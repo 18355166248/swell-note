@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef, useState, type ReactNode } from "react"
+import { lazy, Suspense, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import {
   ArrowLeft,
   AlertCircle,
@@ -71,6 +71,7 @@ type WorkspaceProps = {
   localVaultSupported: boolean
   mobileScreen: MobileScreen
   mobileConnectionLabel: string
+  mobileListStateKey: string
   notes: Note[]
   onCreateNote: () => void
   onFormat: (syntax: string) => void
@@ -602,10 +603,21 @@ function FormatButton({ children, icon: Icon, label, onClick }: FormatButtonProp
 }
 
 function MobileWorkspace(props: WorkspaceProps) {
+  const noteListPositionsRef = useRef(new Map<string, number>())
+  // 使用与实际可见结果一致的延迟搜索键，避免输入态先更新时覆盖原列表滚动位置。
+  const listStateKey = `${props.selectedFolder ?? "__all__"}\u0000${props.mobileListStateKey}`
+
   return (
     <div className="mobile-workspace" data-screen={props.mobileScreen}>
       {props.mobileScreen === "library" ? <MobileLibrary {...props} /> : null}
-      {props.mobileScreen === "notes" ? <MobileNoteList {...props} /> : null}
+      {props.mobileScreen === "notes" ? (
+        <MobileNoteList
+          {...props}
+          initialScrollTop={noteListPositionsRef.current.get(listStateKey) ?? 0}
+          key={listStateKey}
+          onScrollPositionChange={(scrollTop) => noteListPositionsRef.current.set(listStateKey, scrollTop)}
+        />
+      ) : null}
       {props.mobileScreen === "editor" ? (
         <NoteEditor
           backlinks={props.backlinks}
@@ -761,8 +773,36 @@ function MobileLibraryRow({ count, depth = 0, icon: Icon, label, onClick }: Mobi
   )
 }
 
-function MobileNoteList(props: WorkspaceProps) {
+type MobileNoteListProps = WorkspaceProps & {
+  initialScrollTop: number
+  onScrollPositionChange: (scrollTop: number) => void
+}
+
+function MobileNoteList(props: MobileNoteListProps) {
   const groups = groupNotes(props.notes)
+  const viewportRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    // 列表重新挂载时在首次绘制前恢复位置，并按当前内容高度收敛，避免返回详情时闪到顶部。
+    const restore = () => {
+      viewport.scrollTop = Math.min(
+        props.initialScrollTop,
+        Math.max(0, viewport.scrollHeight - viewport.clientHeight),
+      )
+    }
+    restore()
+    // Radix Viewport 在筛选结果切换时可能下一帧才完成尺寸计算，因此再校准一次最终位置。
+    const frame = window.requestAnimationFrame(restore)
+    return () => window.cancelAnimationFrame(frame)
+  }, [props.initialScrollTop, props.notes.length])
+
+  const selectNote = (note: Note) => {
+    props.onScrollPositionChange(viewportRef.current?.scrollTop ?? 0)
+    props.onSelectNote(note)
+  }
+
   return (
     <section className="mobile-screen">
       <header className="mobile-titlebar">
@@ -777,7 +817,10 @@ function MobileNoteList(props: WorkspaceProps) {
         <div className="note-search-wrap"><Search /><Input onChange={(event) => props.onQueryChange(event.target.value)} placeholder="搜索笔记" value={props.query} /></div>
         <Button aria-label="筛选选项" size="icon" variant="ghost"><SlidersHorizontal /></Button>
       </div>
-      <ScrollArea className="mobile-scroll-content">
+      <ScrollArea
+        className="mobile-scroll-content"
+        viewportRef={viewportRef}
+      >
         <div className="mobile-note-groups">
           {groups.map((group) => (
             <section key={group.label}>
@@ -787,7 +830,7 @@ function MobileNoteList(props: WorkspaceProps) {
                   active={note.id === props.activeNoteId}
                   key={note.id}
                   note={note}
-                  onSelect={props.onSelectNote}
+                  onSelect={selectNote}
                 />
               ))}
             </section>

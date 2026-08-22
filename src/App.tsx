@@ -370,6 +370,7 @@ function App() {
         localVaultSupported={canSelectLocalVault()}
         mobileScreen={mobileScreen}
         mobileConnectionLabel={mobileConnectionLabel}
+        mobileListStateKey={normalizedQuery}
         notes={visibleNotes}
         onCreateNote={createNote}
         onFormat={formatActiveNote}
