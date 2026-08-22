@@ -6,8 +6,9 @@
 
 - Tauri 2 + React 19 + TypeScript + Vite 基础工程
 - Tailwind CSS 4 与 shadcn/ui（Nova / Radix）
-- 响应式三栏笔记界面
+- 宽屏四栏、平板三栏与手机三级页面的响应式笔记界面
 - 笔记搜索、选择、新建、编辑和收藏交互
+- CodeMirror 6 Markdown 编辑器与光标位置格式插入
 - 坚果云 WebDAV 参数配置、递归目录扫描与 Markdown 按需读取
 - macOS / Windows 桌面端构建基础
 
@@ -51,8 +52,7 @@ pnpm tauri ios init
 
 ## 下一阶段
 
-1. 接入 CodeMirror 6 Markdown 编辑器。
-2. 设计统一的文件系统适配层，支持 Tauri 与浏览器文件能力。
-3. 读取现有 Obsidian Vault，兼容附件与 `[[双向链接]]`。
-4. 建立 SQLite 索引和本地全文搜索。
-5. 实现 WebDAV 增量同步、冲突检测与同步日志。
+1. 设计统一的文件系统适配层，支持 Tauri 与浏览器文件能力。
+2. 读取现有 Obsidian Vault，兼容附件与 `[[双向链接]]`。
+3. 建立 SQLite 索引和本地全文搜索。
+4. 实现 WebDAV 增量同步、冲突检测与同步日志。

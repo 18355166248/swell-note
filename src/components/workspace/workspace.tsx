@@ -1,4 +1,4 @@
-import type { ReactNode } from "react"
+import { lazy, Suspense, useRef, type ReactNode } from "react"
 import {
   ArrowLeft,
   Check,
@@ -44,6 +44,10 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { Note } from "@/types/note"
+import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+
+// CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
+const MarkdownEditor = lazy(() => import("@/components/editor/markdown-editor"))
 
 export type MobileScreen = "library" | "notes" | "editor"
 
@@ -377,6 +381,16 @@ type NoteEditorProps = {
 
 function NoteEditor({ compact = false, note, onBack, onFormat, onUpdateNote }: NoteEditorProps) {
   const readOnly = note.source === "webdav"
+  const editorRef = useRef<MarkdownEditorHandle>(null)
+
+  const handleFormat = (syntax: string) => {
+    if (!syntax) return
+    if (editorRef.current) {
+      editorRef.current.insertText(syntax)
+      return
+    }
+    onFormat(syntax)
+  }
 
   return (
     <article className="note-editor" data-compact={compact}>
@@ -411,7 +425,7 @@ function NoteEditor({ compact = false, note, onBack, onFormat, onUpdateNote }: N
         </div>
       </header>
 
-      {!compact ? <FormattingToolbar onFormat={onFormat} /> : null}
+      {!compact ? <FormattingToolbar onFormat={handleFormat} /> : null}
 
       <ScrollArea className="editor-scroll">
         <div className="document-canvas">
@@ -429,21 +443,23 @@ function NoteEditor({ compact = false, note, onBack, onFormat, onUpdateNote }: N
             <span>·</span>
             <span>{deriveFolder(note)}</span>
           </div>
-          <textarea
-            aria-label="Markdown 编辑器"
-            className="markdown-editor"
-            onChange={(event) => onUpdateNote({
-              content: event.target.value,
-              preview: event.target.value.replace(/^#+\s*/gm, "").slice(0, 90),
-            })}
-            readOnly={readOnly}
-            spellCheck={false}
-            value={note.content}
-          />
+          <div className="markdown-editor-shell">
+            <Suspense fallback={<div className="editor-loading">正在加载编辑器…</div>}>
+              <MarkdownEditor
+                onChange={(content) => onUpdateNote({
+                  content,
+                  preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
+                })}
+                readOnly={readOnly}
+                ref={editorRef}
+                value={note.content}
+              />
+            </Suspense>
+          </div>
         </div>
       </ScrollArea>
 
-      {compact ? <FormattingToolbar mobile onFormat={onFormat} /> : (
+      {compact ? <FormattingToolbar mobile onFormat={handleFormat} /> : (
         <footer className="editor-statusbar">
           <span>{note.content.length} 字</span>
           <span>Markdown</span>

@@ -168,8 +168,17 @@
 .document-canvas { width: min(100%,830px); margin: 0 auto; padding: 48px 64px 80px; }
 .document-title { width: 100%; border: 0; background: transparent; outline: none; color: #1d2530; font-size: clamp(25px,2.3vw,34px); line-height: 1.2; font-weight: 720; letter-spacing: -.035em; }
 .document-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 13px 0 30px; color: var(--muted-foreground); font-size: 11px; }
-.markdown-editor { width: 100%; min-height: calc(100dvh - 250px); resize: none; border: 0; background: transparent; outline: none; caret-color: var(--primary); color: #28313e; font-family: "Geist Variable","PingFang SC",sans-serif; font-size: 14px; line-height: 1.85; }
-.markdown-editor[readonly] { cursor: default; }
+.markdown-editor-shell { width: 100%; min-height: calc(100dvh - 250px); color: #28313e; }
+.markdown-editor-shell .cm-editor { min-height: inherit; background: transparent; font-size: 14px; }
+.markdown-editor-shell .cm-editor.cm-focused { outline: none; }
+.markdown-editor-shell .cm-scroller { overflow: visible; font-family: "Geist Variable","PingFang SC",sans-serif; line-height: 1.85; }
+.markdown-editor-shell .cm-content { padding: 0; caret-color: var(--primary); }
+.markdown-editor-shell .cm-line { padding: 0; }
+.markdown-editor-shell .cm-selectionBackground,
+.markdown-editor-shell .cm-content ::selection { background: color-mix(in oklab,var(--primary) 18%,transparent) !important; }
+.markdown-editor-shell .cm-cursor { border-left-color: var(--primary); }
+.markdown-editor-shell .cm-placeholder { color: var(--muted-foreground); font-style: normal; }
+.editor-loading { padding: 8px 0; color: var(--muted-foreground); font-size: 13px; }
 .editor-statusbar { display: flex; min-height: 30px; align-items: center; gap: 16px; border-top: 1px solid var(--border); padding: 0 16px; color: var(--muted-foreground); font-size: 10px; }
 
 @media (max-width: 1099px) and (min-width: 768px) {
@@ -220,7 +229,9 @@
   .note-editor[data-compact="true"] .document-canvas { padding: 28px 20px 80px; }
   .note-editor[data-compact="true"] .document-title { font-size: 28px; }
   .note-editor[data-compact="true"] .document-meta { margin: 10px 0 25px; }
-  .note-editor[data-compact="true"] .markdown-editor { min-height: calc(100dvh - 245px); font-size: 15px; line-height: 1.8; }
+  .note-editor[data-compact="true"] .markdown-editor-shell { min-height: calc(100dvh - 245px); }
+  .note-editor[data-compact="true"] .markdown-editor-shell .cm-editor { font-size: 15px; }
+  .note-editor[data-compact="true"] .markdown-editor-shell .cm-scroller { line-height: 1.8; }
   .formatting-toolbar[data-mobile="true"] { min-height: calc(54px + env(safe-area-inset-bottom)); gap: 4px; justify-content: space-around; border-top: 1px solid var(--border); border-bottom: 0; padding: 5px 10px env(safe-area-inset-bottom); background: white; }
   .formatting-toolbar[data-mobile="true"] button { min-width: 40px; height: 42px; }
   .formatting-toolbar[data-mobile="true"] .toolbar-divider { display: none; }
