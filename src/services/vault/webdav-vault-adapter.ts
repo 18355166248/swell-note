@@ -8,6 +8,13 @@ export function createWebDavVaultAdapter(
 ): VaultAdapter {
   return {
     displayName: "坚果云",
+    getDisplayPath(path) {
+      const rootPath = config.remotePath.replace(/^\/+|\/+$/g, "")
+      const normalizedPath = path.replace(/^\/+/, "")
+      return rootPath && normalizedPath.startsWith(`${rootPath}/`)
+        ? normalizedPath.slice(rootPath.length + 1)
+        : normalizedPath
+    },
     kind: "webdav",
     readOnly: true,
     async listMarkdownFiles() {

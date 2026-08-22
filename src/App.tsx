@@ -16,6 +16,7 @@ import {
   indexVaultFiles,
   normalizeNoteTarget,
 } from "@/services/search/note-index"
+import { buildVaultFolders, noteBelongsToFolder } from "@/services/search/vault-folders"
 import type { Note, NoteSaveState } from "@/types/note"
 import "./App.css"
 
@@ -23,6 +24,7 @@ function App() {
   const [notes, setNotes] = useState(demoNotes)
   const [activeNoteId, setActiveNoteId] = useState(demoNotes[0].id)
   const [query, setQuery] = useState("")
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [mobileScreen, setMobileScreen] = useState<MobileScreen>("library")
   const [isOpeningVault, setIsOpeningVault] = useState(false)
@@ -43,13 +45,17 @@ function App() {
 
   const deferredQuery = useDeferredValue(query)
   const normalizedQuery = deferredQuery.trim().toLocaleLowerCase()
+  const folders = useMemo(() => buildVaultFolders(notes), [notes])
+  const folderNotes = selectedFolder
+    ? notes.filter((note) => noteBelongsToFolder(note, selectedFolder))
+    : notes
   const visibleNotes = normalizedQuery
-    ? notes.filter((note) =>
+    ? folderNotes.filter((note) =>
         `${note.title} ${note.preview} ${note.searchText ?? ""}`
           .toLocaleLowerCase()
           .includes(normalizedQuery),
       )
-    : notes
+    : folderNotes
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0]
   const activeTarget = normalizeNoteTarget(activeNote.title)
   const backlinks = useMemo(
@@ -210,10 +216,11 @@ function App() {
     const remoteNotes: Note[] = files.map((file, index) => ({
       id: `${adapter.kind}:${file.path}`,
       title: file.name.replace(/\.md$/i, ""),
-      preview: file.path,
+      preview: adapter.getDisplayPath?.(file.path) ?? file.path,
       content: index === 0 ? firstDocument.content : "正在从笔记库读取…",
       updatedAt: formatRemoteDate(file.updatedAt),
       starred: false,
+      folder: deriveRemoteFolder(adapter.getDisplayPath?.(file.path) ?? file.path),
       source: adapter.kind === "webdav" ? "webdav" : "local",
       remotePath: file.path,
       readOnly: adapter.readOnly,
@@ -225,6 +232,7 @@ function App() {
 
     // 适配器只保存在运行时；浏览器目录句柄和 WebDAV 密码都不会写入本地存储。
     setVaultSession(adapter)
+    setSelectedFolder(null)
     setNotes(remoteNotes)
     setActiveNoteId(remoteNotes[0].id)
     setVaultNoteCount(remoteNotes.length)
@@ -357,6 +365,7 @@ function App() {
         backlinks={backlinks}
         connectionLabel={connectionLabel}
         connected={connected}
+        folders={folders}
         isOpeningVault={isOpeningVault}
         localVaultSupported={canSelectLocalVault()}
         mobileScreen={mobileScreen}
@@ -371,13 +380,19 @@ function App() {
         onQueryChange={setQuery}
         onReloadNote={() => void reloadActiveNote()}
         onResolveAsset={resolveActiveAsset}
+        onSelectFolder={(folder) => {
+          setSelectedFolder(folder)
+          setMobileScreen("notes")
+        }}
         onSelectNote={(note) => void selectNote(note)}
         onUpdateNote={updateActiveNote}
         query={query}
+        selectedFolder={selectedFolder}
         saveState={saveStates[activeNoteId] ?? {
           status: activeNote.readOnly ? "readonly" : "saved",
         }}
         syncLabel={syncLabel}
+        totalNoteCount={notes.length}
         vaultError={vaultError}
       />
       <WebDavSettingsDialog
@@ -400,6 +415,11 @@ function formatRemoteDate(lastModified?: string) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date)
+}
+
+function deriveRemoteFolder(path: string) {
+  const segments = path.split("/").filter(Boolean)
+  return segments.slice(0, -1).join(" / ") || "根目录"
 }
 
 export default App

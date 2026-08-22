@@ -34,6 +34,7 @@ export interface VaultAdapter {
   readonly displayName: string
   readonly kind: VaultSourceKind
   readonly readOnly: boolean
+  getDisplayPath?(path: string): string
   listMarkdownFiles(): Promise<VaultFileEntry[]>
   readBinaryFile?(path: string): Promise<VaultAsset>
   readTextFile(path: string): Promise<VaultDocument>

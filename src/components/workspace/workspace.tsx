@@ -51,6 +51,7 @@ import {
 } from "@/components/ui/tooltip"
 import type { Note, NoteSaveState } from "@/types/note"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
+import type { VaultFolder } from "@/services/search/vault-folders"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 
 // CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
@@ -65,6 +66,7 @@ type WorkspaceProps = {
   backlinks: Note[]
   connectionLabel: string
   connected: boolean
+  folders: VaultFolder[]
   isOpeningVault: boolean
   localVaultSupported: boolean
   mobileScreen: MobileScreen
@@ -79,22 +81,16 @@ type WorkspaceProps = {
   onQueryChange: (query: string) => void
   onReloadNote: () => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
+  onSelectFolder: (folder: string | null) => void
   onSelectNote: (note: Note) => void
   onUpdateNote: (patch: Partial<Note>) => void
   query: string
   saveState: NoteSaveState
+  selectedFolder: string | null
   syncLabel: string
+  totalNoteCount: number
   vaultError: string | null
 }
-
-const folders = [
-  { label: "产品规划", count: 12, children: ["跨端产品", "桌面端", "移动端"] },
-  { label: "技术方案", count: 15 },
-  { label: "设计资源", count: 26 },
-  { label: "会议记录", count: 9 },
-  { label: "个人知识库", count: 54 },
-  { label: "读书笔记", count: 37 },
-]
 
 export function Workspace(props: WorkspaceProps) {
   return (
@@ -112,10 +108,13 @@ function DesktopWorkspace(props: WorkspaceProps) {
       <LibraryPanel
         connected={props.connected}
         connectionLabel={props.connectionLabel}
-        noteCount={props.notes.length}
+        folders={props.folders}
+        noteCount={props.totalNoteCount}
         onCreateNote={props.onCreateNote}
         onOpenLocalVault={props.onOpenLocalVault}
         onOpenSettings={props.onOpenSettings}
+        onSelectFolder={props.onSelectFolder}
+        selectedFolder={props.selectedFolder}
         isOpeningVault={props.isOpeningVault}
         localVaultSupported={props.localVaultSupported}
         syncLabel={props.syncLabel}
@@ -124,6 +123,7 @@ function DesktopWorkspace(props: WorkspaceProps) {
       <NoteListPanel
         activeNoteId={props.activeNoteId}
         notes={props.notes}
+        folderLabel={props.selectedFolder ?? "全部笔记"}
         onQueryChange={props.onQueryChange}
         onSelectNote={props.onSelectNote}
         query={props.query}
@@ -201,12 +201,15 @@ function RailButton({ active = false, icon: Icon, indicator = false, label, onCl
 type LibraryPanelProps = {
   connected: boolean
   connectionLabel: string
+  folders: VaultFolder[]
   isOpeningVault: boolean
   localVaultSupported: boolean
   noteCount: number
   onCreateNote: () => void
   onOpenLocalVault: () => void
   onOpenSettings: () => void
+  onSelectFolder: (folder: string | null) => void
+  selectedFolder: string | null
   syncLabel: string
   vaultError: string | null
 }
@@ -214,12 +217,15 @@ type LibraryPanelProps = {
 function LibraryPanel({
   connected,
   connectionLabel,
+  folders,
   isOpeningVault,
   localVaultSupported,
   noteCount,
   onCreateNote,
   onOpenLocalVault,
   onOpenSettings,
+  onSelectFolder,
+  selectedFolder,
   syncLabel,
   vaultError,
 }: LibraryPanelProps) {
@@ -254,7 +260,7 @@ function LibraryPanel({
 
       <ScrollArea className="library-scroll">
         <nav className="library-navigation" aria-label="笔记库导航">
-          <LibraryRow active count={noteCount} icon={FileText} label="全部笔记" />
+          <LibraryRow active={selectedFolder === null} count={noteCount} icon={FileText} label="全部笔记" onClick={() => onSelectFolder(null)} />
           <LibraryRow count={Math.min(noteCount, 32)} icon={CheckCircle2} label="最近更新" />
           <LibraryRow count={8} icon={Star} label="收藏" />
           <LibraryRow count={6} icon={Trash2} label="回收站" />
@@ -264,28 +270,17 @@ function LibraryPanel({
             <Button aria-label="新建文件夹" size="icon-xs" variant="ghost"><Plus /></Button>
           </div>
 
-          {folders.map((folder, index) => (
-            <div key={folder.label}>
-              <LibraryRow
-                count={folder.count}
-                expanded={index === 0}
-                icon={index === 0 ? FolderOpen : Folder}
-                label={folder.label}
-              />
-              {folder.children ? (
-                <div className="folder-children">
-                  {folder.children.map((child, childIndex) => (
-                    <LibraryRow
-                      active={childIndex === 0}
-                      count={[8, 4, 4][childIndex]}
-                      icon={Folder}
-                      key={child}
-                      label={child}
-                    />
-                  ))}
-                </div>
-              ) : null}
-            </div>
+          {folders.map((folder) => (
+            <LibraryRow
+              active={selectedFolder === folder.path}
+              count={folder.count}
+              depth={folder.depth}
+              expanded={folder.hasChildren}
+              icon={selectedFolder === folder.path ? FolderOpen : Folder}
+              key={folder.path}
+              label={folder.label}
+              onClick={() => onSelectFolder(folder.path)}
+            />
           ))}
         </nav>
       </ScrollArea>
@@ -305,14 +300,16 @@ function LibraryPanel({
 type LibraryRowProps = {
   active?: boolean
   count?: number
+  depth?: number
   expanded?: boolean
   icon: typeof FileText
   label: string
+  onClick?: () => void
 }
 
-function LibraryRow({ active = false, count, expanded, icon: Icon, label }: LibraryRowProps) {
+function LibraryRow({ active = false, count, depth = 0, expanded, icon: Icon, label, onClick }: LibraryRowProps) {
   return (
-    <button className="library-row" data-active={active} type="button">
+    <button className="library-row" data-active={active} data-depth={Math.min(depth, 3)} onClick={onClick} type="button">
       {typeof expanded === "boolean" ? (
         expanded ? <ChevronDown className="library-chevron" /> : <ChevronRight className="library-chevron" />
       ) : <span className="library-chevron" />}
@@ -325,6 +322,7 @@ function LibraryRow({ active = false, count, expanded, icon: Icon, label }: Libr
 
 type NoteListPanelProps = {
   activeNoteId: string
+  folderLabel: string
   notes: Note[]
   onQueryChange: (query: string) => void
   onSelectNote: (note: Note) => void
@@ -333,6 +331,7 @@ type NoteListPanelProps = {
 
 function NoteListPanel({
   activeNoteId,
+  folderLabel,
   notes,
   onQueryChange,
   onSelectNote,
@@ -344,8 +343,8 @@ function NoteListPanel({
     <section className="note-list-panel">
       <div className="pane-header note-list-titlebar">
         <div>
-          <span className="eyebrow">产品规划 / 跨端产品</span>
-          <h2>全部笔记</h2>
+          <span className="eyebrow">当前目录</span>
+          <h2>{folderLabel}</h2>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -717,7 +716,7 @@ function MobileLibrary(props: WorkspaceProps) {
           {props.vaultError ? <p className="vault-error">{props.vaultError}</p> : null}
 
           <div className="mobile-library-rows">
-            <MobileLibraryRow count={props.notes.length} icon={FileText} label="全部笔记" onClick={() => props.onMobileScreenChange("notes")} />
+            <MobileLibraryRow count={props.totalNoteCount} icon={FileText} label="全部笔记" onClick={() => props.onSelectFolder(null)} />
             <MobileLibraryRow count={32} icon={CheckCircle2} label="最近更新" onClick={() => props.onMobileScreenChange("notes")} />
             <MobileLibraryRow count={8} icon={Star} label="收藏" onClick={() => props.onMobileScreenChange("notes")} />
             <MobileLibraryRow count={6} icon={Trash2} label="回收站" />
@@ -725,13 +724,14 @@ function MobileLibrary(props: WorkspaceProps) {
 
           <div className="mobile-section-heading"><span>文件夹</span><Button aria-label="新建文件夹" size="icon-sm" variant="ghost"><Plus /></Button></div>
           <div className="mobile-folder-list">
-            {folders.map((folder, index) => (
+            {props.folders.map((folder) => (
               <MobileLibraryRow
                 count={folder.count}
-                icon={index === 0 ? FolderOpen : Folder}
-                key={folder.label}
+                depth={folder.depth}
+                icon={props.selectedFolder === folder.path ? FolderOpen : Folder}
+                key={folder.path}
                 label={folder.label}
-                onClick={() => props.onMobileScreenChange("notes")}
+                onClick={() => props.onSelectFolder(folder.path)}
               />
             ))}
           </div>
@@ -744,14 +744,15 @@ function MobileLibrary(props: WorkspaceProps) {
 
 type MobileLibraryRowProps = {
   count?: number
+  depth?: number
   icon: typeof FileText
   label: string
   onClick?: () => void
 }
 
-function MobileLibraryRow({ count, icon: Icon, label, onClick }: MobileLibraryRowProps) {
+function MobileLibraryRow({ count, depth = 0, icon: Icon, label, onClick }: MobileLibraryRowProps) {
   return (
-    <button className="mobile-library-row" onClick={onClick} type="button">
+    <button className="mobile-library-row" data-depth={Math.min(depth, 3)} onClick={onClick} type="button">
       <Icon />
       <span>{label}</span>
       {typeof count === "number" ? <small>{count}</small> : null}
@@ -766,7 +767,7 @@ function MobileNoteList(props: WorkspaceProps) {
     <section className="mobile-screen">
       <header className="mobile-titlebar">
         <Button aria-label="返回笔记库" onClick={() => props.onMobileScreenChange("library")} size="icon" variant="ghost"><ArrowLeft /></Button>
-        <h1>全部笔记</h1>
+        <h1>{props.selectedFolder ?? "全部笔记"}</h1>
         <div>
           <Button aria-label="筛选" size="icon" variant="ghost"><Filter /></Button>
           <Button aria-label="排序" size="icon" variant="ghost"><ListFilter /></Button>

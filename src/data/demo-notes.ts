@@ -68,6 +68,7 @@ const notes: Note[] = [
 
 export const demoNotes: Note[] = notes.map((note) => ({
   ...note,
+  folder: note.folder ?? "产品规划 / 跨端产品",
   outgoingLinks: extractWikiLinks(note.content),
   searchText: note.content.toLocaleLowerCase(),
 }))
