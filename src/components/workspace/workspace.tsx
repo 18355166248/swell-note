@@ -38,8 +38,20 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -72,6 +84,7 @@ type WorkspaceProps = {
   folders: VaultFolder[]
   isOpeningVault: boolean
   isCreatingNote: boolean
+  isManagingNote: boolean
   isRefreshingVault: boolean
   libraryView: LibraryView
   localVaultSupported: boolean
@@ -82,8 +95,10 @@ type WorkspaceProps = {
   onCreateNote: () => void
   onFormat: (syntax: string) => void
   onMobileScreenChange: (screen: MobileScreen) => void
+  onDeleteNote: () => void
   onOpenLocalVault: () => void
   onOpenWikiLink: (target: string) => void
+  onMoveNote: (folderPath: string | null) => void
   onOpenSettings: () => void
   onNavigate: (path: string) => void
   onQueryChange: (query: string) => void
@@ -159,9 +174,14 @@ function DesktopWorkspace(props: WorkspaceProps) {
       {props.activeNote ? (
         <NoteEditor
           backlinks={props.backlinks}
+          canManageNote={Boolean(props.activeNote.remotePath && !props.activeNote.readOnly)}
+          isManagingNote={props.isManagingNote}
+          moveTargets={props.folders}
           note={props.activeNote}
+          onDeleteNote={props.onDeleteNote}
           onFormat={props.onFormat}
           onOpenWikiLink={props.onOpenWikiLink}
+          onMoveNote={props.onMoveNote}
           onSelectNote={props.onSelectNote}
           onUpdateNote={props.onUpdateNote}
           onReloadNote={props.onReloadNote}
@@ -567,11 +587,16 @@ function NoteListRow({ active, note, onSelect }: NoteListRowProps) {
 
 type NoteEditorProps = {
   backlinks: Note[]
+  canManageNote: boolean
   compact?: boolean
+  isManagingNote: boolean
+  moveTargets: VaultFolder[]
   note: Note
   onBack?: () => void
+  onDeleteNote: () => void
   onFormat: (syntax: string) => void
   onOpenWikiLink: (target: string) => void
+  onMoveNote: (folderPath: string | null) => void
   onReloadNote: () => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onSelectNote: (note: Note) => void
@@ -579,11 +604,12 @@ type NoteEditorProps = {
   saveState: NoteSaveState
 }
 
-function NoteEditor({ backlinks, compact = false, note, onBack, onFormat, onOpenWikiLink, onReloadNote, onResolveAsset, onSelectNote, onUpdateNote, saveState }: NoteEditorProps) {
+function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote, moveTargets, note, onBack, onDeleteNote, onFormat, onMoveNote, onOpenWikiLink, onReloadNote, onResolveAsset, onSelectNote, onUpdateNote, saveState }: NoteEditorProps) {
   const readOnly = note.readOnly ?? note.source === "webdav"
   const titleReadOnly = note.source === "local" || note.source === "webdav"
   const editorRef = useRef<MarkdownEditorHandle>(null)
   const [previewing, setPreviewing] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
 
   const handleFormat = (syntax: string) => {
     if (!syntax) return
@@ -640,6 +666,21 @@ function NoteEditor({ backlinks, compact = false, note, onBack, onFormat, onOpen
                 >
                   重新加载源文件
                 </DropdownMenuItem>
+              ) : null}
+              {canManageNote ? (
+                <>
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger disabled={isManagingNote || saveState.status === "saving"}>移动到文件夹</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className="max-h-72 overflow-y-auto">
+                      <DropdownMenuItem onClick={() => onMoveNote(null)}>根目录</DropdownMenuItem>
+                      {moveTargets.map((folder) => (
+                        <DropdownMenuItem key={folder.path} onClick={() => onMoveNote(folder.path)}>{folder.path}</DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem disabled={isManagingNote || saveState.status === "saving"} onClick={() => setDeleteDialogOpen(true)} variant="destructive">删除本地文件</DropdownMenuItem>
+                </>
               ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -698,6 +739,18 @@ function NoteEditor({ backlinks, compact = false, note, onBack, onFormat, onOpen
           <span className="ml-auto">行 1，列 1</span>
         </footer>
       ) : null}
+      <Dialog onOpenChange={setDeleteDialogOpen} open={deleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>删除“{note.title}”？</DialogTitle>
+            <DialogDescription>这会从本地 Vault 永久删除对应 Markdown 文件，无法在 Swell Note 中恢复。</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setDeleteDialogOpen(false)} variant="outline">取消</Button>
+            <Button disabled={isManagingNote || saveState.status === "saving"} onClick={() => { setDeleteDialogOpen(false); onDeleteNote() }} variant="destructive">确认删除</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </article>
   )
 }
@@ -770,11 +823,16 @@ function MobileWorkspace(props: WorkspaceProps) {
         props.activeNote ? (
           <NoteEditor
             backlinks={props.backlinks}
+            canManageNote={Boolean(props.activeNote.remotePath && !props.activeNote.readOnly)}
+            isManagingNote={props.isManagingNote}
             compact
+            moveTargets={props.folders}
             note={props.activeNote}
             onBack={() => props.onMobileScreenChange("notes")}
+            onDeleteNote={props.onDeleteNote}
             onFormat={props.onFormat}
             onOpenWikiLink={props.onOpenWikiLink}
+            onMoveNote={props.onMoveNote}
             onReloadNote={props.onReloadNote}
             onResolveAsset={props.onResolveAsset}
             onSelectNote={props.onSelectNote}

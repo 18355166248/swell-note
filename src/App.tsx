@@ -52,6 +52,7 @@ function App() {
   const [libraryView, setLibraryView] = useState<LibraryView>("all")
   const [mobileScreen, setMobileScreen] = useState<MobileScreen>("library")
   const [isCreatingNote, setIsCreatingNote] = useState(false)
+  const [isManagingNote, setIsManagingNote] = useState(false)
   const [isOpeningVault, setIsOpeningVault] = useState(false)
   const [isRefreshingVault, setIsRefreshingVault] = useState(false)
   const [vaultError, setVaultError] = useState<string | null>(null)
@@ -619,6 +620,97 @@ function App() {
     }
   }
 
+  const moveActiveNote = async (folderPath: string | null) => {
+    const note = activeNote
+    const adapter = vaultSession
+    if (!note?.remotePath || note.readOnly || !adapter?.moveTextFile) {
+      setVaultError("当前笔记不能移动，请打开一个可写的本地 Vault")
+      return
+    }
+    if (saveStates[note.id]?.status === "saving") {
+      setVaultError("笔记仍在保存，请稍后再移动")
+      return
+    }
+
+    const pathSegments = note.remotePath.split("/").filter(Boolean)
+    const filename = pathSegments[pathSegments.length - 1]
+    if (!filename) return
+    const directory = folderPath?.split(/\s*\/\s*/).filter(Boolean).join("/") ?? ""
+    const targetPath = directory ? `${directory}/${filename}` : filename
+    if (targetPath === note.remotePath) return
+
+    setIsManagingNote(true)
+    setVaultError(null)
+    try {
+      const result = await adapter.moveTextFile(note.remotePath, targetPath)
+      const nextId = `${adapter.kind}:${result.path}`
+      revisionByPathRef.current.delete(note.remotePath)
+      revisionByPathRef.current.set(result.path, result.revision)
+      saveQueuesRef.current.delete(note.remotePath)
+      setNotes((current) => current.map((candidate) => candidate.id === note.id
+        ? {
+            ...candidate,
+            folder: deriveRemoteFolder(result.path),
+            id: nextId,
+            remotePath: result.path,
+            revision: result.revision,
+            updatedAt: "刚刚移动",
+          }
+        : candidate))
+      setSaveStates((current) => {
+        const next = { ...current }
+        delete next[note.id]
+        next[nextId] = { status: "saved" }
+        return next
+      })
+      setActiveNoteId(nextId)
+      navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "移动笔记失败")
+    } finally {
+      setIsManagingNote(false)
+    }
+  }
+
+  const deleteActiveNote = async () => {
+    const note = activeNote
+    const adapter = vaultSession
+    if (!note?.remotePath || note.readOnly || !adapter?.deleteTextFile) {
+      setVaultError("当前笔记不能删除，请打开一个可写的本地 Vault")
+      return
+    }
+    if (saveStates[note.id]?.status === "saving") {
+      setVaultError("笔记仍在保存，请稍后再删除")
+      return
+    }
+
+    setIsManagingNote(true)
+    setVaultError(null)
+    try {
+      await adapter.deleteTextFile(note.remotePath)
+      const currentIndex = notes.findIndex((candidate) => candidate.id === note.id)
+      const remainingNotes = notes.filter((candidate) => candidate.id !== note.id)
+      const nextNote = remainingNotes[Math.min(Math.max(currentIndex, 0), remainingNotes.length - 1)] ?? null
+
+      revisionByPathRef.current.delete(note.remotePath)
+      saveQueuesRef.current.delete(note.remotePath)
+      setNotes(remainingNotes)
+      setSaveStates((current) => {
+        const next = { ...current }
+        delete next[note.id]
+        return next
+      })
+      setVaultNoteCount((count) => Math.max(0, count - 1))
+      setActiveNoteId(nextNote?.id ?? "")
+      setMobileScreen(nextNote ? "editor" : "notes")
+      navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "删除笔记失败")
+    } finally {
+      setIsManagingNote(false)
+    }
+  }
+
   const openWikiLink = (target: string) => {
     const normalizedTarget = normalizeNoteTarget(target)
     // Obsidian 链接可能写标题、相对路径或标题锚点，统一归一化后再路由到已加载笔记。
@@ -653,6 +745,7 @@ function App() {
             folders={folders}
             isOpeningVault={isOpeningVault}
             isCreatingNote={isCreatingNote}
+            isManagingNote={isManagingNote}
             isRefreshingVault={isRefreshingVault}
             libraryView={libraryView}
             localVaultSupported={canSelectLocalVault()}
@@ -661,12 +754,14 @@ function App() {
             mobileListStateKey={normalizedQuery}
             notes={visibleNotes}
             onCreateNote={() => void createNote()}
+            onDeleteNote={() => void deleteActiveNote()}
             onFormat={formatActiveNote}
             onMobileScreenChange={(screen) => {
               setMobileScreen(screen)
               if (screen !== "editor" && noteRouteMatch) navigate("/notes")
             }}
             onNavigate={navigate}
+            onMoveNote={(folderPath) => void moveActiveNote(folderPath)}
             onOpenLocalVault={() => void openLocalVault()}
             onOpenWikiLink={openWikiLink}
             onOpenSettings={() => navigate("/settings/webdav")}

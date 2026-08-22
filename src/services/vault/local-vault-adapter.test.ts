@@ -66,6 +66,10 @@ class FakeDirectoryHandle {
     this.entries.set(name, file)
     return file
   }
+
+  async removeEntry(name: string) {
+    if (!this.entries.delete(name)) throw new Error(`找不到文件：${name}`)
+  }
 }
 
 function createVault() {
@@ -114,6 +118,18 @@ describe("browser vault adapter", () => {
       content: "# 新笔记\n",
     })
     await expect(adapter.createTextFile?.("docs/新笔记.md", "覆盖内容")).rejects.toThrow("文件已存在")
+  })
+
+  it("移动和删除 Markdown 文件时同步更新适配器路径", async () => {
+    const { adapter } = createVault()
+    await adapter.listMarkdownFiles()
+    const moved = await adapter.moveTextFile?.("docs/note.md", "note.md")
+
+    expect(moved?.path).toBe("note.md")
+    await expect(adapter.readTextFile("note.md")).resolves.toMatchObject({ content: "# 初始内容" })
+    await expect(adapter.readTextFile("docs/note.md")).rejects.toThrow("找不到本地文件")
+    await adapter.deleteTextFile?.("note.md")
+    await expect(adapter.listMarkdownFiles()).resolves.toEqual([])
   })
 
   it("按相对路径读取 Vault 二进制附件", async () => {

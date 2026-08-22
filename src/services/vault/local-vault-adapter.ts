@@ -23,6 +23,7 @@ type BrowserFileSystemDirectoryHandle = {
   name: string
   getDirectoryHandle(name: string): Promise<BrowserFileSystemDirectoryHandle>
   getFileHandle(name: string, options?: { create?: boolean }): Promise<BrowserFileSystemFileHandle>
+  removeEntry(name: string): Promise<void>
   values(): AsyncIterableIterator<BrowserFileSystemFileHandle | BrowserFileSystemDirectoryHandle>
 }
 
@@ -70,6 +71,11 @@ export function createBrowserVaultAdapter(root: BrowserFileSystemDirectoryHandle
       handles.set(path, handle)
       return { path, revision: browserRevision(await handle.getFile()) }
     },
+    async deleteTextFile(path) {
+      const { directory, fileName } = await resolveBrowserFileParent(root, path)
+      await directory.removeEntry(fileName)
+      handles.delete(path)
+    },
     async listMarkdownFiles() {
       const files: VaultFileEntry[] = []
       handles.clear()
@@ -85,6 +91,25 @@ export function createBrowserVaultAdapter(root: BrowserFileSystemDirectoryHandle
     async readBinaryFile(path) {
       const file = await getBrowserFileHandle(root, path, false).then((handle) => handle.getFile())
       return { data: new Uint8Array(await file.arrayBuffer()), mimeType: file.type || undefined }
+    },
+    async moveTextFile(path, targetPath) {
+      if (handles.has(targetPath)) throw new Error(`目标文件已存在：${targetPath}`)
+      const sourceHandle = handles.get(path)
+      if (!sourceHandle) throw new Error(`找不到本地文件：${path}`)
+      const content = await sourceHandle.getFile().then((file) => file.text())
+      const targetHandle = await getBrowserFileHandle(root, targetPath, true)
+      await writeBrowserFile(targetHandle, content)
+      try {
+        const { directory, fileName } = await resolveBrowserFileParent(root, path)
+        await directory.removeEntry(fileName)
+      } catch (error) {
+        const { directory, fileName } = await resolveBrowserFileParent(root, targetPath)
+        await directory.removeEntry(fileName).catch(() => undefined)
+        throw error
+      }
+      handles.delete(path)
+      handles.set(targetPath, targetHandle)
+      return { path: targetPath, revision: browserRevision(await targetHandle.getFile()) }
     },
     async writeTextFile(path, content, expectedRevision) {
       const handle = handles.get(path)
@@ -130,7 +155,7 @@ async function collectBrowserMarkdownFiles(
 }
 
 async function selectTauriVault(): Promise<VaultAdapter | null> {
-  const [{ open }, { exists, readDir, readFile, readTextFile, stat, writeTextFile }, { join }] = await Promise.all([
+  const [{ open }, { exists, readDir, readFile, readTextFile, remove, rename, stat, writeTextFile }, { join }] = await Promise.all([
     import("@tauri-apps/plugin-dialog"),
     import("@tauri-apps/plugin-fs"),
     import("@tauri-apps/api/path"),
@@ -151,6 +176,9 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
       await writeTextFile(absolutePath, content)
       return { path, revision: tauriRevision(await stat(absolutePath)) }
     },
+    async deleteTextFile(path) {
+      await remove(await join(rootPath, path))
+    },
     async listMarkdownFiles() {
       const files: VaultFileEntry[] = []
       await collectTauriMarkdownFiles(rootPath, "", files, readDir, join)
@@ -166,6 +194,15 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
     },
     async readBinaryFile(path) {
       return { data: await readFile(await join(rootPath, path)), mimeType: mimeTypeFromPath(path) }
+    },
+    async moveTextFile(path, targetPath) {
+      const [absolutePath, absoluteTargetPath] = await Promise.all([
+        join(rootPath, path),
+        join(rootPath, targetPath),
+      ])
+      if (await exists(absoluteTargetPath)) throw new Error(`目标文件已存在：${targetPath}`)
+      await rename(absolutePath, absoluteTargetPath)
+      return { path: targetPath, revision: tauriRevision(await stat(absoluteTargetPath)) }
     },
     async writeTextFile(path, content, expectedRevision) {
       const absolutePath = await join(rootPath, path)
@@ -219,6 +256,18 @@ async function getBrowserFileHandle(
     directory = await directory.getDirectoryHandle(segment)
   }
   return directory.getFileHandle(fileName, { create })
+}
+
+async function resolveBrowserFileParent(
+  root: BrowserFileSystemDirectoryHandle,
+  path: string,
+) {
+  const segments = path.split("/").filter(Boolean)
+  const fileName = segments.pop()
+  if (!fileName) throw new Error("文件路径无效")
+  let directory = root
+  for (const segment of segments) directory = await directory.getDirectoryHandle(segment)
+  return { directory, fileName }
 }
 
 async function writeBrowserFile(handle: BrowserFileSystemFileHandle, content: string) {
