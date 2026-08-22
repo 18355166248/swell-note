@@ -6,7 +6,7 @@ export type Note = {
   updatedAt: string
   starred: boolean
   folder?: string
-  source?: "demo" | "local" | "webdav"
+  source?: "local" | "webdav"
   remotePath?: string
   readOnly?: boolean
   revision?: string

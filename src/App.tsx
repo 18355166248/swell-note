@@ -537,7 +537,7 @@ function App() {
   const selectNote = async (note: Note) => {
     setActiveNoteId(note.id)
     setMobileScreen("editor")
-    if (note.source === "demo" || note.contentLoaded || !note.remotePath || !vaultSession) return
+    if (note.contentLoaded || !note.remotePath || !vaultSession) return
 
     try {
       const document = await vaultSession.readTextFile(note.remotePath)
