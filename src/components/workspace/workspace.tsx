@@ -645,12 +645,20 @@ function FormatButton({ children, icon: Icon, label, onClick }: FormatButtonProp
 
 function MobileWorkspace(props: WorkspaceProps) {
   const noteListPositionsRef = useRef(new Map<string, number>())
+  const libraryPositionsRef = useRef(new Map<string, number>())
   // 使用与实际可见结果一致的延迟搜索键，避免输入态先更新时覆盖原列表滚动位置。
   const listStateKey = `${props.selectedFolder ?? "__all__"}\u0000${props.mobileListStateKey}`
+  const libraryStateKey = `${props.totalNoteCount}\u0000${props.folders.map((folder) => folder.path).join("\u0000")}`
 
   return (
     <div className="mobile-workspace" data-screen={props.mobileScreen}>
-      {props.mobileScreen === "library" ? <MobileLibrary {...props} /> : null}
+      {props.mobileScreen === "library" ? (
+        <MobileLibrary
+          {...props}
+          initialScrollTop={libraryPositionsRef.current.get(libraryStateKey) ?? 0}
+          onScrollPositionChange={(scrollTop) => libraryPositionsRef.current.set(libraryStateKey, scrollTop)}
+        />
+      ) : null}
       {props.mobileScreen === "notes" ? (
         <MobileNoteList
           {...props}
@@ -735,7 +743,42 @@ function SaveStateIndicator({ note, state }: { note: Note; state: NoteSaveState 
   )
 }
 
-function MobileLibrary(props: WorkspaceProps) {
+type MobileLibraryProps = WorkspaceProps & {
+  initialScrollTop: number
+  onScrollPositionChange: (scrollTop: number) => void
+}
+
+function MobileLibrary(props: MobileLibraryProps) {
+  const viewportRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const restore = () => {
+      viewport.scrollTop = Math.min(
+        props.initialScrollTop,
+        Math.max(0, viewport.scrollHeight - viewport.clientHeight),
+      )
+    }
+    restore()
+    const frame = window.requestAnimationFrame(restore)
+    return () => window.cancelAnimationFrame(frame)
+  }, [props.initialScrollTop, props.totalNoteCount])
+
+  const rememberPosition = () => {
+    props.onScrollPositionChange(viewportRef.current?.scrollTop ?? 0)
+  }
+
+  const openNotes = () => {
+    rememberPosition()
+    props.onMobileScreenChange("notes")
+  }
+
+  const selectFolder = (folder: string | null) => {
+    rememberPosition()
+    props.onSelectFolder(folder)
+  }
+
   return (
     <section className="mobile-screen mobile-library">
       <MobileBrandHeader
@@ -743,7 +786,7 @@ function MobileLibrary(props: WorkspaceProps) {
         mobileConnectionLabel={props.mobileConnectionLabel}
         onOpenSettings={props.onOpenSettings}
       />
-      <ScrollArea className="mobile-scroll-content">
+      <ScrollArea className="mobile-scroll-content" viewportRef={viewportRef}>
         <div className="mobile-page-padding">
           <div className="mobile-search-row">
             <div className="note-search-wrap">
@@ -756,13 +799,13 @@ function MobileLibrary(props: WorkspaceProps) {
             </div>
             <Button aria-label="筛选" size="icon" variant="ghost"><SlidersHorizontal /></Button>
           </div>
-          <Button className="mobile-new-note" onClick={props.onCreateNote}>
+          <Button className="mobile-new-note" onClick={() => { rememberPosition(); props.onCreateNote() }}>
             <Plus data-icon="inline-start" />新建笔记
           </Button>
           <Button
             className="mobile-open-vault"
             disabled={!props.localVaultSupported || props.isOpeningVault}
-            onClick={props.onOpenLocalVault}
+            onClick={() => { rememberPosition(); props.onOpenLocalVault() }}
             variant="outline"
           >
             <FolderOpen data-icon="inline-start" />
@@ -771,9 +814,9 @@ function MobileLibrary(props: WorkspaceProps) {
           {props.vaultError ? <p className="vault-error">{props.vaultError}</p> : null}
 
           <div className="mobile-library-rows">
-            <MobileLibraryRow count={props.totalNoteCount} icon={FileText} label="全部笔记" onClick={() => props.onSelectFolder(null)} />
-            <MobileLibraryRow count={32} icon={CheckCircle2} label="最近更新" onClick={() => props.onMobileScreenChange("notes")} />
-            <MobileLibraryRow count={8} icon={Star} label="收藏" onClick={() => props.onMobileScreenChange("notes")} />
+            <MobileLibraryRow count={props.totalNoteCount} icon={FileText} label="全部笔记" onClick={() => selectFolder(null)} />
+            <MobileLibraryRow count={Math.min(props.totalNoteCount, 32)} icon={CheckCircle2} label="最近更新" onClick={openNotes} />
+            <MobileLibraryRow count={props.notes.filter((note) => note.starred).length} icon={Star} label="收藏" onClick={openNotes} />
             <MobileLibraryRow count={6} icon={Trash2} label="回收站" />
           </div>
 
@@ -786,7 +829,7 @@ function MobileLibrary(props: WorkspaceProps) {
                 icon={props.selectedFolder === folder.path ? FolderOpen : Folder}
                 key={folder.path}
                 label={folder.label}
-                onClick={() => props.onSelectFolder(folder.path)}
+                onClick={() => selectFolder(folder.path)}
               />
             ))}
           </div>
