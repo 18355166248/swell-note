@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Swell Note wave and page logo</title>
+  <defs>
+    <linearGradient id="wave" x1="104" y1="374" x2="408" y2="188" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#22C7E8"/>
+    </linearGradient>
+  </defs>
+  <path fill="#181B22" fill-rule="evenodd" d="M132 74h175l73 73v226c0 36-29 65-65 65H132c-36 0-65-29-65-65V139c0-36 29-65 65-65Zm173 20v59c0 16 13 29 29 29h27L305 94ZM95 309c51-80 126-117 203-91 32 11 57 31 74 55-30-13-60-18-91-13-56 9-93 46-122 83-20-8-42-20-64-34Z"/>
+  <path fill="url(#wave)" d="M92 359c43 32 84 44 123 35 38-9 58-38 88-61 28-22 61-30 101-20-27 54-72 92-133 108-72 19-138-2-179-62Z"/>
+</svg>

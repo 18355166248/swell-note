@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Swell Note Design QA</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 28px; background: #eef1f5; color: #202735; font: 14px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+      h1 { margin: 0 0 24px; font-size: 24px; }
+      h2 { margin: 0 0 12px; font-size: 16px; }
+      section { margin-bottom: 28px; }
+      .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+      .frame { overflow: hidden; border: 1px solid #d9dee7; border-radius: 12px; background: white; box-shadow: 0 6px 20px #52607514; }
+      .frame > header { padding: 10px 14px; border-bottom: 1px solid #e6e9ef; font-weight: 650; }
+      img { display: block; width: 100%; height: auto; }
+      .mobile-implementation { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 10px; background: #f7f8fa; }
+    </style>
+  </head>
+  <body>
+    <h1>Swell Note · Design QA</h1>
+    <section>
+      <h2>桌面端：选定稿 vs 1440 × 1024 实现</h2>
+      <div class="pair">
+        <div class="frame"><header>选定设计稿</header><img src="./focused-workspace-desktop.png" alt="桌面设计稿" /></div>
+        <div class="frame"><header>当前实现</header><img src="./implementation-desktop.png" alt="桌面实现" /></div>
+      </div>
+    </section>
+    <section>
+      <h2>手机端：同风格三状态设计 vs 390 × 844 实现</h2>
+      <div class="pair">
+        <div class="frame"><header>手机设计稿</header><img src="./focused-workspace-mobile.png" alt="手机设计稿" /></div>
+        <div class="frame">
+          <header>资料库 / 列表 / 编辑器</header>
+          <div class="mobile-implementation">
+            <img src="./implementation-mobile-library.png" alt="手机资料库实现" />
+            <img src="./implementation-mobile-list.png" alt="手机列表实现" />
+            <img src="./implementation-mobile-editor.png" alt="手机编辑器实现" />
+          </div>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

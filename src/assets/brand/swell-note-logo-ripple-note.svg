@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Swell Note ripple logo</title>
+  <path d="M405 391a200 200 0 1 1 38-55" fill="none" stroke="#1B1E24" stroke-width="42" stroke-linecap="round"/>
+  <path d="M350 341a132 132 0 1 1 22-47" fill="none" stroke="#34B7A5" stroke-width="38" stroke-linecap="round"/>
+  <path d="M294 295a68 68 0 1 1 10-34" fill="none" stroke="#1B1E24" stroke-width="34" stroke-linecap="round"/>
+  <path fill="#1B1E24" d="M216 218h49l35 35v60c0 14-11 25-25 25h-59c-14 0-25-11-25-25v-70c0-14 11-25 25-25Zm46 12v25c0 7 6 13 13 13h14l-27-38Z"/>
+</svg>
