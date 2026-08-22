@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "build:android:debug": "tauri android build --debug --apk --target aarch64 --ci",
+    "build:ios:sim": "tauri ios build --debug --target aarch64-sim --no-sign --ci",
     "dev": "vite",
     "build": "tsc && vite build",
     "test": "vitest run",
@@ -19,6 +21,7 @@
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-fs": "^2.5.1",
+    "@tauri-apps/plugin-http": "^2.5.9",
     "@tauri-apps/plugin-opener": "^2",
     "@uiw/react-codemirror": "^4.25.11",
     "class-variance-authority": "^0.7.1",

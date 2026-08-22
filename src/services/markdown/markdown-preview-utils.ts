@@ -1,4 +1,17 @@
 const WIKI_SCHEME = "swell-note://wiki/"
+const ASSET_SCHEME = "swell-note://asset/"
+const imageExtensionPattern = /\.(avif|gif|jpe?g|png|svg|webp)$/i
+
+function rewriteEmbeddedAssetsInLine(line: string) {
+  return line.replace(/!\[\[([^\[\]\n]+)\]\]/g, (match, value: string) => {
+    const [rawTarget, rawAlias] = value.split("|", 2)
+    const target = rawTarget.trim()
+    if (!target) return match
+    const label = rawAlias?.trim() || target.split("/").pop() || "附件"
+    const href = `${ASSET_SCHEME}${encodeURIComponent(target)}`
+    return imageExtensionPattern.test(target) ? `![${label}](${href})` : `[${label}](${href})`
+  })
+}
 
 function rewriteWikiLinksInLine(line: string) {
   return line.replace(/\[\[([^\[\]\n]+)\]\]/g, (match, value: string) => {
@@ -22,7 +35,7 @@ export function rewriteWikiLinks(content: string) {
         fencedCode = !fencedCode
         return line
       }
-      return fencedCode ? line : rewriteWikiLinksInLine(line)
+      return fencedCode ? line : rewriteWikiLinksInLine(rewriteEmbeddedAssetsInLine(line))
     })
     .join("\n")
 }
@@ -35,4 +48,19 @@ export function parseWikiHref(href?: string) {
   } catch {
     return null
   }
+}
+
+export function parseVaultAssetHref(href?: string) {
+  if (!href?.startsWith(ASSET_SCHEME)) return null
+
+  try {
+    return decodeURIComponent(href.slice(ASSET_SCHEME.length))
+  } catch {
+    return null
+  }
+}
+
+export function isRelativeAttachmentHref(href?: string) {
+  if (!href || href.startsWith("#") || /^[a-z][a-z\d+.-]*:/i.test(href)) return false
+  return /\.(avif|gif|jpe?g|m4a|mov|mp3|mp4|ogg|pdf|png|svg|wav|webm|webp)(?:[?#].*)?$/i.test(href)
 }

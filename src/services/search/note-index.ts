@@ -32,8 +32,9 @@ export async function indexVaultFiles(
   files: VaultFileEntry[],
   onBatch: (batch: IndexedVaultFile[], indexed: number, total: number) => void,
   isCancelled: () => boolean,
+  options: { batchSize?: number; delayMs?: number } = {},
 ) {
-  const batchSize = 6
+  const batchSize = Math.max(1, options.batchSize ?? 6)
   let indexed = 0
 
   // 小批量并发兼顾大目录速度与磁盘压力；每批回传一次，避免逐文件触发 React 重渲染。
@@ -55,5 +56,8 @@ export async function indexVaultFiles(
 
     indexed += batchFiles.length
     if (!isCancelled()) onBatch(batch, indexed, files.length)
+    if (options.delayMs && offset + batchSize < files.length && !isCancelled()) {
+      await new Promise((resolve) => setTimeout(resolve, options.delayMs))
+    }
   }
 }

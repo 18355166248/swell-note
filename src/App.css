@@ -324,6 +324,10 @@
 .wiki-link:hover, .markdown-preview a:hover { text-decoration-color: currentColor; }
 .markdown-preview input[type="checkbox"] { margin-right: .45em; accent-color: var(--primary); }
 .markdown-preview img { display: block; max-width: 100%; height: auto; margin: 1.25em auto; border-radius: 8px; }
+.markdown-attachment-button, .markdown-attachment-download { display: inline-flex; align-items: center; min-height: 34px; margin: .35em 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); padding: 6px 10px; color: var(--primary); font: inherit; cursor: pointer; }
+.markdown-attachment-button:disabled { cursor: wait; opacity: .65; }
+.markdown-attachment-frame { display: block; width: 100%; min-height: 520px; margin: 1em 0; border: 1px solid var(--border); border-radius: 10px; background: white; }
+.markdown-attachment-media { display: block; width: min(100%, 720px); max-height: 520px; margin: 1em 0; border-radius: 10px; }
 .markdown-image-state { display: inline-flex; min-height: 34px; align-items: center; border-radius: 7px; background: var(--muted); padding: 6px 10px; color: var(--muted-foreground); font-size: 12px; }
 .markdown-image-state[data-status="error"] { color: var(--destructive); }
 .editor-loading { padding: 8px 0; color: var(--muted-foreground); font-size: 13px; }

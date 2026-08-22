@@ -13,6 +13,10 @@
     "fs:allow-rename",
     "fs:allow-stat",
     "fs:allow-write-text-file",
+    {
+      "identifier": "http:default",
+      "allow": [{ "url": "https://dav.jianguoyun.com/**" }]
+    },
     "opener:default"
   ]
 }

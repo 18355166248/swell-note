@@ -357,8 +357,12 @@ function App() {
     })
   }
 
-  const startLocalIndex = (adapter: VaultAdapter, files: VaultFileEntry[]) => {
+  const startVaultIndex = (adapter: VaultAdapter, files: VaultFileEntry[]) => {
     const generation = ++indexGenerationRef.current
+    if (files.length === 0) {
+      setIndexProgress(null)
+      return
+    }
     setIndexProgress({ indexed: 0, total: files.length })
     void indexVaultFiles(
       adapter,
@@ -378,6 +382,9 @@ function App() {
         setIndexProgress({ indexed, total })
       },
       () => generation !== indexGenerationRef.current,
+      adapter.kind === "webdav"
+        ? { batchSize: 2, delayMs: 350 }
+        : { batchSize: 6 },
     )
   }
 
@@ -461,12 +468,11 @@ function App() {
     ])))
     setVaultError(null)
     if (!preserveContext) setMobileScreen("notes")
-    if (adapter.kind === "webdav") {
-      indexGenerationRef.current += 1
-      setIndexProgress(null)
-    } else {
-      startLocalIndex(adapter, files)
-    }
+    // WebDAV 也建立全文索引，但降低并发并在批次间让出时间，避免触发坚果云频率限制。
+    const filesToIndex = files.filter((file) => !remoteNotes.find((note) =>
+      note.remotePath === file.path && typeof note.searchText === "string",
+    ))
+    startVaultIndex(adapter, filesToIndex)
     return remoteNotes.length
   }
 

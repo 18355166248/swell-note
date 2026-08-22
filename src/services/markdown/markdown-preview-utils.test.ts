@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
 
-import { parseWikiHref, rewriteWikiLinks } from "./markdown-preview-utils"
+import {
+  isRelativeAttachmentHref,
+  parseVaultAssetHref,
+  parseWikiHref,
+  rewriteWikiLinks,
+} from "./markdown-preview-utils"
 
 describe("Markdown preview wiki links", () => {
   it("rewrites wiki links, aliases, and heading targets", () => {
@@ -20,5 +25,20 @@ describe("Markdown preview wiki links", () => {
     expect(parseWikiHref("swell-note://wiki/%E4%BA%A7%E5%93%81%E7%81%B5%E6%84%9F")).toBe("产品灵感")
     expect(parseWikiHref("https://example.com")).toBeNull()
     expect(parseWikiHref("swell-note://wiki/%E0%A4%A")).toBeNull()
+  })
+
+  it("rewrites Obsidian embedded files as local assets", () => {
+    const output = rewriteWikiLinks("![[assets/封面.png]]\n![[资料/方案.pdf|查看方案]]")
+
+    expect(output).toContain("![封面.png](swell-note://asset/assets%2F%E5%B0%81%E9%9D%A2.png)")
+    expect(output).toContain("[查看方案](swell-note://asset/%E8%B5%84%E6%96%99%2F%E6%96%B9%E6%A1%88.pdf)")
+    expect(parseVaultAssetHref("swell-note://asset/docs%2Fdemo.pdf")).toBe("docs/demo.pdf")
+  })
+
+  it("detects only supported relative attachment links", () => {
+    expect(isRelativeAttachmentHref("../assets/demo.pdf")).toBe(true)
+    expect(isRelativeAttachmentHref("recording.mp3?download=1")).toBe(true)
+    expect(isRelativeAttachmentHref("https://example.com/demo.pdf")).toBe(false)
+    expect(isRelativeAttachmentHref("notes/next.md")).toBe(false)
   })
 })

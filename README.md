@@ -9,19 +9,21 @@
 - 宽屏四栏、平板三栏与手机三级页面的响应式笔记界面
 - 笔记搜索、选择、收藏，以及可写本地 Vault 中的真实 Markdown 新建与编辑
 - CodeMirror 6 Markdown 编辑器与光标位置格式插入
-- 坚果云 WebDAV 参数配置、递归目录扫描与 Markdown 按需读取
+- 坚果云 WebDAV 参数配置、递归目录扫描、Markdown 按需读取与限速后台全文索引
 - Web / Tauri 统一笔记库适配层，可选择并递归读取现有本地 Obsidian Vault
 - 本地笔记自动保存、文件版本校验、冲突副本与源文件重新加载
-- 本地后台全文索引、搜索正文和 Obsidian `[[双向链接]]` 反向引用
+- 本地 / WebDAV 后台全文索引、搜索正文和 Obsidian `[[双向链接]]` 反向引用
 - GFM Markdown 阅读预览、任务列表、表格与可跳转 Wiki 链接
 - 本地 Vault 与坚果云相对路径图片、Obsidian 图片嵌入预览
+- PDF、音频、视频与普通附件按需读取，避免打开笔记时自动下载大文件
 - 从实际 Vault 路径生成文件夹层级、递归计数与目录筛选
 - IndexedDB 离线 Vault 缓存、刷新自动恢复与多缓存切换
 - 在线整库手动刷新，并保留当前文档、目录、搜索和已读取正文
 - Hash 路由导航：笔记、Markdown 待办、设置，以及 WebDAV / 缓存 / 关于二级设置页
 - 笔记详情、文件夹、最近更新和收藏二级路由，支持刷新恢复
-- 本地 Markdown 待办勾选写回，以及非当前离线缓存删除
-- macOS / Windows 桌面端构建基础
+- 本地 Markdown 待办勾选写回、文件移动与二次确认永久删除
+- Tauri 原生 HTTP 接入，WebDAV 在 macOS、Windows、Android、iOS 中不依赖 WebView CORS
+- Android Studio 与 Xcode 工程；已通过 arm64 Android 调试 APK 和 iOS arm64 模拟器包构建
 
 默认不注入任何演示笔记；连接坚果云或打开本地目录后，界面只展示真实 Vault 数据。坚果云当前保持只读。文件列表和已打开正文会写入本机 IndexedDB，WebDAV 应用密码只存在于当前连接会话，不会写入缓存。
 
@@ -52,6 +54,21 @@ pnpm tauri android init
 pnpm tauri ios init
 ```
 
+当前仓库已经包含生成后的 Android / iOS 工程，一般不需要再次初始化。移动端调试构建：
+
+```bash
+pnpm build:android:debug
+pnpm build:ios:sim
+```
+
+基础自测：
+
+```bash
+pnpm test
+pnpm build
+cargo check --manifest-path src-tauri/Cargo.toml
+```
+
 ## 技术边界
 
 - Markdown 文件是用户数据的事实来源，不能依赖私有数据库才能读取。
@@ -61,8 +78,8 @@ pnpm tauri ios init
 - 无法自动合并的修改必须保留冲突副本。
 - WebDAV 应用密码不能写入源码或浏览器 localStorage；原生端使用系统安全存储。
 
-## 下一阶段
+## 后续增强
 
-1. 扩展 PDF、音频等非图片附件预览。
-2. 将内存索引迁移到 SQLite，支持更大规模笔记库。
-3. 实现 WebDAV 增量同步、冲突检测与同步日志。
+1. 将内存索引迁移到 SQLite，支持万级以上笔记库。
+2. 在明确写入策略后实现 WebDAV 增量同步、冲突检测与同步日志；当前云端保持只读。
+3. 补齐应用商店签名、发布账号与自动发布流水线。

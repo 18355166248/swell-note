@@ -1,4 +1,6 @@
 import type { WebDavConfig } from "@/lib/webdav-config"
+import { isTauri } from "@tauri-apps/api/core"
+import { fetch as nativeFetch } from "@tauri-apps/plugin-http"
 
 const MAX_DIRECTORIES = 200
 const MAX_MARKDOWN_FILES = 2_000
@@ -118,7 +120,9 @@ async function webDavFetch(
   path: string,
   init: RequestInit,
 ) {
-  const response = await fetch(buildRequestUrl(config, path), {
+  // 原生包通过 Rust HTTP 客户端请求 WebDAV，规避各平台 WebView 的 CORS 差异；Web 预览仍走同源代理。
+  const request = isTauri() ? nativeFetch : fetch
+  const response = await request(buildRequestUrl(config, path), {
     ...init,
     headers: {
       ...init.headers,
@@ -138,7 +142,7 @@ function buildRequestUrl(config: WebDavConfig, path: string) {
   const server = new URL(config.serverUrl)
 
   // 浏览器开发预览经 Vite 同源代理访问，原生端后续切换到 Tauri HTTP 插件。
-  if (import.meta.env.DEV && server.hostname === "dav.jianguoyun.com") {
+  if (!isTauri() && import.meta.env.DEV && server.hostname === "dav.jianguoyun.com") {
     return `/api/webdav${encodedPath}`
   }
 
