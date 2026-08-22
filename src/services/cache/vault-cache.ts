@@ -71,6 +71,14 @@ export async function listVaultCaches(): Promise<VaultCacheSummary[]> {
     .sort((left, right) => right.savedAt - left.savedAt)
 }
 
+export async function deleteVaultCache(id: string) {
+  const database = await openDatabase()
+  const transaction = database.transaction(VAULT_STORE, "readwrite")
+  transaction.objectStore(VAULT_STORE).delete(id)
+  await transactionDone(transaction)
+  database.close()
+}
+
 function openDatabase() {
   return new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION)

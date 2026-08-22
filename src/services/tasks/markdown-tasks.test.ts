@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { extractMarkdownTasks } from "./markdown-tasks"
+import { extractMarkdownTasks, setMarkdownTaskChecked } from "./markdown-tasks"
 import type { Note } from "@/types/note"
 
 const note = (content: string, contentLoaded = true): Note => ({
@@ -23,5 +23,11 @@ describe("extractMarkdownTasks", () => {
 
   it("不从尚未读取正文的笔记中生成任务", () => {
     expect(extractMarkdownTasks([note("- [ ] 不应展示", false)])).toEqual([])
+  })
+
+  it("按来源行切换任务状态且保留其余 Markdown", () => {
+    const content = "# 计划\n- [ ] 完成路由\n正文"
+    expect(setMarkdownTaskChecked(content, 2, true)).toBe("# 计划\n- [x] 完成路由\n正文")
+    expect(() => setMarkdownTaskChecked(content, 3, true)).toThrow("来源已经变化")
   })
 })

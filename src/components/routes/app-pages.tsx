@@ -9,6 +9,7 @@ import {
   Info,
   ListTodo,
   Settings,
+  Trash2,
 } from "lucide-react"
 import { Outlet, useLocation } from "react-router-dom"
 
@@ -18,7 +19,7 @@ import {
 } from "@/components/workspace/workspace"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { extractMarkdownTasks } from "@/services/tasks/markdown-tasks"
+import { extractMarkdownTasks, type MarkdownTask } from "@/services/tasks/markdown-tasks"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 import type { Note } from "@/types/note"
 
@@ -34,9 +35,11 @@ export function TodoPage({
   onNavigate,
   onOpenNote,
   onOpenSync,
+  onToggleTask,
 }: NavigationProps & {
   notes: Note[]
   onOpenNote: (note: Note) => void
+  onToggleTask: (task: MarkdownTask, checked: boolean) => void
 }) {
   const [filter, setFilter] = useState<"all" | "completed" | "pending">("pending")
   const tasks = useMemo(() => extractMarkdownTasks(notes), [notes])
@@ -78,24 +81,36 @@ export function TodoPage({
             {visibleTasks.length > 0 ? (
               <div className="todo-list">
                 {visibleTasks.map((task) => (
-                  <button
+                  <div
                     className="todo-row"
                     key={task.id}
-                    onClick={() => {
-                      const note = notesById.get(task.noteId)
-                      if (note) onOpenNote(note)
-                    }}
-                    type="button"
                   >
-                    <span className="todo-check" data-checked={task.checked}>
+                    <button
+                      aria-label={task.checked ? `将“${task.text}”设为未完成` : `完成“${task.text}”`}
+                      className="todo-check"
+                      data-checked={task.checked}
+                      disabled={notesById.get(task.noteId)?.readOnly !== false}
+                      onClick={() => onToggleTask(task, !task.checked)}
+                      title={notesById.get(task.noteId)?.readOnly !== false ? "只读笔记中的待办不能修改" : undefined}
+                      type="button"
+                    >
                       {task.checked ? <CheckCircle2 /> : null}
-                    </span>
-                    <span>
-                      <strong data-completed={task.checked}>{task.text}</strong>
-                      <small>{task.noteTitle} · 第 {task.line} 行</small>
-                    </span>
-                    <ChevronRight />
-                  </button>
+                    </button>
+                    <button
+                      className="todo-source-link"
+                      onClick={() => {
+                        const note = notesById.get(task.noteId)
+                        if (note) onOpenNote(note)
+                      }}
+                      type="button"
+                    >
+                      <span>
+                        <strong data-completed={task.checked}>{task.text}</strong>
+                        <small>{task.noteTitle} · 第 {task.line} 行</small>
+                      </span>
+                      <ChevronRight />
+                    </button>
+                  </div>
                 ))}
               </div>
             ) : (
@@ -185,12 +200,15 @@ export function SettingsOverview({ onNavigate }: { onNavigate: (path: string) =>
 export function CacheSettingsPage({
   activeCacheId,
   caches,
+  onDeleteCache,
   onSelectCache,
 }: {
   activeCacheId: string | null
   caches: VaultCacheSummary[]
+  onDeleteCache: (cacheId: string) => void
   onSelectCache: (cacheId: string) => void
 }) {
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   return (
     <div className="settings-content-card">
       <div className="settings-content-heading">
@@ -200,10 +218,22 @@ export function CacheSettingsPage({
       {caches.length > 0 ? (
         <div className="settings-cache-list">
           {caches.map((cache) => (
-            <button data-active={cache.id === activeCacheId} key={cache.id} onClick={() => onSelectCache(cache.id)} type="button">
-              <span><strong>{cache.label}</strong><small>{cache.noteCount} 篇 · {formatCacheDate(cache.savedAt)}</small></span>
-              {cache.id === activeCacheId ? <span className="settings-active-badge">当前</span> : <ChevronRight />}
-            </button>
+            <div className="settings-cache-row" data-active={cache.id === activeCacheId} key={cache.id}>
+              <button onClick={() => onSelectCache(cache.id)} type="button">
+                <span><strong>{cache.label}</strong><small>{cache.noteCount} 篇 · {formatCacheDate(cache.savedAt)}</small></span>
+                {cache.id === activeCacheId ? <span className="settings-active-badge">当前</span> : <ChevronRight />}
+              </button>
+              {cache.id !== activeCacheId ? (
+                pendingDeleteId === cache.id ? (
+                  <span className="cache-delete-confirm">
+                    <Button onClick={() => setPendingDeleteId(null)} size="sm" variant="ghost">取消</Button>
+                    <Button onClick={() => { onDeleteCache(cache.id); setPendingDeleteId(null) }} size="sm" variant="destructive">确认删除</Button>
+                  </span>
+                ) : (
+                  <Button aria-label={`删除缓存 ${cache.label}`} onClick={() => setPendingDeleteId(cache.id)} size="icon-sm" variant="ghost"><Trash2 /></Button>
+                )
+              ) : null}
+            </div>
           ))}
         </div>
       ) : <p className="settings-empty-copy">还没有离线缓存。连接坚果云或打开本地 Vault 后会自动创建。</p>}

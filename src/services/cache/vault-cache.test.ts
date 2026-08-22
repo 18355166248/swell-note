@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 
 import {
   createVaultCacheId,
+  deleteVaultCache,
   listVaultCaches,
   loadLastVaultCache,
   loadVaultCache,
@@ -52,6 +53,17 @@ describe("vault cache", () => {
     await expect(listVaultCaches()).resolves.toEqual([
       expect.objectContaining({ id: "two", noteCount: 0 }),
       expect.objectContaining({ id: "one", noteCount: 1 }),
+    ])
+  })
+
+  it("删除指定缓存且不影响其他 Vault", async () => {
+    await saveVaultCache({ activeNoteId: "a", id: "one", label: "A", notes: [], savedAt: 1, sourceKind: "webdav" })
+    await saveVaultCache({ activeNoteId: "b", id: "two", label: "B", notes: [], savedAt: 2, sourceKind: "webdav" })
+    await deleteVaultCache("one")
+
+    await expect(loadVaultCache("one")).resolves.toBeNull()
+    await expect(listVaultCaches()).resolves.toEqual([
+      expect.objectContaining({ id: "two" }),
     ])
   })
 })

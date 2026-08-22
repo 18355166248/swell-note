@@ -20,6 +20,10 @@ export type VaultWriteResult = {
   revision: string
 }
 
+export type VaultCreateResult = VaultWriteResult & {
+  path: string
+}
+
 export class VaultConflictError extends Error {
   readonly conflictPath: string
 
@@ -37,6 +41,7 @@ export interface VaultAdapter {
   readonly kind: VaultSourceKind
   readonly readOnly: boolean
   getDisplayPath?(path: string): string
+  createTextFile?(path: string, content: string): Promise<VaultCreateResult>
   listMarkdownFiles(): Promise<VaultFileEntry[]>
   readBinaryFile?(path: string): Promise<VaultAsset>
   readTextFile(path: string): Promise<VaultDocument>

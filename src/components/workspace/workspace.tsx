@@ -29,7 +29,6 @@ import {
   Settings,
   SlidersHorizontal,
   Star,
-  Trash2,
   UserRound,
 } from "lucide-react"
 
@@ -39,7 +38,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
@@ -61,6 +59,7 @@ const MarkdownPreview = lazy(() => import("@/components/editor/markdown-preview"
 
 export type MobileScreen = "library" | "notes" | "editor"
 export type AppSection = "notes" | "settings" | "todos"
+export type LibraryView = "all" | "recent" | "starred"
 
 type WorkspaceProps = {
   activeCacheId: string | null
@@ -69,9 +68,12 @@ type WorkspaceProps = {
   backlinks: Note[]
   connectionLabel: string
   connected: boolean
+  canCreateNote: boolean
   folders: VaultFolder[]
   isOpeningVault: boolean
+  isCreatingNote: boolean
   isRefreshingVault: boolean
+  libraryView: LibraryView
   localVaultSupported: boolean
   mobileScreen: MobileScreen
   mobileConnectionLabel: string
@@ -89,12 +91,14 @@ type WorkspaceProps = {
   onRefreshVault: () => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onSelectFolder: (folder: string | null) => void
+  onSelectLibraryView: (view: LibraryView) => void
   onSelectNote: (note: Note) => void
   onSelectVaultCache: (cacheId: string) => void
   onUpdateNote: (patch: Partial<Note>) => void
   query: string
   saveState: NoteSaveState
   selectedFolder: string | null
+  starredNoteCount: number
   syncLabel: string
   totalNoteCount: number
   vaultError: string | null
@@ -121,18 +125,22 @@ function DesktopWorkspace(props: WorkspaceProps) {
       />
       <LibraryPanel
         activeCacheId={props.activeCacheId}
+        canCreateNote={props.canCreateNote}
         connected={props.connected}
         connectionLabel={props.connectionLabel}
         folders={props.folders}
+        libraryView={props.libraryView}
         noteCount={props.totalNoteCount}
         onCreateNote={props.onCreateNote}
         onOpenLocalVault={props.onOpenLocalVault}
         onOpenSettings={props.onOpenSettings}
         onRefreshVault={props.onRefreshVault}
         onSelectFolder={props.onSelectFolder}
+        onSelectLibraryView={props.onSelectLibraryView}
         onSelectVaultCache={props.onSelectVaultCache}
         selectedFolder={props.selectedFolder}
         isOpeningVault={props.isOpeningVault}
+        isCreatingNote={props.isCreatingNote}
         isRefreshingVault={props.isRefreshingVault}
         localVaultSupported={props.localVaultSupported}
         syncLabel={props.syncLabel}
@@ -142,7 +150,7 @@ function DesktopWorkspace(props: WorkspaceProps) {
       <NoteListPanel
         activeNoteId={props.activeNoteId}
         notes={props.notes}
-        folderLabel={props.selectedFolder ?? "全部笔记"}
+        folderLabel={props.selectedFolder ?? (props.libraryView === "recent" ? "最近更新" : props.libraryView === "starred" ? "收藏" : "全部笔记")}
         onOpenSettings={props.onOpenSettings}
         onQueryChange={props.onQueryChange}
         onSelectNote={props.onSelectNote}
@@ -227,11 +235,14 @@ function RailButton({ active = false, icon: Icon, indicator = false, label, onCl
 
 type LibraryPanelProps = {
   activeCacheId: string | null
+  canCreateNote: boolean
   connected: boolean
   connectionLabel: string
   folders: VaultFolder[]
   isOpeningVault: boolean
+  isCreatingNote: boolean
   isRefreshingVault: boolean
+  libraryView: LibraryView
   localVaultSupported: boolean
   noteCount: number
   onCreateNote: () => void
@@ -239,6 +250,7 @@ type LibraryPanelProps = {
   onOpenSettings: () => void
   onRefreshVault: () => void
   onSelectFolder: (folder: string | null) => void
+  onSelectLibraryView: (view: LibraryView) => void
   onSelectVaultCache: (cacheId: string) => void
   selectedFolder: string | null
   syncLabel: string
@@ -249,10 +261,13 @@ type LibraryPanelProps = {
 function LibraryPanel({
   activeCacheId,
   connected,
+  canCreateNote,
   connectionLabel,
   folders,
   isOpeningVault,
+  isCreatingNote,
   isRefreshingVault,
+  libraryView,
   localVaultSupported,
   noteCount,
   onCreateNote,
@@ -260,6 +275,7 @@ function LibraryPanel({
   onOpenSettings,
   onRefreshVault,
   onSelectFolder,
+  onSelectLibraryView,
   onSelectVaultCache,
   selectedFolder,
   syncLabel,
@@ -273,15 +289,12 @@ function LibraryPanel({
           <span className="eyebrow">工作区</span>
           <h1>笔记库</h1>
         </div>
-        <Button aria-label="新建文件夹" size="icon-sm" variant="ghost">
-          <Plus />
-        </Button>
       </div>
 
       <div className="library-actions">
-        <Button className="new-note-button" onClick={onCreateNote}>
-          <Plus data-icon="inline-start" />
-          新建笔记
+        <Button className="new-note-button" disabled={!canCreateNote || isCreatingNote} onClick={onCreateNote}>
+          {isCreatingNote ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
+          {isCreatingNote ? "正在创建…" : canCreateNote ? "新建笔记" : "本地 Vault 中可新建"}
         </Button>
         <Button
           className="open-vault-button"
@@ -302,23 +315,21 @@ function LibraryPanel({
 
       <ScrollArea className="library-scroll">
         <nav className="library-navigation" aria-label="笔记库导航">
-          <LibraryRow active={selectedFolder === null} count={noteCount} icon={FileText} label="全部笔记" onClick={() => onSelectFolder(null)} />
-          <LibraryRow count={Math.min(noteCount, 32)} icon={CheckCircle2} label="最近更新" />
-          <LibraryRow count={8} icon={Star} label="收藏" />
-          <LibraryRow count={6} icon={Trash2} label="回收站" />
+          <LibraryRow active={selectedFolder === null && libraryView === "all"} count={noteCount} icon={FileText} label="全部笔记" onClick={() => onSelectLibraryView("all")} />
+          <LibraryRow active={libraryView === "recent"} count={Math.min(noteCount, 32)} icon={CheckCircle2} label="最近更新" onClick={() => onSelectLibraryView("recent")} />
+          <LibraryRow active={libraryView === "starred"} icon={Star} label="收藏" onClick={() => onSelectLibraryView("starred")} />
 
           <div className="library-section-title">
             <span>文件夹</span>
-            <Button aria-label="新建文件夹" size="icon-xs" variant="ghost"><Plus /></Button>
           </div>
 
           {folders.map((folder) => (
             <LibraryRow
-              active={selectedFolder === folder.path}
+              active={libraryView === "all" && selectedFolder === folder.path}
               count={folder.count}
               depth={folder.depth}
               expanded={folder.hasChildren}
-              icon={selectedFolder === folder.path ? FolderOpen : Folder}
+              icon={libraryView === "all" && selectedFolder === folder.path ? FolderOpen : Folder}
               key={folder.path}
               label={folder.label}
               onClick={() => onSelectFolder(folder.path)}
@@ -630,10 +641,6 @@ function NoteEditor({ backlinks, compact = false, note, onBack, onFormat, onOpen
                   重新加载源文件
                 </DropdownMenuItem>
               ) : null}
-              <DropdownMenuItem>移动到文件夹</DropdownMenuItem>
-              <DropdownMenuItem>查看历史版本</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive">移到回收站</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -861,11 +868,6 @@ function MobileLibrary(props: MobileLibraryProps) {
     props.onScrollPositionChange(viewportRef.current?.scrollTop ?? 0)
   }
 
-  const openNotes = () => {
-    rememberPosition()
-    props.onMobileScreenChange("notes")
-  }
-
   const selectFolder = (folder: string | null) => {
     rememberPosition()
     props.onSelectFolder(folder)
@@ -892,8 +894,9 @@ function MobileLibrary(props: MobileLibraryProps) {
             </div>
             <Button aria-label="筛选" size="icon" variant="ghost"><SlidersHorizontal /></Button>
           </div>
-          <Button className="mobile-new-note" onClick={() => { rememberPosition(); props.onCreateNote() }}>
-            <Plus data-icon="inline-start" />新建笔记
+          <Button className="mobile-new-note" disabled={!props.canCreateNote || props.isCreatingNote} onClick={() => { rememberPosition(); props.onCreateNote() }}>
+            {props.isCreatingNote ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
+            {props.isCreatingNote ? "正在创建…" : props.canCreateNote ? "新建笔记" : "本地 Vault 中可新建"}
           </Button>
           <Button
             className="mobile-open-vault"
@@ -916,13 +919,12 @@ function MobileLibrary(props: MobileLibraryProps) {
           {props.vaultError ? <p className="vault-error">{props.vaultError}</p> : null}
 
           <div className="mobile-library-rows">
-            <MobileLibraryRow count={props.totalNoteCount} icon={FileText} label="全部笔记" onClick={() => selectFolder(null)} />
-            <MobileLibraryRow count={Math.min(props.totalNoteCount, 32)} icon={CheckCircle2} label="最近更新" onClick={openNotes} />
-            <MobileLibraryRow count={props.notes.filter((note) => note.starred).length} icon={Star} label="收藏" onClick={openNotes} />
-            <MobileLibraryRow count={6} icon={Trash2} label="回收站" />
+            <MobileLibraryRow count={props.totalNoteCount} icon={FileText} label="全部笔记" onClick={() => { rememberPosition(); props.onSelectLibraryView("all") }} />
+            <MobileLibraryRow count={Math.min(props.totalNoteCount, 32)} icon={CheckCircle2} label="最近更新" onClick={() => { rememberPosition(); props.onSelectLibraryView("recent") }} />
+            <MobileLibraryRow count={props.starredNoteCount} icon={Star} label="收藏" onClick={() => { rememberPosition(); props.onSelectLibraryView("starred") }} />
           </div>
 
-          <div className="mobile-section-heading"><span>文件夹</span><Button aria-label="新建文件夹" size="icon-sm" variant="ghost"><Plus /></Button></div>
+          <div className="mobile-section-heading"><span>文件夹</span></div>
           <div className="mobile-folder-list">
             {props.folders.map((folder) => (
               <MobileLibraryRow
@@ -1036,7 +1038,7 @@ function MobileNoteList(props: MobileNoteListProps) {
           )) : <EmptyNoteList onOpenSettings={props.onOpenSettings} />}
         </div>
       </ScrollArea>
-      <Button aria-label="新建笔记" className="mobile-fab" onClick={props.onCreateNote} size="icon-lg"><Plus /></Button>
+      {props.canCreateNote ? <Button aria-label="新建笔记" className="mobile-fab" disabled={props.isCreatingNote} onClick={props.onCreateNote} size="icon-lg">{props.isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}</Button> : null}
       <AppBottomNav activeSection="notes" onNavigate={props.onNavigate} />
     </section>
   )

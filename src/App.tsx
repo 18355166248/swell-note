@@ -1,7 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
-import { Navigate, Route, Routes, useNavigate } from "react-router-dom"
+import { Navigate, Route, Routes, useMatch, useNavigate } from "react-router-dom"
 
-import { Workspace, type MobileScreen } from "@/components/workspace/workspace"
+import { Workspace, type LibraryView, type MobileScreen } from "@/components/workspace/workspace"
 import {
   AboutSettingsPage,
   CacheSettingsPage,
@@ -20,6 +20,7 @@ import { resolveVaultAssetPath } from "@/services/vault/vault-path"
 import { createWebDavVaultAdapter } from "@/services/vault/webdav-vault-adapter"
 import {
   createVaultCacheId,
+  deleteVaultCache,
   listVaultCaches,
   loadLastVaultCache,
   loadVaultCache,
@@ -33,6 +34,7 @@ import {
   normalizeNoteTarget,
 } from "@/services/search/note-index"
 import { buildVaultFolders, noteBelongsToFolder } from "@/services/search/vault-folders"
+import { setMarkdownTaskChecked, type MarkdownTask } from "@/services/tasks/markdown-tasks"
 import type { Note, NoteSaveState } from "@/types/note"
 import "./App.css"
 
@@ -40,11 +42,16 @@ type ActiveCacheMeta = Pick<VaultCacheSnapshot, "id" | "label" | "sourceKind">
 
 function App() {
   const navigate = useNavigate()
+  const folderRouteMatch = useMatch("/notes/folder/:folderPath")
+  const noteRouteMatch = useMatch("/notes/:noteId")
+  const viewRouteMatch = useMatch("/notes/view/:view")
   const [notes, setNotes] = useState<Note[]>([])
   const [activeNoteId, setActiveNoteId] = useState("")
   const [query, setQuery] = useState("")
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
+  const [libraryView, setLibraryView] = useState<LibraryView>("all")
   const [mobileScreen, setMobileScreen] = useState<MobileScreen>("library")
+  const [isCreatingNote, setIsCreatingNote] = useState(false)
   const [isOpeningVault, setIsOpeningVault] = useState(false)
   const [isRefreshingVault, setIsRefreshingVault] = useState(false)
   const [vaultError, setVaultError] = useState<string | null>(null)
@@ -133,19 +140,39 @@ function App() {
     for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer)
   }, [])
 
+  useEffect(() => {
+    if (folderRouteMatch?.params.folderPath) {
+      setLibraryView("all")
+      setSelectedFolder(decodeURIComponent(folderRouteMatch.params.folderPath))
+      setMobileScreen("notes")
+      return
+    }
+    const routeView = viewRouteMatch?.params.view
+    if (routeView === "recent" || routeView === "starred") {
+      setLibraryView(routeView)
+      setSelectedFolder(null)
+      setMobileScreen("notes")
+    }
+  }, [folderRouteMatch?.params.folderPath, viewRouteMatch?.params.view])
+
   const deferredQuery = useDeferredValue(query)
   const normalizedQuery = deferredQuery.trim().toLocaleLowerCase()
   const folders = useMemo(() => buildVaultFolders(notes), [notes])
   const folderNotes = selectedFolder
     ? notes.filter((note) => noteBelongsToFolder(note, selectedFolder))
     : notes
+  const libraryNotes = libraryView === "recent"
+    ? folderNotes.slice(0, 32)
+    : libraryView === "starred"
+      ? folderNotes.filter((note) => note.starred)
+      : folderNotes
   const visibleNotes = normalizedQuery
-    ? folderNotes.filter((note) =>
+    ? libraryNotes.filter((note) =>
         `${note.title} ${note.preview} ${note.searchText ?? ""}`
           .toLocaleLowerCase()
           .includes(normalizedQuery),
       )
-    : folderNotes
+    : libraryNotes
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? null
   const activeTarget = activeNote ? normalizeNoteTarget(activeNote.title) : ""
   const backlinks = useMemo(
@@ -247,21 +274,77 @@ function App() {
     saveTimersRef.current.set(note.id, timer)
   }
 
-  const createNote = () => {
-    const id = crypto.randomUUID()
-    const newNote: Note = {
-      id,
-      title: "无标题笔记",
-      preview: "开始记录你的想法…",
-      content: "# 无标题笔记\n\n开始记录你的想法…",
-      updatedAt: "刚刚",
-      starred: false,
-      folder: "个人知识库",
+  const toggleTask = (task: MarkdownTask, checked: boolean) => {
+    const note = notes.find((candidate) => candidate.id === task.noteId)
+    if (!note || note.readOnly || !note.remotePath || !vaultSession?.writeTextFile) {
+      setVaultError("当前待办来自只读笔记，不能修改源文件")
+      return
+    }
+    try {
+      const content = setMarkdownTaskChecked(note.content, task.line, checked)
+      setNotes((current) => current.map((candidate) => candidate.id === note.id
+        ? {
+            ...candidate,
+            content,
+            outgoingLinks: extractWikiLinks(content),
+            preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
+            searchText: content.toLocaleLowerCase(),
+            updatedAt: "刚刚",
+          }
+        : candidate))
+      scheduleLocalSave(note, content)
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "更新待办失败")
+    }
+  }
+
+  const createNote = async () => {
+    const adapter = vaultSession
+    if (!adapter?.createTextFile || adapter.readOnly) {
+      setVaultError("请先打开一个可写的本地 Vault")
+      return
     }
 
-    setNotes((current) => [newNote, ...current])
-    setActiveNoteId(id)
-    setMobileScreen("editor")
+    setIsCreatingNote(true)
+    setVaultError(null)
+    try {
+      const now = new Date()
+      const timestamp = formatFileTimestamp(now)
+      const title = `新笔记 ${timestamp.slice(0, 10)} ${timestamp.slice(11, 16).replace("-", ":")}`
+      const directory = selectedFolder?.split(/\s*\/\s*/).filter(Boolean).join("/")
+      const path = `${directory ? `${directory}/` : ""}新笔记-${timestamp}-${now.getMilliseconds().toString().padStart(3, "0")}.md`
+      const content = `# ${title}\n\n`
+      const result = await adapter.createTextFile(path, content)
+      const id = `${adapter.kind}:${result.path}`
+      const newNote: Note = {
+        content,
+        contentLoaded: true,
+        folder: deriveRemoteFolder(result.path),
+        id,
+        outgoingLinks: [],
+        preview: "开始记录你的想法…",
+        readOnly: false,
+        remotePath: result.path,
+        revision: result.revision,
+        searchText: content.toLocaleLowerCase(),
+        source: "local",
+        starred: false,
+        title,
+        updatedAt: "刚刚",
+      }
+      revisionByPathRef.current.set(result.path, result.revision)
+      setLibraryView("all")
+      setNotes((current) => [newNote, ...current])
+      setActiveNoteId(id)
+      setSaveStates((current) => ({ ...current, [id]: { status: "saved" } }))
+      setVaultNoteCount((count) => count + 1)
+      setMobileScreen("editor")
+      navigate(`/notes/${encodeURIComponent(id)}`)
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "新建笔记失败")
+    } finally {
+      setIsCreatingNote(false)
+    }
   }
 
   const formatActiveNote = (syntax: string) => {
@@ -418,6 +501,19 @@ function App() {
     }
   }
 
+  const removeVaultCache = async (cacheId: string) => {
+    if (cacheId === activeCacheMeta?.id) {
+      setVaultError("当前正在使用的缓存不能删除，请先切换到其他笔记库")
+      return
+    }
+    try {
+      await deleteVaultCache(cacheId)
+      setVaultCaches(await listVaultCaches())
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "删除缓存失败")
+    }
+  }
+
   const openLocalVault = async () => {
     setIsOpeningVault(true)
     setVaultError(null)
@@ -464,6 +560,21 @@ function App() {
       )
     }
   }
+
+  const openNote = (note: Note) => {
+    navigate(`/notes/${encodeURIComponent(note.id)}`)
+    void selectNote(note)
+  }
+
+  useEffect(() => {
+    const routeNoteId = noteRouteMatch?.params.noteId
+    if (!routeNoteId) return
+    const decodedNoteId = decodeURIComponent(routeNoteId)
+    const routeNote = notes.find((note) => note.id === decodedNoteId)
+    if (!routeNote) return
+    setMobileScreen("editor")
+    if (routeNote.id !== activeNoteId) void selectNote(routeNote)
+  }, [activeNoteId, noteRouteMatch?.params.noteId, notes])
 
   const reloadActiveNote = async () => {
     if (!activeNote) return
@@ -518,7 +629,7 @@ function App() {
 
     if (linkedNote) {
       setVaultError(null)
-      void selectNote(linkedNote)
+      openNote(linkedNote)
       return
     }
 
@@ -538,17 +649,23 @@ function App() {
             backlinks={backlinks}
             connectionLabel={connectionLabel}
             connected={connected}
+            canCreateNote={Boolean(vaultSession?.createTextFile && !vaultSession.readOnly)}
             folders={folders}
             isOpeningVault={isOpeningVault}
+            isCreatingNote={isCreatingNote}
             isRefreshingVault={isRefreshingVault}
+            libraryView={libraryView}
             localVaultSupported={canSelectLocalVault()}
             mobileScreen={mobileScreen}
             mobileConnectionLabel={mobileConnectionLabel}
             mobileListStateKey={normalizedQuery}
             notes={visibleNotes}
-            onCreateNote={createNote}
+            onCreateNote={() => void createNote()}
             onFormat={formatActiveNote}
-            onMobileScreenChange={setMobileScreen}
+            onMobileScreenChange={(screen) => {
+              setMobileScreen(screen)
+              if (screen !== "editor" && noteRouteMatch) navigate("/notes")
+            }}
             onNavigate={navigate}
             onOpenLocalVault={() => void openLocalVault()}
             onOpenWikiLink={openWikiLink}
@@ -558,10 +675,18 @@ function App() {
             onRefreshVault={() => void refreshVault()}
             onResolveAsset={resolveActiveAsset}
             onSelectFolder={(folder) => {
+              setLibraryView("all")
               setSelectedFolder(folder)
               setMobileScreen("notes")
+              navigate(folder ? `/notes/folder/${encodeURIComponent(folder)}` : "/notes")
             }}
-            onSelectNote={(note) => void selectNote(note)}
+            onSelectLibraryView={(view) => {
+              setLibraryView(view)
+              setSelectedFolder(null)
+              setMobileScreen("notes")
+              navigate(view === "all" ? "/notes" : `/notes/view/${view}`)
+            }}
+            onSelectNote={openNote}
             onSelectVaultCache={(cacheId) => void selectVaultCache(cacheId)}
             onUpdateNote={updateActiveNote}
             query={query}
@@ -570,6 +695,7 @@ function App() {
               status: activeNote?.readOnly ? "readonly" : "saved",
             }}
             syncLabel={syncLabel}
+            starredNoteCount={notes.filter((note) => note.starred).length}
             totalNoteCount={notes.length}
             vaultError={vaultError}
             vaultCaches={vaultCaches}
@@ -584,10 +710,10 @@ function App() {
             notes={notes}
             onNavigate={navigate}
             onOpenNote={(note) => {
-              navigate("/notes")
-              void selectNote(note)
+              openNote(note)
             }}
             onOpenSync={() => navigate("/settings/webdav")}
+            onToggleTask={toggleTask}
           />
         )}
       />
@@ -612,6 +738,7 @@ function App() {
             <CacheSettingsPage
               activeCacheId={activeCacheMeta?.id ?? null}
               caches={vaultCaches}
+              onDeleteCache={(cacheId) => void removeVaultCache(cacheId)}
               onSelectCache={(cacheId) => {
                 void selectVaultCache(cacheId).then(() => navigate("/notes"))
               }}
@@ -640,6 +767,11 @@ function formatRemoteDate(lastModified?: string) {
 function deriveRemoteFolder(path: string) {
   const segments = path.split("/").filter(Boolean)
   return segments.slice(0, -1).join(" / ") || "根目录"
+}
+
+function formatFileTimestamp(date: Date) {
+  const pad = (value: number) => value.toString().padStart(2, "0")
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}-${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`
 }
 
 async function readVaultDocuments(adapter: VaultAdapter, paths: string[]) {

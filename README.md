@@ -7,7 +7,7 @@
 - Tauri 2 + React 19 + TypeScript + Vite 基础工程
 - Tailwind CSS 4 与 shadcn/ui（Nova / Radix）
 - 宽屏四栏、平板三栏与手机三级页面的响应式笔记界面
-- 笔记搜索、选择、新建、编辑和收藏交互
+- 笔记搜索、选择、收藏，以及可写本地 Vault 中的真实 Markdown 新建与编辑
 - CodeMirror 6 Markdown 编辑器与光标位置格式插入
 - 坚果云 WebDAV 参数配置、递归目录扫描与 Markdown 按需读取
 - Web / Tauri 统一笔记库适配层，可选择并递归读取现有本地 Obsidian Vault
@@ -19,6 +19,8 @@
 - IndexedDB 离线 Vault 缓存、刷新自动恢复与多缓存切换
 - 在线整库手动刷新，并保留当前文档、目录、搜索和已读取正文
 - Hash 路由导航：笔记、Markdown 待办、设置，以及 WebDAV / 缓存 / 关于二级设置页
+- 笔记详情、文件夹、最近更新和收藏二级路由，支持刷新恢复
+- 本地 Markdown 待办勾选写回，以及非当前离线缓存删除
 - macOS / Windows 桌面端构建基础
 
 默认不注入任何演示笔记；连接坚果云或打开本地目录后，界面只展示真实 Vault 数据。坚果云当前保持只读。文件列表和已打开正文会写入本机 IndexedDB，WebDAV 应用密码只存在于当前连接会话，不会写入缓存。

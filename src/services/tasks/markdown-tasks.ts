@@ -28,3 +28,14 @@ export function extractMarkdownTasks(notes: Note[]) {
     })
   })
 }
+
+export function setMarkdownTaskChecked(content: string, lineNumber: number, checked: boolean) {
+  const lines = content.split("\n")
+  const lineIndex = lineNumber - 1
+  const line = lines[lineIndex]
+  if (line === undefined || !TASK_PATTERN.test(line)) {
+    throw new Error("待办来源已经变化，请重新加载笔记")
+  }
+  lines[lineIndex] = line.replace(/\[([ xX])\]/, checked ? "[x]" : "[ ]")
+  return lines.join("\n")
+}

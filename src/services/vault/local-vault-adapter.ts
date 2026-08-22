@@ -63,6 +63,13 @@ export function createBrowserVaultAdapter(root: BrowserFileSystemDirectoryHandle
     displayName: root.name,
     kind: "browser",
     readOnly: false,
+    async createTextFile(path, content) {
+      if (handles.has(path)) throw new Error(`文件已存在：${path}`)
+      const handle = await getBrowserFileHandle(root, path, true)
+      await writeBrowserFile(handle, content)
+      handles.set(path, handle)
+      return { path, revision: browserRevision(await handle.getFile()) }
+    },
     async listMarkdownFiles() {
       const files: VaultFileEntry[] = []
       handles.clear()
@@ -123,7 +130,7 @@ async function collectBrowserMarkdownFiles(
 }
 
 async function selectTauriVault(): Promise<VaultAdapter | null> {
-  const [{ open }, { readDir, readFile, readTextFile, stat, writeTextFile }, { join }] = await Promise.all([
+  const [{ open }, { exists, readDir, readFile, readTextFile, stat, writeTextFile }, { join }] = await Promise.all([
     import("@tauri-apps/plugin-dialog"),
     import("@tauri-apps/plugin-fs"),
     import("@tauri-apps/api/path"),
@@ -138,6 +145,12 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
     displayName: pathSegments[pathSegments.length - 1] ?? "本地笔记库",
     kind: "tauri",
     readOnly: false,
+    async createTextFile(path, content) {
+      const absolutePath = await join(rootPath, path)
+      if (await exists(absolutePath)) throw new Error(`文件已存在：${path}`)
+      await writeTextFile(absolutePath, content)
+      return { path, revision: tauriRevision(await stat(absolutePath)) }
+    },
     async listMarkdownFiles() {
       const files: VaultFileEntry[] = []
       await collectTauriMarkdownFiles(rootPath, "", files, readDir, join)

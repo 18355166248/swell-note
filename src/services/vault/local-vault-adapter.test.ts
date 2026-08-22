@@ -104,6 +104,18 @@ describe("browser vault adapter", () => {
     })
   })
 
+  it("在指定目录创建真实 Markdown 文件并立即可读", async () => {
+    const { adapter } = createVault()
+    await adapter.listMarkdownFiles()
+    const result = await adapter.createTextFile?.("docs/新笔记.md", "# 新笔记\n")
+
+    expect(result?.path).toBe("docs/新笔记.md")
+    await expect(adapter.readTextFile("docs/新笔记.md")).resolves.toMatchObject({
+      content: "# 新笔记\n",
+    })
+    await expect(adapter.createTextFile?.("docs/新笔记.md", "覆盖内容")).rejects.toThrow("文件已存在")
+  })
+
   it("按相对路径读取 Vault 二进制附件", async () => {
     const { adapter, docs } = createVault()
     docs.entries.set("cover.png", new FakeFileHandle("cover.png", "image-bytes"))
