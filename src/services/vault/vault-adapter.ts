@@ -32,6 +32,8 @@ export class VaultConflictError extends Error {
 
 export interface VaultAdapter {
   readonly displayName: string
+  readonly cacheIdentity: string
+  readonly cacheLabel: string
   readonly kind: VaultSourceKind
   readonly readOnly: boolean
   getDisplayPath?(path: string): string

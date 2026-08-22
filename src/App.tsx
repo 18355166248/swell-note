@@ -11,6 +11,15 @@ import type { VaultAdapter, VaultFileEntry } from "@/services/vault/vault-adapte
 import { resolveVaultAssetPath } from "@/services/vault/vault-path"
 import { createWebDavVaultAdapter } from "@/services/vault/webdav-vault-adapter"
 import {
+  createVaultCacheId,
+  listVaultCaches,
+  loadLastVaultCache,
+  loadVaultCache,
+  saveVaultCache,
+  type VaultCacheSnapshot,
+  type VaultCacheSummary,
+} from "@/services/cache/vault-cache"
+import {
   extractWikiLinks,
   indexVaultFiles,
   normalizeNoteTarget,
@@ -18,6 +27,8 @@ import {
 import { buildVaultFolders, noteBelongsToFolder } from "@/services/search/vault-folders"
 import type { Note, NoteSaveState } from "@/types/note"
 import "./App.css"
+
+type ActiveCacheMeta = Pick<VaultCacheSnapshot, "id" | "label" | "sourceKind">
 
 function App() {
   const [notes, setNotes] = useState<Note[]>([])
@@ -31,12 +42,83 @@ function App() {
   const [webDavConfigured, setWebDavConfigured] = useState(hasSavedWebDavConfig)
   const [vaultNoteCount, setVaultNoteCount] = useState(0)
   const [vaultSession, setVaultSession] = useState<VaultAdapter | null>(null)
+  const [vaultCaches, setVaultCaches] = useState<VaultCacheSummary[]>([])
+  const [activeCacheMeta, setActiveCacheMeta] = useState<ActiveCacheMeta | null>(null)
+  const [cacheReady, setCacheReady] = useState(false)
   const [saveStates, setSaveStates] = useState<Record<string, NoteSaveState>>({})
   const [indexProgress, setIndexProgress] = useState<{ indexed: number; total: number } | null>(null)
   const saveTimersRef = useRef(new Map<string, number>())
   const saveQueuesRef = useRef(new Map<string, Promise<void>>())
   const revisionByPathRef = useRef(new Map<string, string | undefined>())
   const indexGenerationRef = useRef(0)
+
+  const applyCachedSnapshot = useCallback((snapshot: VaultCacheSnapshot) => {
+    // 缓存恢复时主动断开运行时适配器，确保离线浏览不会误走本地文件或 WebDAV 写入链路。
+    for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer)
+    saveTimersRef.current.clear()
+    saveQueuesRef.current.clear()
+    revisionByPathRef.current.clear()
+    indexGenerationRef.current += 1
+
+    const cachedNotes = snapshot.notes.map((note) => ({
+      ...note,
+      content: note.contentLoaded
+        ? note.content
+        : "# 正文尚未缓存\n\n重新连接原笔记库后，可以读取这篇文档的完整内容。",
+      contentLoaded: note.contentLoaded,
+      readOnly: true,
+    }))
+    const restoredActiveId = cachedNotes.some((note) => note.id === snapshot.activeNoteId)
+      ? snapshot.activeNoteId
+      : cachedNotes[0]?.id ?? ""
+
+    setVaultSession(null)
+    setActiveCacheMeta({ id: snapshot.id, label: snapshot.label, sourceKind: snapshot.sourceKind })
+    setNotes(cachedNotes)
+    setActiveNoteId(restoredActiveId)
+    setVaultNoteCount(cachedNotes.length)
+    setSelectedFolder(null)
+    setQuery("")
+    setIndexProgress(null)
+    setSaveStates(Object.fromEntries(cachedNotes.map((note) => [note.id, { status: "readonly" }])))
+    setVaultError(null)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    // IndexedDB 是本机离线快照；这里只恢复笔记数据与最后位置，不存储 WebDAV 密码或连接实例。
+    void Promise.all([loadLastVaultCache(), listVaultCaches()])
+      .then(([snapshot, caches]) => {
+        if (cancelled) return
+        setVaultCaches(caches)
+        if (snapshot) applyCachedSnapshot(snapshot)
+      })
+      .catch((error) => {
+        if (!cancelled) setVaultError(error instanceof Error ? error.message : "读取离线缓存失败")
+      })
+      .finally(() => {
+        if (!cancelled) setCacheReady(true)
+      })
+    return () => { cancelled = true }
+  }, [applyCachedSnapshot])
+
+  useEffect(() => {
+    if (!cacheReady || !activeCacheMeta || notes.length === 0) return
+    const timer = window.setTimeout(() => {
+      const snapshot: VaultCacheSnapshot = {
+        ...activeCacheMeta,
+        activeNoteId,
+        notes,
+        savedAt: Date.now(),
+      }
+      // 内容读取、收藏和本地编辑后统一刷新离线快照；敏感凭据不属于 Note 模型，因此不会进入缓存。
+      void saveVaultCache(snapshot)
+        .then(listVaultCaches)
+        .then(setVaultCaches)
+        .catch((error) => setVaultError(error instanceof Error ? error.message : "保存离线缓存失败"))
+    }, 450)
+    return () => window.clearTimeout(timer)
+  }, [activeCacheMeta, activeNoteId, cacheReady, notes])
 
   useEffect(() => () => {
     for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer)
@@ -65,24 +147,29 @@ function App() {
       : [],
     [activeNoteId, activeTarget, notes],
   )
-  const connected = vaultNoteCount > 0
+  const connected = vaultSession !== null && vaultNoteCount > 0
+  const cached = !vaultSession && activeCacheMeta !== null && vaultNoteCount > 0
   const syncLabel = connected
     ? indexProgress && indexProgress.indexed < indexProgress.total
       ? `正在索引 ${indexProgress.indexed}/${indexProgress.total}`
       : `${vaultSession?.displayName ?? "笔记库"} · ${vaultNoteCount} 篇`
-    : webDavConfigured
+    : cached
+      ? `离线缓存 · ${vaultNoteCount} 篇`
+      : webDavConfigured
       ? "等待输入应用密码"
       : "尚未连接"
   const connectionLabel = vaultSession?.kind === "webdav"
     ? "已连接坚果云"
     : vaultSession
       ? "已打开本地笔记库"
-      : "配置 WebDAV"
+      : activeCacheMeta?.label ?? "配置 WebDAV"
   const mobileConnectionLabel = vaultSession?.kind === "webdav"
     ? "已同步"
     : vaultSession
       ? "本地"
-      : "未连接"
+      : cached
+        ? "缓存"
+        : "未连接"
 
   const resolveActiveAsset = useCallback(async (source: string) => {
     const notePath = activeNote?.remotePath
@@ -232,8 +319,24 @@ function App() {
       contentLoaded: index === 0,
     }))
 
+    const cacheMeta: ActiveCacheMeta = {
+      id: await createVaultCacheId(adapter.cacheIdentity),
+      label: adapter.cacheLabel,
+      sourceKind: adapter.kind,
+    }
+    const snapshot: VaultCacheSnapshot = {
+      ...cacheMeta,
+      activeNoteId: remoteNotes[0].id,
+      notes: remoteNotes,
+      savedAt: Date.now(),
+    }
+    // 首次读取成功就立刻落盘，避免用户在延迟保存触发前刷新导致这次远程列表丢失。
+    await saveVaultCache(snapshot)
+
     // 适配器只保存在运行时；浏览器目录句柄和 WebDAV 密码都不会写入本地存储。
     setVaultSession(adapter)
+    setActiveCacheMeta(cacheMeta)
+    setVaultCaches(await listVaultCaches())
     setSelectedFolder(null)
     setNotes(remoteNotes)
     setActiveNoteId(remoteNotes[0].id)
@@ -251,6 +354,20 @@ function App() {
       startLocalIndex(adapter, files)
     }
     return remoteNotes.length
+  }
+
+  const selectVaultCache = async (cacheId: string) => {
+    try {
+      const snapshot = await loadVaultCache(cacheId)
+      if (!snapshot) throw new Error("缓存不存在，可能已被浏览器清理")
+      // 重新保存一次只用于记录“最后使用的缓存”，快照内容不会发生改变。
+      await saveVaultCache(snapshot)
+      applyCachedSnapshot(snapshot)
+      setVaultCaches(await listVaultCaches())
+      setMobileScreen("notes")
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "切换缓存失败")
+    }
   }
 
   const openLocalVault = async () => {
@@ -363,6 +480,7 @@ function App() {
   return (
     <>
       <Workspace
+        activeCacheId={activeCacheMeta?.id ?? null}
         activeNote={activeNote}
         activeNoteId={activeNoteId}
         backlinks={backlinks}
@@ -389,6 +507,7 @@ function App() {
           setMobileScreen("notes")
         }}
         onSelectNote={(note) => void selectNote(note)}
+        onSelectVaultCache={(cacheId) => void selectVaultCache(cacheId)}
         onUpdateNote={updateActiveNote}
         query={query}
         selectedFolder={selectedFolder}
@@ -398,6 +517,7 @@ function App() {
         syncLabel={syncLabel}
         totalNoteCount={notes.length}
         vaultError={vaultError}
+        vaultCaches={vaultCaches}
       />
       <WebDavSettingsDialog
         onConnect={connectWebDav}

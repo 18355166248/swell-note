@@ -7,6 +7,8 @@ export function createWebDavVaultAdapter(
   password: string,
 ): VaultAdapter {
   return {
+    cacheIdentity: `webdav:${config.serverUrl}:${config.username}:${config.remotePath}`,
+    cacheLabel: `坚果云 · ${config.remotePath}`,
     displayName: "坚果云",
     getDisplayPath(path) {
       const rootPath = config.remotePath.replace(/^\/+|\/+$/g, "")

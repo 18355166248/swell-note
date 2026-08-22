@@ -10,6 +10,7 @@ import {
   CircleHelp,
   Cloud,
   Code2,
+  Database,
   FileText,
   Filter,
   Folder,
@@ -53,6 +54,7 @@ import type { Note, NoteSaveState } from "@/types/note"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 import type { VaultFolder } from "@/services/search/vault-folders"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 
 // CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
 const MarkdownEditor = lazy(() => import("@/components/editor/markdown-editor"))
@@ -61,6 +63,7 @@ const MarkdownPreview = lazy(() => import("@/components/editor/markdown-preview"
 export type MobileScreen = "library" | "notes" | "editor"
 
 type WorkspaceProps = {
+  activeCacheId: string | null
   activeNote: Note | null
   activeNoteId: string
   backlinks: Note[]
@@ -84,6 +87,7 @@ type WorkspaceProps = {
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onSelectFolder: (folder: string | null) => void
   onSelectNote: (note: Note) => void
+  onSelectVaultCache: (cacheId: string) => void
   onUpdateNote: (patch: Partial<Note>) => void
   query: string
   saveState: NoteSaveState
@@ -91,6 +95,7 @@ type WorkspaceProps = {
   syncLabel: string
   totalNoteCount: number
   vaultError: string | null
+  vaultCaches: VaultCacheSummary[]
 }
 
 export function Workspace(props: WorkspaceProps) {
@@ -107,6 +112,7 @@ function DesktopWorkspace(props: WorkspaceProps) {
     <div className="desktop-workspace">
       <NavigationRail connected={props.connected} onOpenSettings={props.onOpenSettings} />
       <LibraryPanel
+        activeCacheId={props.activeCacheId}
         connected={props.connected}
         connectionLabel={props.connectionLabel}
         folders={props.folders}
@@ -115,11 +121,13 @@ function DesktopWorkspace(props: WorkspaceProps) {
         onOpenLocalVault={props.onOpenLocalVault}
         onOpenSettings={props.onOpenSettings}
         onSelectFolder={props.onSelectFolder}
+        onSelectVaultCache={props.onSelectVaultCache}
         selectedFolder={props.selectedFolder}
         isOpeningVault={props.isOpeningVault}
         localVaultSupported={props.localVaultSupported}
         syncLabel={props.syncLabel}
         vaultError={props.vaultError}
+        vaultCaches={props.vaultCaches}
       />
       <NoteListPanel
         activeNoteId={props.activeNoteId}
@@ -203,6 +211,7 @@ function RailButton({ active = false, icon: Icon, indicator = false, label, onCl
 }
 
 type LibraryPanelProps = {
+  activeCacheId: string | null
   connected: boolean
   connectionLabel: string
   folders: VaultFolder[]
@@ -213,12 +222,15 @@ type LibraryPanelProps = {
   onOpenLocalVault: () => void
   onOpenSettings: () => void
   onSelectFolder: (folder: string | null) => void
+  onSelectVaultCache: (cacheId: string) => void
   selectedFolder: string | null
   syncLabel: string
   vaultError: string | null
+  vaultCaches: VaultCacheSummary[]
 }
 
 function LibraryPanel({
+  activeCacheId,
   connected,
   connectionLabel,
   folders,
@@ -229,9 +241,11 @@ function LibraryPanel({
   onOpenLocalVault,
   onOpenSettings,
   onSelectFolder,
+  onSelectVaultCache,
   selectedFolder,
   syncLabel,
   vaultError,
+  vaultCaches,
 }: LibraryPanelProps) {
   return (
     <aside className="library-panel">
@@ -259,6 +273,11 @@ function LibraryPanel({
           <FolderOpen data-icon="inline-start" />
           {isOpeningVault ? "正在读取…" : "打开本地笔记库"}
         </Button>
+        <CacheSwitcher
+          activeCacheId={activeCacheId}
+          caches={vaultCaches}
+          onSelectCache={onSelectVaultCache}
+        />
         {vaultError ? <p className="vault-error">{vaultError}</p> : null}
       </div>
 
@@ -298,6 +317,48 @@ function LibraryPanel({
         <ChevronRight />
       </button>
     </aside>
+  )
+}
+
+function CacheSwitcher({
+  activeCacheId,
+  caches,
+  mobile = false,
+  onSelectCache,
+}: {
+  activeCacheId: string | null
+  caches: VaultCacheSummary[]
+  mobile?: boolean
+  onSelectCache: (cacheId: string) => void
+}) {
+  if (caches.length === 0) return null
+  const activeCache = caches.find((cache) => cache.id === activeCacheId)
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button className={mobile ? "mobile-cache-switcher" : "cache-switcher"} variant="outline">
+          <Database data-icon="inline-start" />
+          <span>{activeCache?.label ?? "切换离线缓存"}</span>
+          <ChevronDown className="cache-switcher-chevron" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="cache-switcher-menu">
+        {caches.map((cache) => (
+          <DropdownMenuItem
+            className="cache-switcher-item"
+            key={cache.id}
+            onClick={() => onSelectCache(cache.id)}
+          >
+            <span className="cache-check">{cache.id === activeCacheId ? <Check /> : null}</span>
+            <span>
+              <strong>{cache.label}</strong>
+              <small>{cache.noteCount} 篇 · {formatCacheDate(cache.savedAt)}</small>
+            </span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -811,6 +872,15 @@ function MobileLibrary(props: MobileLibraryProps) {
             <FolderOpen data-icon="inline-start" />
             {props.isOpeningVault ? "正在读取…" : "打开本地笔记库"}
           </Button>
+          <CacheSwitcher
+            activeCacheId={props.activeCacheId}
+            caches={props.vaultCaches}
+            mobile
+            onSelectCache={(cacheId) => {
+              rememberPosition()
+              props.onSelectVaultCache(cacheId)
+            }}
+          />
           {props.vaultError ? <p className="vault-error">{props.vaultError}</p> : null}
 
           <div className="mobile-library-rows">
@@ -838,6 +908,17 @@ function MobileLibrary(props: MobileLibraryProps) {
       <MobileBottomNav onOpenSettings={props.onOpenSettings} />
     </section>
   )
+}
+
+function formatCacheDate(savedAt: number) {
+  const date = new Date(savedAt)
+  if (Number.isNaN(date.getTime())) return "时间未知"
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date)
 }
 
 type MobileLibraryRowProps = {

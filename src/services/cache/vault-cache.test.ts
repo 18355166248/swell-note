@@ -1,0 +1,57 @@
+import "fake-indexeddb/auto"
+import { beforeEach, describe, expect, it } from "vitest"
+
+import {
+  createVaultCacheId,
+  listVaultCaches,
+  loadLastVaultCache,
+  loadVaultCache,
+  saveVaultCache,
+} from "./vault-cache"
+
+beforeEach(async () => {
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.deleteDatabase("swell-note-vault-cache")
+    request.onsuccess = () => resolve()
+    request.onerror = () => reject(request.error)
+  })
+})
+
+describe("vault cache", () => {
+  it("使用不可逆哈希生成稳定缓存标识", async () => {
+    const identity = "webdav:https://dav.example.com:user@example.com:/notes/"
+    expect(await createVaultCacheId(identity)).toBe(await createVaultCacheId(identity))
+    expect(await createVaultCacheId(identity)).not.toContain("user@example.com")
+  })
+
+  it("保存多个缓存并恢复最后使用项", async () => {
+    await saveVaultCache({
+      activeNoteId: "a",
+      id: "one",
+      label: "坚果云 · /A/",
+      notes: [{
+        content: "# 已缓存正文",
+        contentLoaded: true,
+        id: "a",
+        preview: "已缓存正文",
+        readOnly: true,
+        starred: false,
+        title: "缓存文档",
+        updatedAt: "刚刚",
+      }],
+      savedAt: 1,
+      sourceKind: "webdav",
+    })
+    await saveVaultCache({ activeNoteId: "b", id: "two", label: "坚果云 · /B/", notes: [], savedAt: 2, sourceKind: "webdav" })
+
+    await expect(loadLastVaultCache()).resolves.toMatchObject({ id: "two" })
+    await expect(loadVaultCache("one")).resolves.toMatchObject({
+      id: "one",
+      notes: [expect.objectContaining({ content: "# 已缓存正文", id: "a" })],
+    })
+    await expect(listVaultCaches()).resolves.toEqual([
+      expect.objectContaining({ id: "two", noteCount: 0 }),
+      expect.objectContaining({ id: "one", noteCount: 1 }),
+    ])
+  })
+})

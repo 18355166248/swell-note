@@ -58,6 +58,8 @@ async function selectBrowserVault(): Promise<VaultAdapter | null> {
 export function createBrowserVaultAdapter(root: BrowserFileSystemDirectoryHandle): VaultAdapter {
   const handles = new Map<string, BrowserFileSystemFileHandle>()
   return {
+    cacheIdentity: `browser:${root.name}`,
+    cacheLabel: `本地 · ${root.name}`,
     displayName: root.name,
     kind: "browser",
     readOnly: false,
@@ -131,6 +133,8 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
   const pathSegments = rootPath.split(/[\\/]/).filter(Boolean)
 
   return {
+    cacheIdentity: `tauri:${rootPath}`,
+    cacheLabel: `本地 · ${pathSegments[pathSegments.length - 1] ?? "笔记库"}`,
     displayName: pathSegments[pathSegments.length - 1] ?? "本地笔记库",
     kind: "tauri",
     readOnly: false,
