@@ -90,6 +90,90 @@
 .workspace-root { height: 100dvh; overflow: hidden; background: var(--background); }
 .desktop-workspace { display: grid; height: 100%; grid-template-columns: 64px minmax(205px,230px) minmax(280px,320px) minmax(0,1fr); }
 .mobile-workspace { display: none; }
+.mobile-bottom-nav { display: none; }
+
+/* 一级路由共用稳定的应用壳层；设置二级路由只替换右侧内容，避免整页导航跳动。 */
+.route-page-shell { display: grid; height: 100dvh; min-height: 0; grid-template-columns: 64px minmax(0,1fr); overflow: hidden; background: white; }
+.settings-route-shell { display: grid; height: 100dvh; min-height: 0; grid-template-columns: 64px 260px minmax(0,1fr); overflow: hidden; background: white; }
+.route-main-panel, .settings-detail-panel { display: flex; min-width: 0; min-height: 0; flex-direction: column; }
+.route-page-header, .settings-detail-header { display: flex; min-height: 74px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); padding: 13px 24px; }
+.route-page-header h1, .settings-detail-header h1 { margin: 2px 0 0; font-size: 21px; font-weight: 680; letter-spacing: -.025em; }
+.route-count { border-radius: 999px; background: var(--blue-soft); padding: 5px 10px; color: var(--primary); font-size: 11px; font-weight: 650; }
+.route-scroll-area { min-height: 0; flex: 1; }
+.todo-filter { display: flex; gap: 4px; border-bottom: 1px solid var(--border); padding: 10px 24px; }
+.todo-filter button[data-active="true"] { color: var(--primary); }
+.todo-content { width: min(780px,calc(100% - 48px)); margin: 0 auto; padding: 24px 0 64px; }
+.route-hint { display: flex; align-items: center; gap: 9px; margin-bottom: 18px; border-radius: 10px; background: var(--panel-soft); padding: 11px 13px; color: var(--muted-foreground); font-size: 12px; line-height: 1.5; }
+.route-hint svg { width: 17px; height: 17px; flex: 0 0 auto; color: var(--primary); }
+.route-hint code { border-radius: 4px; background: var(--muted); padding: 1px 4px; color: var(--foreground); }
+.todo-list { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; }
+.todo-row { display: grid; width: 100%; min-height: 66px; grid-template-columns: 24px minmax(0,1fr) 18px; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); padding: 10px 15px; text-align: left; }
+.todo-row:last-child { border-bottom: 0; }
+.todo-row:hover { background: var(--panel-soft); }
+.todo-row > span:nth-child(2) { min-width: 0; }
+.todo-row strong, .todo-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-row strong { font-size: 13px; font-weight: 610; }
+.todo-row strong[data-completed="true"] { color: var(--muted-foreground); text-decoration: line-through; }
+.todo-row small { margin-top: 4px; color: var(--muted-foreground); font-size: 10.5px; }
+.todo-row > svg { width: 16px; color: var(--muted-foreground); }
+.todo-check { display: grid; width: 19px; height: 19px; place-items: center; border: 1.5px solid #b7bfca; border-radius: 6px; }
+.todo-check[data-checked="true"] { border-color: var(--primary); background: var(--primary); color: white; }
+.todo-check svg { width: 14px; height: 14px; }
+.route-empty-state { display: flex; min-height: 340px; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.route-empty-state > svg { width: 38px; height: 38px; color: var(--primary); }
+.route-empty-state h2 { margin: 15px 0 5px; font-size: 17px; }
+.route-empty-state p { margin: 0 0 17px; color: var(--muted-foreground); font-size: 12px; }
+.settings-sidebar { min-width: 0; border-right: 1px solid var(--border); background: var(--panel-soft); padding: 20px 12px; }
+.settings-sidebar-title { display: flex; align-items: center; gap: 9px; padding: 0 8px 20px; font-size: 16px; }
+.settings-sidebar-title svg { width: 19px; color: var(--primary); }
+.settings-sidebar nav { display: grid; gap: 4px; }
+.settings-sidebar nav button { display: grid; min-height: 44px; grid-template-columns: 20px minmax(0,1fr) 16px; align-items: center; gap: 9px; border-radius: 8px; padding: 0 10px; color: #46505e; text-align: left; }
+.settings-sidebar nav button:hover { background: var(--muted); }
+.settings-sidebar nav button[data-active="true"] { background: var(--blue-soft); color: var(--primary); font-weight: 620; }
+.settings-sidebar nav svg { width: 17px; height: 17px; }
+.settings-sidebar nav button > svg:last-child { color: var(--muted-foreground); }
+.settings-mobile-back { display: none; }
+.settings-overview, .settings-content-card { width: min(720px,calc(100% - 48px)); margin: 0 auto; padding: 28px 0 70px; }
+.settings-overview > p { margin: 0 0 20px; color: var(--muted-foreground); font-size: 13px; line-height: 1.7; }
+.settings-card-list, .settings-cache-list { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; }
+.settings-card-list button, .settings-cache-list button { display: grid; width: 100%; min-height: 72px; grid-template-columns: 40px minmax(0,1fr) 18px; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); padding: 10px 15px; text-align: left; }
+.settings-cache-list button { grid-template-columns: minmax(0,1fr) auto; }
+.settings-card-list button:last-child, .settings-cache-list button:last-child { border-bottom: 0; }
+.settings-card-list button:hover, .settings-cache-list button:hover { background: var(--panel-soft); }
+.settings-card-icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 10px; background: var(--blue-soft); color: var(--primary); }
+.settings-card-icon svg { width: 18px; height: 18px; }
+.settings-card-list strong, .settings-card-list small, .settings-cache-list strong, .settings-cache-list small { display: block; }
+.settings-card-list strong, .settings-cache-list strong { font-size: 13px; }
+.settings-card-list small, .settings-cache-list small { margin-top: 4px; color: var(--muted-foreground); font-size: 11px; }
+.settings-card-list > button > svg, .settings-cache-list > button > svg { width: 16px; color: var(--muted-foreground); }
+.settings-content-heading { display: flex; align-items: flex-start; gap: 13px; margin-bottom: 24px; }
+.settings-content-heading > svg { width: 22px; height: 22px; margin-top: 2px; color: var(--primary); }
+.settings-content-heading h2 { margin: 0; font-size: 17px; }
+.settings-content-heading p { margin: 5px 0 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.5; }
+.settings-active-badge { border-radius: 999px; background: var(--blue-soft); padding: 4px 8px; color: var(--primary); font-size: 10.5px; font-weight: 650; }
+.settings-empty-copy { border-radius: 10px; background: var(--panel-soft); padding: 18px; color: var(--muted-foreground); font-size: 12px; }
+.about-list { overflow: hidden; margin: 0; border: 1px solid var(--border); border-radius: 12px; }
+.about-list div { display: flex; min-height: 50px; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--border); padding: 8px 14px; font-size: 12px; }
+.about-list div:last-child { border-bottom: 0; }
+.about-list dt { color: var(--muted-foreground); }
+.about-list dd { margin: 0; text-align: right; }
+.settings-form-grid { display: grid; gap: 20px; }
+.settings-field { display: grid; gap: 8px; }
+.settings-field > button, .settings-field > p { width: fit-content; margin: 0; color: var(--muted-foreground); font-size: 11px; line-height: 1.5; }
+.settings-field > button:hover { color: var(--foreground); text-decoration: underline; }
+.settings-field-label { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.settings-field-label a { display: inline-flex; align-items: center; gap: 4px; color: var(--muted-foreground); font-size: 11px; }
+.settings-field-label a svg { width: 12px; height: 12px; }
+.settings-password-field { position: relative; }
+.settings-password-field input { padding-right: 40px; }
+.settings-password-field button { position: absolute; top: 2px; right: 2px; }
+.settings-security-note { display: flex; align-items: flex-start; gap: 6px; }
+.settings-security-note svg { width: 14px; height: 14px; flex: 0 0 auto; }
+.settings-form-error { display: flex; align-items: flex-start; gap: 7px; margin-top: 18px; border-radius: 9px; background: color-mix(in oklab,var(--destructive) 8%,white); padding: 10px 12px; color: var(--destructive); font-size: 12px; }
+.settings-form-error svg { width: 15px; height: 15px; flex: 0 0 auto; }
+.settings-form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 24px; border-top: 1px solid var(--border); padding-top: 18px; }
+.settings-form-actions > span { display: inline-flex; align-items: center; gap: 5px; margin-right: auto; color: #148454; font-size: 11px; }
+.settings-form-actions > span svg { width: 14px; height: 14px; }
 
 /* 桌面端使用稳定的多栏信息架构，避免不同宽度下跳动和丢失当前上下文。 */
 .navigation-rail { display: flex; flex-direction: column; align-items: center; border-right: 1px solid var(--border); background: #fff; padding: 18px 0 14px; }
@@ -312,6 +396,22 @@
   .formatting-toolbar[data-mobile="true"] { min-height: calc(54px + env(safe-area-inset-bottom)); gap: 4px; justify-content: space-around; border-top: 1px solid var(--border); border-bottom: 0; padding: 5px 10px env(safe-area-inset-bottom); background: white; }
   .formatting-toolbar[data-mobile="true"] button { min-width: 40px; height: 42px; }
   .formatting-toolbar[data-mobile="true"] .toolbar-divider { display: none; }
+  .route-page-shell, .settings-route-shell { display: flex; height: 100dvh; flex-direction: column; }
+  .route-page-shell > .navigation-rail, .settings-route-shell > .navigation-rail, .settings-sidebar { display: none; }
+  .route-main-panel, .settings-detail-panel { flex: 1; }
+  .route-page-header, .settings-detail-header { min-height: 58px; padding: 8px 16px; }
+  .route-page-header h1, .settings-detail-header h1 { font-size: 18px; }
+  .route-count { font-size: 10px; }
+  .todo-filter { padding: 8px 12px; }
+  .todo-content, .settings-overview, .settings-content-card { width: auto; margin: 0; padding: 16px 16px 48px; }
+  .route-hint { align-items: flex-start; }
+  .todo-row { min-height: 68px; padding-inline: 13px; }
+  .settings-detail-header { justify-content: flex-start; gap: 4px; }
+  .settings-mobile-back { display: inline-flex; margin-left: -8px; }
+  .settings-card-list button { min-height: 76px; }
+  .settings-form-actions { align-items: stretch; flex-wrap: wrap; }
+  .settings-form-actions > span { width: 100%; }
+  .settings-form-actions button { flex: 1; }
 }
 
 @media (min-width: 1280px) {

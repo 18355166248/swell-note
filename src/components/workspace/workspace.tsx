@@ -15,7 +15,6 @@ import {
   Filter,
   Folder,
   FolderOpen,
-  Home,
   List,
   ListFilter,
   Link,
@@ -30,7 +29,6 @@ import {
   Settings,
   SlidersHorizontal,
   Star,
-  Tags,
   Trash2,
   UserRound,
 } from "lucide-react"
@@ -62,6 +60,7 @@ const MarkdownEditor = lazy(() => import("@/components/editor/markdown-editor"))
 const MarkdownPreview = lazy(() => import("@/components/editor/markdown-preview"))
 
 export type MobileScreen = "library" | "notes" | "editor"
+export type AppSection = "notes" | "settings" | "todos"
 
 type WorkspaceProps = {
   activeCacheId: string | null
@@ -84,6 +83,7 @@ type WorkspaceProps = {
   onOpenLocalVault: () => void
   onOpenWikiLink: (target: string) => void
   onOpenSettings: () => void
+  onNavigate: (path: string) => void
   onQueryChange: (query: string) => void
   onReloadNote: () => void
   onRefreshVault: () => void
@@ -113,7 +113,12 @@ export function Workspace(props: WorkspaceProps) {
 function DesktopWorkspace(props: WorkspaceProps) {
   return (
     <div className="desktop-workspace">
-      <NavigationRail connected={props.connected} onOpenSettings={props.onOpenSettings} />
+      <AppNavigationRail
+        activeSection="notes"
+        connected={props.connected}
+        onNavigate={props.onNavigate}
+        onOpenSync={props.onOpenSettings}
+      />
       <LibraryPanel
         activeCacheId={props.activeCacheId}
         connected={props.connected}
@@ -160,28 +165,33 @@ function DesktopWorkspace(props: WorkspaceProps) {
   )
 }
 
-function NavigationRail({
+export function AppNavigationRail({
+  activeSection,
   connected,
-  onOpenSettings,
-}: Pick<WorkspaceProps, "connected" | "onOpenSettings">) {
+  onNavigate,
+  onOpenSync,
+}: {
+  activeSection: AppSection
+  connected: boolean
+  onNavigate: (path: string) => void
+  onOpenSync: () => void
+}) {
   return (
     <aside className="navigation-rail">
       <img alt="Swell Note" className="rail-logo" src={swellNoteLogo} />
       <nav className="rail-navigation" aria-label="主导航">
-        <RailButton icon={Home} label="首页" />
-        <RailButton active icon={FileText} label="笔记" />
-        <RailButton icon={CheckCircle2} label="待办" />
-        <RailButton icon={Tags} label="标签" />
+        <RailButton active={activeSection === "notes"} icon={FileText} label="笔记" onClick={() => onNavigate("/notes")} />
+        <RailButton active={activeSection === "todos"} icon={CheckCircle2} label="待办" onClick={() => onNavigate("/todos")} />
       </nav>
       <div className="rail-footer">
         <RailButton
           indicator={connected}
           icon={Cloud}
           label="同步"
-          onClick={onOpenSettings}
+          onClick={onOpenSync}
         />
-        <RailButton icon={Settings} label="设置" onClick={onOpenSettings} />
-        <RailButton icon={CircleHelp} label="帮助" />
+        <RailButton active={activeSection === "settings"} icon={Settings} label="设置" onClick={() => onNavigate("/settings")} />
+        <RailButton icon={CircleHelp} label="关于" onClick={() => onNavigate("/settings/about")} />
       </div>
     </aside>
   )
@@ -189,7 +199,7 @@ function NavigationRail({
 
 type RailButtonProps = {
   active?: boolean
-  icon: typeof Home
+  icon: typeof FileText
   indicator?: boolean
   label: string
   onClick?: () => void
@@ -927,7 +937,7 @@ function MobileLibrary(props: MobileLibraryProps) {
           </div>
         </div>
       </ScrollArea>
-      <MobileBottomNav onOpenSettings={props.onOpenSettings} />
+      <AppBottomNav activeSection="notes" onNavigate={props.onNavigate} />
     </section>
   )
 }
@@ -1027,7 +1037,7 @@ function MobileNoteList(props: MobileNoteListProps) {
         </div>
       </ScrollArea>
       <Button aria-label="新建笔记" className="mobile-fab" onClick={props.onCreateNote} size="icon-lg"><Plus /></Button>
-      <MobileBottomNav onOpenSettings={props.onOpenSettings} />
+      <AppBottomNav activeSection="notes" onNavigate={props.onNavigate} />
     </section>
   )
 }
@@ -1059,12 +1069,18 @@ function MobileBrandHeader({
   )
 }
 
-function MobileBottomNav({ onOpenSettings }: Pick<WorkspaceProps, "onOpenSettings">) {
+export function AppBottomNav({
+  activeSection,
+  onNavigate,
+}: {
+  activeSection: AppSection
+  onNavigate: (path: string) => void
+}) {
   return (
     <nav className="mobile-bottom-nav" aria-label="手机主导航">
-      <button className="mobile-tab" data-active type="button"><FileText /><span>笔记</span></button>
-      <button className="mobile-tab" type="button"><CheckCircle2 /><span>待办</span></button>
-      <button className="mobile-tab" onClick={onOpenSettings} type="button"><Settings /><span>设置</span></button>
+      <button className="mobile-tab" data-active={activeSection === "notes"} onClick={() => onNavigate("/notes")} type="button"><FileText /><span>笔记</span></button>
+      <button className="mobile-tab" data-active={activeSection === "todos"} onClick={() => onNavigate("/todos")} type="button"><CheckCircle2 /><span>待办</span></button>
+      <button className="mobile-tab" data-active={activeSection === "settings"} onClick={() => onNavigate("/settings")} type="button"><Settings /><span>设置</span></button>
     </nav>
   )
 }

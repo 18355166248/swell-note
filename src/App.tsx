@@ -1,7 +1,15 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom"
 
 import { Workspace, type MobileScreen } from "@/components/workspace/workspace"
-import { WebDavSettingsDialog } from "@/components/webdav-settings-dialog"
+import {
+  AboutSettingsPage,
+  CacheSettingsPage,
+  SettingsLayout,
+  SettingsOverview,
+  TodoPage,
+} from "@/components/routes/app-pages"
+import { WebDavSettingsForm } from "@/components/settings/webdav-settings-form"
 import { hasSavedWebDavConfig, type WebDavConfig } from "@/lib/webdav-config"
 import {
   canSelectLocalVault,
@@ -31,11 +39,11 @@ import "./App.css"
 type ActiveCacheMeta = Pick<VaultCacheSnapshot, "id" | "label" | "sourceKind">
 
 function App() {
+  const navigate = useNavigate()
   const [notes, setNotes] = useState<Note[]>([])
   const [activeNoteId, setActiveNoteId] = useState("")
   const [query, setQuery] = useState("")
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [mobileScreen, setMobileScreen] = useState<MobileScreen>("library")
   const [isOpeningVault, setIsOpeningVault] = useState(false)
   const [isRefreshingVault, setIsRefreshingVault] = useState(false)
@@ -380,7 +388,7 @@ function App() {
 
   const refreshVault = async () => {
     if (!vaultSession) {
-      setSettingsOpen(true)
+      navigate("/settings/webdav")
       return
     }
 
@@ -518,56 +526,102 @@ function App() {
   }
 
   return (
-    <>
-      <Workspace
-        activeCacheId={activeCacheMeta?.id ?? null}
-        activeNote={activeNote}
-        activeNoteId={activeNoteId}
-        backlinks={backlinks}
-        connectionLabel={connectionLabel}
-        connected={connected}
-        folders={folders}
-        isOpeningVault={isOpeningVault}
-        isRefreshingVault={isRefreshingVault}
-        localVaultSupported={canSelectLocalVault()}
-        mobileScreen={mobileScreen}
-        mobileConnectionLabel={mobileConnectionLabel}
-        mobileListStateKey={normalizedQuery}
-        notes={visibleNotes}
-        onCreateNote={createNote}
-        onFormat={formatActiveNote}
-        onMobileScreenChange={setMobileScreen}
-        onOpenLocalVault={() => void openLocalVault()}
-        onOpenWikiLink={openWikiLink}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onQueryChange={setQuery}
-        onReloadNote={() => void reloadActiveNote()}
-        onRefreshVault={() => void refreshVault()}
-        onResolveAsset={resolveActiveAsset}
-        onSelectFolder={(folder) => {
-          setSelectedFolder(folder)
-          setMobileScreen("notes")
-        }}
-        onSelectNote={(note) => void selectNote(note)}
-        onSelectVaultCache={(cacheId) => void selectVaultCache(cacheId)}
-        onUpdateNote={updateActiveNote}
-        query={query}
-        selectedFolder={selectedFolder}
-        saveState={saveStates[activeNoteId] ?? {
-          status: activeNote?.readOnly ? "readonly" : "saved",
-        }}
-        syncLabel={syncLabel}
-        totalNoteCount={notes.length}
-        vaultError={vaultError}
-        vaultCaches={vaultCaches}
+    <Routes>
+      <Route element={<Navigate replace to="/notes" />} path="/" />
+      <Route
+        path="/notes/*"
+        element={(
+          <Workspace
+            activeCacheId={activeCacheMeta?.id ?? null}
+            activeNote={activeNote}
+            activeNoteId={activeNoteId}
+            backlinks={backlinks}
+            connectionLabel={connectionLabel}
+            connected={connected}
+            folders={folders}
+            isOpeningVault={isOpeningVault}
+            isRefreshingVault={isRefreshingVault}
+            localVaultSupported={canSelectLocalVault()}
+            mobileScreen={mobileScreen}
+            mobileConnectionLabel={mobileConnectionLabel}
+            mobileListStateKey={normalizedQuery}
+            notes={visibleNotes}
+            onCreateNote={createNote}
+            onFormat={formatActiveNote}
+            onMobileScreenChange={setMobileScreen}
+            onNavigate={navigate}
+            onOpenLocalVault={() => void openLocalVault()}
+            onOpenWikiLink={openWikiLink}
+            onOpenSettings={() => navigate("/settings/webdav")}
+            onQueryChange={setQuery}
+            onReloadNote={() => void reloadActiveNote()}
+            onRefreshVault={() => void refreshVault()}
+            onResolveAsset={resolveActiveAsset}
+            onSelectFolder={(folder) => {
+              setSelectedFolder(folder)
+              setMobileScreen("notes")
+            }}
+            onSelectNote={(note) => void selectNote(note)}
+            onSelectVaultCache={(cacheId) => void selectVaultCache(cacheId)}
+            onUpdateNote={updateActiveNote}
+            query={query}
+            selectedFolder={selectedFolder}
+            saveState={saveStates[activeNoteId] ?? {
+              status: activeNote?.readOnly ? "readonly" : "saved",
+            }}
+            syncLabel={syncLabel}
+            totalNoteCount={notes.length}
+            vaultError={vaultError}
+            vaultCaches={vaultCaches}
+          />
+        )}
       />
-      <WebDavSettingsDialog
-        onConnect={connectWebDav}
-        onOpenChange={setSettingsOpen}
-        onSaved={() => setWebDavConfigured(true)}
-        open={settingsOpen}
+      <Route
+        path="/todos"
+        element={(
+          <TodoPage
+            connected={connected}
+            notes={notes}
+            onNavigate={navigate}
+            onOpenNote={(note) => {
+              navigate("/notes")
+              void selectNote(note)
+            }}
+            onOpenSync={() => navigate("/settings/webdav")}
+          />
+        )}
       />
-    </>
+      <Route
+        path="/settings"
+        element={<SettingsLayout connected={connected} onNavigate={navigate} onOpenSync={() => navigate("/settings/webdav")} />}
+      >
+        <Route index element={<SettingsOverview onNavigate={navigate} />} />
+        <Route
+          path="webdav"
+          element={(
+            <WebDavSettingsForm
+              onConnect={connectWebDav}
+              onConnected={() => navigate("/notes")}
+              onSaved={() => setWebDavConfigured(true)}
+            />
+          )}
+        />
+        <Route
+          path="cache"
+          element={(
+            <CacheSettingsPage
+              activeCacheId={activeCacheMeta?.id ?? null}
+              caches={vaultCaches}
+              onSelectCache={(cacheId) => {
+                void selectVaultCache(cacheId).then(() => navigate("/notes"))
+              }}
+            />
+          )}
+        />
+        <Route path="about" element={<AboutSettingsPage />} />
+      </Route>
+      <Route element={<Navigate replace to="/notes" />} path="*" />
+    </Routes>
   )
 }
 
