@@ -50,6 +50,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { Note, NoteSaveState } from "@/types/note"
+import type { VaultAsset } from "@/services/vault/vault-adapter"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 
 // CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
@@ -77,6 +78,7 @@ type WorkspaceProps = {
   onOpenSettings: () => void
   onQueryChange: (query: string) => void
   onReloadNote: () => void
+  onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onSelectNote: (note: Note) => void
   onUpdateNote: (patch: Partial<Note>) => void
   query: string
@@ -134,6 +136,7 @@ function DesktopWorkspace(props: WorkspaceProps) {
         onSelectNote={props.onSelectNote}
         onUpdateNote={props.onUpdateNote}
         onReloadNote={props.onReloadNote}
+        onResolveAsset={props.onResolveAsset}
         saveState={props.saveState}
       />
     </div>
@@ -426,12 +429,13 @@ type NoteEditorProps = {
   onFormat: (syntax: string) => void
   onOpenWikiLink: (target: string) => void
   onReloadNote: () => void
+  onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onSelectNote: (note: Note) => void
   onUpdateNote: (patch: Partial<Note>) => void
   saveState: NoteSaveState
 }
 
-function NoteEditor({ backlinks, compact = false, note, onBack, onFormat, onOpenWikiLink, onReloadNote, onSelectNote, onUpdateNote, saveState }: NoteEditorProps) {
+function NoteEditor({ backlinks, compact = false, note, onBack, onFormat, onOpenWikiLink, onReloadNote, onResolveAsset, onSelectNote, onUpdateNote, saveState }: NoteEditorProps) {
   const readOnly = note.readOnly ?? note.source === "webdav"
   const titleReadOnly = note.source === "local" || note.source === "webdav"
   const editorRef = useRef<MarkdownEditorHandle>(null)
@@ -522,7 +526,11 @@ function NoteEditor({ backlinks, compact = false, note, onBack, onFormat, onOpen
           </div>
           {previewing ? (
             <Suspense fallback={<div className="editor-loading">正在生成预览…</div>}>
-              <MarkdownPreview content={note.content} onWikiLink={onOpenWikiLink} />
+              <MarkdownPreview
+                content={note.content}
+                onResolveAsset={onResolveAsset}
+                onWikiLink={onOpenWikiLink}
+              />
             </Suspense>
           ) : (
             <div className="markdown-editor-shell">
@@ -608,6 +616,7 @@ function MobileWorkspace(props: WorkspaceProps) {
           onFormat={props.onFormat}
           onOpenWikiLink={props.onOpenWikiLink}
           onReloadNote={props.onReloadNote}
+          onResolveAsset={props.onResolveAsset}
           onSelectNote={props.onSelectNote}
           onUpdateNote={props.onUpdateNote}
           saveState={props.saveState}

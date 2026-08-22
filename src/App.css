@@ -208,6 +208,9 @@
 .wiki-link { display: inline; padding: 0; font: inherit; }
 .wiki-link:hover, .markdown-preview a:hover { text-decoration-color: currentColor; }
 .markdown-preview input[type="checkbox"] { margin-right: .45em; accent-color: var(--primary); }
+.markdown-preview img { display: block; max-width: 100%; height: auto; margin: 1.25em auto; border-radius: 8px; }
+.markdown-image-state { display: inline-flex; min-height: 34px; align-items: center; border-radius: 7px; background: var(--muted); padding: 6px 10px; color: var(--muted-foreground); font-size: 12px; }
+.markdown-image-state[data-status="error"] { color: var(--destructive); }
 .editor-loading { padding: 8px 0; color: var(--muted-foreground); font-size: 13px; }
 .backlinks-panel { margin-top: 44px; border-top: 1px solid var(--border); padding-top: 20px; }
 .backlinks-title { display: flex; align-items: center; gap: 7px; color: #384352; font-size: 12px; }

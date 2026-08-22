@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 
 import { Workspace, type MobileScreen } from "@/components/workspace/workspace"
 import { WebDavSettingsDialog } from "@/components/webdav-settings-dialog"
@@ -9,6 +9,7 @@ import {
   selectLocalVaultAdapter,
 } from "@/services/vault/local-vault-adapter"
 import type { VaultAdapter, VaultFileEntry } from "@/services/vault/vault-adapter"
+import { resolveVaultAssetPath } from "@/services/vault/vault-path"
 import { createWebDavVaultAdapter } from "@/services/vault/webdav-vault-adapter"
 import {
   extractWikiLinks,
@@ -75,6 +76,13 @@ function App() {
     : vaultSession
       ? "本地"
       : "未连接"
+
+  const resolveActiveAsset = useCallback(async (source: string) => {
+    const notePath = activeNote.remotePath
+    if (!notePath || !vaultSession?.readBinaryFile) return null
+    const assetPath = resolveVaultAssetPath(notePath, source)
+    return assetPath ? vaultSession.readBinaryFile(assetPath) : null
+  }, [activeNote.remotePath, vaultSession])
 
   const updateActiveNote = (patch: Partial<Note>) => {
     const indexedPatch: Partial<Note> = typeof patch.content === "string"
@@ -362,6 +370,7 @@ function App() {
         onOpenSettings={() => setSettingsOpen(true)}
         onQueryChange={setQuery}
         onReloadNote={() => void reloadActiveNote()}
+        onResolveAsset={resolveActiveAsset}
         onSelectNote={(note) => void selectNote(note)}
         onUpdateNote={updateActiveNote}
         query={query}

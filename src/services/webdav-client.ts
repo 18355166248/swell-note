@@ -56,6 +56,18 @@ export async function readMarkdownFile(
   return response.text()
 }
 
+export async function readWebDavAsset(
+  config: WebDavConfig,
+  password: string,
+  path: string,
+) {
+  const response = await webDavFetch(config, password, path, { method: "GET" })
+  return {
+    data: new Uint8Array(await response.arrayBuffer()),
+    mimeType: response.headers.get("content-type") ?? undefined,
+  }
+}
+
 async function listDirectory(
   config: WebDavConfig,
   password: string,

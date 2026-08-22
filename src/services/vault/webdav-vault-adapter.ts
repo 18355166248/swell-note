@@ -1,5 +1,5 @@
 import type { WebDavConfig } from "@/lib/webdav-config"
-import { listMarkdownFiles, readMarkdownFile } from "@/services/webdav-client"
+import { listMarkdownFiles, readMarkdownFile, readWebDavAsset } from "@/services/webdav-client"
 import type { VaultAdapter } from "@/services/vault/vault-adapter"
 
 export function createWebDavVaultAdapter(
@@ -19,6 +19,9 @@ export function createWebDavVaultAdapter(
     },
     async readTextFile(path) {
       return { content: await readMarkdownFile(config, password, path) }
+    },
+    readBinaryFile(path) {
+      return readWebDavAsset(config, password, path)
     },
   }
 }

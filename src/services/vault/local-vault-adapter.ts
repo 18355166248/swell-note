@@ -73,6 +73,10 @@ export function createBrowserVaultAdapter(root: BrowserFileSystemDirectoryHandle
       const file = await handle.getFile()
       return { content: await file.text(), revision: browserRevision(file) }
     },
+    async readBinaryFile(path) {
+      const file = await getBrowserFileHandle(root, path, false).then((handle) => handle.getFile())
+      return { data: new Uint8Array(await file.arrayBuffer()), mimeType: file.type || undefined }
+    },
     async writeTextFile(path, content, expectedRevision) {
       const handle = handles.get(path)
       if (!handle) throw new Error(`找不到本地文件：${path}`)
@@ -117,7 +121,7 @@ async function collectBrowserMarkdownFiles(
 }
 
 async function selectTauriVault(): Promise<VaultAdapter | null> {
-  const [{ open }, { readDir, readTextFile, stat, writeTextFile }, { join }] = await Promise.all([
+  const [{ open }, { readDir, readFile, readTextFile, stat, writeTextFile }, { join }] = await Promise.all([
     import("@tauri-apps/plugin-dialog"),
     import("@tauri-apps/plugin-fs"),
     import("@tauri-apps/api/path"),
@@ -142,6 +146,9 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
         stat(absolutePath),
       ])
       return { content, revision: tauriRevision(fileInfo) }
+    },
+    async readBinaryFile(path) {
+      return { data: await readFile(await join(rootPath, path)), mimeType: mimeTypeFromPath(path) }
     },
     async writeTextFile(path, content, expectedRevision) {
       const absolutePath = await join(rootPath, path)
@@ -169,6 +176,16 @@ function tauriRevision(file: Awaited<ReturnType<typeof import("@tauri-apps/plugi
 function createConflictPath(path: string) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
   return path.replace(/\.md$/i, `.conflict-${timestamp}.md`)
+}
+
+function mimeTypeFromPath(path: string) {
+  const extension = path.split(".").pop()?.toLocaleLowerCase()
+  return extension === "png" ? "image/png"
+    : extension === "jpg" || extension === "jpeg" ? "image/jpeg"
+      : extension === "gif" ? "image/gif"
+        : extension === "webp" ? "image/webp"
+          : extension === "svg" ? "image/svg+xml"
+            : undefined
 }
 
 async function getBrowserFileHandle(

@@ -11,6 +11,11 @@ export type VaultDocument = {
   revision?: string
 }
 
+export type VaultAsset = {
+  data: Uint8Array
+  mimeType?: string
+}
+
 export type VaultWriteResult = {
   revision: string
 }
@@ -30,6 +35,7 @@ export interface VaultAdapter {
   readonly kind: VaultSourceKind
   readonly readOnly: boolean
   listMarkdownFiles(): Promise<VaultFileEntry[]>
+  readBinaryFile?(path: string): Promise<VaultAsset>
   readTextFile(path: string): Promise<VaultDocument>
   writeTextFile?(path: string, content: string, expectedRevision?: string): Promise<VaultWriteResult>
 }

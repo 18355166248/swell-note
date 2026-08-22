@@ -14,10 +14,12 @@ class FakeFileHandle {
   async getFile() {
     const content = this.content
     return {
+      arrayBuffer: async () => new TextEncoder().encode(content).buffer,
       lastModified: this.modified,
       name: this.name,
       size: new TextEncoder().encode(content).length,
       text: async () => content,
+      type: this.name.endsWith(".png") ? "image/png" : "text/markdown",
     } as File
   }
 
@@ -100,6 +102,17 @@ describe("browser vault adapter", () => {
     await expect(adapter.readTextFile("docs/note.md")).resolves.toMatchObject({
       content: "# 已保存内容",
     })
+  })
+
+  it("按相对路径读取 Vault 二进制附件", async () => {
+    const { adapter, docs } = createVault()
+    docs.entries.set("cover.png", new FakeFileHandle("cover.png", "image-bytes"))
+
+    await expect(adapter.readBinaryFile?.("docs/cover.png")).resolves.toMatchObject({
+      mimeType: "image/png",
+    })
+    const asset = await adapter.readBinaryFile?.("docs/cover.png")
+    expect(new TextDecoder().decode(asset?.data)).toBe("image-bytes")
   })
 
   it("检测外部修改后保留冲突副本且不覆盖源文件", async () => {
