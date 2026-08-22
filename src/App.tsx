@@ -4,7 +4,12 @@ import { Workspace, type MobileScreen } from "@/components/workspace/workspace"
 import { WebDavSettingsDialog } from "@/components/webdav-settings-dialog"
 import { demoNotes } from "@/data/demo-notes"
 import { hasSavedWebDavConfig, type WebDavConfig } from "@/lib/webdav-config"
-import { listMarkdownFiles, readMarkdownFile } from "@/services/webdav-client"
+import {
+  canSelectLocalVault,
+  selectLocalVaultAdapter,
+} from "@/services/vault/local-vault-adapter"
+import type { VaultAdapter } from "@/services/vault/vault-adapter"
+import { createWebDavVaultAdapter } from "@/services/vault/webdav-vault-adapter"
 import type { Note } from "@/types/note"
 import "./App.css"
 
@@ -14,12 +19,11 @@ function App() {
   const [query, setQuery] = useState("")
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [mobileScreen, setMobileScreen] = useState<MobileScreen>("library")
+  const [isOpeningVault, setIsOpeningVault] = useState(false)
+  const [vaultError, setVaultError] = useState<string | null>(null)
   const [webDavConfigured, setWebDavConfigured] = useState(hasSavedWebDavConfig)
-  const [remoteNoteCount, setRemoteNoteCount] = useState(0)
-  const [webDavSession, setWebDavSession] = useState<{
-    config: WebDavConfig
-    password: string
-  } | null>(null)
+  const [vaultNoteCount, setVaultNoteCount] = useState(0)
+  const [vaultSession, setVaultSession] = useState<VaultAdapter | null>(null)
 
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const visibleNotes = normalizedQuery
@@ -28,12 +32,22 @@ function App() {
       )
     : notes
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0]
-  const connected = remoteNoteCount > 0
+  const connected = vaultNoteCount > 0
   const syncLabel = connected
-    ? `已读取 ${remoteNoteCount} 篇笔记`
+    ? `${vaultSession?.displayName ?? "笔记库"} · ${vaultNoteCount} 篇`
     : webDavConfigured
       ? "等待输入应用密码"
       : "尚未连接"
+  const connectionLabel = vaultSession?.kind === "webdav"
+    ? "已连接坚果云"
+    : vaultSession
+      ? "已打开本地笔记库"
+      : "配置 WebDAV"
+  const mobileConnectionLabel = vaultSession?.kind === "webdav"
+    ? "已同步"
+    : vaultSession
+      ? "本地"
+      : "未连接"
 
   const updateActiveNote = (patch: Partial<Note>) => {
     // 编辑只进入本地状态；同步层后续监听持久化事件，界面不直接依赖 WebDAV。
@@ -62,7 +76,7 @@ function App() {
   }
 
   const formatActiveNote = (syntax: string) => {
-    if (!syntax || activeNote.source === "webdav") return
+    if (!syntax || activeNote.source === "webdav" || activeNote.source === "local") return
     const content = `${activeNote.content}${syntax}`
     updateActiveNote({
       content,
@@ -71,45 +85,59 @@ function App() {
   }
 
   const connectWebDav = async (config: WebDavConfig, password: string) => {
-    const files = await listMarkdownFiles(config, password)
+    return loadVault(createWebDavVaultAdapter(config, password))
+  }
+
+  const loadVault = async (adapter: VaultAdapter) => {
+    const files = await adapter.listMarkdownFiles()
     if (files.length === 0) {
-      throw new Error(`目录 ${config.remotePath} 下没有找到 Markdown 文件`)
+      throw new Error(`${adapter.displayName} 中没有找到 Markdown 文件`)
     }
 
     const firstFile = files[0]
-    const firstContent = await readMarkdownFile(config, password, firstFile.path)
+    const firstContent = await adapter.readTextFile(firstFile.path)
     const remoteNotes: Note[] = files.map((file, index) => ({
-      id: `webdav:${file.path}`,
+      id: `${adapter.kind}:${file.path}`,
       title: file.name.replace(/\.md$/i, ""),
       preview: file.path,
-      content: index === 0 ? firstContent : "正在从坚果云读取…",
-      updatedAt: formatRemoteDate(file.lastModified),
+      content: index === 0 ? firstContent : "正在从笔记库读取…",
+      updatedAt: formatRemoteDate(file.updatedAt),
       starred: false,
-      source: "webdav",
+      source: adapter.kind === "webdav" ? "webdav" : "local",
       remotePath: file.path,
       contentLoaded: index === 0,
     }))
 
-    // 密码只保存在运行时会话，用于用户点开笔记时按需读取正文。
-    setWebDavSession({ config, password })
+    // 适配器只保存在运行时；浏览器目录句柄和 WebDAV 密码都不会写入本地存储。
+    setVaultSession(adapter)
     setNotes(remoteNotes)
     setActiveNoteId(remoteNotes[0].id)
-    setRemoteNoteCount(remoteNotes.length)
+    setVaultNoteCount(remoteNotes.length)
+    setVaultError(null)
     setMobileScreen("notes")
     return remoteNotes.length
+  }
+
+  const openLocalVault = async () => {
+    setIsOpeningVault(true)
+    setVaultError(null)
+    try {
+      const adapter = await selectLocalVaultAdapter()
+      if (adapter) await loadVault(adapter)
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "读取本地笔记库失败")
+    } finally {
+      setIsOpeningVault(false)
+    }
   }
 
   const selectNote = async (note: Note) => {
     setActiveNoteId(note.id)
     setMobileScreen("editor")
-    if (note.source !== "webdav" || note.contentLoaded || !note.remotePath || !webDavSession) return
+    if (note.source === "demo" || note.contentLoaded || !note.remotePath || !vaultSession) return
 
     try {
-      const content = await readMarkdownFile(
-        webDavSession.config,
-        webDavSession.password,
-        note.remotePath,
-      )
+      const content = await vaultSession.readTextFile(note.remotePath)
       setNotes((current) =>
         current.map((currentNote) =>
           currentNote.id === note.id
@@ -134,18 +162,24 @@ function App() {
       <Workspace
         activeNote={activeNote}
         activeNoteId={activeNoteId}
+        connectionLabel={connectionLabel}
         connected={connected}
+        isOpeningVault={isOpeningVault}
+        localVaultSupported={canSelectLocalVault()}
         mobileScreen={mobileScreen}
+        mobileConnectionLabel={mobileConnectionLabel}
         notes={visibleNotes}
         onCreateNote={createNote}
         onFormat={formatActiveNote}
         onMobileScreenChange={setMobileScreen}
+        onOpenLocalVault={() => void openLocalVault()}
         onOpenSettings={() => setSettingsOpen(true)}
         onQueryChange={setQuery}
         onSelectNote={(note) => void selectNote(note)}
         onUpdateNote={updateActiveNote}
         query={query}
         syncLabel={syncLabel}
+        vaultError={vaultError}
       />
       <WebDavSettingsDialog
         onConnect={connectWebDav}
@@ -158,9 +192,9 @@ function App() {
 }
 
 function formatRemoteDate(lastModified?: string) {
-  if (!lastModified) return "云端文件"
+  if (!lastModified) return "文件时间未知"
   const date = new Date(lastModified)
-  if (Number.isNaN(date.getTime())) return "云端文件"
+  if (Number.isNaN(date.getTime())) return "文件时间未知"
   return new Intl.DateTimeFormat("zh-CN", {
     month: "short",
     day: "numeric",

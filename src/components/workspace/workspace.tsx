@@ -54,18 +54,24 @@ export type MobileScreen = "library" | "notes" | "editor"
 type WorkspaceProps = {
   activeNote: Note
   activeNoteId: string
+  connectionLabel: string
   connected: boolean
+  isOpeningVault: boolean
+  localVaultSupported: boolean
   mobileScreen: MobileScreen
+  mobileConnectionLabel: string
   notes: Note[]
   onCreateNote: () => void
   onFormat: (syntax: string) => void
   onMobileScreenChange: (screen: MobileScreen) => void
+  onOpenLocalVault: () => void
   onOpenSettings: () => void
   onQueryChange: (query: string) => void
   onSelectNote: (note: Note) => void
   onUpdateNote: (patch: Partial<Note>) => void
   query: string
   syncLabel: string
+  vaultError: string | null
 }
 
 const folders = [
@@ -92,10 +98,15 @@ function DesktopWorkspace(props: WorkspaceProps) {
       <NavigationRail connected={props.connected} onOpenSettings={props.onOpenSettings} />
       <LibraryPanel
         connected={props.connected}
+        connectionLabel={props.connectionLabel}
         noteCount={props.notes.length}
         onCreateNote={props.onCreateNote}
+        onOpenLocalVault={props.onOpenLocalVault}
         onOpenSettings={props.onOpenSettings}
+        isOpeningVault={props.isOpeningVault}
+        localVaultSupported={props.localVaultSupported}
         syncLabel={props.syncLabel}
+        vaultError={props.vaultError}
       />
       <NoteListPanel
         activeNoteId={props.activeNoteId}
@@ -170,18 +181,28 @@ function RailButton({ active = false, icon: Icon, indicator = false, label, onCl
 
 type LibraryPanelProps = {
   connected: boolean
+  connectionLabel: string
+  isOpeningVault: boolean
+  localVaultSupported: boolean
   noteCount: number
   onCreateNote: () => void
+  onOpenLocalVault: () => void
   onOpenSettings: () => void
   syncLabel: string
+  vaultError: string | null
 }
 
 function LibraryPanel({
   connected,
+  connectionLabel,
+  isOpeningVault,
+  localVaultSupported,
   noteCount,
   onCreateNote,
+  onOpenLocalVault,
   onOpenSettings,
   syncLabel,
+  vaultError,
 }: LibraryPanelProps) {
   return (
     <aside className="library-panel">
@@ -200,6 +221,16 @@ function LibraryPanel({
           <Plus data-icon="inline-start" />
           新建笔记
         </Button>
+        <Button
+          className="open-vault-button"
+          disabled={!localVaultSupported || isOpeningVault}
+          onClick={onOpenLocalVault}
+          variant="outline"
+        >
+          <FolderOpen data-icon="inline-start" />
+          {isOpeningVault ? "正在读取…" : "打开本地笔记库"}
+        </Button>
+        {vaultError ? <p className="vault-error">{vaultError}</p> : null}
       </div>
 
       <ScrollArea className="library-scroll">
@@ -243,7 +274,7 @@ function LibraryPanel({
       <button className="sync-summary" onClick={onOpenSettings} type="button">
         <span className="sync-summary-dot" data-connected={connected} />
         <span className="min-w-0">
-          <strong>{connected ? "已连接坚果云" : "配置 WebDAV"}</strong>
+          <strong>{connectionLabel}</strong>
           <small>{syncLabel}</small>
         </span>
         <ChevronRight />
@@ -380,7 +411,7 @@ type NoteEditorProps = {
 }
 
 function NoteEditor({ compact = false, note, onBack, onFormat, onUpdateNote }: NoteEditorProps) {
-  const readOnly = note.source === "webdav"
+  const readOnly = note.source === "webdav" || note.source === "local"
   const editorRef = useRef<MarkdownEditorHandle>(null)
 
   const handleFormat = (syntax: string) => {
@@ -402,7 +433,10 @@ function NoteEditor({ compact = false, note, onBack, onFormat, onUpdateNote }: N
         )}
         {onBack ? <span className="mobile-back-label">全部笔记</span> : null}
         <div className="editor-actions">
-          <span className="saved-state"><Check />{readOnly ? "云端只读" : "已保存"}</span>
+          <span className="saved-state">
+            <Check />
+            {note.source === "webdav" ? "云端只读" : note.source === "local" ? "本地只读" : "已保存"}
+          </span>
           <Button
             aria-label={note.starred ? "取消收藏" : "收藏"}
             onClick={() => onUpdateNote({ starred: !note.starred })}
@@ -531,7 +565,11 @@ function MobileWorkspace(props: WorkspaceProps) {
 function MobileLibrary(props: WorkspaceProps) {
   return (
     <section className="mobile-screen mobile-library">
-      <MobileBrandHeader connected={props.connected} onOpenSettings={props.onOpenSettings} />
+      <MobileBrandHeader
+        connected={props.connected}
+        mobileConnectionLabel={props.mobileConnectionLabel}
+        onOpenSettings={props.onOpenSettings}
+      />
       <ScrollArea className="mobile-scroll-content">
         <div className="mobile-page-padding">
           <div className="mobile-search-row">
@@ -548,6 +586,16 @@ function MobileLibrary(props: WorkspaceProps) {
           <Button className="mobile-new-note" onClick={props.onCreateNote}>
             <Plus data-icon="inline-start" />新建笔记
           </Button>
+          <Button
+            className="mobile-open-vault"
+            disabled={!props.localVaultSupported || props.isOpeningVault}
+            onClick={props.onOpenLocalVault}
+            variant="outline"
+          >
+            <FolderOpen data-icon="inline-start" />
+            {props.isOpeningVault ? "正在读取…" : "打开本地笔记库"}
+          </Button>
+          {props.vaultError ? <p className="vault-error">{props.vaultError}</p> : null}
 
           <div className="mobile-library-rows">
             <MobileLibraryRow count={props.notes.length} icon={FileText} label="全部笔记" onClick={() => props.onMobileScreenChange("notes")} />
@@ -632,14 +680,18 @@ function MobileNoteList(props: WorkspaceProps) {
   )
 }
 
-function MobileBrandHeader({ connected, onOpenSettings }: Pick<WorkspaceProps, "connected" | "onOpenSettings">) {
+function MobileBrandHeader({
+  connected,
+  mobileConnectionLabel,
+  onOpenSettings,
+}: Pick<WorkspaceProps, "connected" | "mobileConnectionLabel" | "onOpenSettings">) {
   return (
     <header className="mobile-brand-header">
       <img alt="Swell Note" src={swellNoteLogo} />
       <strong>Swell Note</strong>
       <button className="mobile-sync-state" onClick={onOpenSettings} type="button">
         <CheckCircle2 data-connected={connected} />
-        <span>{connected ? "已同步" : "未连接"}</span>
+        <span>{mobileConnectionLabel}</span>
       </button>
       <Button aria-label="账户" size="icon" variant="ghost"><UserRound /></Button>
     </header>
