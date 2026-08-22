@@ -197,7 +197,7 @@ export function WebDavSettingsDialog({
             </div>
           ) : (
             <div className="rounded-lg border bg-muted/50 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
-              “连接并读取”会向坚果云验证凭据、扫描远端目录，并用云端 Markdown 替换右侧演示列表。当前为只读模式，不会上传或修改坚果云文件。
+              “连接并读取”会向坚果云验证凭据、扫描远端目录，并将云端 Markdown 加载到笔记列表。当前为只读模式，不会上传或修改坚果云文件。
             </div>
           )}
         </div>

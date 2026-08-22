@@ -2,7 +2,6 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 
 import { Workspace, type MobileScreen } from "@/components/workspace/workspace"
 import { WebDavSettingsDialog } from "@/components/webdav-settings-dialog"
-import { demoNotes } from "@/data/demo-notes"
 import { hasSavedWebDavConfig, type WebDavConfig } from "@/lib/webdav-config"
 import {
   canSelectLocalVault,
@@ -21,8 +20,8 @@ import type { Note, NoteSaveState } from "@/types/note"
 import "./App.css"
 
 function App() {
-  const [notes, setNotes] = useState(demoNotes)
-  const [activeNoteId, setActiveNoteId] = useState(demoNotes[0].id)
+  const [notes, setNotes] = useState<Note[]>([])
+  const [activeNoteId, setActiveNoteId] = useState("")
   const [query, setQuery] = useState("")
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -56,12 +55,14 @@ function App() {
           .includes(normalizedQuery),
       )
     : folderNotes
-  const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0]
-  const activeTarget = normalizeNoteTarget(activeNote.title)
+  const activeNote = notes.find((note) => note.id === activeNoteId) ?? null
+  const activeTarget = activeNote ? normalizeNoteTarget(activeNote.title) : ""
   const backlinks = useMemo(
-    () => notes.filter((note) =>
-      note.id !== activeNoteId && note.outgoingLinks?.includes(activeTarget),
-    ),
+    () => activeTarget
+      ? notes.filter((note) =>
+          note.id !== activeNoteId && note.outgoingLinks?.includes(activeTarget),
+        )
+      : [],
     [activeNoteId, activeTarget, notes],
   )
   const connected = vaultNoteCount > 0
@@ -84,13 +85,14 @@ function App() {
       : "未连接"
 
   const resolveActiveAsset = useCallback(async (source: string) => {
-    const notePath = activeNote.remotePath
+    const notePath = activeNote?.remotePath
     if (!notePath || !vaultSession?.readBinaryFile) return null
     const assetPath = resolveVaultAssetPath(notePath, source)
     return assetPath ? vaultSession.readBinaryFile(assetPath) : null
-  }, [activeNote.remotePath, vaultSession])
+  }, [activeNote?.remotePath, vaultSession])
 
   const updateActiveNote = (patch: Partial<Note>) => {
+    if (!activeNote) return
     const indexedPatch: Partial<Note> = typeof patch.content === "string"
       ? {
           ...patch,
@@ -167,7 +169,7 @@ function App() {
   }
 
   const formatActiveNote = (syntax: string) => {
-    if (!syntax || activeNote.readOnly) return
+    if (!activeNote || !syntax || activeNote.readOnly) return
     const content = `${activeNote.content}${syntax}`
     updateActiveNote({
       content,
@@ -299,6 +301,7 @@ function App() {
   }
 
   const reloadActiveNote = async () => {
+    if (!activeNote) return
     const path = activeNote.remotePath
     if (!path || !vaultSession) return
 
@@ -390,7 +393,7 @@ function App() {
         query={query}
         selectedFolder={selectedFolder}
         saveState={saveStates[activeNoteId] ?? {
-          status: activeNote.readOnly ? "readonly" : "saved",
+          status: activeNote?.readOnly ? "readonly" : "saved",
         }}
         syncLabel={syncLabel}
         totalNoteCount={notes.length}

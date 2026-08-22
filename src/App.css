@@ -106,6 +106,12 @@
 .library-panel { border-right: 1px solid var(--border); background: var(--panel-soft); }
 .note-list-panel { border-right: 1px solid var(--border); background: white; }
 .note-editor { background: white; }
+.empty-note-editor { min-height: 0; }
+.empty-note-content { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; padding: 40px; text-align: center; }
+.empty-note-icon { display: grid; width: 52px; height: 52px; place-items: center; border-radius: 15px; background: var(--blue-soft); color: var(--primary); }
+.empty-note-icon svg { width: 25px; height: 25px; }
+.empty-note-content h2 { margin: 18px 0 7px; font-size: 18px; }
+.empty-note-content p { max-width: 390px; margin: 0 0 20px; color: var(--muted-foreground); font-size: 13px; line-height: 1.7; }
 .pane-header { display: flex; min-height: 73px; align-items: center; justify-content: space-between; padding: 14px 16px 10px; }
 .pane-header h1, .pane-header h2 { margin: 2px 0 0; font-size: 17px; line-height: 1.3; font-weight: 660; letter-spacing: -.015em; }
 .eyebrow { color: var(--muted-foreground); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
@@ -156,6 +162,10 @@
 .note-row-heading svg { width: 13px; height: 13px; }
 .note-list-row p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 1; margin: 7px 0 7px; color: var(--muted-foreground); font-size: 11.5px; line-height: 1.5; }
 .note-row-meta { display: flex; align-items: center; gap: 7px; color: #7e8793; font-size: 10.5px; }
+.note-list-empty { display: flex; min-height: 280px; flex-direction: column; align-items: center; justify-content: center; padding: 28px 22px; color: var(--muted-foreground); text-align: center; }
+.note-list-empty > svg { width: 25px; height: 25px; margin-bottom: 12px; color: var(--primary); }
+.note-list-empty strong { color: var(--foreground); font-size: 13px; }
+.note-list-empty p { max-width: 210px; margin: 7px 0 15px; font-size: 11.5px; line-height: 1.6; }
 .note-row-meta span:not(.unread-dot) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unread-dot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
 

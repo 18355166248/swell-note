@@ -61,7 +61,7 @@ const MarkdownPreview = lazy(() => import("@/components/editor/markdown-preview"
 export type MobileScreen = "library" | "notes" | "editor"
 
 type WorkspaceProps = {
-  activeNote: Note
+  activeNote: Note | null
   activeNoteId: string
   backlinks: Note[]
   connectionLabel: string
@@ -125,21 +125,24 @@ function DesktopWorkspace(props: WorkspaceProps) {
         activeNoteId={props.activeNoteId}
         notes={props.notes}
         folderLabel={props.selectedFolder ?? "全部笔记"}
+        onOpenSettings={props.onOpenSettings}
         onQueryChange={props.onQueryChange}
         onSelectNote={props.onSelectNote}
         query={props.query}
       />
-      <NoteEditor
-        backlinks={props.backlinks}
-        note={props.activeNote}
-        onFormat={props.onFormat}
-        onOpenWikiLink={props.onOpenWikiLink}
-        onSelectNote={props.onSelectNote}
-        onUpdateNote={props.onUpdateNote}
-        onReloadNote={props.onReloadNote}
-        onResolveAsset={props.onResolveAsset}
-        saveState={props.saveState}
-      />
+      {props.activeNote ? (
+        <NoteEditor
+          backlinks={props.backlinks}
+          note={props.activeNote}
+          onFormat={props.onFormat}
+          onOpenWikiLink={props.onOpenWikiLink}
+          onSelectNote={props.onSelectNote}
+          onUpdateNote={props.onUpdateNote}
+          onReloadNote={props.onReloadNote}
+          onResolveAsset={props.onResolveAsset}
+          saveState={props.saveState}
+        />
+      ) : <EmptyNoteEditor onOpenSettings={props.onOpenSettings} />}
     </div>
   )
 }
@@ -325,6 +328,7 @@ type NoteListPanelProps = {
   activeNoteId: string
   folderLabel: string
   notes: Note[]
+  onOpenSettings: () => void
   onQueryChange: (query: string) => void
   onSelectNote: (note: Note) => void
   query: string
@@ -334,6 +338,7 @@ function NoteListPanel({
   activeNoteId,
   folderLabel,
   notes,
+  onOpenSettings,
   onQueryChange,
   onSelectNote,
   query,
@@ -371,7 +376,7 @@ function NoteListPanel({
 
       <ScrollArea className="note-list-scroll">
         <div className="note-groups">
-          {groups.map((group) => (
+          {groups.length > 0 ? groups.map((group) => (
             <section key={group.label}>
               <div className="note-group-label">
                 <span>{group.label}</span>
@@ -386,10 +391,46 @@ function NoteListPanel({
                 />
               ))}
             </section>
-          ))}
+          )) : <EmptyNoteList onOpenSettings={onOpenSettings} />}
         </div>
       </ScrollArea>
     </section>
+  )
+}
+
+function EmptyNoteList({ onOpenSettings }: { onOpenSettings: () => void }) {
+  return (
+    <div className="note-list-empty">
+      <Cloud />
+      <strong>还没有远程笔记</strong>
+      <p>连接坚果云后，这里只展示远端 Vault 中的 Markdown。</p>
+      <Button onClick={onOpenSettings} size="sm" variant="outline">连接坚果云</Button>
+    </div>
+  )
+}
+
+function EmptyNoteEditor({
+  onBack,
+  onOpenSettings,
+}: {
+  onBack?: () => void
+  onOpenSettings: () => void
+}) {
+  return (
+    <article className="note-editor empty-note-editor">
+      {onBack ? (
+        <header className="editor-titlebar">
+          <Button aria-label="返回全部笔记" onClick={onBack} size="icon" variant="ghost"><ArrowLeft /></Button>
+          <span className="mobile-back-label">全部笔记</span>
+        </header>
+      ) : null}
+      <div className="empty-note-content">
+        <span className="empty-note-icon"><Cloud /></span>
+        <h2>连接后展示远程文档</h2>
+        <p>当前没有注入任何 Mock 内容。连接坚果云后，将在这里按需读取并展示真实 Markdown。</p>
+        <Button onClick={onOpenSettings}><Cloud data-icon="inline-start" />连接坚果云</Button>
+      </div>
+    </article>
   )
 }
 
@@ -619,19 +660,21 @@ function MobileWorkspace(props: WorkspaceProps) {
         />
       ) : null}
       {props.mobileScreen === "editor" ? (
-        <NoteEditor
-          backlinks={props.backlinks}
-          compact
-          note={props.activeNote}
-          onBack={() => props.onMobileScreenChange("notes")}
-          onFormat={props.onFormat}
-          onOpenWikiLink={props.onOpenWikiLink}
-          onReloadNote={props.onReloadNote}
-          onResolveAsset={props.onResolveAsset}
-          onSelectNote={props.onSelectNote}
-          onUpdateNote={props.onUpdateNote}
-          saveState={props.saveState}
-        />
+        props.activeNote ? (
+          <NoteEditor
+            backlinks={props.backlinks}
+            compact
+            note={props.activeNote}
+            onBack={() => props.onMobileScreenChange("notes")}
+            onFormat={props.onFormat}
+            onOpenWikiLink={props.onOpenWikiLink}
+            onReloadNote={props.onReloadNote}
+            onResolveAsset={props.onResolveAsset}
+            onSelectNote={props.onSelectNote}
+            onUpdateNote={props.onUpdateNote}
+            saveState={props.saveState}
+          />
+        ) : <EmptyNoteEditor onBack={() => props.onMobileScreenChange("notes")} onOpenSettings={props.onOpenSettings} />
       ) : null}
     </div>
   )
@@ -822,7 +865,7 @@ function MobileNoteList(props: MobileNoteListProps) {
         viewportRef={viewportRef}
       >
         <div className="mobile-note-groups">
-          {groups.map((group) => (
+          {groups.length > 0 ? groups.map((group) => (
             <section key={group.label}>
               <div className="note-group-label"><span>{group.label}</span></div>
               {group.notes.map((note) => (
@@ -834,7 +877,7 @@ function MobileNoteList(props: MobileNoteListProps) {
                 />
               ))}
             </section>
-          ))}
+          )) : <EmptyNoteList onOpenSettings={props.onOpenSettings} />}
         </div>
       </ScrollArea>
       <Button aria-label="新建笔记" className="mobile-fab" onClick={props.onCreateNote} size="icon-lg"><Plus /></Button>
@@ -872,6 +915,7 @@ function MobileBottomNav({ onOpenSettings }: Pick<WorkspaceProps, "onOpenSetting
 }
 
 function groupNotes(notes: Note[]) {
+  if (notes.length === 0) return []
   if (notes.length <= 2) return [{ label: "今天", notes }]
   return [
     { label: "今天", notes: notes.slice(0, 2) },
