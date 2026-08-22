@@ -1,6 +1,7 @@
 import type { Note } from "@/types/note"
+import { extractWikiLinks } from "@/services/search/note-index"
 
-export const demoNotes: Note[] = [
+const notes: Note[] = [
   {
     id: "welcome",
     title: "欢迎使用 Swell Note",
@@ -45,7 +46,9 @@ export const demoNotes: Note[] = [
 1. 所有编辑先写入本地文件。
 2. 同步任务读取服务器 ETag。
 3. 上传使用 If-Match，冲突时保留两个副本。
-4. 同步失败不阻塞继续编辑。`,
+4. 同步失败不阻塞继续编辑。
+
+相关：[[欢迎使用 Swell Note]]`,
     updatedAt: "8 月 20 日",
     starred: true,
   },
@@ -62,3 +65,9 @@ export const demoNotes: Note[] = [
     starred: false,
   },
 ]
+
+export const demoNotes: Note[] = notes.map((note) => ({
+  ...note,
+  outgoingLinks: extractWikiLinks(note.content),
+  searchText: note.content.toLocaleLowerCase(),
+}))

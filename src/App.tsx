@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 
 import { Workspace, type MobileScreen } from "@/components/workspace/workspace"
 import { WebDavSettingsDialog } from "@/components/webdav-settings-dialog"
@@ -8,8 +8,13 @@ import {
   canSelectLocalVault,
   selectLocalVaultAdapter,
 } from "@/services/vault/local-vault-adapter"
-import type { VaultAdapter } from "@/services/vault/vault-adapter"
+import type { VaultAdapter, VaultFileEntry } from "@/services/vault/vault-adapter"
 import { createWebDavVaultAdapter } from "@/services/vault/webdav-vault-adapter"
+import {
+  extractWikiLinks,
+  indexVaultFiles,
+  normalizeNoteTarget,
+} from "@/services/search/note-index"
 import type { Note, NoteSaveState } from "@/types/note"
 import "./App.css"
 
@@ -25,24 +30,38 @@ function App() {
   const [vaultNoteCount, setVaultNoteCount] = useState(0)
   const [vaultSession, setVaultSession] = useState<VaultAdapter | null>(null)
   const [saveStates, setSaveStates] = useState<Record<string, NoteSaveState>>({})
+  const [indexProgress, setIndexProgress] = useState<{ indexed: number; total: number } | null>(null)
   const saveTimersRef = useRef(new Map<string, number>())
   const saveQueuesRef = useRef(new Map<string, Promise<void>>())
   const revisionByPathRef = useRef(new Map<string, string | undefined>())
+  const indexGenerationRef = useRef(0)
 
   useEffect(() => () => {
     for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer)
   }, [])
 
-  const normalizedQuery = query.trim().toLocaleLowerCase()
+  const deferredQuery = useDeferredValue(query)
+  const normalizedQuery = deferredQuery.trim().toLocaleLowerCase()
   const visibleNotes = normalizedQuery
     ? notes.filter((note) =>
-        `${note.title} ${note.preview}`.toLocaleLowerCase().includes(normalizedQuery),
+        `${note.title} ${note.preview} ${note.searchText ?? ""}`
+          .toLocaleLowerCase()
+          .includes(normalizedQuery),
       )
     : notes
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? notes[0]
+  const activeTarget = normalizeNoteTarget(activeNote.title)
+  const backlinks = useMemo(
+    () => notes.filter((note) =>
+      note.id !== activeNoteId && note.outgoingLinks?.includes(activeTarget),
+    ),
+    [activeNoteId, activeTarget, notes],
+  )
   const connected = vaultNoteCount > 0
   const syncLabel = connected
-    ? `${vaultSession?.displayName ?? "笔记库"} · ${vaultNoteCount} 篇`
+    ? indexProgress && indexProgress.indexed < indexProgress.total
+      ? `正在索引 ${indexProgress.indexed}/${indexProgress.total}`
+      : `${vaultSession?.displayName ?? "笔记库"} · ${vaultNoteCount} 篇`
     : webDavConfigured
       ? "等待输入应用密码"
       : "尚未连接"
@@ -58,9 +77,16 @@ function App() {
       : "未连接"
 
   const updateActiveNote = (patch: Partial<Note>) => {
+    const indexedPatch: Partial<Note> = typeof patch.content === "string"
+      ? {
+          ...patch,
+          outgoingLinks: extractWikiLinks(patch.content),
+          searchText: patch.content.toLocaleLowerCase(),
+        }
+      : patch
     setNotes((current) =>
       current.map((note) =>
-        note.id === activeNoteId ? { ...note, ...patch, updatedAt: "刚刚" } : note,
+        note.id === activeNoteId ? { ...note, ...indexedPatch, updatedAt: "刚刚" } : note,
       ),
     )
     if (typeof patch.content === "string") scheduleLocalSave(activeNote, patch.content)
@@ -135,6 +161,30 @@ function App() {
     })
   }
 
+  const startLocalIndex = (adapter: VaultAdapter, files: VaultFileEntry[]) => {
+    const generation = ++indexGenerationRef.current
+    setIndexProgress({ indexed: 0, total: files.length })
+    void indexVaultFiles(
+      adapter,
+      files,
+      (batch, indexed, total) => {
+        const indexedByPath = new Map(batch.map((item) => [item.path, item]))
+        setNotes((current) => current.map((note) => {
+          const indexedNote = note.remotePath ? indexedByPath.get(note.remotePath) : undefined
+          return indexedNote
+            ? {
+                ...note,
+                outgoingLinks: indexedNote.outgoingLinks,
+                searchText: indexedNote.searchText,
+              }
+            : note
+        }))
+        setIndexProgress({ indexed, total })
+      },
+      () => generation !== indexGenerationRef.current,
+    )
+  }
+
   const connectWebDav = async (config: WebDavConfig, password: string) => {
     return loadVault(createWebDavVaultAdapter(config, password))
   }
@@ -160,6 +210,8 @@ function App() {
       remotePath: file.path,
       readOnly: adapter.readOnly,
       revision: index === 0 ? firstDocument.revision : undefined,
+      searchText: index === 0 ? firstDocument.content.toLocaleLowerCase() : undefined,
+      outgoingLinks: index === 0 ? extractWikiLinks(firstDocument.content) : undefined,
       contentLoaded: index === 0,
     }))
 
@@ -174,6 +226,12 @@ function App() {
     ])))
     setVaultError(null)
     setMobileScreen("notes")
+    if (adapter.kind === "webdav") {
+      indexGenerationRef.current += 1
+      setIndexProgress(null)
+    } else {
+      startLocalIndex(adapter, files)
+    }
     return remoteNotes.length
   }
 
@@ -204,6 +262,8 @@ function App() {
             ? {
                 ...currentNote,
                 content: document.content,
+                searchText: document.content.toLocaleLowerCase(),
+                outgoingLinks: extractWikiLinks(document.content),
                 revision: document.revision,
                 contentLoaded: true,
               }
@@ -242,6 +302,8 @@ function App() {
               ...note,
               content: document.content,
               preview: document.content.replace(/^#+\s*/gm, "").slice(0, 90),
+              searchText: document.content.toLocaleLowerCase(),
+              outgoingLinks: extractWikiLinks(document.content),
               revision: document.revision,
               updatedAt: "刚刚重新加载",
             }
@@ -267,6 +329,7 @@ function App() {
       <Workspace
         activeNote={activeNote}
         activeNoteId={activeNoteId}
+        backlinks={backlinks}
         connectionLabel={connectionLabel}
         connected={connected}
         isOpeningVault={isOpeningVault}

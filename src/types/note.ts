@@ -10,6 +10,8 @@ export type Note = {
   remotePath?: string
   readOnly?: boolean
   revision?: string
+  searchText?: string
+  outgoingLinks?: string[]
   contentLoaded?: boolean
 }
 

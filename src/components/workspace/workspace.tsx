@@ -18,6 +18,7 @@ import {
   List,
   ListFilter,
   Link,
+  Link2,
   LoaderCircle,
   MoreHorizontal,
   Plus,
@@ -57,6 +58,7 @@ export type MobileScreen = "library" | "notes" | "editor"
 type WorkspaceProps = {
   activeNote: Note
   activeNoteId: string
+  backlinks: Note[]
   connectionLabel: string
   connected: boolean
   isOpeningVault: boolean
@@ -121,8 +123,10 @@ function DesktopWorkspace(props: WorkspaceProps) {
         query={props.query}
       />
       <NoteEditor
+        backlinks={props.backlinks}
         note={props.activeNote}
         onFormat={props.onFormat}
+        onSelectNote={props.onSelectNote}
         onUpdateNote={props.onUpdateNote}
         onReloadNote={props.onReloadNote}
         saveState={props.saveState}
@@ -410,16 +414,18 @@ function NoteListRow({ active, note, onSelect }: NoteListRowProps) {
 }
 
 type NoteEditorProps = {
+  backlinks: Note[]
   compact?: boolean
   note: Note
   onBack?: () => void
   onFormat: (syntax: string) => void
   onReloadNote: () => void
+  onSelectNote: (note: Note) => void
   onUpdateNote: (patch: Partial<Note>) => void
   saveState: NoteSaveState
 }
 
-function NoteEditor({ compact = false, note, onBack, onFormat, onReloadNote, onUpdateNote, saveState }: NoteEditorProps) {
+function NoteEditor({ backlinks, compact = false, note, onBack, onFormat, onReloadNote, onSelectNote, onUpdateNote, saveState }: NoteEditorProps) {
   const readOnly = note.readOnly ?? note.source === "webdav"
   const titleReadOnly = note.source === "local" || note.source === "webdav"
   const editorRef = useRef<MarkdownEditorHandle>(null)
@@ -505,6 +511,7 @@ function NoteEditor({ compact = false, note, onBack, onFormat, onReloadNote, onU
               />
             </Suspense>
           </div>
+          <BacklinksPanel backlinks={backlinks} onSelectNote={onSelectNote} />
         </div>
       </ScrollArea>
 
@@ -566,16 +573,42 @@ function MobileWorkspace(props: WorkspaceProps) {
       {props.mobileScreen === "notes" ? <MobileNoteList {...props} /> : null}
       {props.mobileScreen === "editor" ? (
         <NoteEditor
+          backlinks={props.backlinks}
           compact
           note={props.activeNote}
           onBack={() => props.onMobileScreenChange("notes")}
           onFormat={props.onFormat}
           onReloadNote={props.onReloadNote}
+          onSelectNote={props.onSelectNote}
           onUpdateNote={props.onUpdateNote}
           saveState={props.saveState}
         />
       ) : null}
     </div>
+  )
+}
+
+function BacklinksPanel({ backlinks, onSelectNote }: { backlinks: Note[]; onSelectNote: (note: Note) => void }) {
+  return (
+    <section className="backlinks-panel">
+      <div className="backlinks-title">
+        <Link2 />
+        <strong>反向链接</strong>
+        <span>{backlinks.length}</span>
+      </div>
+      {backlinks.length > 0 ? (
+        <div className="backlinks-list">
+          {backlinks.map((note) => (
+            <button key={note.id} onClick={() => onSelectNote(note)} type="button">
+              <strong>{note.title}</strong>
+              <span>{note.preview}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p>索引完成后，链接到当前笔记的内容会显示在这里。</p>
+      )}
+    </section>
   )
 }
 

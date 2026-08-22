@@ -184,6 +184,16 @@
 .markdown-editor-shell .cm-cursor { border-left-color: var(--primary); }
 .markdown-editor-shell .cm-placeholder { color: var(--muted-foreground); font-style: normal; }
 .editor-loading { padding: 8px 0; color: var(--muted-foreground); font-size: 13px; }
+.backlinks-panel { margin-top: 44px; border-top: 1px solid var(--border); padding-top: 20px; }
+.backlinks-title { display: flex; align-items: center; gap: 7px; color: #384352; font-size: 12px; }
+.backlinks-title svg { width: 15px; height: 15px; color: var(--primary); }
+.backlinks-title span { min-width: 20px; border-radius: 10px; background: var(--muted); padding: 1px 6px; color: var(--muted-foreground); font-size: 10px; text-align: center; }
+.backlinks-panel > p { margin: 12px 0 0; color: var(--muted-foreground); font-size: 12px; }
+.backlinks-list { display: grid; gap: 4px; margin-top: 10px; }
+.backlinks-list button { display: grid; gap: 3px; border-radius: 7px; padding: 8px 10px; text-align: left; }
+.backlinks-list button:hover { background: var(--muted); }
+.backlinks-list strong { font-size: 12px; }
+.backlinks-list span { overflow: hidden; color: var(--muted-foreground); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .editor-statusbar { display: flex; min-height: 30px; align-items: center; gap: 16px; border-top: 1px solid var(--border); padding: 0 16px; color: var(--muted-foreground); font-size: 10px; }
 
 @media (max-width: 1099px) and (min-width: 768px) {
