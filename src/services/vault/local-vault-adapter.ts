@@ -1,18 +1,28 @@
 import { isTauri } from "@tauri-apps/api/core"
 
-import type { VaultAdapter, VaultFileEntry } from "@/services/vault/vault-adapter"
+import {
+  VaultConflictError,
+  type VaultAdapter,
+  type VaultFileEntry,
+} from "@/services/vault/vault-adapter"
 
 const ignoredDirectoryNames = new Set([".git", ".obsidian", "node_modules"])
 
 type BrowserFileSystemFileHandle = {
   kind: "file"
   name: string
+  createWritable(): Promise<{
+    close(): Promise<void>
+    write(data: string): Promise<void>
+  }>
   getFile(): Promise<File>
 }
 
 type BrowserFileSystemDirectoryHandle = {
   kind: "directory"
   name: string
+  getDirectoryHandle(name: string): Promise<BrowserFileSystemDirectoryHandle>
+  getFileHandle(name: string, options?: { create?: boolean }): Promise<BrowserFileSystemFileHandle>
   values(): AsyncIterableIterator<BrowserFileSystemFileHandle | BrowserFileSystemDirectoryHandle>
 }
 
@@ -42,12 +52,15 @@ async function selectBrowserVault(): Promise<VaultAdapter | null> {
     throw error
   }
 
-  const handles = new Map<string, BrowserFileSystemFileHandle>()
+  return createBrowserVaultAdapter(root)
+}
 
+export function createBrowserVaultAdapter(root: BrowserFileSystemDirectoryHandle): VaultAdapter {
+  const handles = new Map<string, BrowserFileSystemFileHandle>()
   return {
     displayName: root.name,
     kind: "browser",
-    readOnly: true,
+    readOnly: false,
     async listMarkdownFiles() {
       const files: VaultFileEntry[] = []
       handles.clear()
@@ -57,7 +70,22 @@ async function selectBrowserVault(): Promise<VaultAdapter | null> {
     async readTextFile(path) {
       const handle = handles.get(path)
       if (!handle) throw new Error(`找不到本地文件：${path}`)
-      return (await handle.getFile()).text()
+      const file = await handle.getFile()
+      return { content: await file.text(), revision: browserRevision(file) }
+    },
+    async writeTextFile(path, content, expectedRevision) {
+      const handle = handles.get(path)
+      if (!handle) throw new Error(`找不到本地文件：${path}`)
+      const currentFile = await handle.getFile()
+      if (expectedRevision && browserRevision(currentFile) !== expectedRevision) {
+        const conflictPath = createConflictPath(path)
+        const conflictHandle = await getBrowserFileHandle(root, conflictPath, true)
+        await writeBrowserFile(conflictHandle, content)
+        throw new VaultConflictError(conflictPath)
+      }
+
+      await writeBrowserFile(handle, content)
+      return { revision: browserRevision(await handle.getFile()) }
     },
   }
 }
@@ -89,7 +117,7 @@ async function collectBrowserMarkdownFiles(
 }
 
 async function selectTauriVault(): Promise<VaultAdapter | null> {
-  const [{ open }, { readDir, readTextFile }, { join }] = await Promise.all([
+  const [{ open }, { readDir, readTextFile, stat, writeTextFile }, { join }] = await Promise.all([
     import("@tauri-apps/plugin-dialog"),
     import("@tauri-apps/plugin-fs"),
     import("@tauri-apps/api/path"),
@@ -101,15 +129,70 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
   return {
     displayName: pathSegments[pathSegments.length - 1] ?? "本地笔记库",
     kind: "tauri",
-    readOnly: true,
+    readOnly: false,
     async listMarkdownFiles() {
       const files: VaultFileEntry[] = []
       await collectTauriMarkdownFiles(rootPath, "", files, readDir, join)
       return files.sort((a, b) => a.path.localeCompare(b.path, "zh-CN"))
     },
     async readTextFile(path) {
-      return readTextFile(await join(rootPath, path))
+      const absolutePath = await join(rootPath, path)
+      const [content, fileInfo] = await Promise.all([
+        readTextFile(absolutePath),
+        stat(absolutePath),
+      ])
+      return { content, revision: tauriRevision(fileInfo) }
     },
+    async writeTextFile(path, content, expectedRevision) {
+      const absolutePath = await join(rootPath, path)
+      const currentRevision = tauriRevision(await stat(absolutePath))
+      if (expectedRevision && currentRevision !== expectedRevision) {
+        const conflictPath = createConflictPath(path)
+        await writeTextFile(await join(rootPath, conflictPath), content)
+        throw new VaultConflictError(conflictPath)
+      }
+
+      await writeTextFile(absolutePath, content)
+      return { revision: tauriRevision(await stat(absolutePath)) }
+    },
+  }
+}
+
+function browserRevision(file: File) {
+  return `${file.lastModified}:${file.size}`
+}
+
+function tauriRevision(file: Awaited<ReturnType<typeof import("@tauri-apps/plugin-fs").stat>>) {
+  return `${file.mtime?.getTime() ?? 0}:${file.size}`
+}
+
+function createConflictPath(path: string) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
+  return path.replace(/\.md$/i, `.conflict-${timestamp}.md`)
+}
+
+async function getBrowserFileHandle(
+  root: BrowserFileSystemDirectoryHandle,
+  path: string,
+  create: boolean,
+) {
+  const segments = path.split("/").filter(Boolean)
+  const fileName = segments.pop()
+  if (!fileName) throw new Error("冲突副本路径无效")
+
+  let directory = root
+  for (const segment of segments) {
+    directory = await directory.getDirectoryHandle(segment)
+  }
+  return directory.getFileHandle(fileName, { create })
+}
+
+async function writeBrowserFile(handle: BrowserFileSystemFileHandle, content: string) {
+  const writable = await handle.createWritable()
+  try {
+    await writable.write(content)
+  } finally {
+    await writable.close()
   }
 }
 

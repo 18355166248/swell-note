@@ -8,5 +8,12 @@ export type Note = {
   folder?: string
   source?: "demo" | "local" | "webdav"
   remotePath?: string
+  readOnly?: boolean
+  revision?: string
   contentLoaded?: boolean
+}
+
+export type NoteSaveState = {
+  message?: string
+  status: "conflict" | "error" | "readonly" | "saved" | "saving"
 }

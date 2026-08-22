@@ -1,6 +1,8 @@
 import { lazy, Suspense, useRef, type ReactNode } from "react"
 import {
   ArrowLeft,
+  AlertCircle,
+  AlertTriangle,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -16,6 +18,7 @@ import {
   List,
   ListFilter,
   Link,
+  LoaderCircle,
   MoreHorizontal,
   Plus,
   Search,
@@ -43,7 +46,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import type { Note } from "@/types/note"
+import type { Note, NoteSaveState } from "@/types/note"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 
 // CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
@@ -67,9 +70,11 @@ type WorkspaceProps = {
   onOpenLocalVault: () => void
   onOpenSettings: () => void
   onQueryChange: (query: string) => void
+  onReloadNote: () => void
   onSelectNote: (note: Note) => void
   onUpdateNote: (patch: Partial<Note>) => void
   query: string
+  saveState: NoteSaveState
   syncLabel: string
   vaultError: string | null
 }
@@ -119,6 +124,8 @@ function DesktopWorkspace(props: WorkspaceProps) {
         note={props.activeNote}
         onFormat={props.onFormat}
         onUpdateNote={props.onUpdateNote}
+        onReloadNote={props.onReloadNote}
+        saveState={props.saveState}
       />
     </div>
   )
@@ -407,11 +414,14 @@ type NoteEditorProps = {
   note: Note
   onBack?: () => void
   onFormat: (syntax: string) => void
+  onReloadNote: () => void
   onUpdateNote: (patch: Partial<Note>) => void
+  saveState: NoteSaveState
 }
 
-function NoteEditor({ compact = false, note, onBack, onFormat, onUpdateNote }: NoteEditorProps) {
-  const readOnly = note.source === "webdav" || note.source === "local"
+function NoteEditor({ compact = false, note, onBack, onFormat, onReloadNote, onUpdateNote, saveState }: NoteEditorProps) {
+  const readOnly = note.readOnly ?? note.source === "webdav"
+  const titleReadOnly = note.source === "local" || note.source === "webdav"
   const editorRef = useRef<MarkdownEditorHandle>(null)
 
   const handleFormat = (syntax: string) => {
@@ -433,10 +443,7 @@ function NoteEditor({ compact = false, note, onBack, onFormat, onUpdateNote }: N
         )}
         {onBack ? <span className="mobile-back-label">全部笔记</span> : null}
         <div className="editor-actions">
-          <span className="saved-state">
-            <Check />
-            {note.source === "webdav" ? "云端只读" : note.source === "local" ? "本地只读" : "已保存"}
-          </span>
+          <SaveStateIndicator note={note} state={saveState} />
           <Button
             aria-label={note.starred ? "取消收藏" : "收藏"}
             onClick={() => onUpdateNote({ starred: !note.starred })}
@@ -450,6 +457,14 @@ function NoteEditor({ compact = false, note, onBack, onFormat, onUpdateNote }: N
               <Button aria-label="更多操作" size="icon-sm" variant="ghost"><MoreHorizontal /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {note.remotePath ? (
+                <DropdownMenuItem
+                  disabled={saveState.status === "saving"}
+                  onClick={onReloadNote}
+                >
+                  重新加载源文件
+                </DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem>移动到文件夹</DropdownMenuItem>
               <DropdownMenuItem>查看历史版本</DropdownMenuItem>
               <DropdownMenuSeparator />
@@ -467,7 +482,7 @@ function NoteEditor({ compact = false, note, onBack, onFormat, onUpdateNote }: N
             aria-label="笔记标题"
             className="document-title"
             onChange={(event) => onUpdateNote({ title: event.target.value })}
-            readOnly={readOnly}
+            readOnly={titleReadOnly}
             value={note.title}
           />
           <div className="document-meta">
@@ -555,10 +570,43 @@ function MobileWorkspace(props: WorkspaceProps) {
           note={props.activeNote}
           onBack={() => props.onMobileScreenChange("notes")}
           onFormat={props.onFormat}
+          onReloadNote={props.onReloadNote}
           onUpdateNote={props.onUpdateNote}
+          saveState={props.saveState}
         />
       ) : null}
     </div>
+  )
+}
+
+function SaveStateIndicator({ note, state }: { note: Note; state: NoteSaveState }) {
+  const label = state.status === "saving"
+    ? "正在保存"
+    : state.status === "conflict"
+      ? "已保留冲突副本"
+      : state.status === "error"
+        ? "保存失败"
+        : state.status === "readonly"
+          ? note.source === "webdav" ? "云端只读" : "只读"
+          : "已保存"
+  const Icon = state.status === "saving"
+    ? LoaderCircle
+    : state.status === "conflict"
+      ? AlertTriangle
+      : state.status === "error"
+        ? AlertCircle
+        : Check
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="saved-state" data-status={state.status}>
+          <Icon className={state.status === "saving" ? "animate-spin" : ""} />
+          {label}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{state.message ?? label}</TooltipContent>
+    </Tooltip>
   )
 }
 

@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { Workspace, type MobileScreen } from "@/components/workspace/workspace"
 import { WebDavSettingsDialog } from "@/components/webdav-settings-dialog"
@@ -10,7 +10,7 @@ import {
 } from "@/services/vault/local-vault-adapter"
 import type { VaultAdapter } from "@/services/vault/vault-adapter"
 import { createWebDavVaultAdapter } from "@/services/vault/webdav-vault-adapter"
-import type { Note } from "@/types/note"
+import type { Note, NoteSaveState } from "@/types/note"
 import "./App.css"
 
 function App() {
@@ -24,6 +24,14 @@ function App() {
   const [webDavConfigured, setWebDavConfigured] = useState(hasSavedWebDavConfig)
   const [vaultNoteCount, setVaultNoteCount] = useState(0)
   const [vaultSession, setVaultSession] = useState<VaultAdapter | null>(null)
+  const [saveStates, setSaveStates] = useState<Record<string, NoteSaveState>>({})
+  const saveTimersRef = useRef(new Map<string, number>())
+  const saveQueuesRef = useRef(new Map<string, Promise<void>>())
+  const revisionByPathRef = useRef(new Map<string, string | undefined>())
+
+  useEffect(() => () => {
+    for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer)
+  }, [])
 
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const visibleNotes = normalizedQuery
@@ -50,12 +58,55 @@ function App() {
       : "未连接"
 
   const updateActiveNote = (patch: Partial<Note>) => {
-    // 编辑只进入本地状态；同步层后续监听持久化事件，界面不直接依赖 WebDAV。
     setNotes((current) =>
       current.map((note) =>
         note.id === activeNoteId ? { ...note, ...patch, updatedAt: "刚刚" } : note,
       ),
     )
+    if (typeof patch.content === "string") scheduleLocalSave(activeNote, patch.content)
+  }
+
+  const scheduleLocalSave = (note: Note, content: string) => {
+    const adapter = vaultSession
+    const path = note.remotePath
+    if (!path || note.readOnly || !adapter?.writeTextFile) return
+
+    const previousTimer = saveTimersRef.current.get(note.id)
+    if (previousTimer) window.clearTimeout(previousTimer)
+    setSaveStates((current) => ({ ...current, [note.id]: { status: "saving" } }))
+
+    // 同一文件的保存任务串行执行，并在真正写入前读取最新 revision，避免快速输入造成自冲突。
+    const timer = window.setTimeout(() => {
+      const previousSave = saveQueuesRef.current.get(path) ?? Promise.resolve()
+      const nextSave = previousSave
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            const result = await adapter.writeTextFile?.(
+              path,
+              content,
+              revisionByPathRef.current.get(path),
+            )
+            if (!result) return
+            revisionByPathRef.current.set(path, result.revision)
+            setNotes((current) => current.map((currentNote) =>
+              currentNote.id === note.id
+                ? { ...currentNote, revision: result.revision, updatedAt: "刚刚" }
+                : currentNote,
+            ))
+            setSaveStates((current) => ({ ...current, [note.id]: { status: "saved" } }))
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "保存笔记失败"
+            const status = error instanceof Error && error.name === "VaultConflictError"
+              ? "conflict"
+              : "error"
+            setSaveStates((current) => ({ ...current, [note.id]: { message, status } }))
+            setVaultError(message)
+          }
+        })
+      saveQueuesRef.current.set(path, nextSave)
+    }, 650)
+    saveTimersRef.current.set(note.id, timer)
   }
 
   const createNote = () => {
@@ -76,7 +127,7 @@ function App() {
   }
 
   const formatActiveNote = (syntax: string) => {
-    if (!syntax || activeNote.source === "webdav" || activeNote.source === "local") return
+    if (!syntax || activeNote.readOnly) return
     const content = `${activeNote.content}${syntax}`
     updateActiveNote({
       content,
@@ -95,16 +146,20 @@ function App() {
     }
 
     const firstFile = files[0]
-    const firstContent = await adapter.readTextFile(firstFile.path)
+    const firstDocument = await adapter.readTextFile(firstFile.path)
+    revisionByPathRef.current.clear()
+    revisionByPathRef.current.set(firstFile.path, firstDocument.revision)
     const remoteNotes: Note[] = files.map((file, index) => ({
       id: `${adapter.kind}:${file.path}`,
       title: file.name.replace(/\.md$/i, ""),
       preview: file.path,
-      content: index === 0 ? firstContent : "正在从笔记库读取…",
+      content: index === 0 ? firstDocument.content : "正在从笔记库读取…",
       updatedAt: formatRemoteDate(file.updatedAt),
       starred: false,
       source: adapter.kind === "webdav" ? "webdav" : "local",
       remotePath: file.path,
+      readOnly: adapter.readOnly,
+      revision: index === 0 ? firstDocument.revision : undefined,
       contentLoaded: index === 0,
     }))
 
@@ -113,6 +168,10 @@ function App() {
     setNotes(remoteNotes)
     setActiveNoteId(remoteNotes[0].id)
     setVaultNoteCount(remoteNotes.length)
+    setSaveStates(Object.fromEntries(remoteNotes.map((note) => [
+      note.id,
+      { status: adapter.readOnly ? "readonly" : "saved" },
+    ])))
     setVaultError(null)
     setMobileScreen("notes")
     return remoteNotes.length
@@ -137,11 +196,17 @@ function App() {
     if (note.source === "demo" || note.contentLoaded || !note.remotePath || !vaultSession) return
 
     try {
-      const content = await vaultSession.readTextFile(note.remotePath)
+      const document = await vaultSession.readTextFile(note.remotePath)
+      revisionByPathRef.current.set(note.remotePath, document.revision)
       setNotes((current) =>
         current.map((currentNote) =>
           currentNote.id === note.id
-            ? { ...currentNote, content, contentLoaded: true }
+            ? {
+                ...currentNote,
+                content: document.content,
+                revision: document.revision,
+                contentLoaded: true,
+              }
             : currentNote,
         ),
       )
@@ -154,6 +219,46 @@ function App() {
             : currentNote,
         ),
       )
+    }
+  }
+
+  const reloadActiveNote = async () => {
+    const path = activeNote.remotePath
+    if (!path || !vaultSession) return
+
+    const pendingTimer = saveTimersRef.current.get(activeNote.id)
+    if (pendingTimer) {
+      window.clearTimeout(pendingTimer)
+      saveTimersRef.current.delete(activeNote.id)
+    }
+    setSaveStates((current) => ({ ...current, [activeNote.id]: { status: "saving" } }))
+
+    try {
+      const document = await vaultSession.readTextFile(path)
+      revisionByPathRef.current.set(path, document.revision)
+      setNotes((current) => current.map((note) =>
+        note.id === activeNote.id
+          ? {
+              ...note,
+              content: document.content,
+              preview: document.content.replace(/^#+\s*/gm, "").slice(0, 90),
+              revision: document.revision,
+              updatedAt: "刚刚重新加载",
+            }
+          : note,
+      ))
+      setSaveStates((current) => ({
+        ...current,
+        [activeNote.id]: { status: activeNote.readOnly ? "readonly" : "saved" },
+      }))
+      setVaultError(null)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "重新加载笔记失败"
+      setSaveStates((current) => ({
+        ...current,
+        [activeNote.id]: { message, status: "error" },
+      }))
+      setVaultError(message)
     }
   }
 
@@ -175,9 +280,13 @@ function App() {
         onOpenLocalVault={() => void openLocalVault()}
         onOpenSettings={() => setSettingsOpen(true)}
         onQueryChange={setQuery}
+        onReloadNote={() => void reloadActiveNote()}
         onSelectNote={(note) => void selectNote(note)}
         onUpdateNote={updateActiveNote}
         query={query}
+        saveState={saveStates[activeNoteId] ?? {
+          status: activeNote.readOnly ? "readonly" : "saved",
+        }}
         syncLabel={syncLabel}
         vaultError={vaultError}
       />

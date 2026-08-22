@@ -17,6 +17,8 @@ export function createWebDavVaultAdapter(
         updatedAt: file.lastModified,
       }))
     },
-    readTextFile: (path) => readMarkdownFile(config, password, path),
+    async readTextFile(path) {
+      return { content: await readMarkdownFile(config, password, path) }
+    },
   }
 }
