@@ -324,6 +324,23 @@ function App() {
     }
   }
 
+  const openWikiLink = (target: string) => {
+    const normalizedTarget = normalizeNoteTarget(target)
+    // Obsidian 链接可能写标题、相对路径或标题锚点，统一归一化后再路由到已加载笔记。
+    const linkedNote = notes.find((note) =>
+      normalizeNoteTarget(note.title) === normalizedTarget
+      || (note.remotePath && normalizeNoteTarget(note.remotePath) === normalizedTarget),
+    )
+
+    if (linkedNote) {
+      setVaultError(null)
+      void selectNote(linkedNote)
+      return
+    }
+
+    setVaultError(`找不到链接笔记：${target}`)
+  }
+
   return (
     <>
       <Workspace
@@ -341,6 +358,7 @@ function App() {
         onFormat={formatActiveNote}
         onMobileScreenChange={setMobileScreen}
         onOpenLocalVault={() => void openLocalVault()}
+        onOpenWikiLink={openWikiLink}
         onOpenSettings={() => setSettingsOpen(true)}
         onQueryChange={setQuery}
         onReloadNote={() => void reloadActiveNote()}

@@ -183,6 +183,31 @@
 .markdown-editor-shell .cm-content ::selection { background: color-mix(in oklab,var(--primary) 18%,transparent) !important; }
 .markdown-editor-shell .cm-cursor { border-left-color: var(--primary); }
 .markdown-editor-shell .cm-placeholder { color: var(--muted-foreground); font-style: normal; }
+.preview-toggle[data-active="true"] { background: var(--blue-soft); color: var(--primary); }
+.markdown-preview { min-height: calc(100dvh - 250px); color: #28313e; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.markdown-preview > :first-child { margin-top: 0; }
+.markdown-preview > :last-child { margin-bottom: 0; }
+.markdown-preview h1, .markdown-preview h2, .markdown-preview h3, .markdown-preview h4 { margin: 1.7em 0 .65em; color: #1d2530; line-height: 1.3; font-weight: 700; letter-spacing: -.02em; }
+.markdown-preview h1 { font-size: 1.8em; }
+.markdown-preview h2 { padding-bottom: .28em; border-bottom: 1px solid var(--border); font-size: 1.4em; }
+.markdown-preview h3 { font-size: 1.16em; }
+.markdown-preview p { margin: .85em 0; }
+.markdown-preview ul, .markdown-preview ol { margin: .8em 0; padding-left: 1.65em; }
+.markdown-preview ul { list-style: disc; }
+.markdown-preview ol { list-style: decimal; }
+.markdown-preview li { margin: .25em 0; }
+.markdown-preview blockquote { margin: 1.1em 0; border-left: 3px solid var(--blue-line); padding: .15em 0 .15em 1em; color: var(--muted-foreground); }
+.markdown-preview blockquote p { margin: .35em 0; }
+.markdown-preview code { border-radius: 4px; background: var(--muted); padding: .12em .35em; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
+.markdown-preview pre { overflow-x: auto; border-radius: 8px; background: #f5f7fa; padding: 14px 16px; line-height: 1.65; }
+.markdown-preview pre code { background: transparent; padding: 0; }
+.markdown-preview table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; margin: 1em 0; }
+.markdown-preview th, .markdown-preview td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; }
+.markdown-preview th { background: var(--panel-soft); font-weight: 650; }
+.markdown-preview a, .wiki-link { color: var(--primary); text-decoration: underline; text-decoration-color: color-mix(in oklab,var(--primary) 35%,transparent); text-underline-offset: 3px; }
+.wiki-link { display: inline; padding: 0; font: inherit; }
+.wiki-link:hover, .markdown-preview a:hover { text-decoration-color: currentColor; }
+.markdown-preview input[type="checkbox"] { margin-right: .45em; accent-color: var(--primary); }
 .editor-loading { padding: 8px 0; color: var(--muted-foreground); font-size: 13px; }
 .backlinks-panel { margin-top: 44px; border-top: 1px solid var(--border); padding-top: 20px; }
 .backlinks-title { display: flex; align-items: center; gap: 7px; color: #384352; font-size: 12px; }
@@ -247,6 +272,7 @@
   .note-editor[data-compact="true"] .document-title { font-size: 28px; }
   .note-editor[data-compact="true"] .document-meta { margin: 10px 0 25px; }
   .note-editor[data-compact="true"] .markdown-editor-shell { min-height: calc(100dvh - 245px); }
+  .note-editor[data-compact="true"] .markdown-preview { min-height: calc(100dvh - 215px); font-size: 15px; }
   .note-editor[data-compact="true"] .markdown-editor-shell .cm-editor { font-size: 15px; }
   .note-editor[data-compact="true"] .markdown-editor-shell .cm-scroller { line-height: 1.8; }
   .formatting-toolbar[data-mobile="true"] { min-height: calc(54px + env(safe-area-inset-bottom)); gap: 4px; justify-content: space-around; border-top: 1px solid var(--border); border-bottom: 0; padding: 5px 10px env(safe-area-inset-bottom); background: white; }

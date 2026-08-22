@@ -1,4 +1,4 @@
-import { lazy, Suspense, useRef, type ReactNode } from "react"
+import { lazy, Suspense, useRef, useState, type ReactNode } from "react"
 import {
   ArrowLeft,
   AlertCircle,
@@ -21,6 +21,8 @@ import {
   Link2,
   LoaderCircle,
   MoreHorizontal,
+  Eye,
+  PencilLine,
   Plus,
   Search,
   Settings,
@@ -52,6 +54,7 @@ import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 
 // CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
 const MarkdownEditor = lazy(() => import("@/components/editor/markdown-editor"))
+const MarkdownPreview = lazy(() => import("@/components/editor/markdown-preview"))
 
 export type MobileScreen = "library" | "notes" | "editor"
 
@@ -70,6 +73,7 @@ type WorkspaceProps = {
   onFormat: (syntax: string) => void
   onMobileScreenChange: (screen: MobileScreen) => void
   onOpenLocalVault: () => void
+  onOpenWikiLink: (target: string) => void
   onOpenSettings: () => void
   onQueryChange: (query: string) => void
   onReloadNote: () => void
@@ -126,6 +130,7 @@ function DesktopWorkspace(props: WorkspaceProps) {
         backlinks={props.backlinks}
         note={props.activeNote}
         onFormat={props.onFormat}
+        onOpenWikiLink={props.onOpenWikiLink}
         onSelectNote={props.onSelectNote}
         onUpdateNote={props.onUpdateNote}
         onReloadNote={props.onReloadNote}
@@ -419,16 +424,18 @@ type NoteEditorProps = {
   note: Note
   onBack?: () => void
   onFormat: (syntax: string) => void
+  onOpenWikiLink: (target: string) => void
   onReloadNote: () => void
   onSelectNote: (note: Note) => void
   onUpdateNote: (patch: Partial<Note>) => void
   saveState: NoteSaveState
 }
 
-function NoteEditor({ backlinks, compact = false, note, onBack, onFormat, onReloadNote, onSelectNote, onUpdateNote, saveState }: NoteEditorProps) {
+function NoteEditor({ backlinks, compact = false, note, onBack, onFormat, onOpenWikiLink, onReloadNote, onSelectNote, onUpdateNote, saveState }: NoteEditorProps) {
   const readOnly = note.readOnly ?? note.source === "webdav"
   const titleReadOnly = note.source === "local" || note.source === "webdav"
   const editorRef = useRef<MarkdownEditorHandle>(null)
+  const [previewing, setPreviewing] = useState(false)
 
   const handleFormat = (syntax: string) => {
     if (!syntax) return
@@ -450,6 +457,21 @@ function NoteEditor({ backlinks, compact = false, note, onBack, onFormat, onRelo
         {onBack ? <span className="mobile-back-label">全部笔记</span> : null}
         <div className="editor-actions">
           <SaveStateIndicator note={note} state={saveState} />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label={previewing ? "切换到编辑" : "切换到预览"}
+                className="preview-toggle"
+                data-active={previewing}
+                onClick={() => setPreviewing((current) => !current)}
+                size="icon-sm"
+                variant="ghost"
+              >
+                {previewing ? <PencilLine /> : <Eye />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{previewing ? "编辑 Markdown" : "预览 Markdown"}</TooltipContent>
+          </Tooltip>
           <Button
             aria-label={note.starred ? "取消收藏" : "收藏"}
             onClick={() => onUpdateNote({ starred: !note.starred })}
@@ -480,7 +502,7 @@ function NoteEditor({ backlinks, compact = false, note, onBack, onFormat, onRelo
         </div>
       </header>
 
-      {!compact ? <FormattingToolbar onFormat={handleFormat} /> : null}
+      {!compact && !previewing ? <FormattingToolbar onFormat={handleFormat} /> : null}
 
       <ScrollArea className="editor-scroll">
         <div className="document-canvas">
@@ -498,30 +520,36 @@ function NoteEditor({ backlinks, compact = false, note, onBack, onFormat, onRelo
             <span>·</span>
             <span>{deriveFolder(note)}</span>
           </div>
-          <div className="markdown-editor-shell">
-            <Suspense fallback={<div className="editor-loading">正在加载编辑器…</div>}>
-              <MarkdownEditor
-                onChange={(content) => onUpdateNote({
-                  content,
-                  preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
-                })}
-                readOnly={readOnly}
-                ref={editorRef}
-                value={note.content}
-              />
+          {previewing ? (
+            <Suspense fallback={<div className="editor-loading">正在生成预览…</div>}>
+              <MarkdownPreview content={note.content} onWikiLink={onOpenWikiLink} />
             </Suspense>
-          </div>
+          ) : (
+            <div className="markdown-editor-shell">
+              <Suspense fallback={<div className="editor-loading">正在加载编辑器…</div>}>
+                <MarkdownEditor
+                  onChange={(content) => onUpdateNote({
+                    content,
+                    preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
+                  })}
+                  readOnly={readOnly}
+                  ref={editorRef}
+                  value={note.content}
+                />
+              </Suspense>
+            </div>
+          )}
           <BacklinksPanel backlinks={backlinks} onSelectNote={onSelectNote} />
         </div>
       </ScrollArea>
 
-      {compact ? <FormattingToolbar mobile onFormat={handleFormat} /> : (
+      {compact && !previewing ? <FormattingToolbar mobile onFormat={handleFormat} /> : !compact ? (
         <footer className="editor-statusbar">
           <span>{note.content.length} 字</span>
           <span>Markdown</span>
           <span className="ml-auto">行 1，列 1</span>
         </footer>
-      )}
+      ) : null}
     </article>
   )
 }
@@ -578,6 +606,7 @@ function MobileWorkspace(props: WorkspaceProps) {
           note={props.activeNote}
           onBack={() => props.onMobileScreenChange("notes")}
           onFormat={props.onFormat}
+          onOpenWikiLink={props.onOpenWikiLink}
           onReloadNote={props.onReloadNote}
           onSelectNote={props.onSelectNote}
           onUpdateNote={props.onUpdateNote}
