@@ -38,6 +38,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [mobileScreen, setMobileScreen] = useState<MobileScreen>("library")
   const [isOpeningVault, setIsOpeningVault] = useState(false)
+  const [isRefreshingVault, setIsRefreshingVault] = useState(false)
   const [vaultError, setVaultError] = useState<string | null>(null)
   const [webDavConfigured, setWebDavConfigured] = useState(hasSavedWebDavConfig)
   const [vaultNoteCount, setVaultNoteCount] = useState(0)
@@ -292,32 +293,50 @@ function App() {
     return loadVault(createWebDavVaultAdapter(config, password))
   }
 
-  const loadVault = async (adapter: VaultAdapter) => {
+  const loadVault = async (adapter: VaultAdapter, preserveContext = false) => {
     const files = await adapter.listMarkdownFiles()
     if (files.length === 0) {
       throw new Error(`${adapter.displayName} 中没有找到 Markdown 文件`)
     }
 
-    const firstFile = files[0]
-    const firstDocument = await adapter.readTextFile(firstFile.path)
+    const previousNotesByPath = preserveContext
+      ? new Map(notes.filter((note) => note.remotePath).map((note) => [note.remotePath!, note]))
+      : new Map<string, Note>()
+    const preferredPath = preserveContext && activeNote?.remotePath
+      && files.some((file) => file.path === activeNote.remotePath)
+      ? activeNote.remotePath
+      : files[0].path
+    const pathsToRead = files
+      .filter((file) => file.path === preferredPath || previousNotesByPath.get(file.path)?.contentLoaded)
+      .map((file) => file.path)
+    const loadedDocuments = await readVaultDocuments(adapter, pathsToRead)
     revisionByPathRef.current.clear()
-    revisionByPathRef.current.set(firstFile.path, firstDocument.revision)
-    const remoteNotes: Note[] = files.map((file, index) => ({
-      id: `${adapter.kind}:${file.path}`,
-      title: file.name.replace(/\.md$/i, ""),
-      preview: adapter.getDisplayPath?.(file.path) ?? file.path,
-      content: index === 0 ? firstDocument.content : "正在从笔记库读取…",
-      updatedAt: formatRemoteDate(file.updatedAt),
-      starred: false,
-      folder: deriveRemoteFolder(adapter.getDisplayPath?.(file.path) ?? file.path),
-      source: adapter.kind === "webdav" ? "webdav" : "local",
-      remotePath: file.path,
-      readOnly: adapter.readOnly,
-      revision: index === 0 ? firstDocument.revision : undefined,
-      searchText: index === 0 ? firstDocument.content.toLocaleLowerCase() : undefined,
-      outgoingLinks: index === 0 ? extractWikiLinks(firstDocument.content) : undefined,
-      contentLoaded: index === 0,
-    }))
+    for (const [path, document] of loadedDocuments) {
+      revisionByPathRef.current.set(path, document.revision)
+    }
+    const remoteNotes: Note[] = files.map((file) => {
+      const previousNote = previousNotesByPath.get(file.path)
+      const loadedDocument = loadedDocuments.get(file.path)
+      const content = loadedDocument?.content ?? "正在从笔记库读取…"
+
+      return {
+        id: `${adapter.kind}:${file.path}`,
+        title: file.name.replace(/\.md$/i, ""),
+        preview: adapter.getDisplayPath?.(file.path) ?? file.path,
+        content,
+        updatedAt: formatRemoteDate(file.updatedAt),
+        starred: previousNote?.starred ?? false,
+        folder: deriveRemoteFolder(adapter.getDisplayPath?.(file.path) ?? file.path),
+        source: adapter.kind === "webdav" ? "webdav" : "local",
+        remotePath: file.path,
+        readOnly: adapter.readOnly,
+        revision: loadedDocument?.revision,
+        searchText: loadedDocument ? content.toLocaleLowerCase() : undefined,
+        outgoingLinks: loadedDocument ? extractWikiLinks(content) : undefined,
+        contentLoaded: Boolean(loadedDocument),
+      }
+    })
+    const nextActiveNoteId = `${adapter.kind}:${preferredPath}`
 
     const cacheMeta: ActiveCacheMeta = {
       id: await createVaultCacheId(adapter.cacheIdentity),
@@ -326,7 +345,7 @@ function App() {
     }
     const snapshot: VaultCacheSnapshot = {
       ...cacheMeta,
-      activeNoteId: remoteNotes[0].id,
+      activeNoteId: nextActiveNoteId,
       notes: remoteNotes,
       savedAt: Date.now(),
     }
@@ -337,16 +356,19 @@ function App() {
     setVaultSession(adapter)
     setActiveCacheMeta(cacheMeta)
     setVaultCaches(await listVaultCaches())
-    setSelectedFolder(null)
+    setSelectedFolder((current) => preserveContext && current
+      && remoteNotes.some((note) => noteBelongsToFolder(note, current))
+      ? current
+      : null)
     setNotes(remoteNotes)
-    setActiveNoteId(remoteNotes[0].id)
+    setActiveNoteId(nextActiveNoteId)
     setVaultNoteCount(remoteNotes.length)
     setSaveStates(Object.fromEntries(remoteNotes.map((note) => [
       note.id,
       { status: adapter.readOnly ? "readonly" : "saved" },
     ])))
     setVaultError(null)
-    setMobileScreen("notes")
+    if (!preserveContext) setMobileScreen("notes")
     if (adapter.kind === "webdav") {
       indexGenerationRef.current += 1
       setIndexProgress(null)
@@ -354,6 +376,24 @@ function App() {
       startLocalIndex(adapter, files)
     }
     return remoteNotes.length
+  }
+
+  const refreshVault = async () => {
+    if (!vaultSession) {
+      setSettingsOpen(true)
+      return
+    }
+
+    setIsRefreshingVault(true)
+    setVaultError(null)
+    try {
+      // 在线刷新复用当前会话凭据，并保留用户所在目录、搜索条件和当前文档，减少上下文跳变。
+      await loadVault(vaultSession, true)
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "刷新笔记库失败")
+    } finally {
+      setIsRefreshingVault(false)
+    }
   }
 
   const selectVaultCache = async (cacheId: string) => {
@@ -488,6 +528,7 @@ function App() {
         connected={connected}
         folders={folders}
         isOpeningVault={isOpeningVault}
+        isRefreshingVault={isRefreshingVault}
         localVaultSupported={canSelectLocalVault()}
         mobileScreen={mobileScreen}
         mobileConnectionLabel={mobileConnectionLabel}
@@ -501,6 +542,7 @@ function App() {
         onOpenSettings={() => setSettingsOpen(true)}
         onQueryChange={setQuery}
         onReloadNote={() => void reloadActiveNote()}
+        onRefreshVault={() => void refreshVault()}
         onResolveAsset={resolveActiveAsset}
         onSelectFolder={(folder) => {
           setSelectedFolder(folder)
@@ -544,6 +586,22 @@ function formatRemoteDate(lastModified?: string) {
 function deriveRemoteFolder(path: string) {
   const segments = path.split("/").filter(Boolean)
   return segments.slice(0, -1).join(" / ") || "根目录"
+}
+
+async function readVaultDocuments(adapter: VaultAdapter, paths: string[]) {
+  const documents = new Map<string, Awaited<ReturnType<VaultAdapter["readTextFile"]>>>()
+  const batchSize = adapter.kind === "webdav" ? 4 : 12
+
+  // 坚果云有请求频率限制：批次内并行避免串行瀑布，批次之间收敛并发避免大量正文同时触发 429。
+  for (let index = 0; index < paths.length; index += batchSize) {
+    const batch = await Promise.all(paths.slice(index, index + batchSize).map(async (path) => [
+      path,
+      await adapter.readTextFile(path),
+    ] as const))
+    for (const [path, document] of batch) documents.set(path, document)
+  }
+
+  return documents
 }
 
 export default App

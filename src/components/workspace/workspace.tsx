@@ -25,6 +25,7 @@ import {
   Eye,
   PencilLine,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   SlidersHorizontal,
@@ -71,6 +72,7 @@ type WorkspaceProps = {
   connected: boolean
   folders: VaultFolder[]
   isOpeningVault: boolean
+  isRefreshingVault: boolean
   localVaultSupported: boolean
   mobileScreen: MobileScreen
   mobileConnectionLabel: string
@@ -84,6 +86,7 @@ type WorkspaceProps = {
   onOpenSettings: () => void
   onQueryChange: (query: string) => void
   onReloadNote: () => void
+  onRefreshVault: () => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onSelectFolder: (folder: string | null) => void
   onSelectNote: (note: Note) => void
@@ -120,10 +123,12 @@ function DesktopWorkspace(props: WorkspaceProps) {
         onCreateNote={props.onCreateNote}
         onOpenLocalVault={props.onOpenLocalVault}
         onOpenSettings={props.onOpenSettings}
+        onRefreshVault={props.onRefreshVault}
         onSelectFolder={props.onSelectFolder}
         onSelectVaultCache={props.onSelectVaultCache}
         selectedFolder={props.selectedFolder}
         isOpeningVault={props.isOpeningVault}
+        isRefreshingVault={props.isRefreshingVault}
         localVaultSupported={props.localVaultSupported}
         syncLabel={props.syncLabel}
         vaultError={props.vaultError}
@@ -216,11 +221,13 @@ type LibraryPanelProps = {
   connectionLabel: string
   folders: VaultFolder[]
   isOpeningVault: boolean
+  isRefreshingVault: boolean
   localVaultSupported: boolean
   noteCount: number
   onCreateNote: () => void
   onOpenLocalVault: () => void
   onOpenSettings: () => void
+  onRefreshVault: () => void
   onSelectFolder: (folder: string | null) => void
   onSelectVaultCache: (cacheId: string) => void
   selectedFolder: string | null
@@ -235,11 +242,13 @@ function LibraryPanel({
   connectionLabel,
   folders,
   isOpeningVault,
+  isRefreshingVault,
   localVaultSupported,
   noteCount,
   onCreateNote,
   onOpenLocalVault,
   onOpenSettings,
+  onRefreshVault,
   onSelectFolder,
   onSelectVaultCache,
   selectedFolder,
@@ -308,14 +317,26 @@ function LibraryPanel({
         </nav>
       </ScrollArea>
 
-      <button className="sync-summary" onClick={onOpenSettings} type="button">
-        <span className="sync-summary-dot" data-connected={connected} />
-        <span className="min-w-0">
-          <strong>{connectionLabel}</strong>
-          <small>{syncLabel}</small>
-        </span>
-        <ChevronRight />
-      </button>
+      <div className="sync-summary-shell">
+        <button className="sync-summary" onClick={onOpenSettings} type="button">
+          <span className="sync-summary-dot" data-connected={connected} />
+          <span className="min-w-0">
+            <strong>{connectionLabel}</strong>
+            <small>{syncLabel}</small>
+          </span>
+          <ChevronRight />
+        </button>
+        <Button
+          aria-label={connected ? "刷新当前笔记库" : "重新连接并更新"}
+          className="sync-refresh-button"
+          disabled={isRefreshingVault}
+          onClick={onRefreshVault}
+          size="icon-sm"
+          variant="ghost"
+        >
+          {isRefreshingVault ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
+        </Button>
+      </div>
     </aside>
   )
 }
@@ -844,8 +865,9 @@ function MobileLibrary(props: MobileLibraryProps) {
     <section className="mobile-screen mobile-library">
       <MobileBrandHeader
         connected={props.connected}
+        isRefreshingVault={props.isRefreshingVault}
         mobileConnectionLabel={props.mobileConnectionLabel}
-        onOpenSettings={props.onOpenSettings}
+        onRefreshVault={props.onRefreshVault}
       />
       <ScrollArea className="mobile-scroll-content" viewportRef={viewportRef}>
         <div className="mobile-page-padding">
@@ -1012,15 +1034,24 @@ function MobileNoteList(props: MobileNoteListProps) {
 
 function MobileBrandHeader({
   connected,
+  isRefreshingVault,
   mobileConnectionLabel,
-  onOpenSettings,
-}: Pick<WorkspaceProps, "connected" | "mobileConnectionLabel" | "onOpenSettings">) {
+  onRefreshVault,
+}: Pick<WorkspaceProps, "connected" | "isRefreshingVault" | "mobileConnectionLabel" | "onRefreshVault">) {
   return (
     <header className="mobile-brand-header">
       <img alt="Swell Note" src={swellNoteLogo} />
       <strong>Swell Note</strong>
-      <button className="mobile-sync-state" onClick={onOpenSettings} type="button">
-        <CheckCircle2 data-connected={connected} />
+      <button
+        aria-label={connected ? "刷新当前笔记库" : "重新连接并更新"}
+        className="mobile-sync-state"
+        disabled={isRefreshingVault}
+        onClick={onRefreshVault}
+        type="button"
+      >
+        {isRefreshingVault
+          ? <LoaderCircle className="animate-spin" />
+          : connected ? <CheckCircle2 data-connected /> : <RefreshCw />}
         <span>{mobileConnectionLabel}</span>
       </button>
       <Button aria-label="账户" size="icon" variant="ghost"><UserRound /></Button>
