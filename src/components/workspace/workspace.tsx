@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   AlertCircle,
   AlertTriangle,
+  Bold,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -12,7 +13,6 @@ import {
   Code2,
   Database,
   FileText,
-  Filter,
   Folder,
   FolderOpen,
   List,
@@ -27,9 +27,9 @@ import {
   RefreshCw,
   Search,
   Settings,
-  SlidersHorizontal,
   Star,
-  UserRound,
+  Italic,
+  Quote,
 } from "lucide-react"
 
 import swellNoteLogo from "@/assets/brand/swell-note-logo-ribbon-s.svg"
@@ -62,6 +62,7 @@ import {
 import type { Note, NoteSaveState } from "@/types/note"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 import type { VaultFolder } from "@/services/search/vault-folders"
+import type { NoteSort } from "@/services/search/note-sort"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 
@@ -91,6 +92,7 @@ type WorkspaceProps = {
   mobileScreen: MobileScreen
   mobileConnectionLabel: string
   mobileListStateKey: string
+  noteSort: NoteSort
   notes: Note[]
   onCreateNote: () => void
   onFormat: (syntax: string) => void
@@ -102,6 +104,7 @@ type WorkspaceProps = {
   onOpenSettings: () => void
   onNavigate: (path: string) => void
   onQueryChange: (query: string) => void
+  onNoteSortChange: (sort: NoteSort) => void
   onReloadNote: () => void
   onRefreshVault: () => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
@@ -165,9 +168,11 @@ function DesktopWorkspace(props: WorkspaceProps) {
       <NoteListPanel
         activeNoteId={props.activeNoteId}
         notes={props.notes}
+        noteSort={props.noteSort}
         folderLabel={props.selectedFolder ?? (props.libraryView === "recent" ? "最近更新" : props.libraryView === "starred" ? "收藏" : "全部笔记")}
         onOpenSettings={props.onOpenSettings}
         onQueryChange={props.onQueryChange}
+        onNoteSortChange={props.onNoteSortChange}
         onSelectNote={props.onSelectNote}
         query={props.query}
       />
@@ -451,8 +456,10 @@ type NoteListPanelProps = {
   activeNoteId: string
   folderLabel: string
   notes: Note[]
+  noteSort: NoteSort
   onOpenSettings: () => void
   onQueryChange: (query: string) => void
+  onNoteSortChange: (sort: NoteSort) => void
   onSelectNote: (note: Note) => void
   query: string
 }
@@ -461,8 +468,10 @@ function NoteListPanel({
   activeNoteId,
   folderLabel,
   notes,
+  noteSort,
   onOpenSettings,
   onQueryChange,
+  onNoteSortChange,
   onSelectNote,
   query,
 }: NoteListPanelProps) {
@@ -475,16 +484,7 @@ function NoteListPanel({
           <span className="eyebrow">当前目录</span>
           <h2>{folderLabel}</h2>
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button aria-label="筛选与排序" size="icon-sm" variant="ghost"><ListFilter /></Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem>按更新时间排序</DropdownMenuItem>
-            <DropdownMenuItem>按创建时间排序</DropdownMenuItem>
-            <DropdownMenuItem>按标题排序</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <NoteSortMenu onChange={onNoteSortChange} sort={noteSort} />
       </div>
 
       <div className="note-search-wrap">
@@ -529,6 +529,38 @@ function EmptyNoteList({ onOpenSettings }: { onOpenSettings: () => void }) {
       <p>连接坚果云后，这里只展示远端 Vault 中的 Markdown。</p>
       <Button onClick={onOpenSettings} size="sm" variant="outline">连接坚果云</Button>
     </div>
+  )
+}
+
+const noteSortOptions: { label: string; value: NoteSort }[] = [
+  { label: "最近更新", value: "updated-desc" },
+  { label: "最早更新", value: "updated-asc" },
+  { label: "标题 A–Z", value: "title-asc" },
+]
+
+function NoteSortMenu({
+  mobile = false,
+  onChange,
+  sort,
+}: {
+  mobile?: boolean
+  onChange: (sort: NoteSort) => void
+  sort: NoteSort
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button aria-label="排序笔记" size={mobile ? "icon" : "icon-sm"} variant="ghost"><ListFilter /></Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {noteSortOptions.map((option) => (
+          <DropdownMenuItem key={option.value} onClick={() => onChange(option.value)}>
+            <Check className={sort === option.value ? "opacity-100" : "opacity-0"} />
+            {option.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -687,7 +719,7 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
         </div>
       </header>
 
-      {!compact && !previewing ? <FormattingToolbar onFormat={handleFormat} /> : null}
+      {!compact && !previewing && !readOnly ? <FormattingToolbar onFormat={handleFormat} /> : null}
 
       <ScrollArea className="editor-scroll">
         <div className="document-canvas">
@@ -732,7 +764,7 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
         </div>
       </ScrollArea>
 
-      {compact && !previewing ? <FormattingToolbar mobile onFormat={handleFormat} /> : !compact ? (
+      {compact && !previewing && !readOnly ? <FormattingToolbar mobile onFormat={handleFormat} /> : !compact ? (
         <footer className="editor-statusbar">
           <span>{note.content.length} 字</span>
           <span>Markdown</span>
@@ -766,11 +798,13 @@ function FormattingToolbar({ mobile = false, onFormat }: FormattingToolbarProps)
       <FormatButton label="二级标题" onClick={() => onFormat("\n## ")}>H2</FormatButton>
       <FormatButton label="三级标题" onClick={() => onFormat("\n### ")}>H3</FormatButton>
       <span className="toolbar-divider" />
+      <FormatButton icon={Bold} label="加粗" onClick={() => onFormat("**加粗文字**")} />
+      <FormatButton icon={Italic} label="斜体" onClick={() => onFormat("*斜体文字*")} />
+      <FormatButton icon={Quote} label="引用" onClick={() => onFormat("\n> ")} />
       <FormatButton icon={List} label="无序列表" onClick={() => onFormat("\n- ")} />
       <FormatButton icon={CheckCircle2} label="任务列表" onClick={() => onFormat("\n- [ ] ")} />
       <FormatButton icon={Code2} label="代码" onClick={() => onFormat("\n```\n\n```\n")} />
       <FormatButton icon={Link} label="链接" onClick={() => onFormat("[链接](https://)")} />
-      <FormatButton icon={MoreHorizontal} label="更多格式" onClick={() => onFormat("")} />
     </div>
   )
 }
@@ -950,7 +984,6 @@ function MobileLibrary(props: MobileLibraryProps) {
                 value={props.query}
               />
             </div>
-            <Button aria-label="筛选" size="icon" variant="ghost"><SlidersHorizontal /></Button>
           </div>
           <Button className="mobile-new-note" disabled={!props.canCreateNote || props.isCreatingNote} onClick={() => { rememberPosition(); props.onCreateNote() }}>
             {props.isCreatingNote ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
@@ -1068,13 +1101,11 @@ function MobileNoteList(props: MobileNoteListProps) {
         <Button aria-label="返回笔记库" onClick={() => props.onMobileScreenChange("library")} size="icon" variant="ghost"><ArrowLeft /></Button>
         <h1>{props.selectedFolder ?? "全部笔记"}</h1>
         <div>
-          <Button aria-label="筛选" size="icon" variant="ghost"><Filter /></Button>
-          <Button aria-label="排序" size="icon" variant="ghost"><ListFilter /></Button>
+          <NoteSortMenu mobile onChange={props.onNoteSortChange} sort={props.noteSort} />
         </div>
       </header>
       <div className="mobile-list-search">
         <div className="note-search-wrap"><Search /><Input onChange={(event) => props.onQueryChange(event.target.value)} placeholder="搜索笔记" value={props.query} /></div>
-        <Button aria-label="筛选选项" size="icon" variant="ghost"><SlidersHorizontal /></Button>
       </div>
       <ScrollArea
         className="mobile-scroll-content"
@@ -1124,7 +1155,6 @@ function MobileBrandHeader({
           : connected ? <CheckCircle2 data-connected /> : <RefreshCw />}
         <span>{mobileConnectionLabel}</span>
       </button>
-      <Button aria-label="账户" size="icon" variant="ghost"><UserRound /></Button>
     </header>
   )
 }

@@ -4,6 +4,7 @@ export type Note = {
   preview: string
   content: string
   updatedAt: string
+  modifiedAt?: number
   starred: boolean
   folder?: string
   source?: "local" | "webdav"

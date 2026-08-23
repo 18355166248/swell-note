@@ -33,6 +33,7 @@ import {
   indexVaultFiles,
   normalizeNoteTarget,
 } from "@/services/search/note-index"
+import { sortNotes, type NoteSort } from "@/services/search/note-sort"
 import { buildVaultFolders, noteBelongsToFolder } from "@/services/search/vault-folders"
 import { setMarkdownTaskChecked, type MarkdownTask } from "@/services/tasks/markdown-tasks"
 import type { Note, NoteSaveState } from "@/types/note"
@@ -50,6 +51,7 @@ function App() {
   const [query, setQuery] = useState("")
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
   const [libraryView, setLibraryView] = useState<LibraryView>("all")
+  const [noteSort, setNoteSort] = useState<NoteSort>("updated-desc")
   const [mobileScreen, setMobileScreen] = useState<MobileScreen>("library")
   const [isCreatingNote, setIsCreatingNote] = useState(false)
   const [isManagingNote, setIsManagingNote] = useState(false)
@@ -163,17 +165,18 @@ function App() {
     ? notes.filter((note) => noteBelongsToFolder(note, selectedFolder))
     : notes
   const libraryNotes = libraryView === "recent"
-    ? folderNotes.slice(0, 32)
+    ? sortNotes(folderNotes, "updated-desc").slice(0, 32)
     : libraryView === "starred"
       ? folderNotes.filter((note) => note.starred)
       : folderNotes
-  const visibleNotes = normalizedQuery
+  const filteredNotes = normalizedQuery
     ? libraryNotes.filter((note) =>
         `${note.title} ${note.preview} ${note.searchText ?? ""}`
           .toLocaleLowerCase()
           .includes(normalizedQuery),
       )
     : libraryNotes
+  const visibleNotes = sortNotes(filteredNotes, noteSort)
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? null
   const activeTarget = activeNote ? normalizeNoteTarget(activeNote.title) : ""
   const backlinks = useMemo(
@@ -217,6 +220,7 @@ function App() {
 
   const updateActiveNote = (patch: Partial<Note>) => {
     if (!activeNote) return
+    const touchesDocument = typeof patch.content === "string" || typeof patch.title === "string"
     const indexedPatch: Partial<Note> = typeof patch.content === "string"
       ? {
           ...patch,
@@ -226,7 +230,13 @@ function App() {
       : patch
     setNotes((current) =>
       current.map((note) =>
-        note.id === activeNoteId ? { ...note, ...indexedPatch, updatedAt: "刚刚" } : note,
+        note.id === activeNoteId
+          ? {
+              ...note,
+              ...indexedPatch,
+              ...(touchesDocument ? { modifiedAt: Date.now(), updatedAt: "刚刚" } : {}),
+            }
+          : note,
       ),
     )
     if (typeof patch.content === "string") scheduleLocalSave(activeNote, patch.content)
@@ -257,7 +267,7 @@ function App() {
             revisionByPathRef.current.set(path, result.revision)
             setNotes((current) => current.map((currentNote) =>
               currentNote.id === note.id
-                ? { ...currentNote, revision: result.revision, updatedAt: "刚刚" }
+                ? { ...currentNote, modifiedAt: Date.now(), revision: result.revision, updatedAt: "刚刚" }
                 : currentNote,
             ))
             setSaveStates((current) => ({ ...current, [note.id]: { status: "saved" } }))
@@ -291,6 +301,7 @@ function App() {
             preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
             searchText: content.toLocaleLowerCase(),
             updatedAt: "刚刚",
+            modifiedAt: Date.now(),
           }
         : candidate))
       scheduleLocalSave(note, content)
@@ -322,6 +333,7 @@ function App() {
         contentLoaded: true,
         folder: deriveRemoteFolder(result.path),
         id,
+        modifiedAt: now.getTime(),
         outgoingLinks: [],
         preview: "开始记录你的想法…",
         readOnly: false,
@@ -424,6 +436,7 @@ function App() {
         preview: adapter.getDisplayPath?.(file.path) ?? file.path,
         content,
         updatedAt: formatRemoteDate(file.updatedAt),
+        modifiedAt: parseRemoteTimestamp(file.updatedAt),
         starred: previousNote?.starred ?? false,
         folder: deriveRemoteFolder(adapter.getDisplayPath?.(file.path) ?? file.path),
         source: adapter.kind === "webdav" ? "webdav" : "local",
@@ -661,6 +674,7 @@ function App() {
             remotePath: result.path,
             revision: result.revision,
             updatedAt: "刚刚移动",
+            modifiedAt: Date.now(),
           }
         : candidate))
       setSaveStates((current) => {
@@ -758,6 +772,7 @@ function App() {
             mobileScreen={mobileScreen}
             mobileConnectionLabel={mobileConnectionLabel}
             mobileListStateKey={normalizedQuery}
+            noteSort={noteSort}
             notes={visibleNotes}
             onCreateNote={() => void createNote()}
             onDeleteNote={() => void deleteActiveNote()}
@@ -772,6 +787,7 @@ function App() {
             onOpenWikiLink={openWikiLink}
             onOpenSettings={() => navigate("/settings/webdav")}
             onQueryChange={setQuery}
+            onNoteSortChange={setNoteSort}
             onReloadNote={() => void reloadActiveNote()}
             onRefreshVault={() => void refreshVault()}
             onResolveAsset={resolveActiveAsset}
@@ -863,6 +879,12 @@ function formatRemoteDate(lastModified?: string) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date)
+}
+
+function parseRemoteTimestamp(lastModified?: string) {
+  if (!lastModified) return undefined
+  const timestamp = Date.parse(lastModified)
+  return Number.isNaN(timestamp) ? undefined : timestamp
 }
 
 function deriveRemoteFolder(path: string) {
