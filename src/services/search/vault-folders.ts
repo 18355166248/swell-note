@@ -35,6 +35,21 @@ export function noteBelongsToFolder(note: Note, folderPath: string) {
   return note.folder === folderPath || note.folder?.startsWith(`${folderPath} / `) === true
 }
 
+export function getFolderAncestorPaths(folderPath?: string | null) {
+  const segments = folderSegments(folderPath ?? undefined)
+  return segments.slice(0, -1).map((_, index) => segments.slice(0, index + 1).join(" / "))
+}
+
+export function getVisibleVaultFolders(
+  folders: VaultFolder[],
+  expandedFolderPaths: ReadonlySet<string>,
+) {
+  return folders.filter((folder) =>
+    folder.depth === 0
+    || getFolderAncestorPaths(folder.path).every((path) => expandedFolderPaths.has(path)),
+  )
+}
+
 function folderSegments(path?: string) {
   return path?.split(/\s*\/\s*/).filter(Boolean) ?? []
 }

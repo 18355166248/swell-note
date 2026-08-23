@@ -1,4 +1,4 @@
-import { lazy, Suspense, useLayoutEffect, useRef, useState, type ReactNode } from "react"
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   ArrowLeft,
   AlertCircle,
@@ -61,7 +61,11 @@ import {
 } from "@/components/ui/tooltip"
 import type { Note, NoteSaveState } from "@/types/note"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
-import type { VaultFolder } from "@/services/search/vault-folders"
+import {
+  getFolderAncestorPaths,
+  getVisibleVaultFolders,
+  type VaultFolder,
+} from "@/services/search/vault-folders"
 import type { NoteSort } from "@/services/search/note-sort"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
@@ -124,15 +128,57 @@ type WorkspaceProps = {
 }
 
 export function Workspace(props: WorkspaceProps) {
+  const [expandedFolderPaths, setExpandedFolderPaths] = useState<Set<string>>(() => new Set())
+
+  useEffect(() => {
+    const ancestors = getFolderAncestorPaths(props.selectedFolder)
+    if (ancestors.length === 0) return
+    // 地址直达深层目录时展开祖先保证选中项可见；之后仍允许用户主动折叠。
+    setExpandedFolderPaths((current) => {
+      if (ancestors.every((path) => current.has(path))) return current
+      return new Set([...current, ...ancestors])
+    })
+  }, [props.selectedFolder])
+  const visibleFolders = useMemo(
+    () => getVisibleVaultFolders(props.folders, expandedFolderPaths),
+    [expandedFolderPaths, props.folders],
+  )
+
+  const toggleFolder = (folderPath: string) => {
+    // 展开状态只记录路径；目录刷新后仍可依赖相同路径恢复，已经消失的路径不会影响渲染。
+    setExpandedFolderPaths((current) => {
+      const next = new Set(current)
+      if (next.has(folderPath)) next.delete(folderPath)
+      else next.add(folderPath)
+      return next
+    })
+  }
+
   return (
     <main className="workspace-root">
-      <DesktopWorkspace {...props} />
-      <MobileWorkspace {...props} />
+      <DesktopWorkspace
+        {...props}
+        expandedFolderPaths={expandedFolderPaths}
+        onToggleFolder={toggleFolder}
+        visibleFolders={visibleFolders}
+      />
+      <MobileWorkspace
+        {...props}
+        expandedFolderPaths={expandedFolderPaths}
+        onToggleFolder={toggleFolder}
+        visibleFolders={visibleFolders}
+      />
     </main>
   )
 }
 
-function DesktopWorkspace(props: WorkspaceProps) {
+type FolderTreeProps = {
+  expandedFolderPaths: ReadonlySet<string>
+  onToggleFolder: (folderPath: string) => void
+  visibleFolders: VaultFolder[]
+}
+
+function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
   return (
     <div className="desktop-workspace">
       <AppNavigationRail
@@ -146,7 +192,8 @@ function DesktopWorkspace(props: WorkspaceProps) {
         canCreateNote={props.canCreateNote}
         connected={props.connected}
         connectionLabel={props.connectionLabel}
-        folders={props.folders}
+        expandedFolderPaths={props.expandedFolderPaths}
+        folders={props.visibleFolders}
         libraryView={props.libraryView}
         noteCount={props.totalNoteCount}
         onCreateNote={props.onCreateNote}
@@ -154,6 +201,7 @@ function DesktopWorkspace(props: WorkspaceProps) {
         onOpenSettings={props.onOpenSettings}
         onRefreshVault={props.onRefreshVault}
         onSelectFolder={props.onSelectFolder}
+        onToggleFolder={props.onToggleFolder}
         onSelectLibraryView={props.onSelectLibraryView}
         onSelectVaultCache={props.onSelectVaultCache}
         selectedFolder={props.selectedFolder}
@@ -263,6 +311,7 @@ type LibraryPanelProps = {
   canCreateNote: boolean
   connected: boolean
   connectionLabel: string
+  expandedFolderPaths: ReadonlySet<string>
   folders: VaultFolder[]
   isOpeningVault: boolean
   isCreatingNote: boolean
@@ -275,6 +324,7 @@ type LibraryPanelProps = {
   onOpenSettings: () => void
   onRefreshVault: () => void
   onSelectFolder: (folder: string | null) => void
+  onToggleFolder: (folderPath: string) => void
   onSelectLibraryView: (view: LibraryView) => void
   onSelectVaultCache: (cacheId: string) => void
   selectedFolder: string | null
@@ -288,6 +338,7 @@ function LibraryPanel({
   connected,
   canCreateNote,
   connectionLabel,
+  expandedFolderPaths,
   folders,
   isOpeningVault,
   isCreatingNote,
@@ -300,6 +351,7 @@ function LibraryPanel({
   onOpenSettings,
   onRefreshVault,
   onSelectFolder,
+  onToggleFolder,
   onSelectLibraryView,
   onSelectVaultCache,
   selectedFolder,
@@ -353,11 +405,13 @@ function LibraryPanel({
               active={libraryView === "all" && selectedFolder === folder.path}
               count={folder.count}
               depth={folder.depth}
-              expanded={folder.hasChildren}
+              expanded={folder.hasChildren ? expandedFolderPaths.has(folder.path) : undefined}
+              folderTree
               icon={libraryView === "all" && selectedFolder === folder.path ? FolderOpen : Folder}
               key={folder.path}
               label={folder.label}
               onClick={() => onSelectFolder(folder.path)}
+              onToggle={folder.hasChildren ? () => onToggleFolder(folder.path) : undefined}
             />
           ))}
         </nav>
@@ -434,21 +488,35 @@ type LibraryRowProps = {
   count?: number
   depth?: number
   expanded?: boolean
+  folderTree?: boolean
   icon: typeof FileText
   label: string
   onClick?: () => void
+  onToggle?: () => void
 }
 
-function LibraryRow({ active = false, count, depth = 0, expanded, icon: Icon, label, onClick }: LibraryRowProps) {
+function LibraryRow({ active = false, count, depth = 0, expanded, folderTree = false, icon: Icon, label, onClick, onToggle }: LibraryRowProps) {
   return (
-    <button className="library-row" data-active={active} data-depth={Math.min(depth, 3)} onClick={onClick} type="button">
-      {typeof expanded === "boolean" ? (
-        expanded ? <ChevronDown className="library-chevron" /> : <ChevronRight className="library-chevron" />
-      ) : <span className="library-chevron" />}
-      <Icon />
-      <span>{label}</span>
-      {typeof count === "number" ? <small>{count}</small> : null}
-    </button>
+    <div className="library-row" data-active={active} data-depth={Math.min(depth, 3)}>
+      {folderTree ? (
+        onToggle ? (
+          <button
+            aria-expanded={expanded}
+            aria-label={`${expanded ? "折叠" : "展开"}${label}`}
+            className="library-folder-toggle"
+            onClick={onToggle}
+            type="button"
+          >
+            {expanded ? <ChevronDown /> : <ChevronRight />}
+          </button>
+        ) : <span className="library-chevron-placeholder" />
+      ) : <span className="library-chevron-placeholder" />}
+      <button className="library-row-main" onClick={onClick} type="button">
+        <Icon />
+        <span>{label}</span>
+        {typeof count === "number" ? <small>{count}</small> : null}
+      </button>
+    </div>
   )
 }
 
@@ -829,7 +897,7 @@ function FormatButton({ children, icon: Icon, label, onClick }: FormatButtonProp
   )
 }
 
-function MobileWorkspace(props: WorkspaceProps) {
+function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
   const noteListPositionsRef = useRef(new Map<string, number>())
   const libraryPositionsRef = useRef(new Map<string, number>())
   // 使用与实际可见结果一致的延迟搜索键，避免输入态先更新时覆盖原列表滚动位置。
@@ -934,7 +1002,7 @@ function SaveStateIndicator({ note, state }: { note: Note; state: NoteSaveState 
   )
 }
 
-type MobileLibraryProps = WorkspaceProps & {
+type MobileLibraryProps = WorkspaceProps & FolderTreeProps & {
   initialScrollTop: number
   onScrollPositionChange: (scrollTop: number) => void
 }
@@ -1017,14 +1085,17 @@ function MobileLibrary(props: MobileLibraryProps) {
 
           <div className="mobile-section-heading"><span>文件夹</span></div>
           <div className="mobile-folder-list">
-            {props.folders.map((folder) => (
+            {props.visibleFolders.map((folder) => (
               <MobileLibraryRow
                 count={folder.count}
                 depth={folder.depth}
+                expanded={folder.hasChildren ? props.expandedFolderPaths.has(folder.path) : undefined}
+                folderTree
                 icon={props.selectedFolder === folder.path ? FolderOpen : Folder}
                 key={folder.path}
                 label={folder.label}
                 onClick={() => selectFolder(folder.path)}
+                onToggle={folder.hasChildren ? () => props.onToggleFolder(folder.path) : undefined}
               />
             ))}
           </div>
@@ -1049,19 +1120,37 @@ function formatCacheDate(savedAt: number) {
 type MobileLibraryRowProps = {
   count?: number
   depth?: number
+  expanded?: boolean
+  folderTree?: boolean
   icon: typeof FileText
   label: string
   onClick?: () => void
+  onToggle?: () => void
 }
 
-function MobileLibraryRow({ count, depth = 0, icon: Icon, label, onClick }: MobileLibraryRowProps) {
+function MobileLibraryRow({ count, depth = 0, expanded, folderTree = false, icon: Icon, label, onClick, onToggle }: MobileLibraryRowProps) {
   return (
-    <button className="mobile-library-row" data-depth={Math.min(depth, 3)} onClick={onClick} type="button">
-      <Icon />
-      <span>{label}</span>
-      {typeof count === "number" ? <small>{count}</small> : null}
-      <ChevronRight />
-    </button>
+    <div className="mobile-library-row" data-depth={Math.min(depth, 3)}>
+      {folderTree ? (
+        onToggle ? (
+          <button
+            aria-expanded={expanded}
+            aria-label={`${expanded ? "折叠" : "展开"}${label}`}
+            className="mobile-folder-toggle"
+            onClick={onToggle}
+            type="button"
+          >
+            {expanded ? <ChevronDown /> : <ChevronRight />}
+          </button>
+        ) : <span className="mobile-folder-toggle-placeholder" />
+      ) : null}
+      <button className="mobile-library-row-main" onClick={onClick} type="button">
+        <Icon />
+        <span>{label}</span>
+        {typeof count === "number" ? <small>{count}</small> : null}
+        <ChevronRight />
+      </button>
+    </div>
   )
 }
 
