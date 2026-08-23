@@ -1,13 +1,16 @@
 import { useMemo, useState } from "react"
 import {
   ArrowLeft,
+  AlertTriangle,
   CheckCircle2,
   ChevronRight,
   Cloud,
+  CloudOff,
   Database,
   FileCheck2,
   Info,
   ListTodo,
+  RefreshCw,
   Settings,
   Trash2,
 } from "lucide-react"
@@ -21,6 +24,7 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { extractMarkdownTasks, type MarkdownTask } from "@/services/tasks/markdown-tasks"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
+import { summarizeWebDavSync } from "@/services/sync/sync-summary"
 import type { Note } from "@/types/note"
 
 type NavigationProps = {
@@ -130,6 +134,7 @@ export function TodoPage({
 }
 
 const settingsEntries = [
+  { description: "查看待同步、冲突和失败项，并手动发起同步", icon: RefreshCw, label: "同步状态", path: "/settings/sync" },
   { description: "坚果云地址、账号、应用密码与远端目录", icon: Cloud, label: "WebDAV 连接", path: "/settings/webdav" },
   { description: "查看并切换保存在本机的 Vault 快照", icon: Database, label: "离线缓存", path: "/settings/cache" },
   { description: "版本、数据边界与开源组件", icon: Info, label: "关于 Swell Note", path: "/settings/about" },
@@ -213,7 +218,7 @@ export function CacheSettingsPage({
     <div className="settings-content-card">
       <div className="settings-content-heading">
         <Database />
-        <div><h2>本机 Vault 快照</h2><p>缓存只用于离线展示，打开后始终只读。</p></div>
+        <div><h2>本机 Vault 快照</h2><p>已缓存正文可离线阅读和编辑，重新连接后再手动同步。</p></div>
       </div>
       {caches.length > 0 ? (
         <div className="settings-cache-list">
@@ -237,6 +242,100 @@ export function CacheSettingsPage({
           ))}
         </div>
       ) : <p className="settings-empty-copy">还没有离线缓存。连接坚果云或打开本地 Vault 后会自动创建。</p>}
+    </div>
+  )
+}
+
+export function SyncSettingsPage({
+  connected,
+  indexProgress,
+  isOnline,
+  isSyncing,
+  lastSyncedAt,
+  notes,
+  onOpenNote,
+  onOpenWebDav,
+  onRetry,
+  onSync,
+  sourceLabel,
+}: {
+  connected: boolean
+  indexProgress: { indexed: number; total: number } | null
+  isOnline: boolean
+  isSyncing: boolean
+  lastSyncedAt?: number
+  notes: Note[]
+  onOpenNote: (note: Note) => void
+  onOpenWebDav: () => void
+  onRetry: (noteId: string) => void
+  onSync: () => void
+  sourceLabel: string
+}) {
+  const summary = summarizeWebDavSync(notes)
+  const problemNotes = notes.filter((note) => note.source === "webdav"
+    && (note.syncStatus === "modified" || note.syncStatus === "conflict"))
+  const indexing = indexProgress && indexProgress.indexed < indexProgress.total
+  const canSync = isOnline && !isSyncing
+
+  return (
+    <div className="settings-content-card sync-center">
+      <div className="sync-overview-card" data-online={isOnline}>
+        <div className="sync-overview-icon">{isOnline ? <Cloud /> : <CloudOff />}</div>
+        <div className="sync-overview-copy">
+          <strong>{connected ? sourceLabel : "尚未建立云端会话"}</strong>
+          <small>{!isOnline
+            ? "当前离线，本地修改会继续保留"
+            : connected
+              ? `最近同步：${formatSyncDate(lastSyncedAt)}`
+              : "配置或重新输入应用密码后即可同步"}</small>
+        </div>
+        <Button disabled={!canSync} onClick={connected ? onSync : onOpenWebDav}>
+          {isSyncing ? <><RefreshCw className="spin" />同步中</> : connected ? "同步全部" : "连接坚果云"}
+        </Button>
+      </div>
+
+      <div className="sync-stat-grid" aria-label="同步统计">
+        <div><strong>{summary.pending}</strong><span>待同步</span></div>
+        <div data-tone={summary.conflicts > 0 ? "warning" : undefined}><strong>{summary.conflicts}</strong><span>冲突</span></div>
+        <div data-tone={summary.failed > 0 ? "danger" : undefined}><strong>{summary.failed}</strong><span>失败</span></div>
+        <div><strong>{summary.synced}</strong><span>已同步</span></div>
+      </div>
+
+      {indexing ? (
+        <div className="sync-index-progress">
+          <span><RefreshCw className="spin" />正在建立全文索引</span>
+          <strong>{indexProgress.indexed}/{indexProgress.total}</strong>
+        </div>
+      ) : null}
+
+      <section className="sync-problem-section">
+        <div className="sync-section-heading">
+          <div><h2>需要处理</h2><p>同步前会校验远端版本，冲突文档不会自动覆盖。</p></div>
+          <span>{problemNotes.length} 项</span>
+        </div>
+        {problemNotes.length > 0 ? (
+          <div className="sync-problem-list">
+            {problemNotes.map((note) => {
+              const conflict = note.syncStatus === "conflict"
+              const failed = Boolean(note.syncError)
+              return (
+                <div className="sync-problem-row" key={note.id}>
+                  <button onClick={() => onOpenNote(note)} type="button">
+                    <span className="sync-problem-icon"><AlertTriangle /></span>
+                    <span><strong>{note.title}</strong><small>{note.folder || "根目录"} · {conflict ? "版本冲突" : failed ? note.syncError : "本地修改待同步"}</small></span>
+                    <ChevronRight />
+                  </button>
+                  {failed && !conflict ? (
+                    <Button disabled={!canSync} onClick={() => onRetry(note.id)} size="sm" variant="outline">重试</Button>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="sync-empty-state"><CheckCircle2 /><span><strong>当前没有待处理项</strong><small>本地工作副本与最近一次远端状态一致。</small></span></div>
+        )}
+      </section>
     </div>
   )
 }
@@ -265,4 +364,14 @@ function formatCacheDate(savedAt: number) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(savedAt))
+}
+
+function formatSyncDate(lastSyncedAt?: number) {
+  if (!lastSyncedAt) return "尚未完成"
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(lastSyncedAt))
 }

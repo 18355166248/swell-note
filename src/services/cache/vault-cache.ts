@@ -11,6 +11,7 @@ export type VaultCacheSnapshot = {
   activeNoteId: string
   id: string
   label: string
+  lastSyncedAt?: number
   notes: Note[]
   savedAt: number
   sourceKind: VaultSourceKind
@@ -18,7 +19,7 @@ export type VaultCacheSnapshot = {
 
 export type VaultCacheSummary = Pick<
   VaultCacheSnapshot,
-  "activeNoteId" | "id" | "label" | "savedAt" | "sourceKind"
+  "activeNoteId" | "id" | "label" | "lastSyncedAt" | "savedAt" | "sourceKind"
 > & { noteCount: number }
 
 export async function createVaultCacheId(identity: string) {
@@ -60,10 +61,11 @@ export async function listVaultCaches(): Promise<VaultCacheSummary[]> {
   )
   database.close()
   return snapshots
-    .map(({ activeNoteId, id, label, notes, savedAt, sourceKind }) => ({
+    .map(({ activeNoteId, id, label, lastSyncedAt, notes, savedAt, sourceKind }) => ({
       activeNoteId,
       id,
       label,
+      lastSyncedAt,
       noteCount: notes.length,
       savedAt,
       sourceKind,

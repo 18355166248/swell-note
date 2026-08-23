@@ -7,6 +7,7 @@ import {
   CacheSettingsPage,
   SettingsLayout,
   SettingsOverview,
+  SyncSettingsPage,
   TodoPage,
 } from "@/components/routes/app-pages"
 import { WebDavSettingsForm } from "@/components/settings/webdav-settings-form"
@@ -47,10 +48,11 @@ import {
   isWebDavWorkingCopy,
   remoteChangedFromBase,
 } from "@/services/sync/webdav-working-copy"
+import { summarizeWebDavSync } from "@/services/sync/sync-summary"
 import type { Note, NoteSaveState } from "@/types/note"
 import "./App.css"
 
-type ActiveCacheMeta = Pick<VaultCacheSnapshot, "id" | "label" | "sourceKind">
+type ActiveCacheMeta = Pick<VaultCacheSnapshot, "id" | "label" | "lastSyncedAt" | "sourceKind">
 
 function App() {
   const navigate = useNavigate()
@@ -115,7 +117,12 @@ function App() {
       : cachedNotes[0]?.id ?? ""
 
     setVaultSession(null)
-    setActiveCacheMeta({ id: snapshot.id, label: snapshot.label, sourceKind: snapshot.sourceKind })
+    setActiveCacheMeta({
+      id: snapshot.id,
+      label: snapshot.label,
+      lastSyncedAt: snapshot.lastSyncedAt,
+      sourceKind: snapshot.sourceKind,
+    })
     setNotes(cachedNotes)
     setActiveNoteId(restoredActiveId)
     setVaultNoteCount(cachedNotes.length)
@@ -242,12 +249,9 @@ function App() {
   )
   const connected = vaultSession !== null && vaultNoteCount > 0
   const cached = !vaultSession && activeCacheMeta !== null && vaultNoteCount > 0
-  const pendingSyncCount = notes.filter((note) =>
-    note.source === "webdav" && note.syncStatus === "modified",
-  ).length
-  const conflictCount = notes.filter((note) =>
-    note.source === "webdav" && note.syncStatus === "conflict",
-  ).length
+  const syncSummary = useMemo(() => summarizeWebDavSync(notes), [notes])
+  const pendingSyncCount = syncSummary.pending + syncSummary.failed
+  const conflictCount = syncSummary.conflicts
   const syncLabel = connected
     ? !isOnline
       ? `${pendingSyncCount} 篇待同步 · 当前离线`
@@ -311,7 +315,10 @@ function App() {
               ...indexedPatch,
               ...(touchesDocument ? { modifiedAt: Date.now(), updatedAt: "刚刚" } : {}),
               ...(touchesDocument && note.source === "webdav"
-                ? { syncStatus: note.syncStatus === "conflict" ? "conflict" as const : "modified" as const }
+                ? {
+                    syncError: undefined,
+                    syncStatus: note.syncStatus === "conflict" ? "conflict" as const : "modified" as const,
+                  }
                 : {}),
             }
           : note,
@@ -397,6 +404,7 @@ function App() {
             syncStatus: candidate.source === "webdav"
               ? candidate.syncStatus === "conflict" ? "conflict" : "modified"
               : candidate.syncStatus,
+            syncError: candidate.source === "webdav" ? undefined : candidate.syncError,
             updatedAt: "刚刚",
             modifiedAt: Date.now(),
           }
@@ -636,6 +644,7 @@ function App() {
           : contentLoaded ? extractWikiLinks(content) : undefined,
         contentLoaded,
         pendingOperation: workingCopy?.pendingOperation,
+        syncError: preserveWorkingCopy ? workingCopy!.syncError : undefined,
         syncStatus: adapter.kind === "webdav"
           ? preserveWorkingCopy
             ? remoteChangedWhileEditing ? "conflict" : workingCopy!.syncStatus
@@ -665,9 +674,16 @@ function App() {
       if (note.remotePath) revisionByPathRef.current.set(note.remotePath, note.revision)
     }
 
+    const cacheId = await createVaultCacheId(adapter.cacheIdentity)
+    const hasUnresolvedSync = mergedNotes.some((note) => note.source === "webdav"
+      && (note.syncStatus === "modified" || note.syncStatus === "conflict" || Boolean(note.syncError)))
     const cacheMeta: ActiveCacheMeta = {
-      id: await createVaultCacheId(adapter.cacheIdentity),
+      id: cacheId,
       label: adapter.cacheLabel,
+      // 只有远端读取成功且没有上传失败或冲突时，才推进“最近同步”时间。
+      lastSyncedAt: adapter.kind === "webdav" && !hasUnresolvedSync
+        ? Date.now()
+        : activeCacheMeta?.id === cacheId ? activeCacheMeta.lastSyncedAt : undefined,
       sourceKind: adapter.kind,
     }
     const snapshot: VaultCacheSnapshot = {
@@ -701,7 +717,11 @@ function App() {
     return mergedNotes
   }
 
-  const pushPendingWebDavNotes = async (adapter: VaultAdapter, currentNotes: Note[]) => {
+  const pushPendingWebDavNotes = async (
+    adapter: VaultAdapter,
+    currentNotes: Note[],
+    noteIds?: ReadonlySet<string>,
+  ) => {
     if (adapter.kind !== "webdav" || !adapter.writeTextFile) {
       return { errorMessage: null, notes: currentNotes }
     }
@@ -709,7 +729,10 @@ function App() {
     let nextNotes = currentNotes
     let errorMessage: string | null = null
     const pendingNotes = currentNotes.filter((note) =>
-      note.source === "webdav" && note.syncStatus === "modified" && note.remotePath,
+      note.source === "webdav"
+      && note.syncStatus === "modified"
+      && note.remotePath
+      && (!noteIds || noteIds.has(note.id)),
     )
 
     // 坚果云对请求频率敏感，按文件串行同步；单篇失败不会阻断其他本地稿的尝试。
@@ -726,6 +749,7 @@ function App() {
               ...note,
               pendingOperation: undefined,
               revision: result.revision,
+              syncError: undefined,
               syncStatus: "synced",
               updatedAt: "刚刚同步",
             }
@@ -737,7 +761,7 @@ function App() {
         const message = error instanceof Error ? error.message : "同步笔记失败"
         errorMessage = message
         nextNotes = nextNotes.map((note) => note.id === pendingNote.id
-          ? { ...note, syncStatus: conflict ? "conflict" : "modified" }
+          ? { ...note, syncError: conflict ? undefined : message, syncStatus: conflict ? "conflict" : "modified" }
           : note)
         setSaveStates((current) => ({
           ...current,
@@ -751,7 +775,7 @@ function App() {
     return { errorMessage, notes: nextNotes }
   }
 
-  const refreshVault = async () => {
+  const refreshVault = async (noteIds?: ReadonlySet<string>) => {
     if (!vaultSession) {
       if (activeCacheMeta?.sourceKind === "webdav" && webDavConfigured) {
         if (!isOnline) {
@@ -774,7 +798,7 @@ function App() {
     setVaultError(null)
     try {
       // 同步按钮是唯一的云端写入入口：先用版本条件上传本地稿，再拉取远端目录并合并。
-      const syncResult = await pushPendingWebDavNotes(vaultSession, notes)
+      const syncResult = await pushPendingWebDavNotes(vaultSession, notes, noteIds)
       await loadVault(vaultSession, true, syncResult.notes)
       if (syncResult.errorMessage) setVaultError(syncResult.errorMessage)
     } catch (error) {
@@ -950,6 +974,7 @@ function App() {
             ...candidate,
             pendingOperation: undefined,
             revision: remoteDocument.revision,
+            syncError: undefined,
             syncStatus: "modified",
           }
         }
@@ -963,6 +988,7 @@ function App() {
           readOnly: false,
           revision: remoteDocument.revision,
           searchText: remoteDocument.content.toLocaleLowerCase(),
+          syncError: undefined,
           syncStatus: "synced",
           updatedAt: "刚刚采用云端版本",
         }
@@ -1186,7 +1212,7 @@ function App() {
             onMoveNote={(folderPath) => void moveActiveNote(folderPath)}
             onOpenLocalVault={() => void openLocalVault()}
             onOpenWikiLink={openWikiLink}
-            onOpenSettings={() => navigate("/settings/webdav")}
+            onOpenSettings={() => navigate(webDavConfigured ? "/settings/sync" : "/settings/webdav")}
             onQueryChange={setQuery}
             onNoteSortChange={setNoteSort}
             onReloadNote={() => void reloadActiveNote()}
@@ -1231,16 +1257,37 @@ function App() {
             onOpenNote={(note) => {
               openNote(note)
             }}
-            onOpenSync={() => navigate("/settings/webdav")}
+            onOpenSync={() => navigate("/settings/sync")}
             onToggleTask={toggleTask}
           />
         )}
       />
       <Route
         path="/settings"
-        element={<SettingsLayout connected={connected} onNavigate={navigate} onOpenSync={() => navigate("/settings/webdav")} />}
+        element={<SettingsLayout connected={connected} onNavigate={navigate} onOpenSync={() => navigate("/settings/sync")} />}
       >
         <Route index element={<SettingsOverview onNavigate={navigate} />} />
+        <Route
+          path="sync"
+          element={(
+            <SyncSettingsPage
+              connected={vaultSession?.kind === "webdav"}
+              indexProgress={indexProgress}
+              isOnline={isOnline}
+              isSyncing={isRefreshingVault}
+              lastSyncedAt={activeCacheMeta?.lastSyncedAt}
+              notes={notes}
+              onOpenNote={openNote}
+              onOpenWebDav={() => {
+                if (webDavConfigured && activeCacheMeta?.sourceKind === "webdav") void refreshVault()
+                else navigate("/settings/webdav")
+              }}
+              onRetry={(noteId) => void refreshVault(new Set([noteId]))}
+              onSync={() => void refreshVault()}
+              sourceLabel={activeCacheMeta?.label ?? "坚果云"}
+            />
+          )}
+        />
         <Route
           path="webdav"
           element={(
@@ -1326,6 +1373,7 @@ async function readVaultDocuments(adapter: VaultAdapter, paths: string[]) {
 
 function getNoteSaveState(note: Note): NoteSaveState {
   if (note.syncStatus === "conflict") return { status: "conflict" }
+  if (note.syncStatus === "modified" && note.syncError) return { message: note.syncError, status: "error" }
   if (note.syncStatus === "modified") return { status: "pending" }
   if (note.readOnly) return { status: "readonly" }
   return { status: "saved" }

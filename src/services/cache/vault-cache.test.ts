@@ -30,6 +30,7 @@ describe("vault cache", () => {
       activeNoteId: "a",
       id: "one",
       label: "坚果云 · /A/",
+      lastSyncedAt: 100,
       notes: [{
         content: "# 已缓存正文",
         contentLoaded: true,
@@ -52,7 +53,7 @@ describe("vault cache", () => {
     })
     await expect(listVaultCaches()).resolves.toEqual([
       expect.objectContaining({ id: "two", noteCount: 0 }),
-      expect.objectContaining({ id: "one", noteCount: 1 }),
+      expect.objectContaining({ id: "one", lastSyncedAt: 100, noteCount: 1 }),
     ])
   })
 
@@ -82,6 +83,7 @@ describe("vault cache", () => {
         remotePath: "/Swell/new.md",
         source: "webdav",
         starred: false,
+        syncError: "网络错误",
         syncStatus: "modified",
         title: "离线新建",
         updatedAt: "待同步",
@@ -93,6 +95,7 @@ describe("vault cache", () => {
     await expect(loadLastVaultCache()).resolves.toMatchObject({
       notes: [expect.objectContaining({
         pendingOperation: "create",
+        syncError: "网络错误",
         syncStatus: "modified",
       })],
     })

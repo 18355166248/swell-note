@@ -15,6 +15,7 @@ export type Note = {
   outgoingLinks?: string[]
   contentLoaded?: boolean
   pendingOperation?: "create"
+  syncError?: string
   syncStatus?: "conflict" | "modified" | "synced"
 }
 
