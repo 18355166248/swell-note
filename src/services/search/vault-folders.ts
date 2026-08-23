@@ -19,16 +19,47 @@ export function buildVaultFolders(notes: Note[]) {
     }
   }
 
-  return [...counts.entries()].map(([path, count]): VaultFolder => {
+  const folders = [...counts.entries()].map(([path, count]): VaultFolder => {
     const segments = folderSegments(path)
     return {
       count,
       depth: segments.length - 1,
-      hasChildren: [...counts.keys()].some((candidate) => candidate.startsWith(`${path} / `)),
+      hasChildren: false,
       label: segments[segments.length - 1],
       path,
     }
   })
+  const foldersByPath = new Map(folders.map((folder) => [folder.path, folder]))
+  const childrenByParent = new Map<string, VaultFolder[]>()
+  const roots: VaultFolder[] = []
+
+  for (const folder of folders) {
+    const parentPath = getParentFolderPath(folder.path)
+    if (!parentPath) {
+      roots.push(folder)
+      continue
+    }
+
+    const parent = foldersByPath.get(parentPath)
+    if (!parent) {
+      roots.push(folder)
+      continue
+    }
+
+    parent.hasChildren = true
+    const siblings = childrenByParent.get(parentPath) ?? []
+    siblings.push(folder)
+    childrenByParent.set(parentPath, siblings)
+  }
+
+  const orderedFolders: VaultFolder[] = []
+  const appendFolderTree = (folder: VaultFolder) => {
+    orderedFolders.push(folder)
+    for (const child of childrenByParent.get(folder.path) ?? []) appendFolderTree(child)
+  }
+  // Map 仍负责保留同级首次出现顺序，前序遍历保证每个子树紧跟父目录，不被其他根目录打断。
+  for (const root of roots) appendFolderTree(root)
+  return orderedFolders
 }
 
 export function noteBelongsToFolder(note: Note, folderPath: string) {
@@ -52,4 +83,9 @@ export function getVisibleVaultFolders(
 
 function folderSegments(path?: string) {
   return path?.split(/\s*\/\s*/).filter(Boolean) ?? []
+}
+
+function getParentFolderPath(path: string) {
+  const segments = folderSegments(path)
+  return segments.slice(0, -1).join(" / ") || null
 }

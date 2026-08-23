@@ -52,4 +52,20 @@ describe("vault folders", () => {
     expect(getFolderAncestorPaths("工作 / 项目 / 客户端")).toEqual(["工作", "工作 / 项目"])
     expect(getFolderAncestorPaths("工作")).toEqual([])
   })
+
+  it("无论子目录首次出现多晚，都紧跟父目录按树形顺序输出", () => {
+    const folders = buildVaultFolders([
+      { id: "1", folder: "XIMA-AI", title: "首页" },
+      { id: "2", folder: "Hobby", title: "爱好" },
+      { id: "3", folder: "Person", title: "个人" },
+      { id: "4", folder: "XIMA-AI / 2026H1绩效", title: "绩效" },
+    ] as Note[])
+
+    expect(folders.map(({ path }) => path)).toEqual([
+      "XIMA-AI",
+      "XIMA-AI / 2026H1绩效",
+      "Hobby",
+      "Person",
+    ])
+  })
 })
