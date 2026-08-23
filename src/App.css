@@ -280,6 +280,8 @@
 .editor-titlebar { display: flex; min-height: 54px; align-items: center; border-bottom: 1px solid var(--border); padding: 0 16px; }
 .editor-breadcrumb { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--muted-foreground); font-size: 11px; }
 .editor-breadcrumb svg { width: 13px; height: 13px; }
+.editor-breadcrumb-segment { display: inline-flex; min-width: 0; align-items: center; gap: 7px; }
+.editor-breadcrumb-segment > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-actions { display: flex; align-items: center; gap: 3px; margin-left: auto; }
 .editor-sync-button { gap: 5px; }
 .editor-sync-button svg { width: 14px; height: 14px; }

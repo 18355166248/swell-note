@@ -1,5 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
-import { Navigate, Route, Routes, useMatch, useNavigate } from "react-router-dom"
+import { Navigate, Route, Routes, useLocation, useMatch, useNavigate } from "react-router-dom"
 
 import { Workspace, type LibraryView, type MobileScreen } from "@/components/workspace/workspace"
 import {
@@ -12,6 +12,7 @@ import {
 import { WebDavSettingsForm } from "@/components/settings/webdav-settings-form"
 import { QuickWebDavConnectDialog } from "@/components/settings/quick-webdav-connect-dialog"
 import { hasSavedWebDavConfig, loadWebDavConfig, type WebDavConfig } from "@/lib/webdav-config"
+import { getNoteReturnRoute, getNotesListRoute } from "@/lib/note-routes"
 import {
   canSelectLocalVault,
   selectLocalVaultAdapter,
@@ -53,9 +54,12 @@ type ActiveCacheMeta = Pick<VaultCacheSnapshot, "id" | "label" | "sourceKind">
 
 function App() {
   const navigate = useNavigate()
+  const location = useLocation()
+  const notesLibraryRouteMatch = useMatch("/notes")
   const folderRouteMatch = useMatch("/notes/folder/:folderPath")
   const noteRouteMatch = useMatch("/notes/:noteId")
   const viewRouteMatch = useMatch("/notes/view/:view")
+  const isNotesLibraryRoute = notesLibraryRouteMatch !== null
   const [notes, setNotes] = useState<Note[]>([])
   const [activeNoteId, setActiveNoteId] = useState("")
   const [query, setQuery] = useState("")
@@ -185,6 +189,8 @@ function App() {
   }, [])
 
   useEffect(() => {
+    // 详情路由保留进入前的目录上下文；只有明确进入列表或笔记库路由时才重建筛选状态。
+    if (noteRouteMatch?.params.noteId) return
     if (folderRouteMatch?.params.folderPath) {
       setLibraryView("all")
       setSelectedFolder(decodeURIComponent(folderRouteMatch.params.folderPath))
@@ -192,12 +198,18 @@ function App() {
       return
     }
     const routeView = viewRouteMatch?.params.view
-    if (routeView === "recent" || routeView === "starred") {
+    if (routeView === "all" || routeView === "recent" || routeView === "starred") {
       setLibraryView(routeView)
       setSelectedFolder(null)
       setMobileScreen("notes")
+      return
     }
-  }, [folderRouteMatch?.params.folderPath, viewRouteMatch?.params.view])
+    if (isNotesLibraryRoute) {
+      setLibraryView("all")
+      setSelectedFolder(null)
+      setMobileScreen("library")
+    }
+  }, [folderRouteMatch?.params.folderPath, isNotesLibraryRoute, noteRouteMatch?.params.noteId, viewRouteMatch?.params.view])
 
   const deferredQuery = useDeferredValue(query)
   const normalizedQuery = deferredQuery.trim().toLocaleLowerCase()
@@ -852,7 +864,11 @@ function App() {
   }
 
   const openNote = (note: Note) => {
-    navigate(`/notes/${encodeURIComponent(note.id)}`)
+    // 路由状态记录来源列表，刷新详情后依然能返回原目录，而不是退回一个含旧筛选的伪 `/notes`。
+    const returnTo = noteRouteMatch
+      ? getNoteReturnRoute(location.state, libraryView, selectedFolder)
+      : getNotesListRoute(libraryView, selectedFolder)
+    navigate(`/notes/${encodeURIComponent(note.id)}`, { state: { returnTo } })
     void selectNote(note)
   }
 
@@ -1158,7 +1174,13 @@ function App() {
             onFormat={formatActiveNote}
             onMobileScreenChange={(screen) => {
               setMobileScreen(screen)
-              if (screen !== "editor" && noteRouteMatch) navigate("/notes")
+              if (screen === "library") {
+                navigate("/notes")
+                return
+              }
+              if (screen === "notes" && noteRouteMatch) {
+                navigate(getNoteReturnRoute(location.state, libraryView, selectedFolder), { replace: true })
+              }
             }}
             onNavigate={navigate}
             onMoveNote={(folderPath) => void moveActiveNote(folderPath)}
@@ -1175,13 +1197,13 @@ function App() {
               setLibraryView("all")
               setSelectedFolder(folder)
               setMobileScreen("notes")
-              navigate(folder ? `/notes/folder/${encodeURIComponent(folder)}` : "/notes")
+              navigate(folder ? getNotesListRoute("all", folder) : getNotesListRoute("all", null))
             }}
             onSelectLibraryView={(view) => {
               setLibraryView(view)
               setSelectedFolder(null)
               setMobileScreen("notes")
-              navigate(view === "all" ? "/notes" : `/notes/view/${view}`)
+              navigate(getNotesListRoute(view, null))
             }}
             onSelectNote={openNote}
             onSelectVaultCache={(cacheId) => void selectVaultCache(cacheId)}

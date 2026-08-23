@@ -69,6 +69,7 @@ import {
 import type { NoteSort } from "@/services/search/note-sort"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
+import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
 
 // CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
 const MarkdownEditor = lazy(() => import("@/components/editor/markdown-editor"))
@@ -723,6 +724,7 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
   const editorRef = useRef<MarkdownEditorHandle>(null)
   const [previewing, setPreviewing] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const breadcrumbSegments = getNoteBreadcrumbSegments(note.folder)
 
   const handleFormat = (syntax: string) => {
     if (!syntax) return
@@ -739,7 +741,15 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
         {onBack ? (
           <Button aria-label="返回全部笔记" onClick={onBack} size="icon" variant="ghost"><ArrowLeft /></Button>
         ) : (
-          <div className="editor-breadcrumb"><FileText /><span>产品规划</span><ChevronRight /><span>跨端产品</span></div>
+          <div className="editor-breadcrumb">
+            <FileText />
+            {breadcrumbSegments.map((segment, index) => (
+              <span className="editor-breadcrumb-segment" key={`${segment}-${index}`}>
+                {index > 0 ? <ChevronRight /> : null}
+                <span>{segment}</span>
+              </span>
+            ))}
+          </div>
         )}
         {onBack ? <span className="mobile-back-label">全部笔记</span> : null}
         <div className="editor-actions">
@@ -943,7 +953,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
   const noteListPositionsRef = useRef(new Map<string, number>())
   const libraryPositionsRef = useRef(new Map<string, number>())
   // 使用与实际可见结果一致的延迟搜索键，避免输入态先更新时覆盖原列表滚动位置。
-  const listStateKey = `${props.selectedFolder ?? "__all__"}\u0000${props.mobileListStateKey}`
+  const listStateKey = `${props.libraryView}\u0000${props.selectedFolder ?? "__all__"}\u0000${props.mobileListStateKey}`
   const libraryStateKey = `${props.totalNoteCount}\u0000${props.folders.map((folder) => folder.path).join("\u0000")}`
 
   return (
@@ -1215,6 +1225,8 @@ type MobileNoteListProps = WorkspaceProps & {
 function MobileNoteList(props: MobileNoteListProps) {
   const groups = groupNotes(props.notes)
   const viewportRef = useRef<HTMLDivElement>(null)
+  const title = props.selectedFolder
+    ?? (props.libraryView === "recent" ? "最近更新" : props.libraryView === "starred" ? "收藏" : "全部笔记")
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current
@@ -1241,7 +1253,7 @@ function MobileNoteList(props: MobileNoteListProps) {
     <section className="mobile-screen">
       <header className="mobile-titlebar">
         <Button aria-label="返回笔记库" onClick={() => props.onMobileScreenChange("library")} size="icon" variant="ghost"><ArrowLeft /></Button>
-        <h1>{props.selectedFolder ?? "全部笔记"}</h1>
+        <h1>{title}</h1>
         <div>
           <NoteSortMenu mobile onChange={props.onNoteSortChange} sort={props.noteSort} />
         </div>
