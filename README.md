@@ -25,7 +25,7 @@
 - Tauri 原生 HTTP 接入，WebDAV 在 macOS、Windows、Android、iOS 中不依赖 WebView CORS
 - Android Studio 与 Xcode 工程；已通过 arm64 Android 调试 APK 和 iOS arm64 模拟器包构建
 
-默认不注入任何演示笔记；连接坚果云或打开本地目录后，界面只展示真实 Vault 数据。坚果云当前保持只读。文件列表和已打开正文会写入本机 IndexedDB，WebDAV 应用密码只存在于当前连接会话，不会写入缓存。
+默认不注入任何演示笔记；连接坚果云或打开本地目录后，界面只展示真实 Vault 数据。坚果云采用本地工作副本、手动安全同步。文件列表和已打开正文会写入本机 IndexedDB；Web 端应用密码仅存在于当前会话，原生端可由用户选择保存到系统凭据库，均不会写入笔记缓存。
 
 ## 本地运行
 

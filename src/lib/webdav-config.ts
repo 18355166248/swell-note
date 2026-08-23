@@ -4,6 +4,7 @@ const STORAGE_KEY = "swell-note:webdav-config:v1"
 
 export type WebDavConfig = {
   provider: "jianguoyun"
+  rememberPassword?: boolean
   serverUrl: string
   username: string
   remotePath: string
@@ -11,6 +12,7 @@ export type WebDavConfig = {
 
 const defaultConfig: WebDavConfig = {
   provider: "jianguoyun",
+  rememberPassword: false,
   serverUrl: JIANGUOYUN_WEBDAV_URL,
   username: import.meta.env.VITE_DEFAULT_WEBDAV_USERNAME ?? "",
   remotePath: "/SwellNote/",
@@ -33,7 +35,7 @@ export function loadWebDavConfig(): WebDavConfig {
 }
 
 export function saveWebDavConfig(config: WebDavConfig) {
-  // 普通连接参数采用版本化存储；应用密码绝不能进入 localStorage。
+  // 这里只记录是否启用系统凭据库；应用密码本身绝不能进入 localStorage。
   localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
 }
 

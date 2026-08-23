@@ -44,6 +44,11 @@ import { sortNotes, type NoteSort } from "@/services/search/note-sort"
 import { buildVaultFolders, noteBelongsToFolder } from "@/services/search/vault-folders"
 import { setMarkdownTaskChecked, type MarkdownTask } from "@/services/tasks/markdown-tasks"
 import {
+  deleteWebDavPassword,
+  loadWebDavPassword,
+  saveWebDavPassword,
+} from "@/services/security/credential-store"
+import {
   canReuseCachedContent,
   isWebDavWorkingCopy,
   remoteChangedFromBase,
@@ -782,7 +787,25 @@ function App() {
           setVaultError("当前设备离线，本地修改已保留；恢复网络后再同步")
           return
         }
-        // 缓存恢复后会话密码已被主动丢弃；在原页面只补录密码，避免打断阅读和滚动位置。
+        const config = loadWebDavConfig()
+        if (config.rememberPassword) {
+          setIsRefreshingVault(true)
+          setVaultError(null)
+          try {
+            const storedPassword = await loadWebDavPassword(config)
+            if (storedPassword) {
+              // 用户仍需主动点击同步；这里只省略重复输密码，不会在应用启动时自动写云端。
+              await connectWebDav(config, storedPassword)
+              return
+            }
+          } catch {
+            await deleteWebDavPassword(config).catch(() => undefined)
+            setVaultError("此设备保存的应用密码已失效，请重新输入")
+          } finally {
+            setIsRefreshingVault(false)
+          }
+        }
+        // Web 端或凭据不可用时，在原页面只补录密码，避免打断阅读和滚动位置。
         setQuickConnectOpen(true)
         return
       }
@@ -1318,7 +1341,11 @@ function App() {
       <QuickWebDavConnectDialog
         account={loadWebDavConfig().username}
         onConnect={async (password) => {
-          await connectWebDav(loadWebDavConfig(), password)
+          const config = loadWebDavConfig()
+          await connectWebDav(config, password)
+          if (config.rememberPassword) {
+            await saveWebDavPassword(config, password).catch(() => undefined)
+          }
         }}
         onOpenChange={setQuickConnectOpen}
         open={quickConnectOpen}

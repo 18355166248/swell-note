@@ -351,7 +351,7 @@ export function AboutSettingsPage() {
         <div><dt>当前版本</dt><dd>0.1.0</dd></div>
         <div><dt>数据来源</dt><dd>本地 Vault / WebDAV</dd></div>
         <div><dt>云端策略</dt><dd>本地优先，手动安全同步</dd></div>
-        <div><dt>密码策略</dt><dd>仅保留在当前运行会话</dd></div>
+        <div><dt>密码策略</dt><dd>Web 仅当前会话 / 原生端可选系统安全存储</dd></div>
       </dl>
     </div>
   )
