@@ -3,6 +3,7 @@ export type VaultSourceKind = "browser" | "tauri" | "webdav"
 export type VaultFileEntry = {
   name: string
   path: string
+  revision?: string
   updatedAt?: string
 }
 
@@ -27,8 +28,8 @@ export type VaultCreateResult = VaultWriteResult & {
 export class VaultConflictError extends Error {
   readonly conflictPath: string
 
-  constructor(conflictPath: string) {
-    super(`源文件已被其他程序修改，当前草稿已保留为冲突副本：${conflictPath}`)
+  constructor(conflictPath: string, message?: string) {
+    super(message ?? `源文件已被其他程序修改，当前草稿已保留为冲突副本：${conflictPath}`)
     this.name = "VaultConflictError"
     this.conflictPath = conflictPath
   }

@@ -14,9 +14,10 @@ export type Note = {
   searchText?: string
   outgoingLinks?: string[]
   contentLoaded?: boolean
+  syncStatus?: "conflict" | "modified" | "synced"
 }
 
 export type NoteSaveState = {
   message?: string
-  status: "conflict" | "error" | "readonly" | "saved" | "saving"
+  status: "conflict" | "error" | "pending" | "readonly" | "saved" | "saving"
 }

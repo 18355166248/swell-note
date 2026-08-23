@@ -1,6 +1,12 @@
 import type { WebDavConfig } from "@/lib/webdav-config"
-import { listMarkdownFiles, readMarkdownFile, readWebDavAsset } from "@/services/webdav-client"
-import type { VaultAdapter } from "@/services/vault/vault-adapter"
+import {
+  listMarkdownFiles,
+  readMarkdownDocument,
+  readWebDavAsset,
+  WebDavRevisionConflictError,
+  writeMarkdownFile,
+} from "@/services/webdav-client"
+import { VaultConflictError, type VaultAdapter } from "@/services/vault/vault-adapter"
 
 export function createWebDavVaultAdapter(
   config: WebDavConfig,
@@ -23,14 +29,28 @@ export function createWebDavVaultAdapter(
       return (await listMarkdownFiles(config, password)).map((file) => ({
         name: file.name,
         path: file.path,
+        revision: file.revision,
         updatedAt: file.lastModified,
       }))
     },
     async readTextFile(path) {
-      return { content: await readMarkdownFile(config, password, path) }
+      return readMarkdownDocument(config, password, path)
     },
     readBinaryFile(path) {
       return readWebDavAsset(config, password, path)
+    },
+    async writeTextFile(path, content, expectedRevision) {
+      if (!expectedRevision) {
+        throw new VaultConflictError(path, "缺少远端版本信息，请重新连接坚果云后再同步")
+      }
+      try {
+        return await writeMarkdownFile(config, password, path, content, expectedRevision)
+      } catch (error) {
+        if (error instanceof WebDavRevisionConflictError) {
+          throw new VaultConflictError(path, "坚果云中的文件已被其他设备修改，本地版本已保留，请先处理冲突")
+        }
+        throw error
+      }
     },
   }
 }

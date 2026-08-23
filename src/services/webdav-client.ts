@@ -9,6 +9,7 @@ export type WebDavFile = {
   lastModified?: string
   name: string
   path: string
+  revision?: string
 }
 
 type WebDavEntry = WebDavFile & {
@@ -49,13 +50,34 @@ export async function listMarkdownFiles(
   )
 }
 
-export async function readMarkdownFile(
+export async function readMarkdownDocument(
   config: WebDavConfig,
   password: string,
   path: string,
 ) {
   const response = await webDavFetch(config, password, path, { method: "GET" })
-  return response.text()
+  return {
+    content: await response.text(),
+    revision: response.headers.get("etag") ?? undefined,
+  }
+}
+
+export async function writeMarkdownFile(
+  config: WebDavConfig,
+  password: string,
+  path: string,
+  content: string,
+  expectedRevision: string,
+) {
+  const response = await webDavFetch(config, password, path, {
+    body: content,
+    headers: {
+      "Content-Type": "text/markdown; charset=utf-8",
+      "If-Match": expectedRevision,
+    },
+    method: "PUT",
+  })
+  return { revision: response.headers.get("etag") ?? expectedRevision }
 }
 
 export async function readWebDavAsset(
@@ -82,6 +104,7 @@ async function listDirectory(
           <d:displayname />
           <d:resourcetype />
           <d:getlastmodified />
+          <d:getetag />
         </d:prop>
       </d:propfind>`,
     headers: {
@@ -108,8 +131,9 @@ async function listDirectory(
       const pathSegments = path.split("/").filter(Boolean)
       const name = displayName || pathSegments[pathSegments.length - 1] || path
       const lastModified = responseNode.getElementsByTagNameNS("DAV:", "getlastmodified")[0]?.textContent
+      const revision = responseNode.getElementsByTagNameNS("DAV:", "getetag")[0]?.textContent
 
-      return [{ directory, lastModified: lastModified ?? undefined, name, path }]
+      return [{ directory, lastModified: lastModified ?? undefined, name, path, revision: revision ?? undefined }]
     },
   )
 }
@@ -133,8 +157,19 @@ async function webDavFetch(
   if (response.ok || response.status === 207) return response
   if (response.status === 401) throw new Error("账号或第三方应用密码不正确")
   if (response.status === 404) throw new Error(`远端目录不存在：${config.remotePath}`)
+  if (response.status === 412) throw new WebDavRevisionConflictError(path)
   if (response.status === 429) throw new Error("坚果云请求过于频繁，请稍后再试")
   throw new Error(`坚果云请求失败（HTTP ${response.status}）`)
+}
+
+export class WebDavRevisionConflictError extends Error {
+  readonly path: string
+
+  constructor(path: string) {
+    super(`远端文件已经更新：${path}`)
+    this.name = "WebDavRevisionConflictError"
+    this.path = path
+  }
 }
 
 function buildRequestUrl(config: WebDavConfig, path: string) {

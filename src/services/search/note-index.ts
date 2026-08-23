@@ -1,8 +1,10 @@
 import type { VaultAdapter, VaultFileEntry } from "@/services/vault/vault-adapter"
 
 export type IndexedVaultFile = {
+  content: string
   outgoingLinks: string[]
   path: string
+  revision: string | undefined
   searchText: string
 }
 
@@ -45,8 +47,10 @@ export async function indexVaultFiles(
       try {
         const document = await adapter.readTextFile(file.path)
         return {
+          content: document.content,
           outgoingLinks: extractWikiLinks(document.content),
           path: file.path,
+          revision: document.revision,
           searchText: document.content.toLocaleLowerCase(),
         }
       } catch {

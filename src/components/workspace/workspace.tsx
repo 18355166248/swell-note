@@ -111,6 +111,7 @@ type WorkspaceProps = {
   onNoteSortChange: (sort: NoteSort) => void
   onReloadNote: () => void
   onRefreshVault: () => void
+  onResolveConflict: (strategy: "local" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onSelectFolder: (folder: string | null) => void
   onSelectLibraryView: (view: LibraryView) => void
@@ -238,6 +239,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           onSelectNote={props.onSelectNote}
           onUpdateNote={props.onUpdateNote}
           onReloadNote={props.onReloadNote}
+          onResolveConflict={props.onResolveConflict}
           onResolveAsset={props.onResolveAsset}
           saveState={props.saveState}
         />
@@ -427,7 +429,7 @@ function LibraryPanel({
           <ChevronRight />
         </button>
         <Button
-          aria-label={connected ? "刷新当前笔记库" : "重新连接并更新"}
+          aria-label={connected ? "同步当前笔记库" : "重新连接并更新"}
           className="sync-refresh-button"
           disabled={isRefreshingVault}
           onClick={onRefreshVault}
@@ -698,13 +700,14 @@ type NoteEditorProps = {
   onOpenWikiLink: (target: string) => void
   onMoveNote: (folderPath: string | null) => void
   onReloadNote: () => void
+  onResolveConflict: (strategy: "local" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onSelectNote: (note: Note) => void
   onUpdateNote: (patch: Partial<Note>) => void
   saveState: NoteSaveState
 }
 
-function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote, moveTargets, note, onBack, onDeleteNote, onFormat, onMoveNote, onOpenWikiLink, onReloadNote, onResolveAsset, onSelectNote, onUpdateNote, saveState }: NoteEditorProps) {
+function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote, moveTargets, note, onBack, onDeleteNote, onFormat, onMoveNote, onOpenWikiLink, onReloadNote, onResolveAsset, onResolveConflict, onSelectNote, onUpdateNote, saveState }: NoteEditorProps) {
   const readOnly = note.readOnly ?? note.source === "webdav"
   const titleReadOnly = note.source === "local" || note.source === "webdav"
   const editorRef = useRef<MarkdownEditorHandle>(null)
@@ -786,6 +789,17 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
           </DropdownMenu>
         </div>
       </header>
+
+      {saveState.status === "conflict" ? (
+        <div className="sync-conflict-banner" role="alert">
+          <div>
+            <strong>云端版本已变化</strong>
+            <span>本地修改仍然安全保留，请选择同步时采用哪个版本。</span>
+          </div>
+          <Button onClick={() => onResolveConflict("local")} size="sm" variant="outline">保留本地版本</Button>
+          <Button onClick={() => onResolveConflict("remote")} size="sm" variant="outline">采用云端版本</Button>
+        </div>
+      ) : null}
 
       {!compact && !previewing && !readOnly ? <FormattingToolbar onFormat={handleFormat} /> : null}
 
@@ -937,6 +951,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             onMoveNote={props.onMoveNote}
             onReloadNote={props.onReloadNote}
             onResolveAsset={props.onResolveAsset}
+            onResolveConflict={props.onResolveConflict}
             onSelectNote={props.onSelectNote}
             onUpdateNote={props.onUpdateNote}
             saveState={props.saveState}
@@ -973,21 +988,25 @@ function BacklinksPanel({ backlinks, onSelectNote }: { backlinks: Note[]; onSele
 
 function SaveStateIndicator({ note, state }: { note: Note; state: NoteSaveState }) {
   const label = state.status === "saving"
-    ? "正在保存"
-    : state.status === "conflict"
-      ? "已保留冲突副本"
-      : state.status === "error"
-        ? "保存失败"
-        : state.status === "readonly"
-          ? note.source === "webdav" ? "云端只读" : "只读"
-          : "已保存"
+    ? note.source === "webdav" ? "正在同步" : "正在保存"
+    : state.status === "pending"
+      ? "待同步"
+      : state.status === "conflict"
+        ? "同步冲突"
+        : state.status === "error"
+          ? note.source === "webdav" ? "同步失败" : "保存失败"
+          : state.status === "readonly"
+            ? note.source === "webdav" ? "正文未缓存" : "只读"
+            : note.source === "webdav" ? "已同步" : "已保存"
   const Icon = state.status === "saving"
     ? LoaderCircle
-    : state.status === "conflict"
-      ? AlertTriangle
-      : state.status === "error"
-        ? AlertCircle
-        : Check
+    : state.status === "pending"
+      ? Cloud
+      : state.status === "conflict"
+        ? AlertTriangle
+        : state.status === "error"
+          ? AlertCircle
+          : Check
 
   return (
     <Tooltip>
@@ -1233,7 +1252,7 @@ function MobileBrandHeader({
       <img alt="Swell Note" src={swellNoteLogo} />
       <strong>Swell Note</strong>
       <button
-        aria-label={connected ? "刷新当前笔记库" : "重新连接并更新"}
+        aria-label={connected ? "同步当前笔记库" : "重新连接并更新"}
         className="mobile-sync-state"
         disabled={isRefreshingVault}
         onClick={onRefreshVault}
