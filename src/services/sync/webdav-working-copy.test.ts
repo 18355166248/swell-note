@@ -4,6 +4,7 @@ import {
   canReuseCachedContent,
   isWebDavWorkingCopy,
   remoteChangedFromBase,
+  shouldReadVaultDocument,
 } from "@/services/sync/webdav-working-copy"
 import type { Note } from "@/types/note"
 
@@ -46,5 +47,25 @@ describe("WebDAV working copy", () => {
     expect(canReuseCachedContent(createNote(), '"v1"')).toBe(true)
     expect(canReuseCachedContent(createNote({ contentLoaded: false }), '"v1"')).toBe(false)
     expect(canReuseCachedContent(createNote(), '"v2"')).toBe(false)
+  })
+
+  it("重连时优先读取当前尚未缓存正文的笔记", () => {
+    expect(shouldReadVaultDocument({
+      filePath: "/note.md",
+      preferredPath: "/note.md",
+      preserveContext: true,
+      previousNote: createNote({ contentLoaded: false, syncStatus: undefined }),
+      remoteRevision: '"v1"',
+    })).toBe(true)
+  })
+
+  it("重连时不覆盖尚未同步的本地工作副本", () => {
+    expect(shouldReadVaultDocument({
+      filePath: "/note.md",
+      preferredPath: "/note.md",
+      preserveContext: true,
+      previousNote: createNote({ contentLoaded: false }),
+      remoteRevision: '"v2"',
+    })).toBe(false)
   })
 })

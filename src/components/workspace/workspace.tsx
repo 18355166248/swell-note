@@ -868,7 +868,9 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
           ) : (
             <div className="markdown-editor-shell">
               <Suspense fallback={<div className="editor-loading">正在加载编辑器…</div>}>
+                {/* CodeMirror 会在提交后同步受控 value；按笔记重建实例，避免切换瞬间残留上一份正文。 */}
                 <MarkdownEditor
+                  key={note.id}
                   onChange={(content) => onUpdateNote({
                     content,
                     preview: content.replace(/^#+\s*/gm, "").slice(0, 90),

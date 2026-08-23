@@ -17,3 +17,33 @@ export function canReuseCachedContent(note: Note | undefined, remoteRevision?: s
     && remoteRevision
     && note.revision === remoteRevision)
 }
+
+type ShouldReadVaultDocumentOptions = {
+  filePath: string
+  preferredPath: string
+  preserveContext: boolean
+  previousNote?: Note
+  remoteRevision?: string
+}
+
+export function shouldReadVaultDocument({
+  filePath,
+  preferredPath,
+  preserveContext,
+  previousNote,
+  remoteRevision,
+}: ShouldReadVaultDocumentOptions) {
+  const hasLocalChanges = previousNote?.syncStatus === "modified"
+    || previousNote?.syncStatus === "conflict"
+  if (hasLocalChanges) return false
+  if (!preserveContext) return filePath === preferredPath
+
+  // 重连时当前详情即使只有元数据，也要优先补齐正文，避免宽屏编辑区一直停留在缓存占位文案。
+  if (filePath === preferredPath && !previousNote?.contentLoaded) return true
+
+  return Boolean(previousNote?.contentLoaded && (
+    !previousNote.revision
+    || !remoteRevision
+    || previousNote.revision !== remoteRevision
+  ))
+}

@@ -52,6 +52,7 @@ import {
   canReuseCachedContent,
   isWebDavWorkingCopy,
   remoteChangedFromBase,
+  shouldReadVaultDocument,
 } from "@/services/sync/webdav-working-copy"
 import { summarizeWebDavSync } from "@/services/sync/sync-summary"
 import type { Note, NoteSaveState } from "@/types/note"
@@ -93,6 +94,7 @@ function App() {
   )
   const saveTimersRef = useRef(new Map<string, number>())
   const saveQueuesRef = useRef(new Map<string, Promise<void>>())
+  const loadingNoteIdsRef = useRef(new Set<string>())
   const revisionByPathRef = useRef(new Map<string, string | undefined>())
   const indexGenerationRef = useRef(0)
   const latestCacheSnapshotRef = useRef<VaultCacheSnapshot | null>(null)
@@ -591,18 +593,13 @@ function App() {
       ? activeNote.remotePath
       : files[0].path
     const pathsToRead = files
-      .filter((file) => {
-        const previousNote = previousNotesByPath.get(file.path)
-        const hasLocalChanges = previousNote?.syncStatus === "modified" || previousNote?.syncStatus === "conflict"
-        if (hasLocalChanges) return false
-        if (!preserveContext) return file.path === preferredPath
-        const remoteChanged = previousNote?.contentLoaded && (
-          !previousNote.revision
-          || !file.revision
-          || previousNote.revision !== file.revision
-        )
-        return Boolean(remoteChanged)
-      })
+      .filter((file) => shouldReadVaultDocument({
+        filePath: file.path,
+        preferredPath,
+        preserveContext,
+        previousNote: previousNotesByPath.get(file.path),
+        remoteRevision: file.revision,
+      }))
       .map((file) => file.path)
     const loadedDocuments = await readVaultDocuments(adapter, pathsToRead)
     const remoteNotes: Note[] = files.map((file) => {
@@ -874,7 +871,10 @@ function App() {
   const selectNote = async (note: Note) => {
     setActiveNoteId(note.id)
     setMobileScreen("editor")
-    if (note.contentLoaded || !note.remotePath || !vaultSession) return
+    if (note.contentLoaded || !note.remotePath || !vaultSession || loadingNoteIdsRef.current.has(note.id)) return
+
+    // 路由恢复和列表点击可能同时请求同一篇正文，用集合去重，避免对坚果云产生重复 GET。
+    loadingNoteIdsRef.current.add(note.id)
 
     try {
       const document = await vaultSession.readTextFile(note.remotePath)
@@ -907,6 +907,8 @@ function App() {
             : currentNote,
         ),
       )
+    } finally {
+      loadingNoteIdsRef.current.delete(note.id)
     }
   }
 
@@ -926,8 +928,10 @@ function App() {
     const routeNote = notes.find((note) => note.id === decodedNoteId)
     if (!routeNote) return
     setMobileScreen("editor")
-    if (routeNote.id !== activeNoteId) void selectNote(routeNote)
-  }, [activeNoteId, noteRouteMatch?.params.noteId, notes])
+    if (routeNote.id !== activeNoteId || (!routeNote.contentLoaded && vaultSession)) {
+      void selectNote(routeNote)
+    }
+  }, [activeNoteId, noteRouteMatch?.params.noteId, notes, vaultSession])
 
   const reloadActiveNote = async () => {
     if (!activeNote) return
