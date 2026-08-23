@@ -245,7 +245,9 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           onReloadNote={props.onReloadNote}
           onResolveConflict={props.onResolveConflict}
           onResolveAsset={props.onResolveAsset}
+          onSync={props.onRefreshVault}
           saveState={props.saveState}
+          syncing={props.isRefreshingVault}
         />
       ) : <EmptyNoteEditor onOpenSettings={props.onOpenSettings} />}
     </div>
@@ -437,10 +439,11 @@ function LibraryPanel({
           className="sync-refresh-button"
           disabled={isRefreshingVault}
           onClick={onRefreshVault}
-          size="icon-sm"
+          size="sm"
           variant="ghost"
         >
           {isRefreshingVault ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
+          {isRefreshingVault ? "同步中" : connected ? "同步" : "连接"}
         </Button>
       </div>
     </aside>
@@ -707,11 +710,13 @@ type NoteEditorProps = {
   onResolveConflict: (strategy: "local" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onSelectNote: (note: Note) => void
+  onSync: () => void
   onUpdateNote: (patch: Partial<Note>) => void
   saveState: NoteSaveState
+  syncing: boolean
 }
 
-function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote, moveTargets, note, onBack, onDeleteNote, onFormat, onMoveNote, onOpenWikiLink, onReloadNote, onResolveAsset, onResolveConflict, onSelectNote, onUpdateNote, saveState }: NoteEditorProps) {
+function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote, moveTargets, note, onBack, onDeleteNote, onFormat, onMoveNote, onOpenWikiLink, onReloadNote, onResolveAsset, onResolveConflict, onSelectNote, onSync, onUpdateNote, saveState, syncing }: NoteEditorProps) {
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
   const readOnly = (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
   const titleReadOnly = note.source === "local" || note.source === "webdav"
@@ -739,6 +744,24 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
         {onBack ? <span className="mobile-back-label">全部笔记</span> : null}
         <div className="editor-actions">
           <SaveStateIndicator note={note} state={saveState} />
+          {note.source === "webdav" ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  aria-label="同步坚果云笔记库"
+                  className="editor-sync-button"
+                  disabled={syncing}
+                  onClick={onSync}
+                  size="sm"
+                  variant={saveState.status === "pending" || saveState.status === "error" ? "default" : "ghost"}
+                >
+                  {syncing ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
+                  <span>{syncing ? "同步中" : "同步"}</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>上传本地修改并拉取远端更新</TooltipContent>
+            </Tooltip>
+          ) : null}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -962,8 +985,10 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             onResolveAsset={props.onResolveAsset}
             onResolveConflict={props.onResolveConflict}
             onSelectNote={props.onSelectNote}
+            onSync={props.onRefreshVault}
             onUpdateNote={props.onUpdateNote}
             saveState={props.saveState}
+            syncing={props.isRefreshingVault}
           />
         ) : <EmptyNoteEditor onBack={() => props.onMobileScreenChange("notes")} onOpenSettings={props.onOpenSettings} />
       ) : null}

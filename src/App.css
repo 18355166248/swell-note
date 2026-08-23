@@ -180,6 +180,8 @@
 .settings-form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 24px; border-top: 1px solid var(--border); padding-top: 18px; }
 .settings-form-actions > span { display: inline-flex; align-items: center; gap: 5px; margin-right: auto; color: #148454; font-size: 11px; }
 .settings-form-actions > span svg { width: 14px; height: 14px; }
+.quick-connect-fields { display: grid; gap: 18px; margin-block: 20px; }
+[data-slot="dialog-content"] > form { display: grid; gap: 0; }
 
 /* 桌面端使用稳定的多栏信息架构，避免不同宽度下跳动和丢失当前上下文。 */
 .navigation-rail { display: flex; flex-direction: column; align-items: center; border-right: 1px solid var(--border); background: #fff; padding: 18px 0 14px; }
@@ -279,6 +281,8 @@
 .editor-breadcrumb { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--muted-foreground); font-size: 11px; }
 .editor-breadcrumb svg { width: 13px; height: 13px; }
 .editor-actions { display: flex; align-items: center; gap: 3px; margin-left: auto; }
+.editor-sync-button { gap: 5px; }
+.editor-sync-button svg { width: 14px; height: 14px; }
 .saved-state { display: flex; align-items: center; gap: 5px; margin-right: 6px; color: var(--muted-foreground); font-size: 10.5px; }
 .saved-state svg { width: 13px; height: 13px; color: #20a968; }
 .saved-state[data-status="saving"] svg { color: var(--primary); }
@@ -407,6 +411,7 @@
   .note-editor[data-compact="true"] .editor-titlebar { min-height: 58px; padding: 0 8px; }
   .mobile-back-label { margin-left: 2px; font-size: 14px; font-weight: 620; }
   .note-editor[data-compact="true"] .saved-state { display: none; }
+  .note-editor[data-compact="true"] .editor-sync-button { padding-inline: 9px; }
   .note-editor[data-compact="true"] .sync-conflict-banner { align-items: stretch; flex-wrap: wrap; padding: 10px 12px; }
   .note-editor[data-compact="true"] .sync-conflict-banner > div { flex-basis: 100%; }
   .note-editor[data-compact="true"] .document-canvas { padding: 28px 20px 80px; }

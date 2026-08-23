@@ -10,7 +10,8 @@ import {
   TodoPage,
 } from "@/components/routes/app-pages"
 import { WebDavSettingsForm } from "@/components/settings/webdav-settings-form"
-import { hasSavedWebDavConfig, type WebDavConfig } from "@/lib/webdav-config"
+import { QuickWebDavConnectDialog } from "@/components/settings/quick-webdav-connect-dialog"
+import { hasSavedWebDavConfig, loadWebDavConfig, type WebDavConfig } from "@/lib/webdav-config"
 import {
   canSelectLocalVault,
   selectLocalVaultAdapter,
@@ -68,6 +69,7 @@ function App() {
   const [isRefreshingVault, setIsRefreshingVault] = useState(false)
   const [vaultError, setVaultError] = useState<string | null>(null)
   const [webDavConfigured, setWebDavConfigured] = useState(hasSavedWebDavConfig)
+  const [quickConnectOpen, setQuickConnectOpen] = useState(false)
   const [vaultNoteCount, setVaultNoteCount] = useState(0)
   const [vaultSession, setVaultSession] = useState<VaultAdapter | null>(null)
   const [vaultCaches, setVaultCaches] = useState<VaultCacheSummary[]>([])
@@ -533,7 +535,17 @@ function App() {
     const cacheId = await createVaultCacheId(adapter.cacheIdentity)
     const restoreWorkingCopy = activeCacheMeta?.id === cacheId
     // 同一笔记库重新输入密码后必须携带离线工作副本参与合并，不能把重连误当成首次导入。
-    return loadVault(adapter, restoreWorkingCopy, restoreWorkingCopy ? notes : [])
+    const mergedNotes = await loadVault(adapter, restoreWorkingCopy, restoreWorkingCopy ? notes : [])
+    const hasPendingChanges = mergedNotes.some((note) =>
+      note.source === "webdav" && note.syncStatus === "modified",
+    )
+    if (!hasPendingChanges) return mergedNotes.length
+
+    // “连接并同步”先拉取版本并完成冲突判断，再上传本地稿，避免重连后直接覆盖其他设备的修改。
+    const syncResult = await pushPendingWebDavNotes(adapter, mergedNotes)
+    const refreshedNotes = await loadVault(adapter, true, syncResult.notes)
+    if (syncResult.errorMessage) setVaultError(syncResult.errorMessage)
+    return refreshedNotes.length
   }
 
   const loadVault = async (
@@ -674,7 +686,7 @@ function App() {
       note.remotePath === file.path && typeof note.searchText === "string",
     ))
     startVaultIndex(adapter, filesToIndex)
-    return mergedNotes.length
+    return mergedNotes
   }
 
   const pushPendingWebDavNotes = async (adapter: VaultAdapter, currentNotes: Note[]) => {
@@ -729,10 +741,19 @@ function App() {
 
   const refreshVault = async () => {
     if (!vaultSession) {
+      if (activeCacheMeta?.sourceKind === "webdav" && webDavConfigured) {
+        if (!isOnline) {
+          setVaultError("当前设备离线，本地修改已保留；恢复网络后再同步")
+          return
+        }
+        // 缓存恢复后会话密码已被主动丢弃；在原页面只补录密码，避免打断阅读和滚动位置。
+        setQuickConnectOpen(true)
+        return
+      }
       navigate("/settings/webdav")
       return
     }
-    if (!isOnline) {
+    if (vaultSession.kind === "webdav" && !isOnline) {
       setVaultError("当前设备离线，本地修改已保留；恢复网络后再同步")
       return
     }
@@ -1103,7 +1124,8 @@ function App() {
   }
 
   return (
-    <Routes>
+    <>
+      <Routes>
       <Route element={<Navigate replace to="/notes" />} path="/" />
       <Route
         path="/notes/*"
@@ -1223,7 +1245,16 @@ function App() {
         <Route path="about" element={<AboutSettingsPage />} />
       </Route>
       <Route element={<Navigate replace to="/notes" />} path="*" />
-    </Routes>
+      </Routes>
+      <QuickWebDavConnectDialog
+        account={loadWebDavConfig().username}
+        onConnect={async (password) => {
+          await connectWebDav(loadWebDavConfig(), password)
+        }}
+        onOpenChange={setQuickConnectOpen}
+        open={quickConnectOpen}
+      />
+    </>
   )
 }
 
