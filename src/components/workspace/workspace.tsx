@@ -712,7 +712,8 @@ type NoteEditorProps = {
 }
 
 function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote, moveTargets, note, onBack, onDeleteNote, onFormat, onMoveNote, onOpenWikiLink, onReloadNote, onResolveAsset, onResolveConflict, onSelectNote, onUpdateNote, saveState }: NoteEditorProps) {
-  const readOnly = note.readOnly ?? note.source === "webdav"
+  // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
+  const readOnly = (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
   const titleReadOnly = note.source === "local" || note.source === "webdav"
   const editorRef = useRef<MarkdownEditorHandle>(null)
   const [previewing, setPreviewing] = useState(false)

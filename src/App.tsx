@@ -75,10 +75,14 @@ function App() {
   const [cacheReady, setCacheReady] = useState(false)
   const [saveStates, setSaveStates] = useState<Record<string, NoteSaveState>>({})
   const [indexProgress, setIndexProgress] = useState<{ indexed: number; total: number } | null>(null)
+  const [isOnline, setIsOnline] = useState(() =>
+    typeof navigator === "undefined" ? true : navigator.onLine,
+  )
   const saveTimersRef = useRef(new Map<string, number>())
   const saveQueuesRef = useRef(new Map<string, Promise<void>>())
   const revisionByPathRef = useRef(new Map<string, string | undefined>())
   const indexGenerationRef = useRef(0)
+  const latestCacheSnapshotRef = useRef<VaultCacheSnapshot | null>(null)
 
   const applyCachedSnapshot = useCallback((snapshot: VaultCacheSnapshot) => {
     // 缓存恢复时主动断开运行时适配器，确保离线浏览不会误走本地文件或 WebDAV 写入链路。
@@ -135,14 +139,15 @@ function App() {
   }, [applyCachedSnapshot])
 
   useEffect(() => {
-    if (!cacheReady || !activeCacheMeta || notes.length === 0) return
+    if (!cacheReady || !activeCacheMeta) return
+    const snapshot: VaultCacheSnapshot = {
+      ...activeCacheMeta,
+      activeNoteId,
+      notes,
+      savedAt: Date.now(),
+    }
+    latestCacheSnapshotRef.current = snapshot
     const timer = window.setTimeout(() => {
-      const snapshot: VaultCacheSnapshot = {
-        ...activeCacheMeta,
-        activeNoteId,
-        notes,
-        savedAt: Date.now(),
-      }
       // 内容读取、收藏和本地编辑后统一刷新离线快照；敏感凭据不属于 Note 模型，因此不会进入缓存。
       void saveVaultCache(snapshot)
         .then(listVaultCaches)
@@ -152,8 +157,29 @@ function App() {
     return () => window.clearTimeout(timer)
   }, [activeCacheMeta, activeNoteId, cacheReady, notes])
 
+  useEffect(() => {
+    const flushCacheWhenHidden = () => {
+      if (document.visibilityState !== "hidden" || !latestCacheSnapshotRef.current) return
+      // 页面进入后台时立即启动 IndexedDB 事务，缩小 450ms 防抖窗口造成的退出丢稿风险。
+      void saveVaultCache({ ...latestCacheSnapshotRef.current, savedAt: Date.now() })
+        .catch(() => undefined)
+    }
+    document.addEventListener("visibilitychange", flushCacheWhenHidden)
+    return () => document.removeEventListener("visibilitychange", flushCacheWhenHidden)
+  }, [])
+
   useEffect(() => () => {
     for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer)
+  }, [])
+
+  useEffect(() => {
+    const updateNetworkState = () => setIsOnline(navigator.onLine)
+    window.addEventListener("online", updateNetworkState)
+    window.addEventListener("offline", updateNetworkState)
+    return () => {
+      window.removeEventListener("online", updateNetworkState)
+      window.removeEventListener("offline", updateNetworkState)
+    }
   }, [])
 
   useEffect(() => {
@@ -209,7 +235,9 @@ function App() {
     note.source === "webdav" && note.syncStatus === "conflict",
   ).length
   const syncLabel = connected
-    ? conflictCount > 0
+    ? !isOnline
+      ? `${pendingSyncCount} 篇待同步 · 当前离线`
+      : conflictCount > 0
       ? `${conflictCount} 篇存在同步冲突`
       : pendingSyncCount > 0
         ? `${pendingSyncCount} 篇修改待同步`
@@ -227,7 +255,9 @@ function App() {
       ? "已打开本地笔记库"
       : activeCacheMeta?.label ?? "配置 WebDAV"
   const mobileConnectionLabel = vaultSession?.kind === "webdav"
-    ? conflictCount > 0
+    ? !isOnline
+      ? "离线"
+      : conflictCount > 0
       ? `${conflictCount} 个冲突`
       : pendingSyncCount > 0
         ? `${pendingSyncCount} 篇待同步`
@@ -248,6 +278,10 @@ function App() {
   const updateActiveNote = (patch: Partial<Note>) => {
     if (!activeNote) return
     const touchesDocument = typeof patch.content === "string" || typeof patch.title === "string"
+    if (touchesDocument && isRefreshingVault) {
+      setVaultError("正在同步当前笔记库，请等待完成后继续编辑")
+      return
+    }
     const indexedPatch: Partial<Note> = typeof patch.content === "string"
       ? {
           ...patch,
@@ -326,6 +360,10 @@ function App() {
   }
 
   const toggleTask = (task: MarkdownTask, checked: boolean) => {
+    if (isRefreshingVault) {
+      setVaultError("正在同步当前笔记库，请等待完成后再修改待办")
+      return
+    }
     const note = notes.find((candidate) => candidate.id === task.noteId)
     const webDavWorkingCopy = note?.source === "webdav" && note.contentLoaded && !note.readOnly
     const writableLocalFile = Boolean(note && !note.readOnly && note.remotePath && vaultSession?.writeTextFile)
@@ -692,6 +730,10 @@ function App() {
   const refreshVault = async () => {
     if (!vaultSession) {
       navigate("/settings/webdav")
+      return
+    }
+    if (!isOnline) {
+      setVaultError("当前设备离线，本地修改已保留；恢复网络后再同步")
       return
     }
 
