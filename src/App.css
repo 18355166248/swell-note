@@ -385,7 +385,7 @@
   .mobile-library-row-main > svg:first-child { width: 19px; height: 19px; flex: 0 0 auto; color: #687384; }
   .mobile-library-row-main > span { min-width: 0; flex: 1; overflow: hidden; font-size: 14px; font-weight: 540; text-overflow: ellipsis; white-space: nowrap; }
   .mobile-library-row-main small { color: var(--muted-foreground); font-size: 12px; }
-  .mobile-library-row-main > svg:last-child { width: 16px; height: 16px; flex: 0 0 auto; color: #a2a9b3; }
+  .mobile-row-navigation { width: 16px; height: 16px; flex: 0 0 auto; color: #a2a9b3; }
   .mobile-section-heading { display: flex; height: 52px; align-items: end; padding-bottom: 8px; color: var(--muted-foreground); font-size: 12px; font-weight: 650; }
   .mobile-section-heading span { flex: 1; }
   .mobile-bottom-nav { display: grid; min-height: calc(64px + env(safe-area-inset-bottom)); grid-template-columns: repeat(3,1fr); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); background: color-mix(in oklab,white 96%,transparent); }

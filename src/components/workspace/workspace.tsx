@@ -1148,7 +1148,7 @@ function MobileLibraryRow({ count, depth = 0, expanded, folderTree = false, icon
         <Icon />
         <span>{label}</span>
         {typeof count === "number" ? <small>{count}</small> : null}
-        <ChevronRight />
+        {folderTree ? null : <ChevronRight className="mobile-row-navigation" />}
       </button>
     </div>
   )

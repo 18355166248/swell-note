@@ -16,11 +16,14 @@ const notes = [
 
 describe("vault folders", () => {
   it("按真实路径生成层级和递归计数", () => {
-    expect(buildVaultFolders(notes)).toEqual([
+    const folders = buildVaultFolders(notes)
+    expect(folders).toEqual([
       expect.objectContaining({ count: 3, depth: 0, label: "工作", path: "工作" }),
       expect.objectContaining({ count: 2, depth: 1, label: "项目", path: "工作 / 项目" }),
       expect.objectContaining({ count: 1, depth: 1, label: "会议", path: "工作 / 会议" }),
     ])
+    expect(folders.find(({ path }) => path === "工作")?.hasChildren).toBe(true)
+    expect(folders.find(({ path }) => path === "工作 / 项目")?.hasChildren).toBe(false)
   })
 
   it("选择父目录时包含所有后代笔记", () => {
