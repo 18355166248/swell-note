@@ -18,7 +18,7 @@ export type VaultAsset = {
 }
 
 export type VaultWriteResult = {
-  revision: string
+  revision?: string
 }
 
 export type VaultCreateResult = VaultWriteResult & {
@@ -42,6 +42,7 @@ export interface VaultAdapter {
   readonly kind: VaultSourceKind
   readonly readOnly: boolean
   getDisplayPath?(path: string): string
+  getStoragePath?(displayPath: string): string
   createTextFile?(path: string, content: string): Promise<VaultCreateResult>
   deleteTextFile?(path: string): Promise<void>
   listMarkdownFiles(): Promise<VaultFileEntry[]>

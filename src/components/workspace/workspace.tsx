@@ -228,7 +228,11 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
       {props.activeNote ? (
         <NoteEditor
           backlinks={props.backlinks}
-          canManageNote={Boolean(props.activeNote.remotePath && !props.activeNote.readOnly)}
+          canManageNote={Boolean(
+            (props.activeNote.source !== "webdav" || props.activeNote.pendingOperation === "create")
+            && props.activeNote.remotePath
+            && !props.activeNote.readOnly,
+          )}
           isManagingNote={props.isManagingNote}
           moveTargets={props.folders}
           note={props.activeNote}
@@ -939,7 +943,11 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
         props.activeNote ? (
           <NoteEditor
             backlinks={props.backlinks}
-            canManageNote={Boolean(props.activeNote.remotePath && !props.activeNote.readOnly)}
+            canManageNote={Boolean(
+              (props.activeNote.source !== "webdav" || props.activeNote.pendingOperation === "create")
+              && props.activeNote.remotePath
+              && !props.activeNote.readOnly,
+            )}
             isManagingNote={props.isManagingNote}
             compact
             moveTargets={props.folders}

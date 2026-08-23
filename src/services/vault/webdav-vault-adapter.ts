@@ -1,5 +1,6 @@
 import type { WebDavConfig } from "@/lib/webdav-config"
 import {
+  createMarkdownFile,
   listMarkdownFiles,
   readMarkdownDocument,
   readWebDavAsset,
@@ -23,6 +24,11 @@ export function createWebDavVaultAdapter(
         ? normalizedPath.slice(rootPath.length + 1)
         : normalizedPath
     },
+    getStoragePath(displayPath) {
+      const rootPath = config.remotePath.replace(/\/+$/g, "")
+      const relativePath = displayPath.replace(/^\/+/, "")
+      return `${rootPath}/${relativePath}`.replace(/\/{2,}/g, "/")
+    },
     kind: "webdav",
     readOnly: true,
     async listMarkdownFiles() {
@@ -38,6 +44,17 @@ export function createWebDavVaultAdapter(
     },
     readBinaryFile(path) {
       return readWebDavAsset(config, password, path)
+    },
+    async createTextFile(path, content) {
+      try {
+        const result = await createMarkdownFile(config, password, path, content)
+        return { path, revision: result.revision }
+      } catch (error) {
+        if (error instanceof WebDavRevisionConflictError) {
+          throw new VaultConflictError(path, "坚果云中已存在同名文件，本地新笔记已保留")
+        }
+        throw error
+      }
     },
     async writeTextFile(path, content, expectedRevision) {
       if (!expectedRevision) {

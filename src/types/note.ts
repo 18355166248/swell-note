@@ -14,6 +14,7 @@ export type Note = {
   searchText?: string
   outgoingLinks?: string[]
   contentLoaded?: boolean
+  pendingOperation?: "create"
   syncStatus?: "conflict" | "modified" | "synced"
 }
 

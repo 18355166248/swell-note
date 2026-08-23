@@ -80,6 +80,24 @@ export async function writeMarkdownFile(
   return { revision: response.headers.get("etag") ?? expectedRevision }
 }
 
+export async function createMarkdownFile(
+  config: WebDavConfig,
+  password: string,
+  path: string,
+  content: string,
+) {
+  const response = await webDavFetch(config, password, path, {
+    body: content,
+    headers: {
+      "Content-Type": "text/markdown; charset=utf-8",
+      // 离线期间其他设备可能已创建同名文件，条件创建确保绝不覆盖。
+      "If-None-Match": "*",
+    },
+    method: "PUT",
+  })
+  return { revision: response.headers.get("etag") ?? undefined }
+}
+
 export async function readWebDavAsset(
   config: WebDavConfig,
   password: string,

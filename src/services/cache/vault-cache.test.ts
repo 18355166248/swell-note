@@ -66,4 +66,35 @@ describe("vault cache", () => {
       expect.objectContaining({ id: "two" }),
     ])
   })
+
+  it("持久化离线新建笔记的待同步操作", async () => {
+    await saveVaultCache({
+      activeNoteId: "webdav:new.md",
+      id: "offline-create",
+      label: "坚果云 · /Swell/",
+      notes: [{
+        content: "# 离线新建",
+        contentLoaded: true,
+        id: "webdav:new.md",
+        pendingOperation: "create",
+        preview: "离线新建",
+        readOnly: false,
+        remotePath: "/Swell/new.md",
+        source: "webdav",
+        starred: false,
+        syncStatus: "modified",
+        title: "离线新建",
+        updatedAt: "待同步",
+      }],
+      savedAt: 3,
+      sourceKind: "webdav",
+    })
+
+    await expect(loadLastVaultCache()).resolves.toMatchObject({
+      notes: [expect.objectContaining({
+        pendingOperation: "create",
+        syncStatus: "modified",
+      })],
+    })
+  })
 })
