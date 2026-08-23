@@ -1,7 +1,9 @@
 import type { WebDavConfig } from "@/lib/webdav-config"
 import {
   createMarkdownFile,
+  deleteMarkdownFile,
   listMarkdownFiles,
+  moveMarkdownFile,
   readMarkdownDocument,
   readWebDavAsset,
   WebDavRevisionConflictError,
@@ -52,6 +54,33 @@ export function createWebDavVaultAdapter(
       } catch (error) {
         if (error instanceof WebDavRevisionConflictError) {
           throw new VaultConflictError(path, "坚果云中已存在同名文件，本地新笔记已保留")
+        }
+        throw error
+      }
+    },
+    async deleteTextFile(path, expectedRevision) {
+      if (!expectedRevision) {
+        throw new VaultConflictError(path, "缺少远端版本信息，请重新连接坚果云后再删除")
+      }
+      try {
+        await deleteMarkdownFile(config, password, path, expectedRevision)
+      } catch (error) {
+        if (error instanceof WebDavRevisionConflictError) {
+          throw new VaultConflictError(path, "坚果云中的文件已被其他设备修改，本地删除请求已保留")
+        }
+        throw error
+      }
+    },
+    async moveTextFile(path, targetPath, expectedRevision) {
+      if (!expectedRevision) {
+        throw new VaultConflictError(path, "缺少远端版本信息，请重新连接坚果云后再移动")
+      }
+      try {
+        const result = await moveMarkdownFile(config, password, path, targetPath, expectedRevision)
+        return { path: targetPath, revision: result.revision }
+      } catch (error) {
+        if (error instanceof WebDavRevisionConflictError) {
+          throw new VaultConflictError(path, "坚果云中的文件已被其他设备修改，本地移动请求已保留")
         }
         throw error
       }

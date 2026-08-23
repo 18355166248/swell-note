@@ -44,10 +44,10 @@ export interface VaultAdapter {
   getDisplayPath?(path: string): string
   getStoragePath?(displayPath: string): string
   createTextFile?(path: string, content: string): Promise<VaultCreateResult>
-  deleteTextFile?(path: string): Promise<void>
+  deleteTextFile?(path: string, expectedRevision?: string): Promise<void>
   listMarkdownFiles(): Promise<VaultFileEntry[]>
   readBinaryFile?(path: string): Promise<VaultAsset>
   readTextFile(path: string): Promise<VaultDocument>
-  moveTextFile?(path: string, targetPath: string): Promise<VaultCreateResult>
+  moveTextFile?(path: string, targetPath: string, expectedRevision?: string): Promise<VaultCreateResult>
   writeTextFile?(path: string, content: string, expectedRevision?: string): Promise<VaultWriteResult>
 }

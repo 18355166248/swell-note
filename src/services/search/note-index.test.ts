@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { extractWikiLinks, indexVaultFiles, normalizeNoteTarget } from "@/services/search/note-index"
+import { extractFrontmatter, extractWikiLinks, indexVaultFiles, normalizeNoteTarget } from "@/services/search/note-index"
 import type { VaultAdapter } from "@/services/vault/vault-adapter"
 
 describe("note index", () => {
@@ -11,6 +11,13 @@ describe("note index", () => {
   it("提取去重后的双向链接目标", () => {
     expect(extractWikiLinks("关联 [[产品规划]]、[[docs/技术方案.md|方案]] 和 [[产品规划#目标]]"))
       .toEqual(["产品规划", "技术方案"])
+  })
+
+  it("解析 Obsidian Frontmatter 的行内与列表标签", () => {
+    expect(extractFrontmatter("---\ntags: [工作, '#计划']\nstatus: active\n---\n# 正文"))
+      .toEqual({ properties: { status: "active", tags: ["工作", "#计划"] }, tags: ["工作", "计划"] })
+    expect(extractFrontmatter("---\ntags:\n  - 项目\n  - 周报\n---\n正文").tags)
+      .toEqual(["项目", "周报"])
   })
 
   it("按配置分批索引，并允许单个文件读取失败", async () => {

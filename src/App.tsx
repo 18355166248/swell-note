@@ -37,6 +37,7 @@ import {
 } from "@/services/cache/vault-cache"
 import {
   extractWikiLinks,
+  extractFrontmatter,
   indexVaultFiles,
   normalizeNoteTarget,
 } from "@/services/search/note-index"
@@ -74,6 +75,7 @@ function App() {
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
   const [libraryView, setLibraryView] = useState<LibraryView>("all")
   const [noteSort, setNoteSort] = useState<NoteSort>("updated-desc")
+  const [selectedTag, setSelectedTag] = useState<string | null>(null)
   const [mobileScreen, setMobileScreen] = useState<MobileScreen>("library")
   const [isCreatingNote, setIsCreatingNote] = useState(false)
   const [isManagingNote, setIsManagingNote] = useState(false)
@@ -107,21 +109,25 @@ function App() {
     revisionByPathRef.current.clear()
     indexGenerationRef.current += 1
 
-    const cachedNotes = snapshot.notes.map((note) => ({
-      ...note,
-      content: note.contentLoaded
-        ? note.content
-        : "# 正文尚未缓存\n\n重新连接原笔记库后，可以读取这篇文档的完整内容。",
-      contentLoaded: note.contentLoaded,
-      // WebDAV 快照就是本地工作副本；正文已缓存时允许离线编辑，但不会在这里触发云端写入。
-      readOnly: note.source === "webdav" ? !note.contentLoaded : true,
-      syncStatus: note.source === "webdav"
-        ? note.syncStatus ?? (note.contentLoaded ? "synced" : undefined)
-        : note.syncStatus,
-    }))
-    const restoredActiveId = cachedNotes.some((note) => note.id === snapshot.activeNoteId)
+    const cachedNotes = snapshot.notes.map((note) => {
+      const contentIndex = note.contentLoaded && !note.tags ? indexNoteContent(note.content) : undefined
+      return {
+        ...note,
+        ...contentIndex,
+        content: note.contentLoaded
+          ? note.content
+          : "# 正文尚未缓存\n\n重新连接原笔记库后，可以读取这篇文档的完整内容。",
+        contentLoaded: note.contentLoaded,
+        // 旧缓存会在恢复时补建 Frontmatter/标签索引，不要求用户重新下载整个笔记库。
+        readOnly: note.source === "webdav" ? !note.contentLoaded : true,
+        syncStatus: note.source === "webdav"
+          ? note.syncStatus ?? (note.contentLoaded ? "synced" : undefined)
+          : note.syncStatus,
+      }
+    })
+    const restoredActiveId = cachedNotes.some((note) => note.id === snapshot.activeNoteId && note.pendingOperation !== "delete")
       ? snapshot.activeNoteId
-      : cachedNotes[0]?.id ?? ""
+      : cachedNotes.find((note) => note.pendingOperation !== "delete")?.id ?? ""
 
     setVaultSession(null)
     setActiveCacheMeta({
@@ -132,7 +138,7 @@ function App() {
     })
     setNotes(cachedNotes)
     setActiveNoteId(restoredActiveId)
-    setVaultNoteCount(cachedNotes.length)
+    setVaultNoteCount(cachedNotes.filter((note) => note.pendingOperation !== "delete").length)
     setSelectedFolder(null)
     setQuery("")
     setIndexProgress(null)
@@ -227,15 +233,26 @@ function App() {
 
   const deferredQuery = useDeferredValue(query)
   const normalizedQuery = deferredQuery.trim().toLocaleLowerCase()
-  const folders = useMemo(() => buildVaultFolders(notes), [notes])
+  const availableNotes = useMemo(
+    () => notes.filter((note) => note.pendingOperation !== "delete"),
+    [notes],
+  )
+  const folders = useMemo(() => buildVaultFolders(availableNotes), [availableNotes])
   const folderNotes = selectedFolder
-    ? notes.filter((note) => noteBelongsToFolder(note, selectedFolder))
-    : notes
+    ? availableNotes.filter((note) => noteBelongsToFolder(note, selectedFolder))
+    : availableNotes
+  const taggedNotes = selectedTag
+    ? folderNotes.filter((note) => note.tags?.includes(selectedTag))
+    : folderNotes
   const libraryNotes = libraryView === "recent"
-    ? sortNotes(folderNotes, "updated-desc").slice(0, 32)
+    ? sortNotes(taggedNotes, "updated-desc").slice(0, 32)
     : libraryView === "starred"
-      ? folderNotes.filter((note) => note.starred)
-      : folderNotes
+      ? taggedNotes.filter((note) => note.starred)
+      : taggedNotes
+  const availableTags = useMemo(
+    () => [...new Set(availableNotes.flatMap((note) => note.tags ?? []))].sort((left, right) => left.localeCompare(right)),
+    [availableNotes],
+  )
   const filteredNotes = normalizedQuery
     ? libraryNotes.filter((note) =>
         `${note.title} ${note.preview} ${note.searchText ?? ""}`
@@ -248,11 +265,11 @@ function App() {
   const activeTarget = activeNote ? normalizeNoteTarget(activeNote.title) : ""
   const backlinks = useMemo(
     () => activeTarget
-      ? notes.filter((note) =>
+      ? availableNotes.filter((note) =>
           note.id !== activeNoteId && note.outgoingLinks?.includes(activeTarget),
         )
       : [],
-    [activeNoteId, activeTarget, notes],
+    [activeNoteId, activeTarget, availableNotes],
   )
   const connected = vaultSession !== null && vaultNoteCount > 0
   const cached = !vaultSession && activeCacheMeta !== null && vaultNoteCount > 0
@@ -308,11 +325,16 @@ function App() {
       return
     }
     const indexedPatch: Partial<Note> = typeof patch.content === "string"
-      ? {
+      ? (() => {
+          const frontmatter = extractFrontmatter(patch.content)
+          return {
           ...patch,
+          frontmatter: frontmatter.properties,
           outgoingLinks: extractWikiLinks(patch.content),
-          searchText: patch.content.toLocaleLowerCase(),
+          searchText: `${patch.content} ${frontmatter.tags.join(" ")}`.toLocaleLowerCase(),
+          tags: frontmatter.tags,
         }
+        })()
       : patch
     setNotes((current) =>
       current.map((note) =>
@@ -405,9 +427,8 @@ function App() {
         ? {
             ...candidate,
             content,
-            outgoingLinks: extractWikiLinks(content),
+            ...indexNoteContent(content),
             preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
-            searchText: content.toLocaleLowerCase(),
             syncStatus: candidate.source === "webdav"
               ? candidate.syncStatus === "conflict" ? "conflict" : "modified"
               : candidate.syncStatus,
@@ -430,7 +451,9 @@ function App() {
 
   const createNote = async () => {
     const adapter = vaultSession
-    if (!adapter || (adapter.kind !== "webdav" && (!adapter.createTextFile || adapter.readOnly))) {
+    const canCreateOfflineWebDav = !adapter && activeCacheMeta?.sourceKind === "webdav" && webDavConfigured
+    if ((!adapter && !canCreateOfflineWebDav)
+      || (adapter && adapter.kind !== "webdav" && (!adapter.createTextFile || adapter.readOnly))) {
       setVaultError("请先打开一个可写的本地 Vault")
       return
     }
@@ -443,10 +466,14 @@ function App() {
       const title = `新笔记 ${timestamp.slice(0, 10)} ${timestamp.slice(11, 16).replace("-", ":")}`
       const directory = selectedFolder?.split(/\s*\/\s*/).filter(Boolean).join("/")
       const displayPath = `${directory ? `${directory}/` : ""}新笔记-${timestamp}-${now.getMilliseconds().toString().padStart(3, "0")}.md`
-      const path = adapter.getStoragePath?.(displayPath) ?? displayPath
+      const config = loadWebDavConfig()
+      const webDavStoragePath = `${config.remotePath.replace(/\/+$/g, "")}/${displayPath.replace(/^\/+/, "")}`
+        .replace(/\/{2,}/g, "/")
+      const path = adapter?.getStoragePath?.(displayPath)
+        ?? (adapter?.kind === "webdav" || canCreateOfflineWebDav ? webDavStoragePath : displayPath)
       const content = `# ${title}\n\n`
-      if (adapter.kind === "webdav") {
-        const id = `${adapter.kind}:${path}`
+      if (adapter?.kind === "webdav" || canCreateOfflineWebDav) {
+        const id = `webdav:${path}`
         const newNote: Note = {
           content,
           contentLoaded: true,
@@ -476,8 +503,8 @@ function App() {
         return
       }
 
-      const result = await adapter.createTextFile!(path, content)
-      const id = `${adapter.kind}:${result.path}`
+      const result = await adapter!.createTextFile!(path, content)
+      const id = `${adapter!.kind}:${result.path}`
       const newNote: Note = {
         content,
         contentLoaded: true,
@@ -541,9 +568,11 @@ function App() {
                 content: indexedNote.content,
                 contentLoaded: true,
                 outgoingLinks: indexedNote.outgoingLinks,
+                frontmatter: indexedNote.frontmatter,
                 readOnly: note.source === "webdav" ? false : note.readOnly,
                 revision: indexedNote.revision ?? note.revision,
                 searchText: indexedNote.searchText,
+                tags: indexedNote.tags,
                 syncStatus: note.source === "webdav" ? "synced" : note.syncStatus,
               }
             : note
@@ -586,7 +615,7 @@ function App() {
     }
 
     const previousNotesByPath = preserveContext
-      ? new Map(contextNotes.filter((note) => note.remotePath).map((note) => [note.remotePath!, note]))
+      ? new Map(contextNotes.filter((note) => note.remotePath).map((note) => [note.previousRemotePath ?? note.remotePath!, note]))
       : new Map<string, Note>()
     const preferredPath = preserveContext && activeNote?.remotePath
       && files.some((file) => file.path === activeNote.remotePath)
@@ -616,6 +645,7 @@ function App() {
         ? workingCopy!.content
         : loadedDocument?.content ?? (reuseCachedContent ? previousNote!.content : "正在从笔记库读取…")
       const contentLoaded = preserveWorkingCopy || Boolean(loadedDocument) || reuseCachedContent
+      const contentIndex = contentLoaded ? indexNoteContent(content) : undefined
 
       return {
         id: preserveWorkingCopy ? workingCopy!.id : `${adapter.kind}:${file.path}`,
@@ -640,12 +670,15 @@ function App() {
           : loadedDocument?.revision ?? file.revision,
         searchText: reuseCachedContent
           ? previousNote!.searchText
-          : contentLoaded ? content.toLocaleLowerCase() : undefined,
+          : contentIndex?.searchText,
         outgoingLinks: reuseCachedContent
           ? previousNote!.outgoingLinks
-          : contentLoaded ? extractWikiLinks(content) : undefined,
+          : contentIndex?.outgoingLinks,
+        frontmatter: reuseCachedContent ? previousNote!.frontmatter ?? contentIndex?.frontmatter : contentIndex?.frontmatter,
+        tags: reuseCachedContent ? previousNote!.tags ?? contentIndex?.tags : contentIndex?.tags,
         contentLoaded,
         pendingOperation: workingCopy?.pendingOperation,
+        previousRemotePath: workingCopy?.previousRemotePath,
         syncError: preserveWorkingCopy ? workingCopy!.syncError : undefined,
         syncStatus: adapter.kind === "webdav"
           ? preserveWorkingCopy
@@ -656,10 +689,10 @@ function App() {
     })
     const remotePaths = new Set(files.map((file) => file.path))
     // 远端删除不能顺带删除尚未上传的本地正文；保留为冲突项，交给用户显式处理。
-    const orphanedWorkingCopies = Array.from(previousNotesByPath.values())
+    const orphanedWorkingCopies = Array.from(new Set(previousNotesByPath.values()))
       .filter((note) => note.source === "webdav"
         && note.remotePath
-        && !remotePaths.has(note.remotePath)
+        && !remotePaths.has(note.previousRemotePath ?? note.remotePath)
         && (note.syncStatus === "modified" || note.syncStatus === "conflict"))
       .map((note): Note => ({
         ...note,
@@ -667,9 +700,10 @@ function App() {
       }))
     const mergedNotes = [...remoteNotes, ...orphanedWorkingCopies]
     const preservedActiveNote = preserveContext
-      ? mergedNotes.find((note) => note.id === activeNoteId)
+      ? mergedNotes.find((note) => note.id === activeNoteId && note.pendingOperation !== "delete")
       : undefined
-    const nextActiveNoteId = preservedActiveNote?.id ?? `${adapter.kind}:${preferredPath}`
+    const fallbackNote = mergedNotes.find((note) => note.pendingOperation !== "delete")
+    const nextActiveNoteId = preservedActiveNote?.id ?? fallbackNote?.id ?? `${adapter.kind}:${preferredPath}`
 
     revisionByPathRef.current.clear()
     for (const note of mergedNotes) {
@@ -707,7 +741,7 @@ function App() {
       : null)
     setNotes(mergedNotes)
     setActiveNoteId(nextActiveNoteId)
-    setVaultNoteCount(mergedNotes.length)
+    setVaultNoteCount(mergedNotes.filter((note) => note.pendingOperation !== "delete").length)
     setSaveStates(Object.fromEntries(mergedNotes.map((note) => [note.id, getNoteSaveState(note)])))
     setVaultError(null)
     if (!preserveContext) setMobileScreen("notes")
@@ -742,14 +776,39 @@ function App() {
       const path = pendingNote.remotePath!
       setSaveStates((current) => ({ ...current, [pendingNote.id]: { status: "saving" } }))
       try {
-        const result = pendingNote.pendingOperation === "create"
-          ? await adapter.createTextFile?.(path, pendingNote.content)
-          : await adapter.writeTextFile(path, pendingNote.content, pendingNote.revision)
+        if (pendingNote.pendingOperation === "delete") {
+          if (!adapter.deleteTextFile) throw new Error("当前 WebDAV 会话不支持删除")
+          await adapter.deleteTextFile(pendingNote.previousRemotePath ?? path, pendingNote.revision)
+          nextNotes = nextNotes.filter((note) => note.id !== pendingNote.id)
+          setSaveStates((current) => {
+            const next = { ...current }
+            delete next[pendingNote.id]
+            return next
+          })
+          continue
+        }
+
+        let result
+        if (pendingNote.pendingOperation === "create") {
+          result = await adapter.createTextFile?.(path, pendingNote.content)
+        } else if (pendingNote.pendingOperation === "move") {
+          if (!adapter.moveTextFile) throw new Error("当前 WebDAV 会话不支持移动")
+          // MOVE 成功后再条件写入本地正文，兼容“离线移动后继续编辑”的组合操作。
+          const moved = await adapter.moveTextFile(
+            pendingNote.previousRemotePath ?? path,
+            path,
+            pendingNote.revision,
+          )
+          result = await adapter.writeTextFile(path, pendingNote.content, moved.revision)
+        } else {
+          result = await adapter.writeTextFile(path, pendingNote.content, pendingNote.revision)
+        }
         if (!result) throw new Error("当前 WebDAV 会话不支持此同步操作")
         nextNotes = nextNotes.map((note) => note.id === pendingNote.id
           ? {
               ...note,
               pendingOperation: undefined,
+              previousRemotePath: undefined,
               revision: result.revision,
               syncError: undefined,
               syncStatus: "synced",
@@ -885,8 +944,7 @@ function App() {
             ? {
                 ...currentNote,
                 content: document.content,
-                searchText: document.content.toLocaleLowerCase(),
-                outgoingLinks: extractWikiLinks(document.content),
+                ...indexNoteContent(document.content),
                 revision: document.revision,
                 contentLoaded: true,
                 readOnly: currentNote.source === "webdav" ? false : currentNote.readOnly,
@@ -958,8 +1016,7 @@ function App() {
               ...note,
               content: document.content,
               preview: document.content.replace(/^#+\s*/gm, "").slice(0, 90),
-              searchText: document.content.toLocaleLowerCase(),
-              outgoingLinks: extractWikiLinks(document.content),
+              ...indexNoteContent(document.content),
               revision: document.revision,
               updatedAt: "刚刚重新加载",
             }
@@ -982,7 +1039,7 @@ function App() {
 
   const resolveActiveConflict = async (strategy: "local" | "remote") => {
     const note = activeNote
-    const path = note?.remotePath
+    const path = note?.previousRemotePath ?? note?.remotePath
     if (!note || note.syncStatus !== "conflict" || !path || !vaultSession) return
     if (strategy === "remote" && !window.confirm("采用云端版本会放弃这篇笔记尚未同步的本地修改，是否继续？")) {
       return
@@ -999,7 +1056,6 @@ function App() {
         if (strategy === "local") {
           return {
             ...candidate,
-            pendingOperation: undefined,
             revision: remoteDocument.revision,
             syncError: undefined,
             syncStatus: "modified",
@@ -1009,14 +1065,18 @@ function App() {
           ...candidate,
           content: remoteDocument.content,
           contentLoaded: true,
-          outgoingLinks: extractWikiLinks(remoteDocument.content),
+          ...indexNoteContent(remoteDocument.content),
+          folder: deriveRemoteFolder(vaultSession.getDisplayPath?.(path) ?? path),
+          id: `${vaultSession.kind}:${path}`,
           pendingOperation: undefined,
+          previousRemotePath: undefined,
           preview: remoteDocument.content.replace(/^#+\s*/gm, "").slice(0, 90),
           readOnly: false,
+          remotePath: path,
           revision: remoteDocument.revision,
-          searchText: remoteDocument.content.toLocaleLowerCase(),
           syncError: undefined,
           syncStatus: "synced",
+          title: path.split("/").pop()?.replace(/\.md$/i, "") ?? candidate.title,
           updatedAt: "刚刚采用云端版本",
         }
       }))
@@ -1024,6 +1084,17 @@ function App() {
         ...current,
         [note.id]: strategy === "local" ? { status: "pending" } : { status: "saved" },
       }))
+      if (strategy === "remote" && note.id !== `${vaultSession.kind}:${path}`) {
+        const restoredId = `${vaultSession.kind}:${path}`
+        setSaveStates((current) => {
+          const next = { ...current }
+          delete next[note.id]
+          next[restoredId] = { status: "saved" }
+          return next
+        })
+        setActiveNoteId(restoredId)
+        navigate(`/notes/${encodeURIComponent(restoredId)}`, { replace: true })
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "读取云端冲突版本失败"
       setSaveStates((current) => ({ ...current, [note.id]: { message, status: "conflict" } }))
@@ -1031,10 +1102,11 @@ function App() {
     }
   }
 
-  const moveActiveNote = async (folderPath: string | null) => {
+  const moveActiveNote = async (folderPath: string | null, requestedTitle?: string) => {
     const note = activeNote
     const adapter = vaultSession
-    if (!note?.remotePath || note.readOnly || !adapter) {
+    const isWebDavNote = note?.source === "webdav"
+    if (!note?.remotePath || note.readOnly || (!adapter && !isWebDavNote)) {
       setVaultError("当前笔记不能移动，请打开一个可写的本地 Vault")
       return
     }
@@ -1044,11 +1116,16 @@ function App() {
     }
 
     const pathSegments = note.remotePath.split("/").filter(Boolean)
-    const filename = pathSegments[pathSegments.length - 1]
+    const normalizedTitle = requestedTitle?.trim().replace(/[\\/:*?"<>|]/g, "-")
+    const filename = normalizedTitle ? `${normalizedTitle}.md` : pathSegments[pathSegments.length - 1]
     if (!filename) return
     const directory = folderPath?.split(/\s*\/\s*/).filter(Boolean).join("/") ?? ""
     const targetPath = directory ? `${directory}/${filename}` : filename
-    const storageTargetPath = adapter.getStoragePath?.(targetPath) ?? targetPath
+    const webDavConfig = loadWebDavConfig()
+    const offlineWebDavTarget = `${webDavConfig.remotePath.replace(/\/+$/g, "")}/${targetPath.replace(/^\/+/, "")}`
+      .replace(/\/{2,}/g, "/")
+    const storageTargetPath = adapter?.getStoragePath?.(targetPath)
+      ?? (isWebDavNote ? offlineWebDavTarget : targetPath)
     if (storageTargetPath === note.remotePath) return
 
     if (note.pendingOperation === "create") {
@@ -1060,6 +1137,7 @@ function App() {
             folder: deriveRemoteFolder(targetPath),
             id: nextId,
             remotePath: storageTargetPath,
+            title: normalizedTitle || candidate.title,
             updatedAt: "刚刚移动 · 待同步",
           }
         : candidate))
@@ -1074,7 +1152,35 @@ function App() {
       return
     }
 
-    if (!adapter.moveTextFile) {
+    if (isWebDavNote) {
+      const nextId = `webdav:${storageTargetPath}`
+      // 已存在的云端笔记先记录原路径；真正 MOVE 仅由显式同步触发并携带 ETag 条件。
+      setNotes((current) => current.map((candidate) => candidate.id === note.id
+        ? {
+            ...candidate,
+            folder: deriveRemoteFolder(targetPath),
+            id: nextId,
+            pendingOperation: "move",
+            previousRemotePath: candidate.previousRemotePath ?? candidate.remotePath,
+            remotePath: storageTargetPath,
+            syncError: undefined,
+            syncStatus: "modified",
+            title: normalizedTitle || candidate.title,
+            updatedAt: "刚刚移动 · 待同步",
+          }
+        : candidate))
+      setSaveStates((current) => {
+        const next = { ...current }
+        delete next[note.id]
+        next[nextId] = { status: "pending" }
+        return next
+      })
+      setActiveNoteId(nextId)
+      navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
+      return
+    }
+
+    if (!adapter?.moveTextFile) {
       setVaultError("当前笔记库不支持移动文件")
       return
     }
@@ -1094,6 +1200,7 @@ function App() {
             id: nextId,
             remotePath: result.path,
             revision: result.revision,
+            title: normalizedTitle || candidate.title,
             updatedAt: "刚刚移动",
             modifiedAt: Date.now(),
           }
@@ -1116,7 +1223,8 @@ function App() {
   const deleteActiveNote = async () => {
     const note = activeNote
     const adapter = vaultSession
-    if (!note?.remotePath || note.readOnly || !adapter) {
+    const isWebDavNote = note?.source === "webdav"
+    if (!note?.remotePath || note.readOnly || (!adapter && !isWebDavNote)) {
       setVaultError("当前笔记不能删除，请打开一个可写的本地 Vault")
       return
     }
@@ -1143,7 +1251,30 @@ function App() {
       return
     }
 
-    if (!adapter.deleteTextFile) {
+    if (isWebDavNote) {
+      const currentIndex = availableNotes.findIndex((candidate) => candidate.id === note.id)
+      const nextVisibleNotes = availableNotes.filter((candidate) => candidate.id !== note.id)
+      const nextNote = nextVisibleNotes[Math.min(Math.max(currentIndex, 0), nextVisibleNotes.length - 1)] ?? null
+      // 删除先写入本地墓碑并从界面隐藏，远端 DELETE 仍需用户点击同步才会执行。
+      setNotes((current) => current.map((candidate) => candidate.id === note.id
+        ? {
+            ...candidate,
+            pendingOperation: "delete",
+            previousRemotePath: candidate.previousRemotePath ?? candidate.remotePath,
+            syncError: undefined,
+            syncStatus: "modified",
+            updatedAt: "已在本机删除 · 待同步",
+          }
+        : candidate))
+      setSaveStates((current) => ({ ...current, [note.id]: { status: "pending" } }))
+      setVaultNoteCount((count) => Math.max(0, count - 1))
+      setActiveNoteId(nextNote?.id ?? "")
+      setMobileScreen(nextNote ? "editor" : "notes")
+      navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
+      return
+    }
+
+    if (!adapter?.deleteTextFile) {
       setVaultError("当前笔记库不支持删除文件")
       return
     }
@@ -1203,13 +1334,15 @@ function App() {
             activeCacheId={activeCacheMeta?.id ?? null}
             activeNote={activeNote}
             activeNoteId={activeNoteId}
+            availableTags={availableTags}
             backlinks={backlinks}
+            cloudConnected={vaultSession?.kind === "webdav"}
             connectionLabel={connectionLabel}
             connected={connected}
-            canCreateNote={Boolean(vaultSession && (
-              vaultSession.kind === "webdav"
-              || (vaultSession.createTextFile && !vaultSession.readOnly)
-            ))}
+            canCreateNote={Boolean(
+              (vaultSession && (vaultSession.kind === "webdav" || (vaultSession.createTextFile && !vaultSession.readOnly)))
+              || (!vaultSession && activeCacheMeta?.sourceKind === "webdav" && webDavConfigured),
+            )}
             folders={folders}
             isOpeningVault={isOpeningVault}
             isCreatingNote={isCreatingNote}
@@ -1237,6 +1370,7 @@ function App() {
             }}
             onNavigate={navigate}
             onMoveNote={(folderPath) => void moveActiveNote(folderPath)}
+            onRenameNote={(title) => void moveActiveNote(activeNote?.folder === "根目录" ? null : activeNote?.folder ?? null, title)}
             onOpenLocalVault={() => void openLocalVault()}
             onOpenWikiLink={openWikiLink}
             onOpenSettings={() => navigate(webDavConfigured ? "/settings/sync" : "/settings/webdav")}
@@ -1259,16 +1393,18 @@ function App() {
               navigate(getNotesListRoute(view, null))
             }}
             onSelectNote={openNote}
+            onSelectTag={setSelectedTag}
             onSelectVaultCache={(cacheId) => void selectVaultCache(cacheId)}
             onUpdateNote={updateActiveNote}
             query={query}
             selectedFolder={selectedFolder}
+            selectedTag={selectedTag}
             saveState={saveStates[activeNoteId] ?? {
               status: activeNote ? getNoteSaveState(activeNote).status : "saved",
             }}
             syncLabel={syncLabel}
-            starredNoteCount={notes.filter((note) => note.starred).length}
-            totalNoteCount={notes.length}
+            starredNoteCount={availableNotes.filter((note) => note.starred).length}
+            totalNoteCount={availableNotes.length}
             vaultError={vaultError}
             vaultCaches={vaultCaches}
           />
@@ -1279,7 +1415,7 @@ function App() {
         element={(
           <TodoPage
             connected={connected}
-            notes={notes}
+            notes={availableNotes}
             onNavigate={navigate}
             onOpenNote={(note) => {
               openNote(note)
@@ -1408,6 +1544,16 @@ function getNoteSaveState(note: Note): NoteSaveState {
   if (note.syncStatus === "modified") return { status: "pending" }
   if (note.readOnly) return { status: "readonly" }
   return { status: "saved" }
+}
+
+function indexNoteContent(content: string) {
+  const frontmatter = extractFrontmatter(content)
+  return {
+    frontmatter: frontmatter.properties,
+    outgoingLinks: extractWikiLinks(content),
+    searchText: `${content} ${frontmatter.tags.join(" ")}`.toLocaleLowerCase(),
+    tags: frontmatter.tags,
+  }
 }
 
 export default App

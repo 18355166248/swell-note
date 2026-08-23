@@ -359,6 +359,11 @@
 .markdown-editor-shell .cm-cursor { border-left-color: var(--primary); }
 .markdown-editor-shell .cm-placeholder { color: var(--muted-foreground); font-style: normal; }
 .preview-toggle[data-active="true"] { background: var(--blue-soft); color: var(--primary); }
+.note-list-actions { display: flex; align-items: center; gap: 2px; }
+.note-list-actions [data-active="true"] { background: var(--blue-soft); color: var(--primary); }
+.note-list-row { content-visibility: auto; contain-intrinsic-size: 118px; }
+.note-row-tags { display: flex; gap: 5px; margin-top: 7px; overflow: hidden; }
+.note-row-tags span { border-radius: 999px; background: var(--blue-soft); padding: 1px 6px; color: var(--primary); font-size: 10px; white-space: nowrap; }
 .markdown-preview { min-height: calc(100dvh - 250px); color: #28313e; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
 .markdown-preview > :first-child { margin-top: 0; }
 .markdown-preview > :last-child { margin-bottom: 0; }
@@ -458,8 +463,9 @@
   .mobile-fab { position: fixed; right: 20px; bottom: calc(82px + env(safe-area-inset-bottom)); z-index: 4; width: 50px; height: 50px; border-radius: 50%; box-shadow: 0 8px 22px color-mix(in oklab,var(--primary) 34%,transparent); }
   .note-editor[data-compact="true"] .editor-titlebar { min-height: 58px; padding: 0 8px; }
   .mobile-back-label { margin-left: 2px; font-size: 14px; font-weight: 620; }
-  .note-editor[data-compact="true"] .saved-state { display: none; }
+  .note-editor[data-compact="true"] .saved-state { max-width: 86px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .note-editor[data-compact="true"] .editor-sync-button { padding-inline: 9px; }
+  .note-editor[data-compact="true"] .preview-toggle { width: auto; padding-inline: 9px; gap: 4px; }
   .note-editor[data-compact="true"] .sync-conflict-banner { align-items: stretch; flex-wrap: wrap; padding: 10px 12px; }
   .note-editor[data-compact="true"] .sync-conflict-banner > div { flex-basis: 100%; }
   .note-editor[data-compact="true"] .document-canvas { padding: 28px 20px 80px; }

@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => false }))
 vi.mock("@tauri-apps/plugin-http", () => ({ fetch: vi.fn() }))
 
-import { createMarkdownFile, WebDavRevisionConflictError } from "@/services/webdav-client"
+import {
+  createMarkdownFile,
+  deleteMarkdownFile,
+  moveMarkdownFile,
+  WebDavRevisionConflictError,
+} from "@/services/webdav-client"
 
 const config = {
   provider: "jianguoyun" as const,
@@ -42,5 +47,46 @@ describe("WebDAV conditional create", () => {
 
     await expect(createMarkdownFile(config, "app-password", "/Swell/重复.md", "# 重复"))
       .rejects.toBeInstanceOf(WebDavRevisionConflictError)
+  })
+})
+
+describe("WebDAV queued file operations", () => {
+  it("移动文件时禁止覆盖目标并校验原文件版本", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", {
+      headers: { etag: '"moved-v2"' },
+      status: 201,
+    }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(moveMarkdownFile(
+      config,
+      "app-password",
+      "/Swell/旧名称.md",
+      "/Swell/目录/新名称.md",
+      '"v1"',
+    )).resolves.toEqual({ revision: '"moved-v2"' })
+
+    const [, request] = fetchMock.mock.calls[0]
+    expect(request).toMatchObject({
+      headers: expect.objectContaining({
+        Destination: "https://dav.jianguoyun.com/dav/Swell/%E7%9B%AE%E5%BD%95/%E6%96%B0%E5%90%8D%E7%A7%B0.md",
+        "If-Match": '"v1"',
+        Overwrite: "F",
+      }),
+      method: "MOVE",
+    })
+  })
+
+  it("删除文件时携带原文件版本", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await deleteMarkdownFile(config, "app-password", "/Swell/待删除.md", '"v3"')
+
+    const [, request] = fetchMock.mock.calls[0]
+    expect(request).toMatchObject({
+      headers: expect.objectContaining({ "If-Match": '"v3"' }),
+      method: "DELETE",
+    })
   })
 })

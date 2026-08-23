@@ -274,6 +274,7 @@ export function SyncSettingsPage({
   const summary = summarizeWebDavSync(notes)
   const problemNotes = notes.filter((note) => note.source === "webdav"
     && (note.syncStatus === "modified" || note.syncStatus === "conflict"))
+  const hasCachedNotes = notes.some((note) => note.source === "webdav")
   const indexing = indexProgress && indexProgress.indexed < indexProgress.total
   const canSync = isOnline && !isSyncing
 
@@ -282,15 +283,17 @@ export function SyncSettingsPage({
       <div className="sync-overview-card" data-online={isOnline}>
         <div className="sync-overview-icon">{isOnline ? <Cloud /> : <CloudOff />}</div>
         <div className="sync-overview-copy">
-          <strong>{connected ? sourceLabel : "尚未建立云端会话"}</strong>
+          <strong>{connected ? sourceLabel : hasCachedNotes ? `${sourceLabel} · 离线缓存` : "尚未建立云端会话"}</strong>
           <small>{!isOnline
             ? "当前离线，本地修改会继续保留"
             : connected
               ? `最近同步：${formatSyncDate(lastSyncedAt)}`
-              : "配置或重新输入应用密码后即可同步"}</small>
+              : hasCachedNotes
+                ? `上次同步：${formatSyncDate(lastSyncedAt)} · 重新连接后可上传修改`
+                : "配置或重新输入应用密码后即可同步"}</small>
         </div>
         <Button disabled={!canSync} onClick={connected ? onSync : onOpenWebDav}>
-          {isSyncing ? <><RefreshCw className="spin" />同步中</> : connected ? "同步全部" : "连接坚果云"}
+          {isSyncing ? <><RefreshCw className="spin" />同步中</> : connected ? "同步全部" : hasCachedNotes ? "重新连接坚果云" : "连接坚果云"}
         </Button>
       </div>
 
@@ -298,7 +301,7 @@ export function SyncSettingsPage({
         <div><strong>{summary.pending}</strong><span>待同步</span></div>
         <div data-tone={summary.conflicts > 0 ? "warning" : undefined}><strong>{summary.conflicts}</strong><span>冲突</span></div>
         <div data-tone={summary.failed > 0 ? "danger" : undefined}><strong>{summary.failed}</strong><span>失败</span></div>
-        <div><strong>{summary.synced}</strong><span>已同步</span></div>
+        <div><strong>{summary.synced}</strong><span>{connected ? "已同步" : "最近已同步"}</span></div>
       </div>
 
       {indexing ? (
@@ -322,7 +325,7 @@ export function SyncSettingsPage({
                 <div className="sync-problem-row" key={note.id}>
                   <button onClick={() => onOpenNote(note)} type="button">
                     <span className="sync-problem-icon"><AlertTriangle /></span>
-                    <span><strong>{note.title}</strong><small>{note.folder || "根目录"} · {conflict ? "版本冲突" : failed ? note.syncError : "本地修改待同步"}</small></span>
+                    <span><strong>{note.title}</strong><small>{note.folder || "根目录"} · {conflict ? "版本冲突" : failed ? note.syncError : getPendingOperationLabel(note)}</small></span>
                     <ChevronRight />
                   </button>
                   {failed && !conflict ? (
@@ -333,11 +336,18 @@ export function SyncSettingsPage({
             })}
           </div>
         ) : (
-          <div className="sync-empty-state"><CheckCircle2 /><span><strong>当前没有待处理项</strong><small>本地工作副本与最近一次远端状态一致。</small></span></div>
+          <div className="sync-empty-state"><CheckCircle2 /><span><strong>{connected ? "当前没有待处理项" : "缓存中没有待处理项"}</strong><small>{connected ? "本地工作副本与最近一次远端状态一致。" : "这是最近一次同步记录，重新连接后会再次校验远端版本。"}</small></span></div>
         )}
       </section>
     </div>
   )
+}
+
+function getPendingOperationLabel(note: Note) {
+  if (note.pendingOperation === "create") return "本机新建 · 待上传"
+  if (note.pendingOperation === "move") return "重命名或移动 · 待同步"
+  if (note.pendingOperation === "delete") return "本机已删除 · 待同步"
+  return "本地修改待同步"
 }
 
 export function AboutSettingsPage() {

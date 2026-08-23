@@ -2,10 +2,12 @@ import type { VaultAdapter, VaultFileEntry } from "@/services/vault/vault-adapte
 
 export type IndexedVaultFile = {
   content: string
+  frontmatter: Record<string, string | string[]>
   outgoingLinks: string[]
   path: string
   revision: string | undefined
   searchText: string
+  tags: string[]
 }
 
 const wikiLinkPattern = /\[\[([^\]]+)\]\]/g
@@ -29,6 +31,41 @@ export function extractWikiLinks(content: string) {
   return [...links]
 }
 
+export function extractFrontmatter(content: string) {
+  const properties: Record<string, string | string[]> = {}
+  const match = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
+  if (!match) return { properties, tags: [] as string[] }
+
+  const lines = match[1].split(/\r?\n/)
+  for (let index = 0; index < lines.length; index += 1) {
+    const property = lines[index].match(/^([\w-]+):\s*(.*)$/)
+    if (!property) continue
+    const [, key, rawValue] = property
+    if (!rawValue) {
+      const values: string[] = []
+      while (lines[index + 1]?.match(/^\s+-\s+/)) {
+        index += 1
+        values.push(cleanFrontmatterValue(lines[index].replace(/^\s+-\s+/, "")))
+      }
+      properties[key] = values
+      continue
+    }
+    properties[key] = rawValue.startsWith("[") && rawValue.endsWith("]")
+      ? rawValue.slice(1, -1).split(",").map(cleanFrontmatterValue).filter(Boolean)
+      : cleanFrontmatterValue(rawValue)
+  }
+
+  const rawTags = properties.tags ?? properties.tag ?? []
+  const tags = (Array.isArray(rawTags) ? rawTags : rawTags.split(/[ ,]+/))
+    .map((tag) => tag.replace(/^#/, "").trim())
+    .filter(Boolean)
+  return { properties, tags: [...new Set(tags)] }
+}
+
+function cleanFrontmatterValue(value: string) {
+  return value.trim().replace(/^["']|["']$/g, "")
+}
+
 export async function indexVaultFiles(
   adapter: VaultAdapter,
   files: VaultFileEntry[],
@@ -46,12 +83,15 @@ export async function indexVaultFiles(
     const batch = (await Promise.all(batchFiles.map(async (file) => {
       try {
         const document = await adapter.readTextFile(file.path)
+        const frontmatter = extractFrontmatter(document.content)
         return {
           content: document.content,
+          frontmatter: frontmatter.properties,
           outgoingLinks: extractWikiLinks(document.content),
           path: file.path,
           revision: document.revision,
-          searchText: document.content.toLocaleLowerCase(),
+          searchText: `${document.content} ${frontmatter.tags.join(" ")}`.toLocaleLowerCase(),
+          tags: frontmatter.tags,
         }
       } catch {
         return null

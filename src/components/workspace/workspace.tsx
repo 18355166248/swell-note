@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
 import {
   ArrowLeft,
   AlertCircle,
@@ -10,6 +10,7 @@ import {
   ChevronRight,
   CircleHelp,
   Cloud,
+  CloudOff,
   Code2,
   Database,
   FileText,
@@ -28,8 +29,11 @@ import {
   Search,
   Settings,
   Star,
+  Tag,
+  Redo2,
   Italic,
   Quote,
+  Undo2,
 } from "lucide-react"
 
 import swellNoteLogo from "@/assets/brand/swell-note-logo-ribbon-s.svg"
@@ -83,8 +87,10 @@ type WorkspaceProps = {
   activeCacheId: string | null
   activeNote: Note | null
   activeNoteId: string
+  availableTags: string[]
   backlinks: Note[]
   connectionLabel: string
+  cloudConnected: boolean
   connected: boolean
   canCreateNote: boolean
   folders: VaultFolder[]
@@ -106,6 +112,7 @@ type WorkspaceProps = {
   onOpenLocalVault: () => void
   onOpenWikiLink: (target: string) => void
   onMoveNote: (folderPath: string | null) => void
+  onRenameNote: (title: string) => void
   onOpenSettings: () => void
   onNavigate: (path: string) => void
   onQueryChange: (query: string) => void
@@ -117,11 +124,13 @@ type WorkspaceProps = {
   onSelectFolder: (folder: string | null) => void
   onSelectLibraryView: (view: LibraryView) => void
   onSelectNote: (note: Note) => void
+  onSelectTag: (tag: string | null) => void
   onSelectVaultCache: (cacheId: string) => void
   onUpdateNote: (patch: Partial<Note>) => void
   query: string
   saveState: NoteSaveState
   selectedFolder: string | null
+  selectedTag: string | null
   starredNoteCount: number
   syncLabel: string
   totalNoteCount: number
@@ -224,14 +233,17 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         onQueryChange={props.onQueryChange}
         onNoteSortChange={props.onNoteSortChange}
         onSelectNote={props.onSelectNote}
+        availableTags={props.availableTags}
+        onSelectTag={props.onSelectTag}
         query={props.query}
+        selectedTag={props.selectedTag}
       />
       {props.activeNote ? (
         <NoteEditor
           backlinks={props.backlinks}
+          cloudConnected={props.cloudConnected}
           canManageNote={Boolean(
-            (props.activeNote.source !== "webdav" || props.activeNote.pendingOperation === "create")
-            && props.activeNote.remotePath
+            props.activeNote.remotePath
             && !props.activeNote.readOnly,
           )}
           isManagingNote={props.isManagingNote}
@@ -241,6 +253,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           onFormat={props.onFormat}
           onOpenWikiLink={props.onOpenWikiLink}
           onMoveNote={props.onMoveNote}
+          onRenameNote={props.onRenameNote}
           onSelectNote={props.onSelectNote}
           onUpdateNote={props.onUpdateNote}
           onReloadNote={props.onReloadNote}
@@ -532,6 +545,7 @@ function LibraryRow({ active = false, count, depth = 0, expanded, folderTree = f
 
 type NoteListPanelProps = {
   activeNoteId: string
+  availableTags: string[]
   folderLabel: string
   notes: Note[]
   noteSort: NoteSort
@@ -539,11 +553,14 @@ type NoteListPanelProps = {
   onQueryChange: (query: string) => void
   onNoteSortChange: (sort: NoteSort) => void
   onSelectNote: (note: Note) => void
+  onSelectTag: (tag: string | null) => void
   query: string
+  selectedTag: string | null
 }
 
 function NoteListPanel({
   activeNoteId,
+  availableTags,
   folderLabel,
   notes,
   noteSort,
@@ -551,7 +568,9 @@ function NoteListPanel({
   onQueryChange,
   onNoteSortChange,
   onSelectNote,
+  onSelectTag,
   query,
+  selectedTag,
 }: NoteListPanelProps) {
   const groups = groupNotes(notes)
 
@@ -562,7 +581,10 @@ function NoteListPanel({
           <span className="eyebrow">当前目录</span>
           <h2>{folderLabel}</h2>
         </div>
-        <NoteSortMenu onChange={onNoteSortChange} sort={noteSort} />
+        <div className="note-list-actions">
+          <TagFilterMenu availableTags={availableTags} onChange={onSelectTag} selectedTag={selectedTag} />
+          <NoteSortMenu onChange={onNoteSortChange} sort={noteSort} />
+        </div>
       </div>
 
       <div className="note-search-wrap">
@@ -642,6 +664,32 @@ function NoteSortMenu({
   )
 }
 
+function TagFilterMenu({
+  availableTags,
+  onChange,
+  selectedTag,
+}: {
+  availableTags: string[]
+  onChange: (tag: string | null) => void
+  selectedTag: string | null
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button aria-label="按标签筛选" data-active={Boolean(selectedTag)} size="icon-sm" variant="ghost"><Tag /></Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+        <DropdownMenuItem onClick={() => onChange(null)}><Check className={selectedTag ? "opacity-0" : "opacity-100"} />全部标签</DropdownMenuItem>
+        {availableTags.map((tag) => (
+          <DropdownMenuItem key={tag} onClick={() => onChange(tag)}>
+            <Check className={selectedTag === tag ? "opacity-100" : "opacity-0"} />#{tag}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 function EmptyNoteEditor({
   onBack,
   onOpenSettings,
@@ -686,6 +734,7 @@ function NoteListRow({ active, note, onSelect }: NoteListRowProps) {
         {note.starred ? <Star className="starred-icon" /> : null}
       </div>
       <p>{note.preview}</p>
+      {note.tags?.length ? <div className="note-row-tags">{note.tags.slice(0, 3).map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
       <div className="note-row-meta">
         <time>{note.updatedAt}</time>
         <span>{note.folder ?? deriveFolder(note)}</span>
@@ -698,6 +747,7 @@ function NoteListRow({ active, note, onSelect }: NoteListRowProps) {
 type NoteEditorProps = {
   backlinks: Note[]
   canManageNote: boolean
+  cloudConnected: boolean
   compact?: boolean
   isManagingNote: boolean
   moveTargets: VaultFolder[]
@@ -707,6 +757,7 @@ type NoteEditorProps = {
   onFormat: (syntax: string) => void
   onOpenWikiLink: (target: string) => void
   onMoveNote: (folderPath: string | null) => void
+  onRenameNote: (title: string) => void
   onReloadNote: () => void
   onResolveConflict: (strategy: "local" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
@@ -717,14 +768,22 @@ type NoteEditorProps = {
   syncing: boolean
 }
 
-function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote, moveTargets, note, onBack, onDeleteNote, onFormat, onMoveNote, onOpenWikiLink, onReloadNote, onResolveAsset, onResolveConflict, onSelectNote, onSync, onUpdateNote, saveState, syncing }: NoteEditorProps) {
+function NoteEditor({ backlinks, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, onBack, onDeleteNote, onFormat, onMoveNote, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onSelectNote, onSync, onUpdateNote, saveState, syncing }: NoteEditorProps) {
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
   const readOnly = (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
   const titleReadOnly = note.source === "local" || note.source === "webdav"
   const editorRef = useRef<MarkdownEditorHandle>(null)
-  const [previewing, setPreviewing] = useState(false)
+  const [previewing, setPreviewing] = useState(compact)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false)
+  const [renameTitle, setRenameTitle] = useState(note.title)
+  const [cursorPosition, setCursorPosition] = useState({ column: 1, line: 1 })
   const breadcrumbSegments = getNoteBreadcrumbSegments(note.folder)
+
+  useEffect(() => {
+    // 手机进入新文档时默认阅读，避免误触键盘；用户可通过明确按钮进入编辑模式。
+    setPreviewing(compact)
+  }, [compact, note.id])
 
   const handleFormat = (syntax: string) => {
     if (!syntax) return
@@ -753,7 +812,7 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
         )}
         {onBack ? <span className="mobile-back-label">全部笔记</span> : null}
         <div className="editor-actions">
-          <SaveStateIndicator note={note} state={saveState} />
+          <SaveStateIndicator cloudConnected={cloudConnected} note={note} state={saveState} />
           {note.source === "webdav" ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -783,6 +842,7 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
                 variant="ghost"
               >
                 {previewing ? <PencilLine /> : <Eye />}
+                {compact ? <span>{previewing ? "编辑" : "阅读"}</span> : null}
               </Button>
             </TooltipTrigger>
             <TooltipContent>{previewing ? "编辑 Markdown" : "预览 Markdown"}</TooltipContent>
@@ -800,7 +860,7 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
               <Button aria-label="更多操作" size="icon-sm" variant="ghost"><MoreHorizontal /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {note.remotePath ? (
+              {note.remotePath && !note.pendingOperation ? (
                 <DropdownMenuItem
                   disabled={saveState.status === "saving"}
                   onClick={onReloadNote}
@@ -810,6 +870,7 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
               ) : null}
               {canManageNote ? (
                 <>
+                  <DropdownMenuItem onClick={() => { setRenameTitle(note.title); setRenameDialogOpen(true) }}>重命名</DropdownMenuItem>
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger disabled={isManagingNote || saveState.status === "saving"}>移动到文件夹</DropdownMenuSubTrigger>
                     <DropdownMenuSubContent className="max-h-72 overflow-y-auto">
@@ -820,7 +881,7 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem disabled={isManagingNote || saveState.status === "saving"} onClick={() => setDeleteDialogOpen(true)} variant="destructive">删除本地文件</DropdownMenuItem>
+                  <DropdownMenuItem disabled={isManagingNote || saveState.status === "saving"} onClick={() => setDeleteDialogOpen(true)} variant="destructive">删除笔记</DropdownMenuItem>
                 </>
               ) : null}
             </DropdownMenuContent>
@@ -839,7 +900,7 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
         </div>
       ) : null}
 
-      {!compact && !previewing && !readOnly ? <FormattingToolbar onFormat={handleFormat} /> : null}
+      {!compact && !previewing && !readOnly ? <FormattingToolbar editorRef={editorRef} onFormat={handleFormat} /> : null}
 
       <ScrollArea className="editor-scroll">
         <div className="document-canvas">
@@ -875,6 +936,7 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
                     content,
                     preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
                   })}
+                  onCursorChange={(line, column) => setCursorPosition({ column, line })}
                   readOnly={readOnly}
                   ref={editorRef}
                   value={note.content}
@@ -886,22 +948,35 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
         </div>
       </ScrollArea>
 
-      {compact && !previewing && !readOnly ? <FormattingToolbar mobile onFormat={handleFormat} /> : !compact ? (
+      {compact && !previewing && !readOnly ? <FormattingToolbar editorRef={editorRef} mobile onFormat={handleFormat} /> : !compact ? (
         <footer className="editor-statusbar">
           <span>{note.content.length} 字</span>
           <span>Markdown</span>
-          <span className="ml-auto">行 1，列 1</span>
+          <span className="ml-auto">行 {cursorPosition.line}，列 {cursorPosition.column}</span>
         </footer>
       ) : null}
       <Dialog onOpenChange={setDeleteDialogOpen} open={deleteDialogOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>删除“{note.title}”？</DialogTitle>
-            <DialogDescription>这会从本地 Vault 永久删除对应 Markdown 文件，无法在 Swell Note 中恢复。</DialogDescription>
+            <DialogDescription>{note.source === "webdav" ? "这会先在本机隐藏笔记，点击同步后再从坚果云删除。" : "这会从本地 Vault 永久删除对应 Markdown 文件，无法在 Swell Note 中恢复。"}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button onClick={() => setDeleteDialogOpen(false)} variant="outline">取消</Button>
             <Button disabled={isManagingNote || saveState.status === "saving"} onClick={() => { setDeleteDialogOpen(false); onDeleteNote() }} variant="destructive">确认删除</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog onOpenChange={setRenameDialogOpen} open={renameDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重命名笔记</DialogTitle>
+            <DialogDescription>{note.source === "webdav" ? "名称先保存在本机，点击同步后再更新坚果云。" : "这会同步修改 Markdown 文件名。"}</DialogDescription>
+          </DialogHeader>
+          <Input autoFocus onChange={(event) => setRenameTitle(event.target.value)} value={renameTitle} />
+          <DialogFooter>
+            <Button onClick={() => setRenameDialogOpen(false)} variant="outline">取消</Button>
+            <Button disabled={!renameTitle.trim() || renameTitle.trim() === note.title} onClick={() => { setRenameDialogOpen(false); onRenameNote(renameTitle) }}>确认重命名</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -910,13 +985,17 @@ function NoteEditor({ backlinks, canManageNote, compact = false, isManagingNote,
 }
 
 type FormattingToolbarProps = {
+  editorRef: RefObject<MarkdownEditorHandle | null>
   mobile?: boolean
   onFormat: (syntax: string) => void
 }
 
-function FormattingToolbar({ mobile = false, onFormat }: FormattingToolbarProps) {
+function FormattingToolbar({ editorRef, mobile = false, onFormat }: FormattingToolbarProps) {
   return (
     <div className="formatting-toolbar" data-mobile={mobile}>
+      <FormatButton icon={Undo2} label="撤销（⌘/Ctrl+Z）" onClick={() => editorRef.current?.undo()} />
+      <FormatButton icon={Redo2} label="重做（⌘/Ctrl+Shift+Z）" onClick={() => editorRef.current?.redo()} />
+      <span className="toolbar-divider" />
       <FormatButton label="二级标题" onClick={() => onFormat("\n## ")}>H2</FormatButton>
       <FormatButton label="三级标题" onClick={() => onFormat("\n### ")}>H3</FormatButton>
       <span className="toolbar-divider" />
@@ -979,9 +1058,9 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
         props.activeNote ? (
           <NoteEditor
             backlinks={props.backlinks}
+            cloudConnected={props.cloudConnected}
             canManageNote={Boolean(
-              (props.activeNote.source !== "webdav" || props.activeNote.pendingOperation === "create")
-              && props.activeNote.remotePath
+              props.activeNote.remotePath
               && !props.activeNote.readOnly,
             )}
             isManagingNote={props.isManagingNote}
@@ -993,6 +1072,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             onFormat={props.onFormat}
             onOpenWikiLink={props.onOpenWikiLink}
             onMoveNote={props.onMoveNote}
+            onRenameNote={props.onRenameNote}
             onReloadNote={props.onReloadNote}
             onResolveAsset={props.onResolveAsset}
             onResolveConflict={props.onResolveConflict}
@@ -1032,7 +1112,7 @@ function BacklinksPanel({ backlinks, onSelectNote }: { backlinks: Note[]; onSele
   )
 }
 
-function SaveStateIndicator({ note, state }: { note: Note; state: NoteSaveState }) {
+function SaveStateIndicator({ cloudConnected, note, state }: { cloudConnected: boolean; note: Note; state: NoteSaveState }) {
   const label = state.status === "saving"
     ? note.source === "webdav" ? "正在同步" : "正在保存"
     : state.status === "pending"
@@ -1043,7 +1123,7 @@ function SaveStateIndicator({ note, state }: { note: Note; state: NoteSaveState 
           ? note.source === "webdav" ? "同步失败" : "保存失败"
           : state.status === "readonly"
             ? note.source === "webdav" ? "正文未缓存" : "只读"
-            : note.source === "webdav" ? "已同步" : "已保存"
+            : note.source === "webdav" ? cloudConnected ? "已同步" : "仅本机缓存" : "已保存"
   const Icon = state.status === "saving"
     ? LoaderCircle
     : state.status === "pending"
@@ -1052,7 +1132,9 @@ function SaveStateIndicator({ note, state }: { note: Note; state: NoteSaveState 
         ? AlertTriangle
         : state.status === "error"
           ? AlertCircle
-          : Check
+          : note.source === "webdav" && !cloudConnected
+            ? CloudOff
+            : Check
 
   return (
     <Tooltip>
@@ -1257,6 +1339,7 @@ function MobileNoteList(props: MobileNoteListProps) {
         <Button aria-label="返回笔记库" onClick={() => props.onMobileScreenChange("library")} size="icon" variant="ghost"><ArrowLeft /></Button>
         <h1>{title}</h1>
         <div>
+          <TagFilterMenu availableTags={props.availableTags} onChange={props.onSelectTag} selectedTag={props.selectedTag} />
           <NoteSortMenu mobile onChange={props.onNoteSortChange} sort={props.noteSort} />
         </div>
       </header>

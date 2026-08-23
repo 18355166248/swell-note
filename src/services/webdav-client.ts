@@ -98,6 +98,37 @@ export async function createMarkdownFile(
   return { revision: response.headers.get("etag") ?? undefined }
 }
 
+export async function deleteMarkdownFile(
+  config: WebDavConfig,
+  password: string,
+  path: string,
+  expectedRevision: string,
+) {
+  await webDavFetch(config, password, path, {
+    headers: { "If-Match": expectedRevision },
+    method: "DELETE",
+  })
+}
+
+export async function moveMarkdownFile(
+  config: WebDavConfig,
+  password: string,
+  path: string,
+  targetPath: string,
+  expectedRevision: string,
+) {
+  // Destination 必须是远端绝对地址；浏览器开发代理只用于承载请求本身。
+  const response = await webDavFetch(config, password, path, {
+    headers: {
+      Destination: buildRemoteUrl(config, targetPath),
+      "If-Match": expectedRevision,
+      Overwrite: "F",
+    },
+    method: "MOVE",
+  })
+  return { revision: response.headers.get("etag") ?? expectedRevision }
+}
+
 export async function readWebDavAsset(
   config: WebDavConfig,
   password: string,
@@ -199,7 +230,11 @@ function buildRequestUrl(config: WebDavConfig, path: string) {
     return `/api/webdav${encodedPath}`
   }
 
-  return new URL(encodedPath.replace(/^\//, ""), config.serverUrl).toString()
+  return buildRemoteUrl(config, path)
+}
+
+function buildRemoteUrl(config: WebDavConfig, path: string) {
+  return new URL(encodePath(path).replace(/^\//, ""), config.serverUrl).toString()
 }
 
 function pathFromHref(href: string, serverUrl: string) {

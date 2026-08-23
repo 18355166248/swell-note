@@ -7,6 +7,7 @@ export type Note = {
   modifiedAt?: number
   starred: boolean
   folder?: string
+  frontmatter?: Record<string, string | string[]>
   source?: "local" | "webdav"
   remotePath?: string
   readOnly?: boolean
@@ -14,9 +15,11 @@ export type Note = {
   searchText?: string
   outgoingLinks?: string[]
   contentLoaded?: boolean
-  pendingOperation?: "create"
+  pendingOperation?: "create" | "delete" | "move"
+  previousRemotePath?: string
   syncError?: string
   syncStatus?: "conflict" | "modified" | "synced"
+  tags?: string[]
 }
 
 export type NoteSaveState = {
