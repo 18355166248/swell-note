@@ -25,6 +25,8 @@
 - IndexedDB 离线 Vault 缓存、刷新自动恢复与多缓存切换
 - 手动、联网恢复或防抖后台同步，并保留当前文档、目录、搜索和已读取正文
 - 本机同步日志、同步前可撤销删除与冲突保护
+- 同步中心显示逐项进度，可在当前请求完成后安全取消，并支持失败项批量重试
+- 多设备并发编辑使用 ETag 阻止覆盖，支持基于历史正文的三方合并和重叠修改标记
 - 坚果云文件夹批量重命名、待删除队列与同步时按需创建远端目录
 - Web PWA 安装清单与生产环境离线应用壳
 - Hash 路由导航：笔记、Markdown 待办、设置，以及 WebDAV / 缓存 / 关于二级设置页
@@ -32,6 +34,7 @@
 - 本地 Markdown 待办勾选写回、文件移动与二次确认永久删除
 - Tauri 原生 HTTP 接入，WebDAV 在 macOS、Windows、Android、iOS 中不依赖 WebView CORS
 - Android Studio 与 Xcode 工程；已通过 arm64 Android 调试 APK 和 iOS arm64 模拟器包构建
+- GitHub Actions 自动构建 macOS DMG、Windows MSI/NSIS、Android APK/AAB 与 iOS 包，并在版本标签发布 Release
 
 默认不注入任何演示笔记；连接坚果云或打开本地目录后，界面只展示真实 Vault 数据。坚果云采用本地工作副本与带 ETag 校验的安全同步，自动同步默认关闭，可在设置中选择联网恢复或后台防抖模式。附件统一写入 Vault 根目录的 `attachments/`，正文使用标准 Markdown 相对路径引用，单个附件上限 20MB；坚果云附件先进入 IndexedDB 离线队列，同步时先上传附件再上传引用正文。文件列表和已打开正文会写入本机 IndexedDB；Web 端应用密码仅存在于当前会话，原生端可由用户选择保存到系统凭据库，均不会写入笔记缓存。
 
@@ -77,6 +80,8 @@ pnpm build
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
+安装包验证、签名 Secrets 和版本标签发布流程见 [`docs/releasing.md`](docs/releasing.md)。
+
 ## 技术边界
 
 - Markdown 文件是用户数据的事实来源，不能依赖私有数据库才能读取。
@@ -90,4 +95,4 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 1. 增加 SQLite 索引增量迁移、统计与损坏自动重建工具。
 2. 补齐附件引用清理与未使用附件巡检。
-3. 补齐应用商店签名、发布账号与自动发布流水线。
+3. 配置 macOS 公证、Windows 代码签名和应用商店发布账号。
