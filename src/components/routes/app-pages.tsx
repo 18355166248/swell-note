@@ -363,15 +363,19 @@ export function SyncSettingsPage({
   isSyncing,
   lastSyncedAt,
   notes,
+  failedAttachmentCount,
   pendingAttachmentCount,
   onAutoSyncModeChange,
+  onCancelSync,
   onClearSyncLog,
   onOpenNote,
   onOpenWebDav,
   onRetry,
+  onRetryFailed,
   onRestoreDeletedNote,
   onSync,
   sourceLabel,
+  syncProgress,
   syncLogs,
 }: {
   autoSyncMode: AutoSyncMode
@@ -381,15 +385,24 @@ export function SyncSettingsPage({
   isSyncing: boolean
   lastSyncedAt?: number
   notes: Note[]
+  failedAttachmentCount: number
   pendingAttachmentCount: number
   onAutoSyncModeChange: (mode: AutoSyncMode) => void
+  onCancelSync: () => void
   onClearSyncLog: () => void
   onOpenNote: (note: Note) => void
   onOpenWebDav: () => void
   onRetry: (noteId: string) => void
+  onRetryFailed: () => void
   onRestoreDeletedNote: (noteId: string) => void
   onSync: () => void
   sourceLabel: string
+  syncProgress: {
+    completed: number
+    currentLabel: string
+    phase: "attachments" | "notes" | "refreshing"
+    total: number
+  } | null
   syncLogs: SyncLogEntry[]
 }) {
   const summary = summarizeWebDavSync(notes)
@@ -400,6 +413,14 @@ export function SyncSettingsPage({
   const deletedNotes = notes.filter((note) => note.source === "webdav" && note.pendingOperation === "delete")
   const indexing = indexProgress && indexProgress.indexed < indexProgress.total
   const canSync = isOnline && !isSyncing
+  const failedCount = summary.failed + failedAttachmentCount
+  const syncPercent = syncProgress
+    ? syncProgress.phase === "refreshing"
+      ? 100
+      : syncProgress.total === 0
+        ? 0
+        : Math.round((syncProgress.completed / syncProgress.total) * 100)
+    : 0
 
   return (
     <div className="settings-content-card sync-center">
@@ -415,15 +436,34 @@ export function SyncSettingsPage({
                 ? `上次同步：${formatSyncDate(lastSyncedAt)} · 重新连接后可上传修改`
                 : "配置或重新输入应用密码后即可同步"}</small>
         </div>
-        <Button disabled={!canSync} onClick={connected ? onSync : onOpenWebDav}>
-          {isSyncing ? <><RefreshCw className="spin" />同步中</> : connected ? "同步全部" : hasCachedNotes ? "重新连接坚果云" : "连接坚果云"}
-        </Button>
+        {isSyncing ? (
+          <Button disabled={syncProgress?.phase === "refreshing"} onClick={onCancelSync} variant="outline">
+            {syncProgress?.phase === "refreshing" ? "正在完成" : "取消同步"}
+          </Button>
+        ) : (
+          <Button disabled={!canSync} onClick={connected ? onSync : onOpenWebDav}>
+            {connected ? "同步全部" : hasCachedNotes ? "重新连接坚果云" : "连接坚果云"}
+          </Button>
+        )}
       </div>
+
+      {syncProgress ? (
+        <div className="sync-operation-progress" role="status">
+          <div>
+            <span><RefreshCw className="spin" />{syncProgress.currentLabel}</span>
+            <strong>{syncPercent}%</strong>
+          </div>
+          <progress max="100" value={syncPercent} />
+          <small>{syncProgress.phase === "refreshing"
+            ? "正在刷新云端目录"
+            : `已处理 ${syncProgress.completed}/${syncProgress.total} 项；取消会在当前请求完成后生效`}</small>
+        </div>
+      ) : null}
 
       <div className="sync-stat-grid" aria-label="同步统计">
         <div><strong>{summary.pending + pendingAttachmentCount}</strong><span>待同步</span></div>
         <div data-tone={summary.conflicts > 0 ? "warning" : undefined}><strong>{summary.conflicts}</strong><span>冲突</span></div>
-        <div data-tone={summary.failed > 0 ? "danger" : undefined}><strong>{summary.failed}</strong><span>失败</span></div>
+        <div data-tone={failedCount > 0 ? "danger" : undefined}><strong>{failedCount}</strong><span>失败</span></div>
         <div><strong>{summary.synced}</strong><span>{connected ? "已同步" : "已缓存"}</span></div>
       </div>
 
@@ -461,7 +501,10 @@ export function SyncSettingsPage({
       <section className="sync-problem-section">
         <div className="sync-section-heading">
           <div><h2>需要处理</h2><p>同步前会校验远端版本，冲突文档不会自动覆盖。</p></div>
-          <span>{problemNotes.length} 项</span>
+          <div className="sync-heading-actions">
+            <span>{problemNotes.length + failedAttachmentCount} 项</span>
+            {failedCount > 0 ? <Button disabled={!canSync} onClick={onRetryFailed} size="sm" variant="outline">重试全部失败</Button> : null}
+          </div>
         </div>
         {problemNotes.length > 0 ? (
           <div className="sync-problem-list">

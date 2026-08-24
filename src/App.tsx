@@ -93,6 +93,13 @@ import type { Note, NoteSaveState } from "@/types/note"
 import "./App.css"
 
 type ActiveCacheMeta = Pick<VaultCacheSnapshot, "id" | "label" | "lastSyncedAt" | "sourceKind">
+type SyncProgress = {
+  completed: number
+  currentLabel: string
+  phase: "attachments" | "notes" | "refreshing"
+  total: number
+}
+type SyncRun = { cancelled: boolean }
 
 function App() {
   const navigate = useNavigate()
@@ -133,6 +140,8 @@ function App() {
   const [autoSyncMode, setAutoSyncMode] = useState<AutoSyncMode>(() => loadSyncPreferences().autoSyncMode)
   const [syncLogs, setSyncLogs] = useState<SyncLogEntry[]>(loadSyncLog)
   const [pendingAttachmentCount, setPendingAttachmentCount] = useState(0)
+  const [failedAttachmentCount, setFailedAttachmentCount] = useState(0)
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
   const [nativeSearchResult, setNativeSearchResult] = useState<{ paths: Set<string>; query: string } | null>(null)
   const saveTimersRef = useRef(new Map<string, number>())
   const saveQueuesRef = useRef(new Map<string, Promise<void>>())
@@ -142,6 +151,7 @@ function App() {
   const latestCacheSnapshotRef = useRef<VaultCacheSnapshot | null>(null)
   const notesRef = useRef(notes)
   const previousOnlineRef = useRef(isOnline)
+  const activeSyncRunRef = useRef<SyncRun | null>(null)
   const refreshVaultRef = useRef<(noteIds?: ReadonlySet<string>) => Promise<void>>(async () => undefined)
   notesRef.current = notes
 
@@ -234,12 +244,21 @@ function App() {
   useEffect(() => {
     if (!activeCacheMeta || activeCacheMeta.sourceKind !== "webdav") {
       setPendingAttachmentCount(0)
+      setFailedAttachmentCount(0)
       return
     }
     let cancelled = false
     void listPendingVaultAttachments(activeCacheMeta.id)
-      .then((entries) => { if (!cancelled) setPendingAttachmentCount(entries.length) })
-      .catch(() => { if (!cancelled) setPendingAttachmentCount(0) })
+      .then((entries) => {
+        if (cancelled) return
+        setPendingAttachmentCount(entries.length)
+        setFailedAttachmentCount(entries.filter((entry) => entry.status === "failed").length)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setPendingAttachmentCount(0)
+        setFailedAttachmentCount(0)
+      })
     return () => { cancelled = true }
   }, [activeCacheMeta])
 
@@ -996,6 +1015,7 @@ function App() {
     adapter: VaultAdapter,
     currentNotes: Note[],
     noteIds?: ReadonlySet<string>,
+    run?: SyncRun,
   ) => {
     if (adapter.kind !== "webdav" || !adapter.writeTextFile) {
       return { errorMessage: null, notes: currentNotes }
@@ -1013,7 +1033,9 @@ function App() {
 
     // 坚果云对请求频率敏感，按文件串行同步；单篇失败不会阻断其他本地稿的尝试。
     for (const pendingNote of pendingNotes) {
+      if (run?.cancelled) break
       const path = pendingNote.remotePath!
+      setSyncProgress((current) => current ? { ...current, currentLabel: pendingNote.title, phase: "notes" } : current)
       setSaveStates((current) => ({ ...current, [pendingNote.id]: { status: "saving" } }))
       try {
         if (pendingNote.pendingOperation === "delete") {
@@ -1083,16 +1105,19 @@ function App() {
           [pendingNote.id]: { message, status: conflict ? "conflict" : "error" },
         }))
         setVaultError(message)
+      } finally {
+        setSyncProgress((current) => current ? { ...current, completed: Math.min(current.total, current.completed + 1) } : current)
       }
     }
 
     setNotes(nextNotes)
-    return { errorMessage, notes: nextNotes }
+    return { cancelled: Boolean(run?.cancelled), errorMessage, notes: nextNotes }
   }
 
   const pushPendingWebDavAttachments = async (
     adapter: VaultAdapter,
     noteIds?: ReadonlySet<string>,
+    run?: SyncRun,
   ) => {
     const failedNoteIds = new Set<string>()
     if (adapter.kind !== "webdav" || !adapter.createBinaryFile || activeCacheMeta?.sourceKind !== "webdav") {
@@ -1108,6 +1133,12 @@ function App() {
 
     // 二进制先于 Markdown 正文上传，保证其他设备读到引用时附件已经存在。
     for (const entry of entries) {
+      if (run?.cancelled) break
+      setSyncProgress((current) => current ? {
+        ...current,
+        currentLabel: entry.path.split("/").pop() ?? entry.path,
+        phase: "attachments",
+      } : current)
       try {
         const directory = entry.path.split("/").slice(0, -1).join("/")
         if (directory && !ensuredDirectories.has(directory)) {
@@ -1133,10 +1164,14 @@ function App() {
         failedNoteIds.add(entry.noteId)
         errorMessage = message
         await updateVaultAttachmentStatus(entry, "failed", message)
+      } finally {
+        setSyncProgress((current) => current ? { ...current, completed: Math.min(current.total, current.completed + 1) } : current)
       }
     }
-    setPendingAttachmentCount((await listPendingVaultAttachments(activeCacheMeta.id)).length)
-    return { errorMessage, failedNoteIds }
+    const remainingEntries = await listPendingVaultAttachments(activeCacheMeta.id)
+    setPendingAttachmentCount(remainingEntries.length)
+    setFailedAttachmentCount(remainingEntries.filter((entry) => entry.status === "failed").length)
+    return { cancelled: Boolean(run?.cancelled), errorMessage, failedNoteIds }
   }
 
   const refreshVault = async (noteIds?: ReadonlySet<string>) => {
@@ -1175,18 +1210,39 @@ function App() {
       setVaultError("当前设备离线，本地修改已保留；恢复网络后再同步")
       return
     }
+    // React 状态更新存在一个渲染间隔，使用运行令牌阻止手动与自动同步在同一时刻重复启动。
+    if (activeSyncRunRef.current) return
 
     setIsRefreshingVault(true)
     setVaultError(null)
+    const run: SyncRun = { cancelled: false }
+    activeSyncRunRef.current = run
     try {
+      const pendingAttachments = activeCacheMeta?.sourceKind === "webdav"
+        ? (await listPendingVaultAttachments(activeCacheMeta.id))
+          .filter((entry) => !noteIds || noteIds.has(entry.noteId)).length
+        : 0
+      const pendingNotes = notes.filter((note) => note.source === "webdav"
+        && note.syncStatus === "modified"
+        && (!noteIds || noteIds.has(note.id))).length
+      setSyncProgress({ completed: 0, currentLabel: "准备同步", phase: "attachments", total: pendingAttachments + pendingNotes })
       // 所有手动/自动同步都汇入同一条带版本校验的写入链路，避免不同入口产生覆盖差异。
-      const attachmentResult = await pushPendingWebDavAttachments(vaultSession, noteIds)
+      const attachmentResult = await pushPendingWebDavAttachments(vaultSession, noteIds, run)
+      if (run.cancelled) {
+        setSyncLogs(appendSyncLog({ message: "同步已取消，未处理项目仍保留在本机队列", status: "error" }))
+        return
+      }
       const eligibleNoteIds = attachmentResult.failedNoteIds.size > 0
         ? new Set(notes
             .filter((note) => (!noteIds || noteIds.has(note.id)) && !attachmentResult.failedNoteIds.has(note.id))
             .map((note) => note.id))
         : noteIds
-      const syncResult = await pushPendingWebDavNotes(vaultSession, notes, eligibleNoteIds)
+      const syncResult = await pushPendingWebDavNotes(vaultSession, notes, eligibleNoteIds, run)
+      if (run.cancelled || syncResult.cancelled) {
+        setSyncLogs(appendSyncLog({ message: "同步已取消，已完成项目状态已保存", status: "error" }))
+        return
+      }
+      setSyncProgress((current) => current ? { ...current, currentLabel: "刷新远端列表", phase: "refreshing" } : current)
       await loadVault(vaultSession, true, syncResult.notes)
       const combinedError = attachmentResult.errorMessage ?? syncResult.errorMessage
       if (combinedError) {
@@ -1205,8 +1261,29 @@ function App() {
       setVaultError(message)
       setSyncLogs(appendSyncLog({ message: `同步失败：${message}`, status: "error" }))
     } finally {
+      if (activeSyncRunRef.current === run) activeSyncRunRef.current = null
+      setSyncProgress(null)
       setIsRefreshingVault(false)
     }
+  }
+
+  const cancelSync = () => {
+    if (!activeSyncRunRef.current) return
+    activeSyncRunRef.current.cancelled = true
+    setSyncProgress((current) => current ? { ...current, currentLabel: "正在安全停止…" } : current)
+  }
+
+  const retryFailedSync = async () => {
+    const failedNoteIds = new Set(notes
+      .filter((note) => note.source === "webdav" && Boolean(note.syncError))
+      .map((note) => note.id))
+    if (activeCacheMeta?.sourceKind === "webdav") {
+      const attachments = await listPendingVaultAttachments(activeCacheMeta.id)
+      for (const entry of attachments) {
+        if (entry.status === "failed") failedNoteIds.add(entry.noteId)
+      }
+    }
+    if (failedNoteIds.size > 0) await refreshVault(failedNoteIds)
   }
 
   refreshVaultRef.current = refreshVault
@@ -2327,6 +2404,7 @@ function App() {
             <SyncSettingsPage
               autoSyncMode={autoSyncMode}
               connected={vaultSession?.kind === "webdav"}
+              failedAttachmentCount={failedAttachmentCount}
               indexProgress={indexProgress}
               isOnline={isOnline}
               isSyncing={isRefreshingVault}
@@ -2334,6 +2412,7 @@ function App() {
               notes={notes}
               pendingAttachmentCount={pendingAttachmentCount}
               onAutoSyncModeChange={changeAutoSyncMode}
+              onCancelSync={cancelSync}
               onClearSyncLog={clearLocalSyncLogs}
               onOpenNote={openNote}
               onOpenWebDav={() => {
@@ -2341,9 +2420,11 @@ function App() {
                 else navigate("/settings/webdav")
               }}
               onRetry={(noteId) => void refreshVault(new Set([noteId]))}
+              onRetryFailed={() => void retryFailedSync()}
               onRestoreDeletedNote={restoreDeletedNote}
               onSync={() => void refreshVault()}
               sourceLabel={activeCacheMeta?.label ?? "坚果云"}
+              syncProgress={syncProgress}
               syncLogs={syncLogs}
             />
           )}

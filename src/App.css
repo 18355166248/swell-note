@@ -186,11 +186,19 @@
 .sync-index-progress { display: flex; align-items: center; justify-content: space-between; border-radius: 10px; background: var(--panel-soft); padding: 11px 13px; color: var(--muted-foreground); font-size: 11px; }
 .sync-index-progress span { display: flex; align-items: center; gap: 7px; }
 .sync-index-progress svg { width: 14px; height: 14px; color: var(--primary); }
+.sync-operation-progress { display: grid; gap: 7px; border: 1px solid color-mix(in srgb,var(--primary) 24%,var(--border)); border-radius: 11px; padding: 12px 13px; background: var(--blue-soft); }
+.sync-operation-progress > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 11px; }
+.sync-operation-progress span { display: flex; min-width: 0; align-items: center; gap: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-operation-progress svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--primary); }
+.sync-operation-progress progress { width: 100%; height: 6px; overflow: hidden; border: 0; border-radius: 999px; accent-color: var(--primary); }
+.sync-operation-progress small { color: var(--muted-foreground); font-size: 10.5px; }
 .sync-problem-section { display: grid; gap: 12px; }
 .sync-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; }
 .sync-section-heading h2 { margin: 0; font-size: 15px; }
 .sync-section-heading p { margin: 4px 0 0; color: var(--muted-foreground); font-size: 11px; }
 .sync-section-heading > span { color: var(--muted-foreground); font-size: 11px; }
+.sync-heading-actions { display: flex; align-items: center; gap: 9px; }
+.sync-heading-actions > span { color: var(--muted-foreground); font-size: 11px; white-space: nowrap; }
 .sync-problem-list { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; }
 .sync-problem-row { display: flex; min-height: 68px; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); padding-right: 12px; }
 .sync-problem-row:last-child { border-bottom: 0; }
