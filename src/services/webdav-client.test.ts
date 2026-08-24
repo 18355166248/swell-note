@@ -10,6 +10,7 @@ import {
   ensureWebDavDirectory,
   moveMarkdownFile,
   WebDavRevisionConflictError,
+  writeMarkdownFile,
 } from "@/services/webdav-client"
 
 const config = {
@@ -118,5 +119,21 @@ describe("WebDAV queued file operations", () => {
       headers: expect.objectContaining({ "If-Match": '"v3"' }),
       method: "DELETE",
     })
+  })
+})
+
+describe("WebDAV multi-device concurrency", () => {
+  it("第二台设备使用过期 ETag 写入时被服务端拒绝", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { headers: { etag: '"v2"' }, status: 204 }))
+      .mockResolvedValueOnce(new Response("", { status: 412 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(writeMarkdownFile(config, "app-password", "/Swell/并发.md", "设备 A", '"v1"'))
+      .resolves.toEqual({ revision: '"v2"' })
+    await expect(writeMarkdownFile(config, "app-password", "/Swell/并发.md", "设备 B", '"v1"'))
+      .rejects.toBeInstanceOf(WebDavRevisionConflictError)
+
+    expect(fetchMock.mock.calls.map(([, request]) => request.headers["If-Match"])).toEqual(['"v1"', '"v1"'])
   })
 })

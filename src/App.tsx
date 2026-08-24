@@ -75,6 +75,7 @@ import {
   shouldReadVaultDocument,
 } from "@/services/sync/webdav-working-copy"
 import { summarizeWebDavSync } from "@/services/sync/sync-summary"
+import { mergeMarkdownVersions } from "@/services/sync/three-way-merge"
 import { appendSyncLog, clearSyncLog, loadSyncLog, type SyncLogEntry } from "@/services/sync/sync-log"
 import {
   loadSyncPreferences,
@@ -795,6 +796,7 @@ function App() {
             && !hasLocalChanges
             ? {
                 ...note,
+                baseContent: indexedNote.content,
                 content: indexedNote.content,
                 contentLoaded: true,
                 outgoingLinks: indexedNote.outgoingLinks,
@@ -913,6 +915,9 @@ function App() {
         source: adapter.kind === "webdav" ? "webdav" : "local",
         remotePath: preserveWorkingCopy ? workingCopy!.remotePath : file.path,
         readOnly: adapter.kind === "webdav" ? !contentLoaded : adapter.readOnly,
+        baseContent: preserveWorkingCopy
+          ? workingCopy!.baseContent
+          : loadedDocument?.content ?? (reuseCachedContent ? previousNote!.baseContent ?? previousNote!.content : undefined),
         revision: preserveWorkingCopy
           ? workingCopy!.revision
           : loadedDocument?.revision ?? file.revision,
@@ -1082,6 +1087,8 @@ function App() {
         nextNotes = nextNotes.map((note) => note.id === pendingNote.id
           ? {
               ...note,
+              baseContent: pendingNote.content,
+              mergeConflictCount: undefined,
               pendingOperation: undefined,
               writeContentAfterMove: undefined,
               previousRemotePath: undefined,
@@ -1368,6 +1375,7 @@ function App() {
           currentNote.id === note.id
             ? {
                 ...currentNote,
+                baseContent: document.content,
                 content: document.content,
                 ...indexNoteContent(document.content),
                 revision: document.revision,
@@ -1439,6 +1447,7 @@ function App() {
         note.id === activeNote.id
           ? {
               ...note,
+              baseContent: document.content,
               content: document.content,
               preview: document.content.replace(/^#+\s*/gm, "").slice(0, 90),
               ...indexNoteContent(document.content),
@@ -1462,7 +1471,7 @@ function App() {
     }
   }
 
-  const resolveActiveConflict = async (strategy: "local" | "remote") => {
+  const resolveActiveConflict = async (strategy: "local" | "merge" | "remote") => {
     const note = activeNote
     const path = note?.previousRemotePath ?? note?.remotePath
     if (!note || note.syncStatus !== "conflict" || !path || !vaultSession) return
@@ -1473,26 +1482,47 @@ function App() {
     setSaveStates((current) => ({ ...current, [note.id]: { status: "saving" } }))
     setVaultError(null)
     try {
-      // 两种选择都先读取最新远端版本：保留本地时只更新同步基准，下一次同步仍会带 If-Match 保护。
+      // 三种选择都先读取最新远端版本：后续上传会基于新的 ETag，避免冲突处理期间再次覆盖他人修改。
       const remoteDocument = await vaultSession.readTextFile(path)
+      const mergeResult = strategy === "merge"
+        ? mergeMarkdownVersions(note.baseContent, note.content, remoteDocument.content)
+        : null
       revisionByPathRef.current.set(path, remoteDocument.revision)
       setNotes((current) => current.map((candidate) => {
         if (candidate.id !== note.id) return candidate
         if (strategy === "local") {
           return {
             ...candidate,
+            baseContent: remoteDocument.content,
+            mergeConflictCount: undefined,
             revision: remoteDocument.revision,
             syncError: undefined,
             syncStatus: "modified",
           }
         }
+        if (strategy === "merge" && mergeResult) {
+          return {
+            ...candidate,
+            ...indexNoteContent(mergeResult.content),
+            baseContent: remoteDocument.content,
+            content: mergeResult.content,
+            mergeConflictCount: mergeResult.conflictCount || undefined,
+            preview: mergeResult.content.replace(/^#+\s*/gm, "").slice(0, 90),
+            revision: remoteDocument.revision,
+            syncError: undefined,
+            syncStatus: mergeResult.conflictCount > 0 ? "conflict" : "modified",
+            updatedAt: mergeResult.conflictCount > 0 ? "合并后仍有重叠修改" : "刚刚自动合并",
+          }
+        }
         return {
           ...candidate,
+          baseContent: remoteDocument.content,
           content: remoteDocument.content,
           contentLoaded: true,
           ...indexNoteContent(remoteDocument.content),
           folder: deriveRemoteFolder(vaultSession.getDisplayPath?.(path) ?? path),
           id: `${vaultSession.kind}:${path}`,
+          mergeConflictCount: undefined,
           pendingOperation: undefined,
           previousRemotePath: undefined,
           preview: remoteDocument.content.replace(/^#+\s*/gm, "").slice(0, 90),
@@ -1507,7 +1537,11 @@ function App() {
       }))
       setSaveStates((current) => ({
         ...current,
-        [note.id]: strategy === "local" ? { status: "pending" } : { status: "saved" },
+        [note.id]: strategy === "remote"
+          ? { status: "saved" }
+          : mergeResult && mergeResult.conflictCount > 0
+            ? { message: `仍有 ${mergeResult.conflictCount} 处重叠修改`, status: "conflict" }
+            : { status: "pending" },
       }))
       if (strategy === "remote" && note.id !== `${vaultSession.kind}:${path}`) {
         const restoredId = `${vaultSession.kind}:${path}`

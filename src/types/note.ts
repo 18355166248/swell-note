@@ -12,6 +12,8 @@ export type Note = {
   remotePath?: string
   readOnly?: boolean
   revision?: string
+  baseContent?: string
+  mergeConflictCount?: number
   searchText?: string
   outgoingLinks?: string[]
   contentLoaded?: boolean

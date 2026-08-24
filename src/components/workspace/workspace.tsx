@@ -132,7 +132,7 @@ type WorkspaceProps = {
   onNoteSortChange: (sort: NoteSort) => void
   onReloadNote: () => void
   onRefreshVault: () => void
-  onResolveConflict: (strategy: "local" | "remote") => void
+  onResolveConflict: (strategy: "local" | "merge" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onSelectFolder: (folder: string | null) => void
   onSelectLibraryView: (view: LibraryView) => void
@@ -892,7 +892,7 @@ type NoteEditorProps = {
   onMoveNote: (folderPath: string | null) => void
   onRenameNote: (title: string) => void
   onReloadNote: () => void
-  onResolveConflict: (strategy: "local" | "remote") => void
+  onResolveConflict: (strategy: "local" | "merge" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onSelectNote: (note: Note) => void
   onSync: () => void
@@ -1053,8 +1053,11 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
         <div className="sync-conflict-banner" role="alert">
           <div>
             <strong>云端版本已变化</strong>
-            <span>本地修改仍然安全保留，请选择同步时采用哪个版本。</span>
+            <span>{note.mergeConflictCount
+              ? `合并稿仍有 ${note.mergeConflictCount} 处重叠修改；编辑标记后可保留本地版本。`
+              : "本地修改仍然安全保留，可先尝试合并两台设备的修改。"}</span>
           </div>
+          <Button onClick={() => onResolveConflict("merge")} size="sm">合并修改</Button>
           <Button onClick={() => onResolveConflict("local")} size="sm" variant="outline">保留本地版本</Button>
           <Button onClick={() => onResolveConflict("remote")} size="sm" variant="outline">采用云端版本</Button>
         </div>
