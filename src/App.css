@@ -369,6 +369,8 @@
 .formatting-toolbar button:hover { background: var(--muted); color: var(--foreground); }
 .formatting-toolbar button svg { width: 15px; height: 15px; }
 .toolbar-divider { width: 1px; height: 17px; margin: 0 4px; background: var(--border); }
+.attachment-file-input { display: none; }
+.attachment-error { margin: 0; border-bottom: 1px solid var(--border); background: color-mix(in oklab,var(--destructive) 9%,white); padding: 8px 16px; color: var(--destructive); font-size: 10.5px; line-height: 1.45; }
 .document-canvas { width: min(100%,830px); margin: 0 auto; padding: 48px 64px 80px; }
 .document-title { width: 100%; border: 0; background: transparent; outline: none; color: #1d2530; font-size: clamp(25px,2.3vw,34px); line-height: 1.2; font-weight: 720; letter-spacing: -.035em; }
 .document-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 13px 0 30px; color: var(--muted-foreground); font-size: 11px; }

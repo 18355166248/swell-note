@@ -12,12 +12,13 @@ export type MarkdownEditorHandle = {
 type MarkdownEditorProps = {
   onChange: (value: string) => void
   onCursorChange?: (line: number, column: number) => void
+  onInsertFiles?: (files: File[]) => void
   readOnly?: boolean
   value: string
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ onChange, onCursorChange, readOnly = false, value }, ref) {
+  function MarkdownEditor({ onChange, onCursorChange, onInsertFiles, readOnly = false, value }, ref) {
     const editorRef = useRef<ReactCodeMirrorRef>(null)
     const extensions = useMemo(() => [
       markdown(),
@@ -29,6 +30,22 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         onCursorChange?.(line.number, position - line.from + 1)
       }),
       EditorView.domEventHandlers({
+        drop(event) {
+          const files = collectTransferFiles(event.dataTransfer)
+          if (!onInsertFiles || readOnly || files.length === 0) return false
+          event.preventDefault()
+          onInsertFiles(files)
+          return true
+        },
+        paste(event) {
+          // 截图与图片文件的剪贴板不带纯文本；Excel 等来源同时带文本时仍按普通粘贴处理。
+          const files = collectTransferFiles(event.clipboardData)
+          if (!onInsertFiles || readOnly || files.length === 0) return false
+          if (event.clipboardData?.getData("text/plain")) return false
+          event.preventDefault()
+          onInsertFiles(files)
+          return true
+        },
         keydown(event, view) {
           if (!(event.metaKey || event.ctrlKey) || event.altKey) return false
           const key = event.key.toLocaleLowerCase()
@@ -50,7 +67,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           return true
         },
       }),
-    ], [onCursorChange])
+    ], [onCursorChange, onInsertFiles, readOnly])
 
     useImperativeHandle(ref, () => ({
       insertText(text) {
@@ -97,6 +114,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     )
   },
 )
+
+function collectTransferFiles(transfer: DataTransfer | null) {
+  return Array.from(transfer?.files ?? [])
+}
 
 function dispatchHistoryShortcut(view: EditorView | undefined, redo: boolean) {
   if (!view) return

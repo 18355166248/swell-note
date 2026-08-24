@@ -24,14 +24,24 @@ import {
   type VaultFileEntry,
 } from "@/services/vault/vault-adapter"
 import { resolveVaultAssetPath } from "@/services/vault/vault-path"
+import {
+  canWriteVaultAttachments,
+  writeVaultAttachments,
+} from "@/services/vault/attachment-writer"
 import { createWebDavVaultAdapter } from "@/services/vault/webdav-vault-adapter"
 import {
   createVaultCacheId,
   deleteVaultCache,
+  discardPendingVaultAttachments,
+  listPendingVaultAttachments,
   listVaultCaches,
+  loadVaultAttachment,
   loadLastVaultCache,
   loadVaultCache,
+  queueVaultAttachment,
+  remapVaultAttachmentNoteId,
   saveVaultCache,
+  updateVaultAttachmentStatus,
   type VaultCacheSnapshot,
   type VaultCacheSummary,
 } from "@/services/cache/vault-cache"
@@ -103,14 +113,17 @@ function App() {
   )
   const [autoSyncMode, setAutoSyncMode] = useState<AutoSyncMode>(() => loadSyncPreferences().autoSyncMode)
   const [syncLogs, setSyncLogs] = useState<SyncLogEntry[]>(loadSyncLog)
+  const [pendingAttachmentCount, setPendingAttachmentCount] = useState(0)
   const saveTimersRef = useRef(new Map<string, number>())
   const saveQueuesRef = useRef(new Map<string, Promise<void>>())
   const loadingNoteIdsRef = useRef(new Set<string>())
   const revisionByPathRef = useRef(new Map<string, string | undefined>())
   const indexGenerationRef = useRef(0)
   const latestCacheSnapshotRef = useRef<VaultCacheSnapshot | null>(null)
+  const notesRef = useRef(notes)
   const previousOnlineRef = useRef(isOnline)
   const refreshVaultRef = useRef<(noteIds?: ReadonlySet<string>) => Promise<void>>(async () => undefined)
+  notesRef.current = notes
 
   const applyCachedSnapshot = useCallback((snapshot: VaultCacheSnapshot) => {
     // 缓存恢复时主动断开运行时适配器，确保离线浏览不会误走本地文件或 WebDAV 写入链路。
@@ -193,6 +206,18 @@ function App() {
     }, 450)
     return () => window.clearTimeout(timer)
   }, [activeCacheMeta, activeNoteId, cacheReady, notes])
+
+  useEffect(() => {
+    if (!activeCacheMeta || activeCacheMeta.sourceKind !== "webdav") {
+      setPendingAttachmentCount(0)
+      return
+    }
+    let cancelled = false
+    void listPendingVaultAttachments(activeCacheMeta.id)
+      .then((entries) => { if (!cancelled) setPendingAttachmentCount(entries.length) })
+      .catch(() => { if (!cancelled) setPendingAttachmentCount(0) })
+    return () => { cancelled = true }
+  }, [activeCacheMeta])
 
   useEffect(() => {
     const flushCacheWhenHidden = () => {
@@ -324,10 +349,54 @@ function App() {
 
   const resolveActiveAsset = useCallback(async (source: string) => {
     const notePath = activeNote?.remotePath
-    if (!notePath || !vaultSession?.readBinaryFile) return null
+    if (!notePath) return null
     const assetPath = resolveVaultAssetPath(notePath, source)
-    return assetPath ? vaultSession.readBinaryFile(assetPath) : null
-  }, [activeNote?.remotePath, vaultSession])
+    if (!assetPath) return null
+    if (activeCacheMeta?.sourceKind === "webdav") {
+      const cachedAttachment = await loadVaultAttachment(activeCacheMeta.id, assetPath)
+      if (cachedAttachment) return { data: new Uint8Array(cachedAttachment.data), mimeType: cachedAttachment.mimeType }
+    }
+    return vaultSession?.readBinaryFile ? vaultSession.readBinaryFile(assetPath) : null
+  }, [activeCacheMeta, activeNote?.remotePath, vaultSession])
+
+  const attachmentNoteId = activeNote?.id
+  const attachmentNotePath = activeNote?.remotePath
+  const attachmentNoteSource = activeNote?.source
+  const attachmentCacheId = activeCacheMeta?.sourceKind === "webdav" ? activeCacheMeta.id : undefined
+  const insertActiveNoteAttachments = useCallback(async (files: File[]) => {
+    if (!attachmentNotePath || !attachmentNoteId) {
+      return { errors: ["当前笔记库不支持写入附件"], markdown: "" }
+    }
+    if (attachmentNoteSource === "webdav" && attachmentCacheId) {
+      const config = loadWebDavConfig()
+      const rootPath = config.remotePath.replace(/^\/+|\/+$/g, "")
+      const writer = {
+        createBinaryFile: async (path: string, data: Uint8Array, mimeType?: string) => {
+          // WebDAV 附件先持久化到 IndexedDB；这里不持有 File，刷新页面后队列仍可继续同步。
+          await queueVaultAttachment({
+            cacheId: attachmentCacheId,
+            data: data.slice().buffer,
+            mimeType,
+            noteId: attachmentNoteId,
+            path,
+          })
+          return { path }
+        },
+        getDisplayPath: (path: string) => rootPath && path.replace(/^\/+/, "").startsWith(`${rootPath}/`)
+          ? path.replace(/^\/+/, "").slice(rootPath.length + 1)
+          : path.replace(/^\/+/, ""),
+        getStoragePath: (displayPath: string) => `${config.remotePath.replace(/\/+$/g, "")}/${displayPath.replace(/^\/+/, "")}`.replace(/\/{2,}/g, "/"),
+      }
+      const result = await writeVaultAttachments(writer, attachmentNotePath, files)
+      setPendingAttachmentCount((await listPendingVaultAttachments(attachmentCacheId)).length)
+      return result
+    }
+    if (!vaultSession || !canWriteVaultAttachments(vaultSession)) {
+      return { errors: ["当前笔记库不支持写入附件"], markdown: "" }
+    }
+    // 附件不进入 Markdown 文件列表，写盘后由预览按相对路径直接读取，无需重新扫描笔记库。
+    return writeVaultAttachments(vaultSession, attachmentNotePath, files)
+  }, [attachmentCacheId, attachmentNoteId, attachmentNotePath, attachmentNoteSource, vaultSession])
 
   const updateActiveNote = (patch: Partial<Note>) => {
     if (!activeNote) return
@@ -485,7 +554,9 @@ function App() {
           ...indexNoteContent(content),
           preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
           syncError: candidate.source === "webdav" ? undefined : candidate.syncError,
-          syncStatus: candidate.source === "webdav" ? "modified" : candidate.syncStatus,
+          syncStatus: candidate.source === "webdav"
+            ? candidate.syncStatus === "conflict" ? "conflict" : "modified"
+            : candidate.syncStatus,
           updatedAt: "刚刚",
           modifiedAt: Date.now(),
         }
@@ -594,6 +665,34 @@ function App() {
     })
   }
 
+  const formatNoteById = (noteId: string, syntax: string) => {
+    const note = notesRef.current.find((candidate) => candidate.id === noteId)
+    if (!note || !syntax || note.readOnly) return
+    const content = `${note.content}${syntax}`
+    setNotes((current) => current.map((candidate) => candidate.id === noteId
+      ? {
+          ...candidate,
+          content,
+          ...indexNoteContent(content),
+          modifiedAt: Date.now(),
+          preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
+          syncError: candidate.source === "webdav" ? undefined : candidate.syncError,
+          syncStatus: candidate.source === "webdav"
+            ? candidate.syncStatus === "conflict" ? "conflict" : "modified"
+            : candidate.syncStatus,
+          updatedAt: "刚刚",
+        }
+      : candidate))
+    if (note.source === "webdav") {
+      setSaveStates((current) => ({
+        ...current,
+        [noteId]: note.syncStatus === "conflict" ? { status: "conflict" } : { status: "pending" },
+      }))
+    } else {
+      scheduleLocalSave(note, content)
+    }
+  }
+
   const startVaultIndex = (adapter: VaultAdapter, files: VaultFileEntry[]) => {
     const generation = ++indexGenerationRef.current
     if (files.length === 0) {
@@ -643,12 +742,21 @@ function App() {
     const hasPendingChanges = mergedNotes.some((note) =>
       note.source === "webdav" && note.syncStatus === "modified",
     )
-    if (!hasPendingChanges) return mergedNotes.length
+    const attachmentResult = await pushPendingWebDavAttachments(adapter)
+    if (!hasPendingChanges) {
+      if (attachmentResult.errorMessage) setVaultError(attachmentResult.errorMessage)
+      return mergedNotes.length
+    }
 
     // “连接并同步”先拉取版本并完成冲突判断，再上传本地稿，避免重连后直接覆盖其他设备的修改。
-    const syncResult = await pushPendingWebDavNotes(adapter, mergedNotes)
+    const eligibleNoteIds = attachmentResult.failedNoteIds.size > 0
+      ? new Set(mergedNotes.filter((note) => !attachmentResult.failedNoteIds.has(note.id)).map((note) => note.id))
+      : undefined
+    const syncResult = await pushPendingWebDavNotes(adapter, mergedNotes, eligibleNoteIds)
     const refreshedNotes = await loadVault(adapter, true, syncResult.notes)
-    if (syncResult.errorMessage) setVaultError(syncResult.errorMessage)
+    if (attachmentResult.errorMessage || syncResult.errorMessage) {
+      setVaultError(attachmentResult.errorMessage ?? syncResult.errorMessage)
+    }
     return refreshedNotes.length
   }
 
@@ -829,6 +937,11 @@ function App() {
         if (pendingNote.pendingOperation === "delete") {
           if (!adapter.deleteTextFile) throw new Error("当前 WebDAV 会话不支持删除")
           await adapter.deleteTextFile(pendingNote.previousRemotePath ?? path, pendingNote.revision)
+          if (activeCacheMeta?.sourceKind === "webdav") {
+            // 远端删除成功后附件引用已不可恢复，此时再清理队列，避免撤销删除时丢失待传附件。
+            await discardPendingVaultAttachments(activeCacheMeta.id, new Set([pendingNote.id]))
+            setPendingAttachmentCount((await listPendingVaultAttachments(activeCacheMeta.id)).length)
+          }
           nextNotes = nextNotes.filter((note) => note.id !== pendingNote.id)
           setSaveStates((current) => {
             const next = { ...current }
@@ -895,6 +1008,55 @@ function App() {
     return { errorMessage, notes: nextNotes }
   }
 
+  const pushPendingWebDavAttachments = async (
+    adapter: VaultAdapter,
+    noteIds?: ReadonlySet<string>,
+  ) => {
+    const failedNoteIds = new Set<string>()
+    if (adapter.kind !== "webdav" || !adapter.createBinaryFile || activeCacheMeta?.sourceKind !== "webdav") {
+      return { errorMessage: null as string | null, failedNoteIds }
+    }
+    const deletedNoteIds = new Set(notes
+      .filter((note) => note.pendingOperation === "delete")
+      .map((note) => note.id))
+    const entries = (await listPendingVaultAttachments(activeCacheMeta.id))
+      .filter((entry) => !deletedNoteIds.has(entry.noteId) && (!noteIds || noteIds.has(entry.noteId)))
+    let errorMessage: string | null = null
+    const ensuredDirectories = new Set<string>()
+
+    // 二进制先于 Markdown 正文上传，保证其他设备读到引用时附件已经存在。
+    for (const entry of entries) {
+      try {
+        const directory = entry.path.split("/").slice(0, -1).join("/")
+        if (directory && !ensuredDirectories.has(directory)) {
+          await adapter.ensureDirectory?.(directory)
+          ensuredDirectories.add(directory)
+        }
+        await adapter.createBinaryFile(entry.path, new Uint8Array(entry.data), entry.mimeType)
+        await updateVaultAttachmentStatus(entry, "synced")
+      } catch (error) {
+        if (error instanceof VaultConflictError && adapter.readBinaryFile) {
+          try {
+            const remote = await adapter.readBinaryFile(entry.path)
+            if (equalBytes(new Uint8Array(entry.data), remote.data)) {
+              // PUT 成功后若应用在落状态前退出，重试会遇到 412；内容一致即可安全恢复为已同步。
+              await updateVaultAttachmentStatus(entry, "synced")
+              continue
+            }
+          } catch {
+            // 远端校验失败时保留原始冲突，等待用户下次重试。
+          }
+        }
+        const message = error instanceof Error ? error.message : "附件同步失败"
+        failedNoteIds.add(entry.noteId)
+        errorMessage = message
+        await updateVaultAttachmentStatus(entry, "failed", message)
+      }
+    }
+    setPendingAttachmentCount((await listPendingVaultAttachments(activeCacheMeta.id)).length)
+    return { errorMessage, failedNoteIds }
+  }
+
   const refreshVault = async (noteIds?: ReadonlySet<string>) => {
     if (!vaultSession) {
       if (activeCacheMeta?.sourceKind === "webdav" && webDavConfigured) {
@@ -936,11 +1098,18 @@ function App() {
     setVaultError(null)
     try {
       // 所有手动/自动同步都汇入同一条带版本校验的写入链路，避免不同入口产生覆盖差异。
-      const syncResult = await pushPendingWebDavNotes(vaultSession, notes, noteIds)
+      const attachmentResult = await pushPendingWebDavAttachments(vaultSession, noteIds)
+      const eligibleNoteIds = attachmentResult.failedNoteIds.size > 0
+        ? new Set(notes
+            .filter((note) => (!noteIds || noteIds.has(note.id)) && !attachmentResult.failedNoteIds.has(note.id))
+            .map((note) => note.id))
+        : noteIds
+      const syncResult = await pushPendingWebDavNotes(vaultSession, notes, eligibleNoteIds)
       await loadVault(vaultSession, true, syncResult.notes)
-      if (syncResult.errorMessage) {
-        setVaultError(syncResult.errorMessage)
-        setSyncLogs(appendSyncLog({ message: `同步完成，但部分笔记失败：${syncResult.errorMessage}`, status: "error" }))
+      const combinedError = attachmentResult.errorMessage ?? syncResult.errorMessage
+      if (combinedError) {
+        setVaultError(combinedError)
+        setSyncLogs(appendSyncLog({ message: `同步完成，但部分内容失败：${combinedError}`, status: "error" }))
       } else {
         const pendingCount = notes.filter((note) => note.source === "webdav"
           && (note.pendingOperation || note.syncStatus === "modified")).length
@@ -1245,6 +1414,9 @@ function App() {
         return next
       })
       setActiveNoteId(nextId)
+      if (activeCacheMeta?.sourceKind === "webdav") {
+        void remapVaultAttachmentNoteId(activeCacheMeta.id, note.id, nextId)
+      }
       navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
       return
     }
@@ -1274,6 +1446,9 @@ function App() {
         return next
       })
       setActiveNoteId(nextId)
+      if (activeCacheMeta?.sourceKind === "webdav") {
+        void remapVaultAttachmentNoteId(activeCacheMeta.id, note.id, nextId)
+      }
       navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
       return
     }
@@ -1395,6 +1570,11 @@ function App() {
     })
     const activePlan = plans.get(activeNoteId)
     if (activePlan) setActiveNoteId(activePlan.id)
+    if (activeCacheMeta?.sourceKind === "webdav") {
+      for (const [previousNoteId, plan] of plans) {
+        void remapVaultAttachmentNoteId(activeCacheMeta.id, previousNoteId, plan.id)
+      }
+    }
     const firstPlan = plans.values().next().value as { folder: string } | undefined
     if (firstPlan) {
       setSelectedFolder(firstPlan.folder.split(/\s*\/\s*/).slice(0, folderPath.split(/\s*\/\s*/).length).join(" / "))
@@ -1417,6 +1597,11 @@ function App() {
     const createdIds = new Set(notes
       .filter((note) => candidateIds.has(note.id) && note.pendingOperation === "create")
       .map((note) => note.id))
+    if (activeCacheMeta?.sourceKind === "webdav" && createdIds.size > 0) {
+      void discardPendingVaultAttachments(activeCacheMeta.id, createdIds)
+        .then(() => listPendingVaultAttachments(activeCacheMeta.id))
+        .then((entries) => setPendingAttachmentCount(entries.length))
+    }
     // 已上传文件进入可撤销墓碑；从未上传的新文件直接撤销创建，因此不会产生远端 DELETE。
     setNotes((current) => current
       .filter((note) => !createdIds.has(note.id))
@@ -1461,6 +1646,10 @@ function App() {
     if (saveStates[note.id]?.status === "saving") {
       setVaultError("笔记仍在保存，请稍后再删除")
       return
+    }
+    if (isWebDavNote && note.pendingOperation === "create" && activeCacheMeta?.sourceKind === "webdav") {
+      await discardPendingVaultAttachments(activeCacheMeta.id, new Set([note.id]))
+      setPendingAttachmentCount((await listPendingVaultAttachments(activeCacheMeta.id)).length)
     }
 
     if (note.pendingOperation === "create") {
@@ -1595,6 +1784,8 @@ function App() {
               (vaultSession && (vaultSession.kind === "webdav" || (vaultSession.createTextFile && !vaultSession.readOnly)))
               || (!vaultSession && activeCacheMeta?.sourceKind === "webdav" && webDavConfigured),
             )}
+            canInsertAttachment={canWriteVaultAttachments(vaultSession)
+              || (activeNote?.source === "webdav" && activeCacheMeta?.sourceKind === "webdav")}
             folders={folders}
             isOpeningVault={isOpeningVault}
             isCreatingNote={isCreatingNote}
@@ -1611,6 +1802,8 @@ function App() {
             onDeleteNote={() => void deleteActiveNote()}
             onDeleteFolder={deleteWebDavFolder}
             onFormat={formatActiveNote}
+            onFormatNote={formatNoteById}
+            onInsertAttachments={insertActiveNoteAttachments}
             onMobileScreenChange={(screen) => {
               setMobileScreen(screen)
               if (screen === "library") {
@@ -1697,6 +1890,7 @@ function App() {
               isSyncing={isRefreshingVault}
               lastSyncedAt={activeCacheMeta?.lastSyncedAt}
               notes={notes}
+              pendingAttachmentCount={pendingAttachmentCount}
               onAutoSyncModeChange={changeAutoSyncMode}
               onClearSyncLog={clearLocalSyncLogs}
               onOpenNote={openNote}
@@ -1815,6 +2009,14 @@ function indexNoteContent(content: string) {
     searchText: `${content} ${frontmatter.tags.join(" ")}`.toLocaleLowerCase(),
     tags: frontmatter.tags,
   }
+}
+
+function equalBytes(left: Uint8Array, right: Uint8Array) {
+  if (left.byteLength !== right.byteLength) return false
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false
+  }
+  return true
 }
 
 export default App

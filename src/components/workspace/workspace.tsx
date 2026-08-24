@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
 import {
   ArrowLeft,
   AlertCircle,
@@ -16,6 +16,7 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  Image,
   List,
   ListFilter,
   Link,
@@ -39,6 +40,7 @@ import {
 import swellNoteLogo from "@/assets/brand/swell-note-logo-ribbon-s.svg"
 import { Button } from "@/components/ui/button"
 import { lazyWithRetry } from "@/lib/lazy-with-retry"
+import type { AttachmentWriteResult } from "@/services/vault/attachment-writer"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -97,6 +99,7 @@ type WorkspaceProps = {
   folders: VaultFolder[]
   isOpeningVault: boolean
   isCreatingNote: boolean
+  canInsertAttachment: boolean
   isManagingNote: boolean
   isRefreshingVault: boolean
   libraryView: LibraryView
@@ -108,6 +111,8 @@ type WorkspaceProps = {
   notes: Note[]
   onCreateNote: () => void
   onFormat: (syntax: string) => void
+  onFormatNote: (noteId: string, syntax: string) => void
+  onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
   onMobileScreenChange: (screen: MobileScreen) => void
   onDeleteNote: () => void
   onDeleteFolder: (folderPath: string) => void
@@ -248,6 +253,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
       {props.activeNote ? (
         <NoteEditor
           backlinks={props.backlinks}
+          canInsertAttachment={props.canInsertAttachment}
           cloudConnected={props.cloudConnected}
           canManageNote={Boolean(
             props.activeNote.remotePath
@@ -258,6 +264,8 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           note={props.activeNote}
           onDeleteNote={props.onDeleteNote}
           onFormat={props.onFormat}
+          onFormatNote={props.onFormatNote}
+          onInsertAttachments={props.onInsertAttachments}
           onOpenWikiLink={props.onOpenWikiLink}
           onMoveNote={props.onMoveNote}
           onRenameNote={props.onRenameNote}
@@ -803,6 +811,7 @@ function NoteListRow({ active, note, onSelect }: NoteListRowProps) {
 
 type NoteEditorProps = {
   backlinks: Note[]
+  canInsertAttachment: boolean
   canManageNote: boolean
   cloudConnected: boolean
   compact?: boolean
@@ -812,6 +821,8 @@ type NoteEditorProps = {
   onBack?: () => void
   onDeleteNote: () => void
   onFormat: (syntax: string) => void
+  onFormatNote: (noteId: string, syntax: string) => void
+  onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
   onOpenWikiLink: (target: string) => void
   onMoveNote: (folderPath: string | null) => void
   onRenameNote: (title: string) => void
@@ -825,7 +836,7 @@ type NoteEditorProps = {
   syncing: boolean
 }
 
-function NoteEditor({ backlinks, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, onBack, onDeleteNote, onFormat, onMoveNote, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onSelectNote, onSync, onUpdateNote, saveState, syncing }: NoteEditorProps) {
+function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, onBack, onDeleteNote, onFormat, onFormatNote, onInsertAttachments, onMoveNote, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onSelectNote, onSync, onUpdateNote, saveState, syncing }: NoteEditorProps) {
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
   const readOnly = (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
   const titleReadOnly = note.source === "local" || note.source === "webdav"
@@ -835,6 +846,11 @@ function NoteEditor({ backlinks, canManageNote, cloudConnected, compact = false,
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [renameTitle, setRenameTitle] = useState(note.title)
   const [cursorPosition, setCursorPosition] = useState({ column: 1, line: 1 })
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [insertingAttachment, setInsertingAttachment] = useState(false)
+  const attachmentBusyRef = useRef(false)
+  const currentNoteIdRef = useRef(note.id)
+  currentNoteIdRef.current = note.id
   const breadcrumbSegments = getNoteBreadcrumbSegments(note.folder)
 
   useEffect(() => {
@@ -842,14 +858,36 @@ function NoteEditor({ backlinks, canManageNote, cloudConnected, compact = false,
     setPreviewing(compact)
   }, [compact, note.id])
 
-  const handleFormat = (syntax: string) => {
+  const handleFormat = useCallback((syntax: string) => {
     if (!syntax) return
     if (editorRef.current) {
       editorRef.current.insertText(syntax)
       return
     }
     onFormat(syntax)
-  }
+  }, [onFormat])
+
+  const handleInsertFiles = useCallback(async (files: File[]) => {
+    if (files.length === 0 || readOnly || !canInsertAttachment || attachmentBusyRef.current) return
+    const uploadNoteId = note.id
+    attachmentBusyRef.current = true
+    setAttachmentError(null)
+    setInsertingAttachment(true)
+    try {
+      const { errors, markdown } = await onInsertAttachments(files)
+      // 部分文件失败时仍插入已写入成功的附件，避免用户重复拖拽整批文件。
+      if (markdown) {
+        if (currentNoteIdRef.current === uploadNoteId) handleFormat(markdown)
+        else onFormatNote(uploadNoteId, markdown)
+      }
+      setAttachmentError(errors.length > 0 ? errors.join("；") : null)
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : "插入附件失败")
+    } finally {
+      attachmentBusyRef.current = false
+      setInsertingAttachment(false)
+    }
+  }, [canInsertAttachment, handleFormat, note.id, onFormatNote, onInsertAttachments, readOnly])
 
   return (
     <article className="note-editor" data-compact={compact}>
@@ -957,7 +995,19 @@ function NoteEditor({ backlinks, canManageNote, cloudConnected, compact = false,
         </div>
       ) : null}
 
-      {!compact && !previewing && !readOnly ? <FormattingToolbar editorRef={editorRef} onFormat={handleFormat} /> : null}
+      {!compact && !previewing && !readOnly ? (
+        <FormattingToolbar
+          attachmentBusy={insertingAttachment}
+          canInsertAttachment={canInsertAttachment}
+          editorRef={editorRef}
+          onFormat={handleFormat}
+          onInsertFiles={handleInsertFiles}
+        />
+      ) : null}
+
+      {attachmentError ? (
+        <p className="attachment-error" role="alert">{attachmentError}</p>
+      ) : null}
 
       <ScrollArea className="editor-scroll">
         <div className="document-canvas">
@@ -994,6 +1044,7 @@ function NoteEditor({ backlinks, canManageNote, cloudConnected, compact = false,
                     preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
                   })}
                   onCursorChange={(line, column) => setCursorPosition({ column, line })}
+                  onInsertFiles={canInsertAttachment && !insertingAttachment ? handleInsertFiles : undefined}
                   readOnly={readOnly}
                   ref={editorRef}
                   value={note.content}
@@ -1005,7 +1056,16 @@ function NoteEditor({ backlinks, canManageNote, cloudConnected, compact = false,
         </div>
       </ScrollArea>
 
-      {compact && !previewing && !readOnly ? <FormattingToolbar editorRef={editorRef} mobile onFormat={handleFormat} /> : !compact ? (
+      {compact && !previewing && !readOnly ? (
+        <FormattingToolbar
+          attachmentBusy={insertingAttachment}
+          canInsertAttachment={canInsertAttachment}
+          editorRef={editorRef}
+          mobile
+          onFormat={handleFormat}
+          onInsertFiles={handleInsertFiles}
+        />
+      ) : !compact ? (
         <footer className="editor-statusbar">
           <span>{note.content.length} 字</span>
           <span>Markdown</span>
@@ -1042,12 +1102,24 @@ function NoteEditor({ backlinks, canManageNote, cloudConnected, compact = false,
 }
 
 type FormattingToolbarProps = {
+  attachmentBusy: boolean
+  canInsertAttachment: boolean
   editorRef: RefObject<MarkdownEditorHandle | null>
   mobile?: boolean
   onFormat: (syntax: string) => void
+  onInsertFiles: (files: File[]) => Promise<void>
 }
 
-function FormattingToolbar({ editorRef, mobile = false, onFormat }: FormattingToolbarProps) {
+function FormattingToolbar({
+  attachmentBusy,
+  canInsertAttachment,
+  editorRef,
+  mobile = false,
+  onFormat,
+  onInsertFiles,
+}: FormattingToolbarProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
   return (
     <div className="formatting-toolbar" data-mobile={mobile}>
       <FormatButton icon={Undo2} label="撤销（⌘/Ctrl+Z）" onClick={() => editorRef.current?.undo()} />
@@ -1063,23 +1135,47 @@ function FormattingToolbar({ editorRef, mobile = false, onFormat }: FormattingTo
       <FormatButton icon={CheckCircle2} label="任务列表" onClick={() => onFormat("\n- [ ] ")} />
       <FormatButton icon={Code2} label="代码" onClick={() => onFormat("\n```\n\n```\n")} />
       <FormatButton icon={Link} label="链接" onClick={() => onFormat("[链接](https://)")} />
+      {canInsertAttachment ? (
+        <>
+          <FormatButton
+            busy={attachmentBusy}
+            icon={Image}
+            label="插入图片或附件"
+            onClick={() => fileInputRef.current?.click()}
+          />
+          <input
+            className="attachment-file-input"
+            multiple
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? [])
+              // 清空 value 才能连续两次选择同一个文件。
+              event.target.value = ""
+              if (files.length > 0) void onInsertFiles(files)
+            }}
+            ref={fileInputRef}
+            tabIndex={-1}
+            type="file"
+          />
+        </>
+      ) : null}
     </div>
   )
 }
 
 type FormatButtonProps = {
+  busy?: boolean
   children?: ReactNode
   icon?: typeof List
   label: string
   onClick: () => void
 }
 
-function FormatButton({ children, icon: Icon, label, onClick }: FormatButtonProps) {
+function FormatButton({ busy = false, children, icon: Icon, label, onClick }: FormatButtonProps) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button aria-label={label} onClick={onClick} type="button">
-          {Icon ? <Icon /> : children}
+        <button aria-label={label} disabled={busy} onClick={onClick} type="button">
+          {busy ? <LoaderCircle className="animate-spin" /> : Icon ? <Icon /> : children}
         </button>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
@@ -1120,6 +1216,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
               props.activeNote.remotePath
               && !props.activeNote.readOnly,
             )}
+            canInsertAttachment={props.canInsertAttachment}
             isManagingNote={props.isManagingNote}
             compact
             moveTargets={props.folders}
@@ -1127,6 +1224,8 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             onBack={() => props.onMobileScreenChange("notes")}
             onDeleteNote={props.onDeleteNote}
             onFormat={props.onFormat}
+            onFormatNote={props.onFormatNote}
+            onInsertAttachments={props.onInsertAttachments}
             onOpenWikiLink={props.onOpenWikiLink}
             onMoveNote={props.onMoveNote}
             onRenameNote={props.onRenameNote}

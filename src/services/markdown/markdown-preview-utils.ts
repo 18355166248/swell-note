@@ -62,5 +62,7 @@ export function parseVaultAssetHref(href?: string) {
 
 export function isRelativeAttachmentHref(href?: string) {
   if (!href || href.startsWith("#") || /^[a-z][a-z\d+.-]*:/i.test(href)) return false
-  return /\.(avif|gif|jpe?g|m4a|mov|mp3|mp4|ogg|pdf|png|svg|wav|webm|webp)(?:[?#].*)?$/i.test(href)
+  if (/(?:^|\/)attachments\/[^?#]+(?:[?#].*)?$/i.test(href.replace(/\\/g, "/"))) return true
+  // Vault 内的相对链接除 Markdown 笔记外都按附件处理，保证上传的任意格式文件都能在预览里打开。
+  return /\.[a-z\d]{1,8}(?:[?#].*)?$/i.test(href) && !/\.md(?:[?#].*)?$/i.test(href)
 }

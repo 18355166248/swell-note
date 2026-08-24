@@ -98,6 +98,25 @@ export async function createMarkdownFile(
   return { revision: response.headers.get("etag") ?? undefined }
 }
 
+export async function createWebDavBinaryFile(
+  config: WebDavConfig,
+  password: string,
+  path: string,
+  data: Uint8Array,
+  mimeType?: string,
+) {
+  const response = await webDavFetch(config, password, path, {
+    body: data,
+    headers: {
+      "Content-Type": mimeType || "application/octet-stream",
+      // 附件名包含唯一后缀，同时仍使用条件创建防止多设备意外覆盖。
+      "If-None-Match": "*",
+    },
+    method: "PUT",
+  })
+  return { revision: response.headers.get("etag") ?? undefined }
+}
+
 export async function deleteMarkdownFile(
   config: WebDavConfig,
   password: string,

@@ -35,10 +35,15 @@ describe("Markdown preview wiki links", () => {
     expect(parseVaultAssetHref("swell-note://asset/docs%2Fdemo.pdf")).toBe("docs/demo.pdf")
   })
 
-  it("detects only supported relative attachment links", () => {
+  it("detects relative attachment links of any uploaded file type", () => {
     expect(isRelativeAttachmentHref("../assets/demo.pdf")).toBe(true)
     expect(isRelativeAttachmentHref("recording.mp3?download=1")).toBe(true)
+    expect(isRelativeAttachmentHref("attachments/方案-20260824150405.docx")).toBe(true)
+    expect(isRelativeAttachmentHref("attachments/素材.zip")).toBe(true)
+    expect(isRelativeAttachmentHref("../attachments/说明.md")).toBe(true)
     expect(isRelativeAttachmentHref("https://example.com/demo.pdf")).toBe(false)
     expect(isRelativeAttachmentHref("notes/next.md")).toBe(false)
+    expect(isRelativeAttachmentHref("notes/NEXT.MD")).toBe(false)
+    expect(isRelativeAttachmentHref("docs/readme")).toBe(false)
   })
 })

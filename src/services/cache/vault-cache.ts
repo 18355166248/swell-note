@@ -2,9 +2,10 @@ import type { Note } from "@/types/note"
 import type { VaultSourceKind } from "@/services/vault/vault-adapter"
 
 const DATABASE_NAME = "swell-note-vault-cache"
-const DATABASE_VERSION = 1
+const DATABASE_VERSION = 2
 const VAULT_STORE = "vaults"
 const SETTINGS_STORE = "settings"
+const ATTACHMENT_STORE = "attachments"
 const LAST_CACHE_KEY = "last-cache"
 
 export type VaultCacheSnapshot = {
@@ -21,6 +22,100 @@ export type VaultCacheSummary = Pick<
   VaultCacheSnapshot,
   "activeNoteId" | "id" | "label" | "lastSyncedAt" | "savedAt" | "sourceKind"
 > & { noteCount: number }
+
+export type VaultAttachmentCacheEntry = {
+  cacheId: string
+  createdAt: number
+  data: ArrayBuffer
+  error?: string
+  key: string
+  mimeType?: string
+  noteId: string
+  path: string
+  status: "failed" | "pending" | "synced"
+}
+
+export async function queueVaultAttachment(
+  entry: Omit<VaultAttachmentCacheEntry, "createdAt" | "key" | "status">,
+) {
+  const database = await openDatabase()
+  const value: VaultAttachmentCacheEntry = {
+    ...entry,
+    createdAt: Date.now(),
+    key: attachmentKey(entry.cacheId, entry.path),
+    status: "pending",
+  }
+  const transaction = database.transaction(ATTACHMENT_STORE, "readwrite")
+  try {
+    transaction.objectStore(ATTACHMENT_STORE).add(value)
+    await transactionDone(transaction)
+    return value
+  } catch (error) {
+    if (transaction.error?.name === "ConstraintError" || (error instanceof DOMException && error.name === "ConstraintError")) {
+      throw new Error(`文件已存在：${entry.path}`)
+    }
+    throw error
+  } finally {
+    database.close()
+  }
+}
+
+export async function loadVaultAttachment(cacheId: string, path: string) {
+  const database = await openDatabase()
+  const entry = await requestResult<VaultAttachmentCacheEntry | undefined>(
+    database.transaction(ATTACHMENT_STORE, "readonly").objectStore(ATTACHMENT_STORE).get(attachmentKey(cacheId, path)),
+  )
+  database.close()
+  return entry ?? null
+}
+
+export async function listPendingVaultAttachments(cacheId: string) {
+  const database = await openDatabase()
+  const entries = await requestResult<VaultAttachmentCacheEntry[]>(
+    database.transaction(ATTACHMENT_STORE, "readonly").objectStore(ATTACHMENT_STORE).index("cacheId").getAll(cacheId),
+  )
+  database.close()
+  return entries.filter((entry) => entry.status !== "synced").sort((left, right) => left.createdAt - right.createdAt)
+}
+
+export async function updateVaultAttachmentStatus(
+  entry: VaultAttachmentCacheEntry,
+  status: VaultAttachmentCacheEntry["status"],
+  error?: string,
+) {
+  const database = await openDatabase()
+  const transaction = database.transaction(ATTACHMENT_STORE, "readwrite")
+  transaction.objectStore(ATTACHMENT_STORE).put({ ...entry, error, status })
+  await transactionDone(transaction)
+  database.close()
+}
+
+export async function discardPendingVaultAttachments(cacheId: string, noteIds: ReadonlySet<string>) {
+  const database = await openDatabase()
+  const transaction = database.transaction(ATTACHMENT_STORE, "readwrite")
+  const done = transactionDone(transaction)
+  const store = transaction.objectStore(ATTACHMENT_STORE)
+  const entries = await requestResult<VaultAttachmentCacheEntry[]>(store.index("cacheId").getAll(cacheId))
+  for (const entry of entries) {
+    if (entry.status !== "synced" && noteIds.has(entry.noteId)) store.delete(entry.key)
+  }
+  await done
+  database.close()
+}
+
+export async function remapVaultAttachmentNoteId(cacheId: string, previousNoteId: string, nextNoteId: string) {
+  if (previousNoteId === nextNoteId) return
+  const database = await openDatabase()
+  const transaction = database.transaction(ATTACHMENT_STORE, "readwrite")
+  const done = transactionDone(transaction)
+  const store = transaction.objectStore(ATTACHMENT_STORE)
+  const entries = await requestResult<VaultAttachmentCacheEntry[]>(store.index("cacheId").getAll(cacheId))
+  for (const entry of entries) {
+    if (entry.noteId === previousNoteId && entry.status !== "synced") store.put({ ...entry, noteId: nextNoteId })
+  }
+  await done
+  database.close()
+}
 
 export async function createVaultCacheId(identity: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(identity))
@@ -75,9 +170,13 @@ export async function listVaultCaches(): Promise<VaultCacheSummary[]> {
 
 export async function deleteVaultCache(id: string) {
   const database = await openDatabase()
-  const transaction = database.transaction(VAULT_STORE, "readwrite")
+  const transaction = database.transaction([VAULT_STORE, ATTACHMENT_STORE], "readwrite")
+  const done = transactionDone(transaction)
   transaction.objectStore(VAULT_STORE).delete(id)
-  await transactionDone(transaction)
+  const attachmentStore = transaction.objectStore(ATTACHMENT_STORE)
+  const attachmentKeys = await requestResult<IDBValidKey[]>(attachmentStore.index("cacheId").getAllKeys(id))
+  for (const key of attachmentKeys) attachmentStore.delete(key)
+  await done
   database.close()
 }
 
@@ -92,10 +191,18 @@ function openDatabase() {
       if (!database.objectStoreNames.contains(SETTINGS_STORE)) {
         database.createObjectStore(SETTINGS_STORE, { keyPath: "key" })
       }
+      if (!database.objectStoreNames.contains(ATTACHMENT_STORE)) {
+        const store = database.createObjectStore(ATTACHMENT_STORE, { keyPath: "key" })
+        store.createIndex("cacheId", "cacheId")
+      }
     }
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error ?? new Error("打开笔记缓存失败"))
   })
+}
+
+function attachmentKey(cacheId: string, path: string) {
+  return `${cacheId}\u0000${path}`
 }
 
 function requestResult<T>(request: IDBRequest<T>) {

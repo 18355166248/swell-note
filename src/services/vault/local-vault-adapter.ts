@@ -13,7 +13,7 @@ type BrowserFileSystemFileHandle = {
   name: string
   createWritable(): Promise<{
     close(): Promise<void>
-    write(data: string): Promise<void>
+    write(data: BufferSource | string): Promise<void>
   }>
   getFile(): Promise<File>
 }
@@ -21,7 +21,10 @@ type BrowserFileSystemFileHandle = {
 type BrowserFileSystemDirectoryHandle = {
   kind: "directory"
   name: string
-  getDirectoryHandle(name: string): Promise<BrowserFileSystemDirectoryHandle>
+  getDirectoryHandle(
+    name: string,
+    options?: { create?: boolean },
+  ): Promise<BrowserFileSystemDirectoryHandle>
   getFileHandle(name: string, options?: { create?: boolean }): Promise<BrowserFileSystemFileHandle>
   removeEntry(name: string): Promise<void>
   values(): AsyncIterableIterator<BrowserFileSystemFileHandle | BrowserFileSystemDirectoryHandle>
@@ -64,6 +67,12 @@ export function createBrowserVaultAdapter(root: BrowserFileSystemDirectoryHandle
     displayName: root.name,
     kind: "browser",
     readOnly: false,
+    async createBinaryFile(path, data) {
+      if (await browserFileExists(root, path)) throw new Error(`文件已存在：${path}`)
+      const handle = await getBrowserFileHandle(root, path, true)
+      await writeBrowserFile(handle, data)
+      return { path, revision: browserRevision(await handle.getFile()) }
+    },
     async createTextFile(path, content) {
       if (handles.has(path)) throw new Error(`文件已存在：${path}`)
       const handle = await getBrowserFileHandle(root, path, true)
@@ -155,7 +164,7 @@ async function collectBrowserMarkdownFiles(
 }
 
 async function selectTauriVault(): Promise<VaultAdapter | null> {
-  const [{ open }, { exists, readDir, readFile, readTextFile, remove, rename, stat, writeTextFile }, { join }] = await Promise.all([
+  const [{ open }, { exists, mkdir, readDir, readFile, readTextFile, remove, rename, stat, writeFile, writeTextFile }, { join }] = await Promise.all([
     import("@tauri-apps/plugin-dialog"),
     import("@tauri-apps/plugin-fs"),
     import("@tauri-apps/api/path"),
@@ -170,6 +179,15 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
     displayName: pathSegments[pathSegments.length - 1] ?? "本地笔记库",
     kind: "tauri",
     readOnly: false,
+    async createBinaryFile(path, data) {
+      const absolutePath = await join(rootPath, path)
+      const parentPath = path.split("/").slice(0, -1).join("/")
+      // 附件目录首次使用时尚不存在，递归创建保证写入不会因缺目录失败。
+      if (parentPath) await mkdir(await join(rootPath, parentPath), { recursive: true })
+      if (await exists(absolutePath)) throw new Error(`文件已存在：${path}`)
+      await writeFile(absolutePath, data)
+      return { path, revision: tauriRevision(await stat(absolutePath)) }
+    },
     async createTextFile(path, content) {
       const absolutePath = await join(rootPath, path)
       if (await exists(absolutePath)) throw new Error(`文件已存在：${path}`)
@@ -253,7 +271,8 @@ async function getBrowserFileHandle(
 
   let directory = root
   for (const segment of segments) {
-    directory = await directory.getDirectoryHandle(segment)
+    // 附件目录首次使用时尚不存在，写入路径需要逐级按需创建。
+    directory = await directory.getDirectoryHandle(segment, { create })
   }
   return directory.getFileHandle(fileName, { create })
 }
@@ -270,7 +289,19 @@ async function resolveBrowserFileParent(
   return { directory, fileName }
 }
 
-async function writeBrowserFile(handle: BrowserFileSystemFileHandle, content: string) {
+async function browserFileExists(root: BrowserFileSystemDirectoryHandle, path: string) {
+  try {
+    await getBrowserFileHandle(root, path, false)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function writeBrowserFile(
+  handle: BrowserFileSystemFileHandle,
+  content: BufferSource | string,
+) {
   const writable = await handle.createWritable()
   try {
     await writable.write(content)

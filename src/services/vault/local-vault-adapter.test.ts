@@ -2,23 +2,29 @@ import { describe, expect, it } from "vitest"
 
 import { createBrowserVaultAdapter } from "@/services/vault/local-vault-adapter"
 
+function toBytes(data: BufferSource) {
+  return data instanceof ArrayBuffer
+    ? new Uint8Array(data)
+    : new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+}
+
 class FakeFileHandle {
   readonly kind = "file" as const
-  private content: string
+  private content: Uint8Array
   private modified = 1
 
   constructor(readonly name: string, content: string) {
-    this.content = content
+    this.content = new TextEncoder().encode(content)
   }
 
   async getFile() {
     const content = this.content
     return {
-      arrayBuffer: async () => new TextEncoder().encode(content).buffer,
+      arrayBuffer: async () => toBytes(content).slice().buffer,
       lastModified: this.modified,
       name: this.name,
-      size: new TextEncoder().encode(content).length,
-      text: async () => content,
+      size: content.byteLength,
+      text: async () => new TextDecoder().decode(content),
       type: this.name.endsWith(".png") ? "image/png" : "text/markdown",
     } as File
   }
@@ -26,8 +32,10 @@ class FakeFileHandle {
   async createWritable() {
     let nextContent = this.content
     return {
-      write: async (content: string) => {
-        nextContent = content
+      write: async (content: BufferSource | string) => {
+        nextContent = typeof content === "string"
+          ? new TextEncoder().encode(content)
+          : toBytes(content)
       },
       close: async () => {
         this.content = nextContent
@@ -37,7 +45,7 @@ class FakeFileHandle {
   }
 
   mutateOutsideApp(content: string) {
-    this.content = content
+    this.content = new TextEncoder().encode(content)
     this.modified += 1
   }
 }
@@ -52,10 +60,13 @@ class FakeDirectoryHandle {
     yield* this.entries.values()
   }
 
-  async getDirectoryHandle(name: string) {
+  async getDirectoryHandle(name: string, options?: { create?: boolean }) {
     const entry = this.entries.get(name)
-    if (!(entry instanceof FakeDirectoryHandle)) throw new Error(`找不到目录：${name}`)
-    return entry
+    if (entry instanceof FakeDirectoryHandle) return entry
+    if (entry || !options?.create) throw new Error(`找不到目录：${name}`)
+    const directory = new FakeDirectoryHandle(name)
+    this.entries.set(name, directory)
+    return directory
   }
 
   async getFileHandle(name: string, options?: { create?: boolean }) {
@@ -81,7 +92,7 @@ function createVault() {
   ignored.entries.set("cache.md", new FakeFileHandle("cache.md", "ignore"))
   root.entries.set(docs.name, docs)
   root.entries.set(ignored.name, ignored)
-  return { adapter: createBrowserVaultAdapter(root), docs, note }
+  return { adapter: createBrowserVaultAdapter(root), docs, note, root }
 }
 
 describe("browser vault adapter", () => {
@@ -141,6 +152,20 @@ describe("browser vault adapter", () => {
     })
     const asset = await adapter.readBinaryFile?.("docs/cover.png")
     expect(new TextDecoder().decode(asset?.data)).toBe("image-bytes")
+  })
+
+  it("上传附件时按需创建目录并拒绝覆盖同名文件", async () => {
+    const { adapter, root } = createVault()
+    const path = "attachments/封面-20260824150405.png"
+    const data = new Uint8Array([137, 80, 78, 71])
+
+    const result = await adapter.createBinaryFile?.(path, data, "image/png")
+
+    expect(result?.path).toBe(path)
+    expect(root.entries.get("attachments")).toBeInstanceOf(FakeDirectoryHandle)
+    const asset = await adapter.readBinaryFile?.(path)
+    expect(asset && Array.from(asset.data)).toEqual([137, 80, 78, 71])
+    await expect(adapter.createBinaryFile?.(path, data)).rejects.toThrow("文件已存在")
   })
 
   it("检测外部修改后保留冲突副本且不覆盖源文件", async () => {

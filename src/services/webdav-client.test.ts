@@ -5,6 +5,7 @@ vi.mock("@tauri-apps/plugin-http", () => ({ fetch: vi.fn() }))
 
 import {
   createMarkdownFile,
+  createWebDavBinaryFile,
   deleteMarkdownFile,
   ensureWebDavDirectory,
   moveMarkdownFile,
@@ -23,6 +24,19 @@ afterEach(() => {
 })
 
 describe("WebDAV conditional create", () => {
+  it("附件使用条件创建并保留 MIME 类型", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 201 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await createWebDavBinaryFile(config, "app-password", "/Swell/attachments/a.png", new Uint8Array([1, 2]), "image/png")
+
+    const [, request] = fetchMock.mock.calls[0]
+    expect(request).toMatchObject({
+      headers: expect.objectContaining({ "Content-Type": "image/png", "If-None-Match": "*" }),
+      method: "PUT",
+    })
+  })
+
   it("使用 If-None-Match 创建文件，避免覆盖同名远端笔记", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response("", {
       headers: { etag: '"created-v1"' },

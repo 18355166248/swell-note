@@ -1,6 +1,7 @@
 import type { WebDavConfig } from "@/lib/webdav-config"
 import {
   createMarkdownFile,
+  createWebDavBinaryFile,
   deleteMarkdownFile,
   ensureWebDavDirectory,
   listMarkdownFiles,
@@ -34,6 +35,17 @@ export function createWebDavVaultAdapter(
     },
     kind: "webdav",
     readOnly: true,
+    async createBinaryFile(path, data, mimeType) {
+      try {
+        const result = await createWebDavBinaryFile(config, password, path, data, mimeType)
+        return { path, revision: result.revision }
+      } catch (error) {
+        if (error instanceof WebDavRevisionConflictError) {
+          throw new VaultConflictError(path, "坚果云中已存在同名附件，本地附件仍保留在同步队列")
+        }
+        throw error
+      }
+    },
     ensureDirectory(path) {
       return ensureWebDavDirectory(config, password, path)
     },

@@ -280,6 +280,7 @@ export function SyncSettingsPage({
   isSyncing,
   lastSyncedAt,
   notes,
+  pendingAttachmentCount,
   onAutoSyncModeChange,
   onClearSyncLog,
   onOpenNote,
@@ -297,6 +298,7 @@ export function SyncSettingsPage({
   isSyncing: boolean
   lastSyncedAt?: number
   notes: Note[]
+  pendingAttachmentCount: number
   onAutoSyncModeChange: (mode: AutoSyncMode) => void
   onClearSyncLog: () => void
   onOpenNote: (note: Note) => void
@@ -336,7 +338,7 @@ export function SyncSettingsPage({
       </div>
 
       <div className="sync-stat-grid" aria-label="同步统计">
-        <div><strong>{summary.pending}</strong><span>待同步</span></div>
+        <div><strong>{summary.pending + pendingAttachmentCount}</strong><span>待同步</span></div>
         <div data-tone={summary.conflicts > 0 ? "warning" : undefined}><strong>{summary.conflicts}</strong><span>冲突</span></div>
         <div data-tone={summary.failed > 0 ? "danger" : undefined}><strong>{summary.failed}</strong><span>失败</span></div>
         <div><strong>{summary.synced}</strong><span>{connected ? "已同步" : "已缓存"}</span></div>

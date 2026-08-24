@@ -4,10 +4,16 @@ import { beforeEach, describe, expect, it } from "vitest"
 import {
   createVaultCacheId,
   deleteVaultCache,
+  discardPendingVaultAttachments,
+  listPendingVaultAttachments,
+  loadVaultAttachment,
   listVaultCaches,
   loadLastVaultCache,
   loadVaultCache,
+  queueVaultAttachment,
+  remapVaultAttachmentNoteId,
   saveVaultCache,
+  updateVaultAttachmentStatus,
 } from "./vault-cache"
 
 beforeEach(async () => {
@@ -99,5 +105,33 @@ describe("vault cache", () => {
         syncStatus: "modified",
       })],
     })
+  })
+
+  it("持久化附件队列、同步状态并随 Vault 缓存删除", async () => {
+    await saveVaultCache({ activeNoteId: "note", id: "cache", label: "坚果云", notes: [], savedAt: 1, sourceKind: "webdav" })
+    const entry = await queueVaultAttachment({
+      cacheId: "cache",
+      data: new Uint8Array([1, 2, 3]).buffer,
+      mimeType: "image/png",
+      noteId: "note",
+      path: "/Swell/attachments/a.png",
+    })
+
+    await expect(listPendingVaultAttachments("cache")).resolves.toHaveLength(1)
+    await expect(loadVaultAttachment("cache", entry.path)).resolves.toMatchObject({ status: "pending" })
+    await updateVaultAttachmentStatus(entry, "synced")
+    await expect(listPendingVaultAttachments("cache")).resolves.toEqual([])
+    await deleteVaultCache("cache")
+    await expect(loadVaultAttachment("cache", entry.path)).resolves.toBeNull()
+  })
+
+  it("笔记移动时改绑附件，删除时清理未同步附件", async () => {
+    await queueVaultAttachment({ cacheId: "cache", data: new ArrayBuffer(1), noteId: "old", path: "/a.png" })
+    await remapVaultAttachmentNoteId("cache", "old", "next")
+    await expect(listPendingVaultAttachments("cache")).resolves.toEqual([
+      expect.objectContaining({ noteId: "next" }),
+    ])
+    await discardPendingVaultAttachments("cache", new Set(["next"]))
+    await expect(listPendingVaultAttachments("cache")).resolves.toEqual([])
   })
 })
