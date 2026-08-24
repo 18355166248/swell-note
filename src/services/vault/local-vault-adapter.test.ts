@@ -78,8 +78,13 @@ class FakeDirectoryHandle {
     return file
   }
 
-  async removeEntry(name: string) {
-    if (!this.entries.delete(name)) throw new Error(`找不到文件：${name}`)
+  async removeEntry(name: string, options?: { recursive?: boolean }) {
+    const entry = this.entries.get(name)
+    if (!entry) throw new Error(`找不到文件：${name}`)
+    if (entry instanceof FakeDirectoryHandle && entry.entries.size > 0 && !options?.recursive) {
+      throw new Error(`文件夹非空：${name}`)
+    }
+    this.entries.delete(name)
   }
 }
 
@@ -101,6 +106,34 @@ describe("browser vault adapter", () => {
     await expect(adapter.listMarkdownFiles()).resolves.toEqual([
       expect.objectContaining({ name: "note.md", path: "docs/note.md" }),
     ])
+  })
+
+  it("列出并创建空文件夹，同时隐藏附件目录", async () => {
+    const { adapter, root } = createVault()
+    root.entries.set("attachments", new FakeDirectoryHandle("attachments"))
+    await adapter.createDirectory?.("工作/空目录")
+
+    await expect(adapter.listDirectories?.()).resolves.toEqual(expect.arrayContaining(["docs", "工作", "工作/空目录"]))
+    await expect(adapter.createDirectory?.("工作/空目录")).rejects.toThrow("文件夹已存在")
+  })
+
+  it("重命名目录时复制全部内容并在成功后删除源目录", async () => {
+    const { adapter, root } = createVault()
+    await adapter.listMarkdownFiles()
+    await adapter.moveDirectory?.("docs", "归档/文档")
+
+    await expect(adapter.listDirectories?.()).resolves.toEqual(["归档", "归档/文档"])
+    await expect(adapter.readTextFile("归档/文档/note.md")).resolves.toMatchObject({ content: "# 初始内容" })
+    expect(root.entries.has("docs")).toBe(false)
+  })
+
+  it("递归删除本地目录并清理其文件句柄", async () => {
+    const { adapter } = createVault()
+    await adapter.listMarkdownFiles()
+    await adapter.deleteDirectory?.("docs")
+
+    await expect(adapter.listDirectories?.()).resolves.toEqual([])
+    await expect(adapter.readTextFile("docs/note.md")).rejects.toThrow("找不到本地文件")
   })
 
   it("版本一致时写回源文件并更新 revision", async () => {

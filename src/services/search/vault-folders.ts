@@ -8,8 +8,16 @@ export type VaultFolder = {
   path: string
 }
 
-export function buildVaultFolders(notes: Note[]) {
+export function buildVaultFolders(notes: Note[], explicitDirectories: readonly string[] = []) {
   const counts = new Map<string, number>()
+
+  for (const directory of explicitDirectories) {
+    const segments = folderSegments(directory)
+    for (let index = 1; index <= segments.length; index += 1) {
+      const path = segments.slice(0, index).join(" / ")
+      if (!counts.has(path)) counts.set(path, 0)
+    }
+  }
 
   for (const note of notes) {
     const segments = folderSegments(note.folder)

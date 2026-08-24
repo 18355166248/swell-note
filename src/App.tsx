@@ -87,6 +87,7 @@ function App() {
   const viewRouteMatch = useMatch("/notes/view/:view")
   const isNotesLibraryRoute = notesLibraryRouteMatch !== null
   const [notes, setNotes] = useState<Note[]>([])
+  const [vaultDirectories, setVaultDirectories] = useState<string[]>([])
   const [activeNoteId, setActiveNoteId] = useState("")
   const [query, setQuery] = useState("")
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
@@ -161,6 +162,7 @@ function App() {
       sourceKind: snapshot.sourceKind,
     })
     setNotes(cachedNotes)
+    setVaultDirectories(snapshot.directories ?? [])
     setActiveNoteId(restoredActiveId)
     setVaultNoteCount(cachedNotes.filter((note) => note.pendingOperation !== "delete").length)
     setSelectedFolder(null)
@@ -193,6 +195,7 @@ function App() {
     const snapshot: VaultCacheSnapshot = {
       ...activeCacheMeta,
       activeNoteId,
+      directories: vaultDirectories,
       notes,
       savedAt: Date.now(),
     }
@@ -205,7 +208,7 @@ function App() {
         .catch((error) => setVaultError(error instanceof Error ? error.message : "保存离线缓存失败"))
     }, 450)
     return () => window.clearTimeout(timer)
-  }, [activeCacheMeta, activeNoteId, cacheReady, notes])
+  }, [activeCacheMeta, activeNoteId, cacheReady, notes, vaultDirectories])
 
   useEffect(() => {
     if (!activeCacheMeta || activeCacheMeta.sourceKind !== "webdav") {
@@ -274,7 +277,10 @@ function App() {
     () => notes.filter((note) => note.pendingOperation !== "delete"),
     [notes],
   )
-  const folders = useMemo(() => buildVaultFolders(availableNotes), [availableNotes])
+  const folders = useMemo(
+    () => buildVaultFolders(availableNotes, vaultDirectories),
+    [availableNotes, vaultDirectories],
+  )
   const folderNotes = selectedFolder
     ? availableNotes.filter((note) => noteBelongsToFolder(note, selectedFolder))
     : availableNotes
@@ -765,10 +771,16 @@ function App() {
     preserveContext = false,
     contextNotes: Note[] = notes,
   ) => {
-    const files = await adapter.listMarkdownFiles()
-    if (files.length === 0) {
+    const [files, directories] = await Promise.all([
+      adapter.listMarkdownFiles(),
+      adapter.listDirectories?.() ?? Promise.resolve([]),
+    ])
+    if (files.length === 0 && adapter.kind === "webdav") {
       throw new Error(`${adapter.displayName} 中没有找到 Markdown 文件`)
     }
+    const displayDirectories = directories.map((path) => deriveDirectoryPath(
+      adapter.getDisplayPath?.(path) ?? path,
+    ))
 
     const previousNotesByPath = preserveContext
       ? new Map(contextNotes.filter((note) => note.remotePath).map((note) => [note.previousRemotePath ?? note.remotePath!, note]))
@@ -776,7 +788,7 @@ function App() {
     const preferredPath = preserveContext && activeNote?.remotePath
       && files.some((file) => file.path === activeNote.remotePath)
       ? activeNote.remotePath
-      : files[0].path
+      : files[0]?.path ?? ""
     const pathsToRead = files
       .filter((file) => shouldReadVaultDocument({
         filePath: file.path,
@@ -860,7 +872,7 @@ function App() {
       ? mergedNotes.find((note) => note.id === activeNoteId && note.pendingOperation !== "delete")
       : undefined
     const fallbackNote = mergedNotes.find((note) => note.pendingOperation !== "delete")
-    const nextActiveNoteId = preservedActiveNote?.id ?? fallbackNote?.id ?? `${adapter.kind}:${preferredPath}`
+    const nextActiveNoteId = preservedActiveNote?.id ?? fallbackNote?.id ?? ""
 
     revisionByPathRef.current.clear()
     for (const note of mergedNotes) {
@@ -882,6 +894,7 @@ function App() {
     const snapshot: VaultCacheSnapshot = {
       ...cacheMeta,
       activeNoteId: nextActiveNoteId,
+      directories: displayDirectories,
       notes: mergedNotes,
       savedAt: Date.now(),
     }
@@ -893,10 +906,12 @@ function App() {
     setActiveCacheMeta(cacheMeta)
     setVaultCaches(await listVaultCaches())
     setSelectedFolder((current) => preserveContext && current
-      && mergedNotes.some((note) => noteBelongsToFolder(note, current))
+      && (mergedNotes.some((note) => noteBelongsToFolder(note, current))
+        || displayDirectories.includes(current))
       ? current
       : null)
     setNotes(mergedNotes)
+    setVaultDirectories(displayDirectories)
     setActiveNoteId(nextActiveNoteId)
     setVaultNoteCount(mergedNotes.filter((note) => note.pendingOperation !== "delete").length)
     setSaveStates(Object.fromEntries(mergedNotes.map((note) => [note.id, getNoteSaveState(note)])))
@@ -1493,6 +1508,157 @@ function App() {
     }
   }
 
+  const createLocalFolder = async (requestedName: string, parentFolder: string | null) => {
+    const adapter = vaultSession
+    if (!adapter?.createDirectory || (adapter.kind !== "browser" && adapter.kind !== "tauri")) {
+      setVaultError("请先打开可写的本地 Vault")
+      return
+    }
+    const name = sanitizeFolderName(requestedName)
+    if (!name) {
+      setVaultError("文件夹名称无效，请换一个名称")
+      return
+    }
+    const folderPath = parentFolder ? `${parentFolder} / ${name}` : name
+    if (folders.some((folder) => folder.path === folderPath)) {
+      setVaultError(`文件夹已存在：${folderPath}`)
+      return
+    }
+
+    setIsManagingNote(true)
+    setVaultError(null)
+    try {
+      await adapter.createDirectory(toStorageDirectoryPath(folderPath))
+      setVaultDirectories((current) => [...new Set([...current, folderPath])])
+      setLibraryView("all")
+      setSelectedFolder(folderPath)
+      setMobileScreen("notes")
+      navigate(getNotesListRoute("all", folderPath))
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "新建文件夹失败")
+    } finally {
+      setIsManagingNote(false)
+    }
+  }
+
+  const renameLocalFolder = async (folderPath: string, requestedName: string) => {
+    const adapter = vaultSession
+    if (!adapter?.moveDirectory || (adapter.kind !== "browser" && adapter.kind !== "tauri")) {
+      setVaultError("当前本地 Vault 不支持文件夹重命名")
+      return
+    }
+    const name = sanitizeFolderName(requestedName)
+    const segments = folderPath.split(/\s*\/\s*/).filter(Boolean)
+    if (!name || segments.length === 0) {
+      setVaultError("文件夹名称无效，请换一个名称")
+      return
+    }
+    const targetFolder = [...segments.slice(0, -1), name].join(" / ")
+    if (targetFolder === folderPath) return
+    if (folders.some((folder) => folder.path === targetFolder)) {
+      setVaultError(`目标文件夹已存在：${targetFolder}`)
+      return
+    }
+    const candidates = notes.filter((note) => note.source === "local" && noteBelongsToFolder(note, folderPath))
+    if (candidates.some((note) => saveStates[note.id]?.status === "saving")) {
+      setVaultError("该目录仍有笔记正在保存，请稍后再重命名")
+      return
+    }
+
+    setIsManagingNote(true)
+    setVaultError(null)
+    try {
+      await adapter.moveDirectory(
+        toStorageDirectoryPath(folderPath),
+        toStorageDirectoryPath(targetFolder),
+      )
+      const plans = new Map(candidates.flatMap((note) => {
+        const filename = note.remotePath?.split("/").pop()
+        const target = filename
+          ? getFolderRenameTarget(note.folder, folderPath, name, filename)
+          : null
+        return target ? [[note.id, {
+          folder: target.folder,
+          id: `${adapter.kind}:${target.relativePath}`,
+          remotePath: target.relativePath,
+        }] as const] : []
+      }))
+      // 目录级移动已经由适配器原子完成，内存索引只需同步换路径，不再逐篇重复写盘。
+      setNotes((current) => current.map((note) => {
+        const plan = plans.get(note.id)
+        return plan ? { ...note, ...plan, modifiedAt: Date.now(), updatedAt: "刚刚移动" } : note
+      }))
+      setSaveStates((current) => {
+        const next = { ...current }
+        for (const [previousId, plan] of plans) {
+          const state = next[previousId]
+          delete next[previousId]
+          next[plan.id] = state ?? { status: "saved" }
+        }
+        return next
+      })
+      for (const note of candidates) {
+        const plan = plans.get(note.id)
+        if (!plan || !note.remotePath) continue
+        revisionByPathRef.current.delete(note.remotePath)
+        revisionByPathRef.current.set(plan.remotePath, note.revision)
+      }
+      setVaultDirectories((current) => current.map((path) =>
+        replaceFolderPrefix(path, folderPath, targetFolder),
+      ))
+      const activePlan = plans.get(activeNoteId)
+      if (activePlan) setActiveNoteId(activePlan.id)
+      setSelectedFolder(targetFolder)
+      setLibraryView("all")
+      setMobileScreen("notes")
+      navigate(getNotesListRoute("all", targetFolder), { replace: true })
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "重命名文件夹失败")
+    } finally {
+      setIsManagingNote(false)
+    }
+  }
+
+  const deleteLocalFolder = async (folderPath: string) => {
+    const adapter = vaultSession
+    if (!adapter?.deleteDirectory || (adapter.kind !== "browser" && adapter.kind !== "tauri")) {
+      setVaultError("当前本地 Vault 不支持删除文件夹")
+      return
+    }
+    const candidates = notes.filter((note) => note.source === "local" && noteBelongsToFolder(note, folderPath))
+    if (candidates.some((note) => saveStates[note.id]?.status === "saving")) {
+      setVaultError("该目录仍有笔记正在保存，请稍后再删除")
+      return
+    }
+
+    setIsManagingNote(true)
+    setVaultError(null)
+    try {
+      await adapter.deleteDirectory(toStorageDirectoryPath(folderPath))
+      const candidateIds = new Set(candidates.map((note) => note.id))
+      const remainingNotes = notes.filter((note) => !candidateIds.has(note.id))
+      setNotes(remainingNotes)
+      setVaultDirectories((current) => current.filter((path) =>
+        path !== folderPath && !path.startsWith(`${folderPath} / `),
+      ))
+      setSaveStates((current) => {
+        const next = { ...current }
+        for (const noteId of candidateIds) delete next[noteId]
+        return next
+      })
+      setVaultNoteCount((count) => Math.max(0, count - candidateIds.size))
+      if (candidateIds.has(activeNoteId)) setActiveNoteId(remainingNotes[0]?.id ?? "")
+      setSelectedFolder(null)
+      setLibraryView("all")
+      setMobileScreen("library")
+      navigate("/notes", { replace: true })
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "删除文件夹失败")
+    } finally {
+      setIsManagingNote(false)
+    }
+  }
+
   const renameWebDavFolder = (folderPath: string, requestedName: string) => {
     if (isRefreshingVault || isManagingNote) {
       setVaultError("正在处理笔记库，请稍后再重命名文件夹")
@@ -1633,6 +1799,22 @@ function App() {
     setLibraryView("all")
     setMobileScreen("library")
     navigate("/notes", { replace: true })
+  }
+
+  const renameFolder = (folderPath: string, requestedName: string) => {
+    if (vaultSession?.kind === "browser" || vaultSession?.kind === "tauri") {
+      void renameLocalFolder(folderPath, requestedName)
+      return
+    }
+    renameWebDavFolder(folderPath, requestedName)
+  }
+
+  const deleteFolder = (folderPath: string) => {
+    if (vaultSession?.kind === "browser" || vaultSession?.kind === "tauri") {
+      void deleteLocalFolder(folderPath)
+      return
+    }
+    deleteWebDavFolder(folderPath)
   }
 
   const deleteActiveNote = async () => {
@@ -1784,9 +1966,16 @@ function App() {
               (vaultSession && (vaultSession.kind === "webdav" || (vaultSession.createTextFile && !vaultSession.readOnly)))
               || (!vaultSession && activeCacheMeta?.sourceKind === "webdav" && webDavConfigured),
             )}
+            canCreateFolder={Boolean(
+              vaultSession?.createDirectory
+              && (vaultSession.kind === "browser" || vaultSession.kind === "tauri"),
+            )}
             canInsertAttachment={canWriteVaultAttachments(vaultSession)
               || (activeNote?.source === "webdav" && activeCacheMeta?.sourceKind === "webdav")}
             folders={folders}
+            folderManagementMode={vaultSession?.kind === "browser" || vaultSession?.kind === "tauri"
+              ? "local"
+              : activeCacheMeta?.sourceKind === "webdav" ? "webdav" : null}
             isOpeningVault={isOpeningVault}
             isCreatingNote={isCreatingNote}
             isManagingNote={isManagingNote}
@@ -1799,8 +1988,9 @@ function App() {
             noteSort={noteSort}
             notes={visibleNotes}
             onCreateNote={() => void createNote()}
+            onCreateFolder={(name, parentFolder) => void createLocalFolder(name, parentFolder)}
             onDeleteNote={() => void deleteActiveNote()}
-            onDeleteFolder={deleteWebDavFolder}
+            onDeleteFolder={deleteFolder}
             onFormat={formatActiveNote}
             onFormatNote={formatNoteById}
             onInsertAttachments={insertActiveNoteAttachments}
@@ -1816,7 +2006,7 @@ function App() {
             }}
             onNavigate={navigate}
             onMoveNote={(folderPath) => void moveActiveNote(folderPath)}
-            onRenameFolder={renameWebDavFolder}
+            onRenameFolder={renameFolder}
             onRenameNote={(title) => void moveActiveNote(activeNote?.folder === "根目录" ? null : activeNote?.folder ?? null, title)}
             onOpenLocalVault={() => void openLocalVault()}
             onOpenWikiLink={openWikiLink}
@@ -1970,6 +2160,25 @@ function parseRemoteTimestamp(lastModified?: string) {
 function deriveRemoteFolder(path: string) {
   const segments = path.split("/").filter(Boolean)
   return segments.slice(0, -1).join(" / ") || "根目录"
+}
+
+function deriveDirectoryPath(path: string) {
+  return path.replace(/\\/g, "/").split("/").filter(Boolean).join(" / ")
+}
+
+function toStorageDirectoryPath(path: string) {
+  return path.split(/\s*\/\s*/).filter(Boolean).join("/")
+}
+
+function sanitizeFolderName(name: string) {
+  return name.trim().replace(/[\\/:*?"<>|]/g, "-").replace(/^-+|-+$/g, "")
+}
+
+function replaceFolderPrefix(path: string, sourceFolder: string, targetFolder: string) {
+  if (path === sourceFolder) return targetFolder
+  return path.startsWith(`${sourceFolder} / `)
+    ? `${targetFolder}${path.slice(sourceFolder.length)}`
+    : path
 }
 
 function formatFileTimestamp(date: Date) {

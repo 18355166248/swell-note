@@ -26,7 +26,7 @@ type BrowserFileSystemDirectoryHandle = {
     options?: { create?: boolean },
   ): Promise<BrowserFileSystemDirectoryHandle>
   getFileHandle(name: string, options?: { create?: boolean }): Promise<BrowserFileSystemFileHandle>
-  removeEntry(name: string): Promise<void>
+  removeEntry(name: string, options?: { recursive?: boolean }): Promise<void>
   values(): AsyncIterableIterator<BrowserFileSystemFileHandle | BrowserFileSystemDirectoryHandle>
 }
 
@@ -67,6 +67,10 @@ export function createBrowserVaultAdapter(root: BrowserFileSystemDirectoryHandle
     displayName: root.name,
     kind: "browser",
     readOnly: false,
+    async createDirectory(path) {
+      if (await browserDirectoryExists(root, path)) throw new Error(`文件夹已存在：${path}`)
+      await getBrowserDirectoryHandle(root, path, true)
+    },
     async createBinaryFile(path, data) {
       if (await browserFileExists(root, path)) throw new Error(`文件已存在：${path}`)
       const handle = await getBrowserFileHandle(root, path, true)
@@ -84,6 +88,16 @@ export function createBrowserVaultAdapter(root: BrowserFileSystemDirectoryHandle
       const { directory, fileName } = await resolveBrowserFileParent(root, path)
       await directory.removeEntry(fileName)
       handles.delete(path)
+    },
+    async deleteDirectory(path) {
+      const { directory, directoryName } = await resolveBrowserDirectoryParent(root, path)
+      await directory.removeEntry(directoryName, { recursive: true })
+      removeHandlePaths(handles, path)
+    },
+    async listDirectories() {
+      const directories: string[] = []
+      await collectBrowserDirectories(root, "", directories)
+      return directories.sort((left, right) => left.localeCompare(right, "zh-CN"))
     },
     async listMarkdownFiles() {
       const files: VaultFileEntry[] = []
@@ -119,6 +133,24 @@ export function createBrowserVaultAdapter(root: BrowserFileSystemDirectoryHandle
       handles.delete(path)
       handles.set(targetPath, targetHandle)
       return { path: targetPath, revision: browserRevision(await targetHandle.getFile()) }
+    },
+    async moveDirectory(path, targetPath) {
+      if (await browserDirectoryExists(root, targetPath)) throw new Error(`目标文件夹已存在：${targetPath}`)
+      const source = await getBrowserDirectoryHandle(root, path, false)
+      const target = await getBrowserDirectoryHandle(root, targetPath, true)
+      // File System Access API 没有通用目录重命名，先完整复制，成功后再删除源目录，失败时保留原数据。
+      try {
+        await copyBrowserDirectory(source, target)
+      } catch (error) {
+        const targetParent = await resolveBrowserDirectoryParent(root, targetPath)
+        await targetParent.directory.removeEntry(targetParent.directoryName, { recursive: true }).catch(() => undefined)
+        throw error
+      }
+      const { directory, directoryName } = await resolveBrowserDirectoryParent(root, path)
+      await directory.removeEntry(directoryName, { recursive: true })
+      // 复制后的目标文件拥有新句柄，重新扫描避免继续引用已经删除的源目录句柄。
+      handles.clear()
+      await collectBrowserMarkdownFiles(root, "", [], handles)
     },
     async writeTextFile(path, content, expectedRevision) {
       const handle = handles.get(path)
@@ -163,6 +195,19 @@ async function collectBrowserMarkdownFiles(
   }
 }
 
+async function collectBrowserDirectories(
+  directory: BrowserFileSystemDirectoryHandle,
+  parentPath: string,
+  directories: string[],
+) {
+  for await (const entry of directory.values()) {
+    if (entry.kind !== "directory" || ignoredDirectoryNames.has(entry.name) || entry.name === "attachments") continue
+    const path = parentPath ? `${parentPath}/${entry.name}` : entry.name
+    directories.push(path)
+    await collectBrowserDirectories(entry, path, directories)
+  }
+}
+
 async function selectTauriVault(): Promise<VaultAdapter | null> {
   const [{ open }, { exists, mkdir, readDir, readFile, readTextFile, remove, rename, stat, writeFile, writeTextFile }, { join }] = await Promise.all([
     import("@tauri-apps/plugin-dialog"),
@@ -179,6 +224,11 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
     displayName: pathSegments[pathSegments.length - 1] ?? "本地笔记库",
     kind: "tauri",
     readOnly: false,
+    async createDirectory(path) {
+      const absolutePath = await join(rootPath, path)
+      if (await exists(absolutePath)) throw new Error(`文件夹已存在：${path}`)
+      await mkdir(absolutePath, { recursive: true })
+    },
     async createBinaryFile(path, data) {
       const absolutePath = await join(rootPath, path)
       const parentPath = path.split("/").slice(0, -1).join("/")
@@ -196,6 +246,14 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
     },
     async deleteTextFile(path) {
       await remove(await join(rootPath, path))
+    },
+    async deleteDirectory(path) {
+      await remove(await join(rootPath, path), { recursive: true })
+    },
+    async listDirectories() {
+      const directories: string[] = []
+      await collectTauriDirectories(rootPath, "", directories, readDir, join)
+      return directories.sort((left, right) => left.localeCompare(right, "zh-CN"))
     },
     async listMarkdownFiles() {
       const files: VaultFileEntry[] = []
@@ -221,6 +279,16 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
       if (await exists(absoluteTargetPath)) throw new Error(`目标文件已存在：${targetPath}`)
       await rename(absolutePath, absoluteTargetPath)
       return { path: targetPath, revision: tauriRevision(await stat(absoluteTargetPath)) }
+    },
+    async moveDirectory(path, targetPath) {
+      const [absolutePath, absoluteTargetPath] = await Promise.all([
+        join(rootPath, path),
+        join(rootPath, targetPath),
+      ])
+      if (await exists(absoluteTargetPath)) throw new Error(`目标文件夹已存在：${targetPath}`)
+      const targetParent = targetPath.split("/").slice(0, -1).join("/")
+      if (targetParent) await mkdir(await join(rootPath, targetParent), { recursive: true })
+      await rename(absolutePath, absoluteTargetPath)
     },
     async writeTextFile(path, content, expectedRevision) {
       const absolutePath = await join(rootPath, path)
@@ -275,6 +343,59 @@ async function getBrowserFileHandle(
     directory = await directory.getDirectoryHandle(segment, { create })
   }
   return directory.getFileHandle(fileName, { create })
+}
+
+async function getBrowserDirectoryHandle(
+  root: BrowserFileSystemDirectoryHandle,
+  path: string,
+  create: boolean,
+) {
+  const segments = path.split("/").filter(Boolean)
+  if (segments.length === 0) throw new Error("文件夹路径无效")
+  let directory = root
+  for (const segment of segments) directory = await directory.getDirectoryHandle(segment, { create })
+  return directory
+}
+
+async function resolveBrowserDirectoryParent(
+  root: BrowserFileSystemDirectoryHandle,
+  path: string,
+) {
+  const segments = path.split("/").filter(Boolean)
+  const directoryName = segments.pop()
+  if (!directoryName) throw new Error("文件夹路径无效")
+  let directory = root
+  for (const segment of segments) directory = await directory.getDirectoryHandle(segment)
+  return { directory, directoryName }
+}
+
+async function browserDirectoryExists(root: BrowserFileSystemDirectoryHandle, path: string) {
+  try {
+    await getBrowserDirectoryHandle(root, path, false)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function copyBrowserDirectory(
+  source: BrowserFileSystemDirectoryHandle,
+  target: BrowserFileSystemDirectoryHandle,
+) {
+  for await (const entry of source.values()) {
+    if (entry.kind === "directory") {
+      await copyBrowserDirectory(entry, await target.getDirectoryHandle(entry.name, { create: true }))
+      continue
+    }
+    const targetFile = await target.getFileHandle(entry.name, { create: true })
+    await writeBrowserFile(targetFile, await entry.getFile().then((file) => file.arrayBuffer()))
+  }
+}
+
+function removeHandlePaths(handles: Map<string, BrowserFileSystemFileHandle>, directoryPath: string) {
+  for (const path of handles.keys()) {
+    if (path.startsWith(`${directoryPath}/`)) handles.delete(path)
+  }
 }
 
 async function resolveBrowserFileParent(
@@ -337,5 +458,27 @@ async function collectTauriMarkdownFiles(
     if (entry.isFile && entry.name.toLocaleLowerCase().endsWith(".md")) {
       files.push({ name: entry.name, path: relativePath })
     }
+  }
+}
+
+async function collectTauriDirectories(
+  absoluteDirectory: string,
+  relativeDirectory: string,
+  directories: string[],
+  readDir: typeof import("@tauri-apps/plugin-fs").readDir,
+  join: typeof import("@tauri-apps/api/path").join,
+) {
+  const entries = await readDir(absoluteDirectory)
+  for (const entry of entries) {
+    if (!entry.isDirectory || ignoredDirectoryNames.has(entry.name) || entry.name === "attachments") continue
+    const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name
+    directories.push(relativePath)
+    await collectTauriDirectories(
+      await join(absoluteDirectory, entry.name),
+      relativePath,
+      directories,
+      readDir,
+      join,
+    )
   }
 }

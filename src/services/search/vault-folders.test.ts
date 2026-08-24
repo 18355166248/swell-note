@@ -26,6 +26,15 @@ describe("vault folders", () => {
     expect(folders.find(({ path }) => path === "工作 / 项目")?.hasChildren).toBe(false)
   })
 
+  it("保留没有笔记的显式目录及其父级", () => {
+    const folders = buildVaultFolders(notes, ["空目录/子目录"])
+    expect(folders).toEqual(expect.arrayContaining([
+      expect.objectContaining({ count: 0, path: "空目录" }),
+      expect.objectContaining({ count: 0, path: "空目录 / 子目录" }),
+    ]))
+    expect(folders.find(({ path }) => path === "空目录")?.hasChildren).toBe(true)
+  })
+
   it("选择父目录时包含所有后代笔记", () => {
     expect(notes.filter((note) => noteBelongsToFolder(note, "工作"))).toHaveLength(3)
     expect(notes.filter((note) => noteBelongsToFolder(note, "工作 / 项目"))).toHaveLength(2)

@@ -16,6 +16,7 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  FolderPlus,
   Image,
   List,
   ListFilter,
@@ -96,7 +97,9 @@ type WorkspaceProps = {
   cloudConnected: boolean
   connected: boolean
   canCreateNote: boolean
+  canCreateFolder: boolean
   folders: VaultFolder[]
+  folderManagementMode: "local" | "webdav" | null
   isOpeningVault: boolean
   isCreatingNote: boolean
   canInsertAttachment: boolean
@@ -110,6 +113,7 @@ type WorkspaceProps = {
   noteSort: NoteSort
   notes: Note[]
   onCreateNote: () => void
+  onCreateFolder: (name: string, parentFolder: string | null) => void
   onFormat: (syntax: string) => void
   onFormatNote: (noteId: string, syntax: string) => void
   onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
@@ -209,6 +213,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
       <LibraryPanel
         activeCacheId={props.activeCacheId}
         canCreateNote={props.canCreateNote}
+        canCreateFolder={props.canCreateFolder}
         connected={props.connected}
         connectionLabel={props.connectionLabel}
         expandedFolderPaths={props.expandedFolderPaths}
@@ -216,6 +221,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         libraryView={props.libraryView}
         noteCount={props.totalNoteCount}
         onCreateNote={props.onCreateNote}
+        onCreateFolder={props.onCreateFolder}
         onOpenLocalVault={props.onOpenLocalVault}
         onOpenSettings={props.onOpenSettings}
         onRefreshVault={props.onRefreshVault}
@@ -224,6 +230,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         onSelectLibraryView={props.onSelectLibraryView}
         onSelectVaultCache={props.onSelectVaultCache}
         selectedFolder={props.selectedFolder}
+        isManagingFolder={props.isManagingNote}
         isOpeningVault={props.isOpeningVault}
         isCreatingNote={props.isCreatingNote}
         isRefreshingVault={props.isRefreshingVault}
@@ -234,10 +241,13 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
       />
       <NoteListPanel
         activeNoteId={props.activeNoteId}
+        canCreateNote={props.canCreateNote}
         notes={props.notes}
         noteSort={props.noteSort}
         folderLabel={props.selectedFolder ?? (props.libraryView === "recent" ? "最近更新" : props.libraryView === "starred" ? "收藏" : "全部笔记")}
+        folderManagementMode={props.folderManagementMode}
         onOpenSettings={props.onOpenSettings}
+        onCreateNote={props.onCreateNote}
         onQueryChange={props.onQueryChange}
         onNoteSortChange={props.onNoteSortChange}
         onDeleteFolder={props.onDeleteFolder}
@@ -345,11 +355,13 @@ function RailButton({ active = false, icon: Icon, indicator = false, label, onCl
 
 type LibraryPanelProps = {
   activeCacheId: string | null
+  canCreateFolder: boolean
   canCreateNote: boolean
   connected: boolean
   connectionLabel: string
   expandedFolderPaths: ReadonlySet<string>
   folders: VaultFolder[]
+  isManagingFolder: boolean
   isOpeningVault: boolean
   isCreatingNote: boolean
   isRefreshingVault: boolean
@@ -357,6 +369,7 @@ type LibraryPanelProps = {
   localVaultSupported: boolean
   noteCount: number
   onCreateNote: () => void
+  onCreateFolder: (name: string, parentFolder: string | null) => void
   onOpenLocalVault: () => void
   onOpenSettings: () => void
   onRefreshVault: () => void
@@ -374,9 +387,11 @@ function LibraryPanel({
   activeCacheId,
   connected,
   canCreateNote,
+  canCreateFolder,
   connectionLabel,
   expandedFolderPaths,
   folders,
+  isManagingFolder,
   isOpeningVault,
   isCreatingNote,
   isRefreshingVault,
@@ -384,6 +399,7 @@ function LibraryPanel({
   localVaultSupported,
   noteCount,
   onCreateNote,
+  onCreateFolder,
   onOpenLocalVault,
   onOpenSettings,
   onRefreshVault,
@@ -435,6 +451,13 @@ function LibraryPanel({
 
           <div className="library-section-title">
             <span>文件夹</span>
+            {canCreateFolder ? (
+              <CreateFolderButton
+                disabled={isManagingFolder}
+                onCreate={(name) => onCreateFolder(name, selectedFolder)}
+                parentFolder={selectedFolder}
+              />
+            ) : null}
           </div>
 
           {folders.map((folder) => (
@@ -561,10 +584,13 @@ function LibraryRow({ active = false, count, depth = 0, expanded, folderTree = f
 type NoteListPanelProps = {
   activeNoteId: string
   availableTags: string[]
+  canCreateNote: boolean
   folderLabel: string
+  folderManagementMode: "local" | "webdav" | null
   notes: Note[]
   noteSort: NoteSort
   isManagingFolder: boolean
+  onCreateNote: () => void
   onOpenSettings: () => void
   onQueryChange: (query: string) => void
   onNoteSortChange: (sort: NoteSort) => void
@@ -580,10 +606,13 @@ type NoteListPanelProps = {
 function NoteListPanel({
   activeNoteId,
   availableTags,
+  canCreateNote,
   folderLabel,
+  folderManagementMode,
   isManagingFolder,
   notes,
   noteSort,
+  onCreateNote,
   onOpenSettings,
   onQueryChange,
   onNoteSortChange,
@@ -605,7 +634,7 @@ function NoteListPanel({
           <h2>{folderLabel}</h2>
         </div>
         <div className="note-list-actions">
-          {selectedFolder ? <FolderRenameButton disabled={isManagingFolder} folderPath={selectedFolder} onDelete={onDeleteFolder} onRename={onRenameFolder} /> : null}
+          {selectedFolder && folderManagementMode ? <FolderRenameButton disabled={isManagingFolder} folderPath={selectedFolder} mode={folderManagementMode} onDelete={onDeleteFolder} onRename={onRenameFolder} /> : null}
           <TagFilterMenu availableTags={availableTags} onChange={onSelectTag} selectedTag={selectedTag} />
           <NoteSortMenu onChange={onNoteSortChange} sort={noteSort} />
         </div>
@@ -638,20 +667,31 @@ function NoteListPanel({
                 />
               ))}
             </section>
-          )) : <EmptyNoteList onOpenSettings={onOpenSettings} />}
+          )) : <EmptyNoteList canCreateNote={canCreateNote} onCreateNote={onCreateNote} onOpenSettings={onOpenSettings} selectedFolder={selectedFolder} />}
         </div>
       </ScrollArea>
     </section>
   )
 }
 
-function EmptyNoteList({ onOpenSettings }: { onOpenSettings: () => void }) {
+function EmptyNoteList({
+  canCreateNote,
+  onCreateNote,
+  onOpenSettings,
+  selectedFolder,
+}: {
+  canCreateNote: boolean
+  onCreateNote: () => void
+  onOpenSettings: () => void
+  selectedFolder: string | null
+}) {
+  const localEmptyState = selectedFolder || canCreateNote
   return (
     <div className="note-list-empty">
-      <Cloud />
-      <strong>还没有远程笔记</strong>
-      <p>连接坚果云后，这里只展示远端 Vault 中的 Markdown。</p>
-      <Button onClick={onOpenSettings} size="sm" variant="outline">连接坚果云</Button>
+      {localEmptyState ? <FolderOpen /> : <Cloud />}
+      <strong>{selectedFolder ? "这个文件夹还是空的" : localEmptyState ? "笔记库还是空的" : "还没有远程笔记"}</strong>
+      <p>{localEmptyState ? "可以直接在当前目录新建第一篇 Markdown 笔记。" : "连接坚果云后，这里只展示远端 Vault 中的 Markdown。"}</p>
+      <Button onClick={localEmptyState ? onCreateNote : onOpenSettings} size="sm" variant="outline">{localEmptyState ? "新建笔记" : "连接坚果云"}</Button>
     </div>
   )
 }
@@ -659,11 +699,13 @@ function EmptyNoteList({ onOpenSettings }: { onOpenSettings: () => void }) {
 function FolderRenameButton({
   disabled,
   folderPath,
+  mode,
   onDelete,
   onRename,
 }: {
   disabled: boolean
   folderPath: string
+  mode: "local" | "webdav"
   onDelete: (folderPath: string) => void
   onRename: (folderPath: string, nextName: string) => void
 }) {
@@ -677,13 +719,13 @@ function FolderRenameButton({
     <Dialog onOpenChange={(nextOpen) => { setOpen(nextOpen); setConfirmingDelete(false); if (nextOpen) setName(currentName) }} open={open}>
       <Button aria-label={`重命名文件夹 ${currentName}`} disabled={disabled} onClick={() => setOpen(true)} size="icon-sm" variant="ghost"><PencilLine /></Button>
       <DialogContent>
-        <DialogHeader><DialogTitle>重命名文件夹</DialogTitle><DialogDescription>该目录及所有子目录中的笔记会先在本机排队，点击同步后才移动坚果云文件。</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>{confirmingDelete ? "删除文件夹" : "重命名文件夹"}</DialogTitle><DialogDescription>{confirmingDelete && mode === "local" ? "将永久删除本地文件夹及其中的全部文件，此操作无法撤销。" : confirmingDelete ? "该目录中的笔记将进入待同步删除，可在同步前撤销。" : mode === "local" ? "将直接重命名本地 Vault 中的目录，并同步更新当前笔记索引。" : "该目录及所有子目录中的笔记会先在本机排队，点击同步后才移动坚果云文件。"}</DialogDescription></DialogHeader>
         <Input autoFocus aria-label="新文件夹名称" onChange={(event) => setName(event.target.value)} value={name} />
         <DialogFooter>
           {confirmingDelete ? (
             <>
               <Button onClick={() => setConfirmingDelete(false)} variant="ghost">暂不删除</Button>
-              <Button onClick={() => { setOpen(false); onDelete(folderPath) }} variant="destructive">确认移入待删除</Button>
+              <Button onClick={() => { setOpen(false); onDelete(folderPath) }} variant="destructive">{mode === "local" ? "确认永久删除" : "确认移入待删除"}</Button>
             </>
           ) : (
             <>
@@ -691,6 +733,36 @@ function FolderRenameButton({
               <Button disabled={!name.trim() || name.trim() === currentName} onClick={() => { setOpen(false); onRename(folderPath, name) }}>确认重命名</Button>
             </>
           )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function CreateFolderButton({
+  disabled,
+  onCreate,
+  parentFolder,
+}: {
+  disabled: boolean
+  onCreate: (name: string) => void
+  parentFolder: string | null
+}) {
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState("")
+
+  return (
+    <Dialog onOpenChange={(nextOpen) => { setOpen(nextOpen); if (nextOpen) setName("") }} open={open}>
+      <Button aria-label="新建文件夹" disabled={disabled} onClick={() => setOpen(true)} size="icon-sm" variant="ghost"><FolderPlus /></Button>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>新建空文件夹</DialogTitle>
+          <DialogDescription>{parentFolder ? `将在“${parentFolder}”下创建子文件夹。` : "将在本地 Vault 根目录创建文件夹。"}</DialogDescription>
+        </DialogHeader>
+        <Input autoFocus aria-label="文件夹名称" onChange={(event) => setName(event.target.value)} placeholder="例如：项目资料" value={name} />
+        <DialogFooter>
+          <Button onClick={() => setOpen(false)} variant="ghost">取消</Button>
+          <Button disabled={!name.trim()} onClick={() => { setOpen(false); onCreate(name) }}>创建文件夹</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -1386,7 +1458,16 @@ function MobileLibrary(props: MobileLibraryProps) {
             <MobileLibraryRow count={props.starredNoteCount} icon={Star} label="收藏" onClick={() => { rememberPosition(); props.onSelectLibraryView("starred") }} />
           </div>
 
-          <div className="mobile-section-heading"><span>文件夹</span></div>
+          <div className="mobile-section-heading">
+            <span>文件夹</span>
+            {props.canCreateFolder ? (
+              <CreateFolderButton
+                disabled={props.isManagingNote}
+                onCreate={(name) => props.onCreateFolder(name, props.selectedFolder)}
+                parentFolder={props.selectedFolder}
+              />
+            ) : null}
+          </div>
           <div className="mobile-folder-list">
             {props.visibleFolders.map((folder) => (
               <MobileLibraryRow
@@ -1495,7 +1576,7 @@ function MobileNoteList(props: MobileNoteListProps) {
         <Button aria-label="返回笔记库" onClick={() => props.onMobileScreenChange("library")} size="icon" variant="ghost"><ArrowLeft /></Button>
         <h1>{title}</h1>
         <div>
-          {props.selectedFolder ? <FolderRenameButton disabled={props.isManagingNote} folderPath={props.selectedFolder} onDelete={props.onDeleteFolder} onRename={props.onRenameFolder} /> : null}
+          {props.selectedFolder && props.folderManagementMode ? <FolderRenameButton disabled={props.isManagingNote} folderPath={props.selectedFolder} mode={props.folderManagementMode} onDelete={props.onDeleteFolder} onRename={props.onRenameFolder} /> : null}
           <TagFilterMenu availableTags={props.availableTags} onChange={props.onSelectTag} selectedTag={props.selectedTag} />
           <NoteSortMenu mobile onChange={props.onNoteSortChange} sort={props.noteSort} />
         </div>
@@ -1520,7 +1601,7 @@ function MobileNoteList(props: MobileNoteListProps) {
                 />
               ))}
             </section>
-          )) : <EmptyNoteList onOpenSettings={props.onOpenSettings} />}
+          )) : <EmptyNoteList canCreateNote={props.canCreateNote} onCreateNote={props.onCreateNote} onOpenSettings={props.onOpenSettings} selectedFolder={props.selectedFolder} />}
         </div>
       </ScrollArea>
       {props.canCreateNote ? <Button aria-label="新建笔记" className="mobile-fab" disabled={props.isCreatingNote} onClick={props.onCreateNote} size="icon-lg">{props.isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}</Button> : null}
