@@ -56,6 +56,12 @@ import {
   shouldReadVaultDocument,
 } from "@/services/sync/webdav-working-copy"
 import { summarizeWebDavSync } from "@/services/sync/sync-summary"
+import { appendSyncLog, clearSyncLog, loadSyncLog, type SyncLogEntry } from "@/services/sync/sync-log"
+import {
+  loadSyncPreferences,
+  saveSyncPreferences,
+  type AutoSyncMode,
+} from "@/services/sync/sync-preferences"
 import type { Note, NoteSaveState } from "@/types/note"
 import "./App.css"
 
@@ -94,12 +100,16 @@ function App() {
   const [isOnline, setIsOnline] = useState(() =>
     typeof navigator === "undefined" ? true : navigator.onLine,
   )
+  const [autoSyncMode, setAutoSyncMode] = useState<AutoSyncMode>(() => loadSyncPreferences().autoSyncMode)
+  const [syncLogs, setSyncLogs] = useState<SyncLogEntry[]>(loadSyncLog)
   const saveTimersRef = useRef(new Map<string, number>())
   const saveQueuesRef = useRef(new Map<string, Promise<void>>())
   const loadingNoteIdsRef = useRef(new Set<string>())
   const revisionByPathRef = useRef(new Map<string, string | undefined>())
   const indexGenerationRef = useRef(0)
   const latestCacheSnapshotRef = useRef<VaultCacheSnapshot | null>(null)
+  const previousOnlineRef = useRef(isOnline)
+  const refreshVaultRef = useRef<(noteIds?: ReadonlySet<string>) => Promise<void>>(async () => undefined)
 
   const applyCachedSnapshot = useCallback((snapshot: VaultCacheSnapshot) => {
     // 缓存恢复时主动断开运行时适配器，确保离线浏览不会误走本地文件或 WebDAV 写入链路。
@@ -447,6 +457,41 @@ function App() {
     } catch (error) {
       setVaultError(error instanceof Error ? error.message : "更新待办失败")
     }
+  }
+
+  const createTask = (text: string) => {
+    if (isRefreshingVault) {
+      setVaultError("正在同步当前笔记库，请等待完成后再添加待办")
+      return false
+    }
+    const target = [activeNote, ...availableNotes].find((note, index, candidates) => note
+      && candidates.findIndex((candidate) => candidate?.id === note.id) === index
+      && note.contentLoaded
+      && !note.readOnly)
+    if (!target) {
+      setVaultError("请先打开一篇可编辑且已加载正文的笔记")
+      return false
+    }
+    const separator = target.content.endsWith("\n") ? "" : "\n"
+    const content = `${target.content}${separator}\n- [ ] ${text}\n`
+    // 快速待办仍写回 Markdown 源文件，保证其他客户端无需理解专有数据库也能读取。
+    setNotes((current) => current.map((candidate) => candidate.id === target.id
+      ? {
+          ...candidate,
+          content,
+          ...indexNoteContent(content),
+          preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
+          syncError: candidate.source === "webdav" ? undefined : candidate.syncError,
+          syncStatus: candidate.source === "webdav" ? "modified" : candidate.syncStatus,
+          updatedAt: "刚刚",
+          modifiedAt: Date.now(),
+        }
+      : candidate))
+    scheduleLocalSave(target, content)
+    if (target.source === "webdav") {
+      setSaveStates((current) => ({ ...current, [target.id]: { status: "pending" } }))
+    }
+    return true
   }
 
   const createNote = async () => {
@@ -876,15 +921,53 @@ function App() {
     setIsRefreshingVault(true)
     setVaultError(null)
     try {
-      // 同步按钮是唯一的云端写入入口：先用版本条件上传本地稿，再拉取远端目录并合并。
+      // 所有手动/自动同步都汇入同一条带版本校验的写入链路，避免不同入口产生覆盖差异。
       const syncResult = await pushPendingWebDavNotes(vaultSession, notes, noteIds)
       await loadVault(vaultSession, true, syncResult.notes)
-      if (syncResult.errorMessage) setVaultError(syncResult.errorMessage)
+      if (syncResult.errorMessage) {
+        setVaultError(syncResult.errorMessage)
+        setSyncLogs(appendSyncLog({ message: `同步完成，但部分笔记失败：${syncResult.errorMessage}`, status: "error" }))
+      } else {
+        const pendingCount = notes.filter((note) => note.source === "webdav"
+          && (note.pendingOperation || note.syncStatus === "modified")).length
+        setSyncLogs(appendSyncLog({
+          message: pendingCount > 0 ? `同步完成，已处理 ${pendingCount} 篇本地修改` : "同步检查完成，云端与本机一致",
+          status: "success",
+        }))
+      }
     } catch (error) {
-      setVaultError(error instanceof Error ? error.message : "刷新笔记库失败")
+      const message = error instanceof Error ? error.message : "刷新笔记库失败"
+      setVaultError(message)
+      setSyncLogs(appendSyncLog({ message: `同步失败：${message}`, status: "error" }))
     } finally {
       setIsRefreshingVault(false)
     }
+  }
+
+  refreshVaultRef.current = refreshVault
+
+  useEffect(() => {
+    const justReconnected = !previousOnlineRef.current && isOnline
+    previousOnlineRef.current = isOnline
+    const shouldSync = autoSyncMode === "background"
+      || (autoSyncMode === "reconnect" && justReconnected)
+    if (!shouldSync || !isOnline || isRefreshingVault || pendingSyncCount === 0 || vaultSession?.kind !== "webdav") return
+
+    // 后台模式采用防抖，避免每次按键都请求 WebDAV；联网模式只在离线转在线时触发一次。
+    const timer = window.setTimeout(() => {
+      void refreshVaultRef.current()
+    }, autoSyncMode === "background" ? 4_000 : 600)
+    return () => window.clearTimeout(timer)
+  }, [autoSyncMode, isOnline, isRefreshingVault, pendingSyncCount, vaultSession])
+
+  const changeAutoSyncMode = (mode: AutoSyncMode) => {
+    setAutoSyncMode(mode)
+    saveSyncPreferences({ autoSyncMode: mode })
+  }
+
+  const clearLocalSyncLogs = () => {
+    clearSyncLog()
+    setSyncLogs([])
   }
 
   const selectVaultCache = async (cacheId: string) => {
@@ -1259,6 +1342,7 @@ function App() {
       setNotes((current) => current.map((candidate) => candidate.id === note.id
         ? {
             ...candidate,
+            operationBeforeDelete: candidate.pendingOperation === "move" ? "move" : undefined,
             pendingOperation: "delete",
             previousRemotePath: candidate.previousRemotePath ?? candidate.remotePath,
             syncError: undefined,
@@ -1304,6 +1388,27 @@ function App() {
     } finally {
       setIsManagingNote(false)
     }
+  }
+
+  const restoreDeletedNote = (noteId: string) => {
+    const note = notes.find((candidate) => candidate.id === noteId && candidate.pendingOperation === "delete")
+    if (!note) return
+    // 撤销删除会恢复删除前的移动状态，确保后续同步不会丢失尚未上传的重命名操作。
+    setNotes((current) => current.map((candidate) => candidate.id === noteId
+      ? {
+          ...candidate,
+          operationBeforeDelete: undefined,
+          pendingOperation: candidate.operationBeforeDelete,
+          syncError: undefined,
+          syncStatus: candidate.operationBeforeDelete ? "modified" : "synced",
+          updatedAt: "刚刚恢复",
+        }
+      : candidate))
+    setSaveStates((current) => ({
+      ...current,
+      [noteId]: note.operationBeforeDelete ? { status: "pending" } : { status: "saved" },
+    }))
+    setVaultNoteCount((count) => count + 1)
   }
 
   const openWikiLink = (target: string) => {
@@ -1415,7 +1520,9 @@ function App() {
         element={(
           <TodoPage
             connected={connected}
+            indexProgress={indexProgress}
             notes={availableNotes}
+            onCreateTask={createTask}
             onNavigate={navigate}
             onOpenNote={(note) => {
               openNote(note)
@@ -1434,20 +1541,25 @@ function App() {
           path="sync"
           element={(
             <SyncSettingsPage
+              autoSyncMode={autoSyncMode}
               connected={vaultSession?.kind === "webdav"}
               indexProgress={indexProgress}
               isOnline={isOnline}
               isSyncing={isRefreshingVault}
               lastSyncedAt={activeCacheMeta?.lastSyncedAt}
               notes={notes}
+              onAutoSyncModeChange={changeAutoSyncMode}
+              onClearSyncLog={clearLocalSyncLogs}
               onOpenNote={openNote}
               onOpenWebDav={() => {
                 if (webDavConfigured && activeCacheMeta?.sourceKind === "webdav") void refreshVault()
                 else navigate("/settings/webdav")
               }}
               onRetry={(noteId) => void refreshVault(new Set([noteId]))}
+              onRestoreDeletedNote={restoreDeletedNote}
               onSync={() => void refreshVault()}
               sourceLabel={activeCacheMeta?.label ?? "坚果云"}
+              syncLogs={syncLogs}
             />
           )}
         />

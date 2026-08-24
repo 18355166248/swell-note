@@ -92,6 +92,12 @@
 .mobile-workspace { display: none; }
 .mobile-bottom-nav { display: none; }
 
+.app-crash-state { display: grid; width: min(460px,calc(100% - 40px)); min-height: 100dvh; margin: 0 auto; place-content: center; justify-items: center; gap: 12px; text-align: center; }
+.app-crash-state h1 { margin: 2px 0 0; font-size: 22px; }
+.app-crash-state p { margin: 0 0 8px; color: var(--muted-foreground); font-size: 13px; line-height: 1.6; }
+.app-crash-icon { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 14px; background: #fff7ed; color: #c2410c; }
+.app-crash-icon svg { width: 24px; height: 24px; }
+
 /* 一级路由共用稳定的应用壳层；设置二级路由只替换右侧内容，避免整页导航跳动。 */
 .route-page-shell { display: grid; height: 100dvh; min-height: 0; grid-template-columns: 64px minmax(0,1fr); overflow: hidden; background: white; }
 .settings-route-shell { display: grid; height: 100dvh; min-height: 0; grid-template-columns: 64px 260px minmax(0,1fr); overflow: hidden; background: white; }
@@ -103,6 +109,9 @@
 .todo-filter { display: flex; gap: 4px; border-bottom: 1px solid var(--border); padding: 10px 24px; }
 .todo-filter button[data-active="true"] { color: var(--primary); }
 .todo-content { width: min(780px,calc(100% - 48px)); margin: 0 auto; padding: 24px 0 64px; }
+.todo-quick-create { display: flex; gap: 8px; margin-bottom: 12px; }
+.todo-quick-create input { min-width: 0; height: 38px; flex: 1; border: 1px solid var(--border); border-radius: 9px; padding: 0 12px; background: var(--background); font-size: 12px; outline: none; }
+.todo-quick-create input:focus { border-color: color-mix(in oklab,var(--primary) 60%,var(--border)); box-shadow: 0 0 0 3px color-mix(in oklab,var(--primary) 10%,transparent); }
 .route-hint { display: flex; align-items: center; gap: 9px; margin-bottom: 18px; border-radius: 10px; background: var(--panel-soft); padding: 11px 13px; color: var(--muted-foreground); font-size: 12px; line-height: 1.5; }
 .route-hint svg { width: 17px; height: 17px; flex: 0 0 auto; color: var(--primary); }
 .route-hint code { border-radius: 4px; background: var(--muted); padding: 1px 4px; color: var(--foreground); }
@@ -194,6 +203,21 @@
 .sync-problem-row > button:first-child > svg { width: 16px; color: var(--muted-foreground); }
 .sync-problem-icon { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 9px; background: #fff7ed; color: #c2410c; }
 .sync-problem-icon svg { width: 16px; height: 16px; }
+.sync-mode-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; }
+.sync-mode-grid button { min-height: 72px; border: 1px solid var(--border); border-radius: 11px; padding: 11px 12px; background: var(--background); text-align: left; }
+.sync-mode-grid button:hover { background: var(--panel-soft); }
+.sync-mode-grid button[data-active="true"] { border-color: color-mix(in oklab,var(--primary) 55%,var(--border)); background: var(--blue-soft); box-shadow: 0 0 0 1px color-mix(in oklab,var(--primary) 12%,transparent); }
+.sync-mode-grid strong, .sync-mode-grid small { display: block; }
+.sync-mode-grid strong { color: var(--foreground); font-size: 12.5px; }
+.sync-mode-grid small { margin-top: 5px; color: var(--muted-foreground); font-size: 10.5px; line-height: 1.4; }
+.sync-log-list { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; }
+.sync-log-list > div { display: grid; min-height: 48px; grid-template-columns: 24px minmax(0,1fr) auto; align-items: center; gap: 8px; border-bottom: 1px solid var(--border); padding: 8px 12px; }
+.sync-log-list > div:last-child { border-bottom: 0; }
+.sync-log-list span { display: grid; place-items: center; color: #20a968; }
+.sync-log-list [data-status="error"] span { color: #c2410c; }
+.sync-log-list svg { width: 16px; height: 16px; }
+.sync-log-list strong { min-width: 0; overflow: hidden; font-size: 11.5px; font-weight: 520; text-overflow: ellipsis; white-space: nowrap; }
+.sync-log-list time { color: var(--muted-foreground); font-size: 10px; white-space: nowrap; }
 .sync-empty-state { display: flex; align-items: center; gap: 11px; border: 1px dashed var(--border); border-radius: 12px; padding: 18px; }
 .sync-empty-state > svg { width: 22px; color: #16a34a; }
 .sync-empty-state strong { font-size: 12.5px; }
@@ -487,8 +511,9 @@
   .todo-filter { padding: 8px 12px; }
   .todo-content, .settings-overview, .settings-content-card { width: auto; margin: 0; padding: 16px 16px 48px; }
   .sync-overview-card { grid-template-columns: 38px minmax(0,1fr); padding: 14px; }
-  .sync-overview-card > .button { grid-column: 1 / -1; width: 100%; }
+  .sync-overview-card > button:last-child { min-height: 44px; grid-column: 1 / -1; width: 100%; }
   .sync-stat-grid { grid-template-columns: repeat(2,1fr); }
+  .sync-mode-grid { grid-template-columns: 1fr; }
   .sync-problem-row { padding-right: 8px; }
   .route-hint { align-items: flex-start; }
   .todo-row { min-height: 68px; padding-inline: 13px; }

@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Settings,
   Trash2,
+  Undo2,
 } from "lucide-react"
 import { Outlet, useLocation } from "react-router-dom"
 
@@ -25,6 +26,8 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { extractMarkdownTasks, type MarkdownTask } from "@/services/tasks/markdown-tasks"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 import { summarizeWebDavSync } from "@/services/sync/sync-summary"
+import type { AutoSyncMode } from "@/services/sync/sync-preferences"
+import type { SyncLogEntry } from "@/services/sync/sync-log"
 import type { Note } from "@/types/note"
 
 type NavigationProps = {
@@ -35,17 +38,22 @@ type NavigationProps = {
 
 export function TodoPage({
   connected,
+  indexProgress,
   notes,
+  onCreateTask,
   onNavigate,
   onOpenNote,
   onOpenSync,
   onToggleTask,
 }: NavigationProps & {
+  indexProgress: { indexed: number; total: number } | null
   notes: Note[]
+  onCreateTask: (text: string) => boolean
   onOpenNote: (note: Note) => void
   onToggleTask: (task: MarkdownTask, checked: boolean) => void
 }) {
   const [filter, setFilter] = useState<"all" | "completed" | "pending">("pending")
+  const [newTask, setNewTask] = useState("")
   const tasks = useMemo(() => extractMarkdownTasks(notes), [notes])
   const visibleTasks = filter === "all"
     ? tasks
@@ -78,9 +86,27 @@ export function TodoPage({
         </div>
         <ScrollArea className="route-scroll-area">
           <div className="todo-content">
+            <form
+              className="todo-quick-create"
+              onSubmit={(event) => {
+                event.preventDefault()
+                const value = newTask.trim()
+                if (value && onCreateTask(value)) setNewTask("")
+              }}
+            >
+              <input
+                aria-label="新待办内容"
+                onChange={(event) => setNewTask(event.target.value)}
+                placeholder="快速添加到当前笔记…"
+                value={newTask}
+              />
+              <Button disabled={!newTask.trim()} size="sm" type="submit">添加</Button>
+            </form>
             <div className="route-hint">
               <ListTodo />
-              <span>自动聚合已读取正文中的 <code>- [ ]</code> 任务；点击任务可回到来源文档。</span>
+              <span>{indexProgress && indexProgress.indexed < indexProgress.total
+                ? `正在读取全库正文并建立待办索引：${indexProgress.indexed}/${indexProgress.total}`
+                : <>已聚合缓存正文中的 <code>- [ ]</code> 任务；点击任务可回到来源文档。</>}</span>
             </div>
             {visibleTasks.length > 0 ? (
               <div className="todo-list">
@@ -247,34 +273,46 @@ export function CacheSettingsPage({
 }
 
 export function SyncSettingsPage({
+  autoSyncMode,
   connected,
   indexProgress,
   isOnline,
   isSyncing,
   lastSyncedAt,
   notes,
+  onAutoSyncModeChange,
+  onClearSyncLog,
   onOpenNote,
   onOpenWebDav,
   onRetry,
+  onRestoreDeletedNote,
   onSync,
   sourceLabel,
+  syncLogs,
 }: {
+  autoSyncMode: AutoSyncMode
   connected: boolean
   indexProgress: { indexed: number; total: number } | null
   isOnline: boolean
   isSyncing: boolean
   lastSyncedAt?: number
   notes: Note[]
+  onAutoSyncModeChange: (mode: AutoSyncMode) => void
+  onClearSyncLog: () => void
   onOpenNote: (note: Note) => void
   onOpenWebDav: () => void
   onRetry: (noteId: string) => void
+  onRestoreDeletedNote: (noteId: string) => void
   onSync: () => void
   sourceLabel: string
+  syncLogs: SyncLogEntry[]
 }) {
   const summary = summarizeWebDavSync(notes)
   const problemNotes = notes.filter((note) => note.source === "webdav"
+    && note.pendingOperation !== "delete"
     && (note.syncStatus === "modified" || note.syncStatus === "conflict"))
   const hasCachedNotes = notes.some((note) => note.source === "webdav")
+  const deletedNotes = notes.filter((note) => note.source === "webdav" && note.pendingOperation === "delete")
   const indexing = indexProgress && indexProgress.indexed < indexProgress.total
   const canSync = isOnline && !isSyncing
 
@@ -301,7 +339,7 @@ export function SyncSettingsPage({
         <div><strong>{summary.pending}</strong><span>待同步</span></div>
         <div data-tone={summary.conflicts > 0 ? "warning" : undefined}><strong>{summary.conflicts}</strong><span>冲突</span></div>
         <div data-tone={summary.failed > 0 ? "danger" : undefined}><strong>{summary.failed}</strong><span>失败</span></div>
-        <div><strong>{summary.synced}</strong><span>{connected ? "已同步" : "最近已同步"}</span></div>
+        <div><strong>{summary.synced}</strong><span>{connected ? "已同步" : "已缓存"}</span></div>
       </div>
 
       {indexing ? (
@@ -310,6 +348,30 @@ export function SyncSettingsPage({
           <strong>{indexProgress.indexed}/{indexProgress.total}</strong>
         </div>
       ) : null}
+
+      <section className="sync-problem-section">
+        <div className="sync-section-heading">
+          <div><h2>自动同步</h2><p>修改只会先保存在本机；按所选时机发起安全同步。</p></div>
+        </div>
+        <div className="sync-mode-grid" role="radiogroup" aria-label="自动同步方式">
+          {([
+            ["manual", "仅手动", "只在点击同步时连接云端"],
+            ["reconnect", "联网后", "网络恢复时同步待处理修改"],
+            ["background", "后台自动", "停止编辑后延迟同步"],
+          ] as const).map(([mode, label, description]) => (
+            <button
+              aria-checked={autoSyncMode === mode}
+              data-active={autoSyncMode === mode}
+              key={mode}
+              onClick={() => onAutoSyncModeChange(mode)}
+              role="radio"
+              type="button"
+            >
+              <strong>{label}</strong><small>{description}</small>
+            </button>
+          ))}
+        </div>
+      </section>
 
       <section className="sync-problem-section">
         <div className="sync-section-heading">
@@ -339,6 +401,45 @@ export function SyncSettingsPage({
           <div className="sync-empty-state"><CheckCircle2 /><span><strong>{connected ? "当前没有待处理项" : "缓存中没有待处理项"}</strong><small>{connected ? "本地工作副本与最近一次远端状态一致。" : "这是最近一次同步记录，重新连接后会再次校验远端版本。"}</small></span></div>
         )}
       </section>
+
+      {deletedNotes.length > 0 ? (
+        <section className="sync-problem-section">
+          <div className="sync-section-heading">
+            <div><h2>待删除</h2><p>同步前仍可撤销；同步后才会从坚果云删除。</p></div>
+            <span>{deletedNotes.length} 项</span>
+          </div>
+          <div className="sync-problem-list">
+            {deletedNotes.map((note) => (
+              <div className="sync-problem-row" key={note.id}>
+                <button onClick={() => onOpenNote(note)} type="button">
+                  <span className="sync-problem-icon"><Trash2 /></span>
+                  <span><strong>{note.title}</strong><small>{note.folder || "根目录"} · 等待同步删除</small></span>
+                  <ChevronRight />
+                </button>
+                <Button onClick={() => onRestoreDeletedNote(note.id)} size="sm" variant="outline"><Undo2 />撤销</Button>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <section className="sync-problem-section">
+        <div className="sync-section-heading">
+          <div><h2>同步日志</h2><p>只保存在当前设备，不记录账号、正文或完整路径。</p></div>
+          {syncLogs.length > 0 ? <Button onClick={onClearSyncLog} size="sm" variant="ghost">清空</Button> : null}
+        </div>
+        {syncLogs.length > 0 ? (
+          <div className="sync-log-list">
+            {syncLogs.slice(0, 10).map((entry) => (
+              <div data-status={entry.status} key={entry.id}>
+                <span>{entry.status === "success" ? <CheckCircle2 /> : <AlertTriangle />}</span>
+                <strong>{entry.message}</strong>
+                <time>{formatLogDate(entry.timestamp)}</time>
+              </div>
+            ))}
+          </div>
+        ) : <div className="sync-empty-state"><RefreshCw /><span><strong>还没有同步记录</strong><small>下一次同步结果会显示在这里。</small></span></div>}
+      </section>
     </div>
   )
 }
@@ -360,7 +461,7 @@ export function AboutSettingsPage() {
       <dl className="about-list">
         <div><dt>当前版本</dt><dd>0.1.0</dd></div>
         <div><dt>数据来源</dt><dd>本地 Vault / WebDAV</dd></div>
-        <div><dt>云端策略</dt><dd>本地优先，手动安全同步</dd></div>
+        <div><dt>云端策略</dt><dd>本地优先，可配置安全同步</dd></div>
         <div><dt>密码策略</dt><dd>Web 仅当前会话 / 原生端可选系统安全存储</dd></div>
       </dl>
     </div>
@@ -384,4 +485,13 @@ function formatSyncDate(lastSyncedAt?: number) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(lastSyncedAt))
+}
+
+function formatLogDate(timestamp: number) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(timestamp))
 }

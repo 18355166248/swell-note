@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
 import {
   ArrowLeft,
   AlertCircle,
@@ -38,6 +38,7 @@ import {
 
 import swellNoteLogo from "@/assets/brand/swell-note-logo-ribbon-s.svg"
 import { Button } from "@/components/ui/button"
+import { lazyWithRetry } from "@/lib/lazy-with-retry"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -76,8 +77,8 @@ import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
 
 // CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
-const MarkdownEditor = lazy(() => import("@/components/editor/markdown-editor"))
-const MarkdownPreview = lazy(() => import("@/components/editor/markdown-preview"))
+const MarkdownEditor = lazyWithRetry(() => import("@/components/editor/markdown-editor"))
+const MarkdownPreview = lazyWithRetry(() => import("@/components/editor/markdown-preview"))
 
 export type MobileScreen = "library" | "notes" | "editor"
 export type AppSection = "notes" | "settings" | "todos"

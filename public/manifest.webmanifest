@@ -1,0 +1,12 @@
+{
+  "name": "Swell Note",
+  "short_name": "Swell Note",
+  "description": "本地优先、支持 WebDAV 的跨端 Markdown 笔记",
+  "start_url": "/#/notes",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3150e8",
+  "icons": [
+    { "src": "/swell-note.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

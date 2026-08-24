@@ -16,6 +16,7 @@ export type Note = {
   outgoingLinks?: string[]
   contentLoaded?: boolean
   pendingOperation?: "create" | "delete" | "move"
+  operationBeforeDelete?: "move"
   previousRemotePath?: string
   syncError?: string
   syncStatus?: "conflict" | "modified" | "synced"
