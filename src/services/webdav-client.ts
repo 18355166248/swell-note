@@ -129,6 +129,24 @@ export async function moveMarkdownFile(
   return { revision: response.headers.get("etag") ?? expectedRevision }
 }
 
+export async function ensureWebDavDirectory(
+  config: WebDavConfig,
+  password: string,
+  directoryPath: string,
+) {
+  const rootPath = normalizePath(config.remotePath).replace(/\/+$/g, "")
+  const targetPath = normalizePath(directoryPath).replace(/\/+$/g, "")
+  if (targetPath === rootPath) return
+  if (!targetPath.startsWith(`${rootPath}/`)) throw new Error("目标目录超出当前笔记库范围")
+
+  let currentPath = rootPath
+  for (const segment of targetPath.slice(rootPath.length + 1).split("/").filter(Boolean)) {
+    currentPath = `${currentPath}/${segment}`
+    // WebDAV 用 405 表示目录已经存在；逐级 MKCOL 可兼容首次创建嵌套目录。
+    await webDavFetch(config, password, currentPath, { method: "MKCOL" }, [405])
+  }
+}
+
 export async function readWebDavAsset(
   config: WebDavConfig,
   password: string,
@@ -192,6 +210,7 @@ async function webDavFetch(
   password: string,
   path: string,
   init: RequestInit,
+  acceptedStatuses: number[] = [],
 ) {
   // 原生包通过 Rust HTTP 客户端请求 WebDAV，规避各平台 WebView 的 CORS 差异；Web 预览仍走同源代理。
   const request = isTauri() ? nativeFetch : fetch
@@ -203,7 +222,7 @@ async function webDavFetch(
     },
   })
 
-  if (response.ok || response.status === 207) return response
+  if (response.ok || response.status === 207 || acceptedStatuses.includes(response.status)) return response
   if (response.status === 401) throw new Error("账号或第三方应用密码不正确")
   if (response.status === 404) throw new Error(`远端目录不存在：${config.remotePath}`)
   if (response.status === 412) throw new WebDavRevisionConflictError(path)

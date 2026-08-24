@@ -43,6 +43,7 @@ export interface VaultAdapter {
   readonly readOnly: boolean
   getDisplayPath?(path: string): string
   getStoragePath?(displayPath: string): string
+  ensureDirectory?(path: string): Promise<void>
   createTextFile?(path: string, content: string): Promise<VaultCreateResult>
   deleteTextFile?(path: string, expectedRevision?: string): Promise<void>
   listMarkdownFiles(): Promise<VaultFileEntry[]>

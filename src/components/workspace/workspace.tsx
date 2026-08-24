@@ -110,9 +110,11 @@ type WorkspaceProps = {
   onFormat: (syntax: string) => void
   onMobileScreenChange: (screen: MobileScreen) => void
   onDeleteNote: () => void
+  onDeleteFolder: (folderPath: string) => void
   onOpenLocalVault: () => void
   onOpenWikiLink: (target: string) => void
   onMoveNote: (folderPath: string | null) => void
+  onRenameFolder: (folderPath: string, nextName: string) => void
   onRenameNote: (title: string) => void
   onOpenSettings: () => void
   onNavigate: (path: string) => void
@@ -233,11 +235,15 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         onOpenSettings={props.onOpenSettings}
         onQueryChange={props.onQueryChange}
         onNoteSortChange={props.onNoteSortChange}
+        onDeleteFolder={props.onDeleteFolder}
+        onRenameFolder={props.onRenameFolder}
         onSelectNote={props.onSelectNote}
         availableTags={props.availableTags}
         onSelectTag={props.onSelectTag}
         query={props.query}
         selectedTag={props.selectedTag}
+        selectedFolder={props.selectedFolder}
+        isManagingFolder={props.isManagingNote}
       />
       {props.activeNote ? (
         <NoteEditor
@@ -550,28 +556,36 @@ type NoteListPanelProps = {
   folderLabel: string
   notes: Note[]
   noteSort: NoteSort
+  isManagingFolder: boolean
   onOpenSettings: () => void
   onQueryChange: (query: string) => void
   onNoteSortChange: (sort: NoteSort) => void
+  onDeleteFolder: (folderPath: string) => void
+  onRenameFolder: (folderPath: string, nextName: string) => void
   onSelectNote: (note: Note) => void
   onSelectTag: (tag: string | null) => void
   query: string
   selectedTag: string | null
+  selectedFolder: string | null
 }
 
 function NoteListPanel({
   activeNoteId,
   availableTags,
   folderLabel,
+  isManagingFolder,
   notes,
   noteSort,
   onOpenSettings,
   onQueryChange,
   onNoteSortChange,
+  onDeleteFolder,
+  onRenameFolder,
   onSelectNote,
   onSelectTag,
   query,
   selectedTag,
+  selectedFolder,
 }: NoteListPanelProps) {
   const groups = groupNotes(notes)
 
@@ -583,6 +597,7 @@ function NoteListPanel({
           <h2>{folderLabel}</h2>
         </div>
         <div className="note-list-actions">
+          {selectedFolder ? <FolderRenameButton disabled={isManagingFolder} folderPath={selectedFolder} onDelete={onDeleteFolder} onRename={onRenameFolder} /> : null}
           <TagFilterMenu availableTags={availableTags} onChange={onSelectTag} selectedTag={selectedTag} />
           <NoteSortMenu onChange={onNoteSortChange} sort={noteSort} />
         </div>
@@ -630,6 +645,47 @@ function EmptyNoteList({ onOpenSettings }: { onOpenSettings: () => void }) {
       <p>连接坚果云后，这里只展示远端 Vault 中的 Markdown。</p>
       <Button onClick={onOpenSettings} size="sm" variant="outline">连接坚果云</Button>
     </div>
+  )
+}
+
+function FolderRenameButton({
+  disabled,
+  folderPath,
+  onDelete,
+  onRename,
+}: {
+  disabled: boolean
+  folderPath: string
+  onDelete: (folderPath: string) => void
+  onRename: (folderPath: string, nextName: string) => void
+}) {
+  const folderSegments = folderPath.split(/\s*\/\s*/).filter(Boolean)
+  const currentName = folderSegments[folderSegments.length - 1] ?? folderPath
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState(currentName)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+
+  return (
+    <Dialog onOpenChange={(nextOpen) => { setOpen(nextOpen); setConfirmingDelete(false); if (nextOpen) setName(currentName) }} open={open}>
+      <Button aria-label={`重命名文件夹 ${currentName}`} disabled={disabled} onClick={() => setOpen(true)} size="icon-sm" variant="ghost"><PencilLine /></Button>
+      <DialogContent>
+        <DialogHeader><DialogTitle>重命名文件夹</DialogTitle><DialogDescription>该目录及所有子目录中的笔记会先在本机排队，点击同步后才移动坚果云文件。</DialogDescription></DialogHeader>
+        <Input autoFocus aria-label="新文件夹名称" onChange={(event) => setName(event.target.value)} value={name} />
+        <DialogFooter>
+          {confirmingDelete ? (
+            <>
+              <Button onClick={() => setConfirmingDelete(false)} variant="ghost">暂不删除</Button>
+              <Button onClick={() => { setOpen(false); onDelete(folderPath) }} variant="destructive">确认移入待删除</Button>
+            </>
+          ) : (
+            <>
+              <Button onClick={() => setConfirmingDelete(true)} variant="destructive">删除文件夹</Button>
+              <Button disabled={!name.trim() || name.trim() === currentName} onClick={() => { setOpen(false); onRename(folderPath, name) }}>确认重命名</Button>
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1340,6 +1396,7 @@ function MobileNoteList(props: MobileNoteListProps) {
         <Button aria-label="返回笔记库" onClick={() => props.onMobileScreenChange("library")} size="icon" variant="ghost"><ArrowLeft /></Button>
         <h1>{title}</h1>
         <div>
+          {props.selectedFolder ? <FolderRenameButton disabled={props.isManagingNote} folderPath={props.selectedFolder} onDelete={props.onDeleteFolder} onRename={props.onRenameFolder} /> : null}
           <TagFilterMenu availableTags={props.availableTags} onChange={props.onSelectTag} selectedTag={props.selectedTag} />
           <NoteSortMenu mobile onChange={props.onNoteSortChange} sort={props.noteSort} />
         </div>

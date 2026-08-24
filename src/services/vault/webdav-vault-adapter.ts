@@ -2,6 +2,7 @@ import type { WebDavConfig } from "@/lib/webdav-config"
 import {
   createMarkdownFile,
   deleteMarkdownFile,
+  ensureWebDavDirectory,
   listMarkdownFiles,
   moveMarkdownFile,
   readMarkdownDocument,
@@ -33,6 +34,9 @@ export function createWebDavVaultAdapter(
     },
     kind: "webdav",
     readOnly: true,
+    ensureDirectory(path) {
+      return ensureWebDavDirectory(config, password, path)
+    },
     async listMarkdownFiles() {
       return (await listMarkdownFiles(config, password)).map((file) => ({
         name: file.name,

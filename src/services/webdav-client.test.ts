@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/plugin-http", () => ({ fetch: vi.fn() }))
 import {
   createMarkdownFile,
   deleteMarkdownFile,
+  ensureWebDavDirectory,
   moveMarkdownFile,
   WebDavRevisionConflictError,
 } from "@/services/webdav-client"
@@ -51,6 +52,21 @@ describe("WebDAV conditional create", () => {
 })
 
 describe("WebDAV queued file operations", () => {
+  it("移动到新目录前会逐级创建目录并接受已存在响应", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 405 }))
+      .mockResolvedValueOnce(new Response("", { status: 201 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await ensureWebDavDirectory(config, "app-password", "/Swell/工作/项目")
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls.map(([url, request]) => [url, request.method])).toEqual([
+      ["/api/webdav/Swell/%E5%B7%A5%E4%BD%9C", "MKCOL"],
+      ["/api/webdav/Swell/%E5%B7%A5%E4%BD%9C/%E9%A1%B9%E7%9B%AE", "MKCOL"],
+    ])
+  })
+
   it("移动文件时禁止覆盖目标并校验原文件版本", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response("", {
       headers: { etag: '"moved-v2"' },

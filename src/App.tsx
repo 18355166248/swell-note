@@ -43,6 +43,7 @@ import {
 } from "@/services/search/note-index"
 import { sortNotes, type NoteSort } from "@/services/search/note-sort"
 import { buildVaultFolders, noteBelongsToFolder } from "@/services/search/vault-folders"
+import { getFolderRenameTarget } from "@/services/search/folder-rename"
 import { setMarkdownTaskChecked, type MarkdownTask } from "@/services/tasks/markdown-tasks"
 import {
   deleteWebDavPassword,
@@ -219,6 +220,7 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (!cacheReady) return
     // 详情路由保留进入前的目录上下文；只有明确进入列表或笔记库路由时才重建筛选状态。
     if (noteRouteMatch?.params.noteId) return
     if (folderRouteMatch?.params.folderPath) {
@@ -239,7 +241,7 @@ function App() {
       setSelectedFolder(null)
       setMobileScreen("library")
     }
-  }, [folderRouteMatch?.params.folderPath, isNotesLibraryRoute, noteRouteMatch?.params.noteId, viewRouteMatch?.params.view])
+  }, [cacheReady, folderRouteMatch?.params.folderPath, isNotesLibraryRoute, noteRouteMatch?.params.noteId, viewRouteMatch?.params.view])
 
   const deferredQuery = useDeferredValue(query)
   const normalizedQuery = deferredQuery.trim().toLocaleLowerCase()
@@ -357,6 +359,7 @@ function App() {
                 ? {
                     syncError: undefined,
                     syncStatus: note.syncStatus === "conflict" ? "conflict" as const : "modified" as const,
+                    writeContentAfterMove: note.pendingOperation === "move" ? true : note.writeContentAfterMove,
                   }
                 : {}),
             }
@@ -723,6 +726,7 @@ function App() {
         tags: reuseCachedContent ? previousNote!.tags ?? contentIndex?.tags : contentIndex?.tags,
         contentLoaded,
         pendingOperation: workingCopy?.pendingOperation,
+        writeContentAfterMove: workingCopy?.writeContentAfterMove,
         previousRemotePath: workingCopy?.previousRemotePath,
         syncError: preserveWorkingCopy ? workingCopy!.syncError : undefined,
         syncStatus: adapter.kind === "webdav"
@@ -809,6 +813,7 @@ function App() {
 
     let nextNotes = currentNotes
     let errorMessage: string | null = null
+    const ensuredDirectories = new Set<string>()
     const pendingNotes = currentNotes.filter((note) =>
       note.source === "webdav"
       && note.syncStatus === "modified"
@@ -838,13 +843,21 @@ function App() {
           result = await adapter.createTextFile?.(path, pendingNote.content)
         } else if (pendingNote.pendingOperation === "move") {
           if (!adapter.moveTextFile) throw new Error("当前 WebDAV 会话不支持移动")
+          const targetDirectory = path.split("/").slice(0, -1).join("/")
+          if (targetDirectory && !ensuredDirectories.has(targetDirectory)) {
+            await adapter.ensureDirectory?.(targetDirectory)
+            ensuredDirectories.add(targetDirectory)
+          }
           // MOVE 成功后再条件写入本地正文，兼容“离线移动后继续编辑”的组合操作。
           const moved = await adapter.moveTextFile(
             pendingNote.previousRemotePath ?? path,
             path,
             pendingNote.revision,
           )
-          result = await adapter.writeTextFile(path, pendingNote.content, moved.revision)
+          // 纯目录重命名只需要 MOVE；旧缓存未记录该标记时仍沿用写正文行为，避免遗漏历史草稿。
+          result = pendingNote.writeContentAfterMove === false
+            ? moved
+            : await adapter.writeTextFile(path, pendingNote.content, moved.revision)
         } else {
           result = await adapter.writeTextFile(path, pendingNote.content, pendingNote.revision)
         }
@@ -853,6 +866,7 @@ function App() {
           ? {
               ...note,
               pendingOperation: undefined,
+              writeContentAfterMove: undefined,
               previousRemotePath: undefined,
               revision: result.revision,
               syncError: undefined,
@@ -1248,6 +1262,7 @@ function App() {
             remotePath: storageTargetPath,
             syncError: undefined,
             syncStatus: "modified",
+            writeContentAfterMove: true,
             title: normalizedTitle || candidate.title,
             updatedAt: "刚刚移动 · 待同步",
           }
@@ -1301,6 +1316,138 @@ function App() {
     } finally {
       setIsManagingNote(false)
     }
+  }
+
+  const renameWebDavFolder = (folderPath: string, requestedName: string) => {
+    if (isRefreshingVault || isManagingNote) {
+      setVaultError("正在处理笔记库，请稍后再重命名文件夹")
+      return
+    }
+    if (activeCacheMeta?.sourceKind !== "webdav") {
+      setVaultError("当前版本先支持坚果云文件夹批量重命名")
+      return
+    }
+    const candidates = notes.filter((note) => note.source === "webdav"
+      && note.pendingOperation !== "delete"
+      && noteBelongsToFolder(note, folderPath))
+    if (candidates.length === 0) return
+    if (candidates.some((note) => !note.remotePath
+      || (note.pendingOperation !== "create" && !note.revision))) {
+      setVaultError("该目录仍有远端版本信息尚未读取，请重新连接后再重命名")
+      return
+    }
+
+    const webDavConfig = loadWebDavConfig()
+    const candidateIds = new Set(candidates.map((note) => note.id))
+    const occupiedPaths = new Set(notes
+      .filter((note) => !candidateIds.has(note.id) && note.pendingOperation !== "delete")
+      .map((note) => note.remotePath)
+      .filter((path): path is string => Boolean(path)))
+    const plans = new Map<string, { folder: string; id: string; remotePath: string }>()
+
+    for (const note of candidates) {
+      const pathSegments = note.remotePath!.split("/").filter(Boolean)
+      const filename = pathSegments[pathSegments.length - 1]
+      const target = filename
+        ? getFolderRenameTarget(note.folder, folderPath, requestedName, filename)
+        : null
+      if (!target) {
+        setVaultError("文件夹名称无效，请换一个名称")
+        return
+      }
+      const remotePath = vaultSession?.getStoragePath?.(target.relativePath)
+        ?? `${webDavConfig.remotePath.replace(/\/+$/g, "")}/${target.relativePath}`.replace(/\/{2,}/g, "/")
+      if (occupiedPaths.has(remotePath)) {
+        setVaultError(`目标目录已存在同名笔记：${filename}`)
+        return
+      }
+      plans.set(note.id, { folder: target.folder, id: `webdav:${remotePath}`, remotePath })
+    }
+
+    setIsManagingNote(true)
+    setVaultError(null)
+    // 批量重命名只改 IndexedDB 工作副本；每篇 MOVE 仍在统一同步链路中串行执行并校验 ETag。
+    setNotes((current) => current.map((note) => {
+      const plan = plans.get(note.id)
+      if (!plan) return note
+      return {
+        ...note,
+        ...plan,
+        pendingOperation: note.pendingOperation === "create" ? "create" : "move",
+        previousRemotePath: note.pendingOperation === "create"
+          ? undefined
+          : note.previousRemotePath ?? note.remotePath,
+        syncError: undefined,
+        syncStatus: "modified",
+        updatedAt: "文件夹已在本机重命名 · 待同步",
+        writeContentAfterMove: note.pendingOperation === "create"
+          ? undefined
+          : note.pendingOperation === "move" ? note.writeContentAfterMove : false,
+      }
+    }))
+    setSaveStates((current) => {
+      const next = { ...current }
+      for (const [oldId, plan] of plans) {
+        delete next[oldId]
+        next[plan.id] = { status: "pending" }
+      }
+      return next
+    })
+    const activePlan = plans.get(activeNoteId)
+    if (activePlan) setActiveNoteId(activePlan.id)
+    const firstPlan = plans.values().next().value as { folder: string } | undefined
+    if (firstPlan) {
+      setSelectedFolder(firstPlan.folder.split(/\s*\/\s*/).slice(0, folderPath.split(/\s*\/\s*/).length).join(" / "))
+      setLibraryView("all")
+      setMobileScreen("notes")
+      navigate(getNotesListRoute("all", firstPlan.folder.split(/\s*\/\s*/).slice(0, folderPath.split(/\s*\/\s*/).length).join(" / ")), { replace: true })
+    }
+    setIsManagingNote(false)
+  }
+
+  const deleteWebDavFolder = (folderPath: string) => {
+    if (activeCacheMeta?.sourceKind !== "webdav" || isRefreshingVault) {
+      setVaultError("当前状态不能删除该文件夹")
+      return
+    }
+    const candidateIds = new Set(notes
+      .filter((note) => note.source === "webdav" && note.pendingOperation !== "delete" && noteBelongsToFolder(note, folderPath))
+      .map((note) => note.id))
+    if (candidateIds.size === 0) return
+    const createdIds = new Set(notes
+      .filter((note) => candidateIds.has(note.id) && note.pendingOperation === "create")
+      .map((note) => note.id))
+    // 已上传文件进入可撤销墓碑；从未上传的新文件直接撤销创建，因此不会产生远端 DELETE。
+    setNotes((current) => current
+      .filter((note) => !createdIds.has(note.id))
+      .map((note) => candidateIds.has(note.id)
+        ? {
+            ...note,
+            operationBeforeDelete: note.pendingOperation === "move" ? "move" as const : undefined,
+            pendingOperation: "delete" as const,
+            previousRemotePath: note.previousRemotePath ?? note.remotePath,
+            syncError: undefined,
+            syncStatus: "modified" as const,
+            updatedAt: "文件夹已在本机删除 · 待同步",
+          }
+        : note))
+    setSaveStates((current) => {
+      const next = { ...current }
+      for (const noteId of candidateIds) {
+        if (createdIds.has(noteId)) delete next[noteId]
+        else next[noteId] = { status: "pending" }
+      }
+      return next
+    })
+    setVaultNoteCount((count) => Math.max(0, count - candidateIds.size))
+    if (candidateIds.has(activeNoteId)) {
+      const fallback = availableNotes.find((note) => !candidateIds.has(note.id))
+      setActiveNoteId(fallback?.id ?? "")
+    }
+    setSelectedFolder(null)
+    setLibraryView("all")
+    setMobileScreen("library")
+    navigate("/notes", { replace: true })
   }
 
   const deleteActiveNote = async () => {
@@ -1462,6 +1609,7 @@ function App() {
             notes={visibleNotes}
             onCreateNote={() => void createNote()}
             onDeleteNote={() => void deleteActiveNote()}
+            onDeleteFolder={deleteWebDavFolder}
             onFormat={formatActiveNote}
             onMobileScreenChange={(screen) => {
               setMobileScreen(screen)
@@ -1475,6 +1623,7 @@ function App() {
             }}
             onNavigate={navigate}
             onMoveNote={(folderPath) => void moveActiveNote(folderPath)}
+            onRenameFolder={renameWebDavFolder}
             onRenameNote={(title) => void moveActiveNote(activeNote?.folder === "根目录" ? null : activeNote?.folder ?? null, title)}
             onOpenLocalVault={() => void openLocalVault()}
             onOpenWikiLink={openWikiLink}
