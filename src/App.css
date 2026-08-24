@@ -344,6 +344,8 @@
 .note-search-wrap input:focus { background: white; border-color: var(--ring); }
 .note-list-panel > .note-search-wrap { margin: 0 14px 10px; }
 .note-groups { padding-bottom: 24px; }
+.virtual-note-list { position: relative; width: 100%; }
+.virtual-note-row { position: absolute; top: 0; left: 0; width: 100%; }
 .note-group-label { display: flex; height: 32px; align-items: center; gap: 6px; padding: 0 16px; color: var(--muted-foreground); font-size: 10.5px; font-weight: 620; }
 .note-group-label small { font-size: inherit; font-weight: 450; }
 .note-list-row { position: relative; display: block; width: 100%; min-height: 92px; border-bottom: 1px solid var(--border); padding: 13px 16px; text-align: left; }

@@ -26,6 +26,7 @@ tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-http = "2"
 keyring-core = "1.0.0"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1.0.2", default-features = false, features = ["keychain"] }

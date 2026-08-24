@@ -1,4 +1,5 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import {
   ArrowLeft,
   AlertCircle,
@@ -624,7 +625,7 @@ function NoteListPanel({
   selectedTag,
   selectedFolder,
 }: NoteListPanelProps) {
-  const groups = groupNotes(notes)
+  const viewportRef = useRef<HTMLDivElement>(null)
 
   return (
     <section className="note-list-panel">
@@ -650,24 +651,16 @@ function NoteListPanel({
         />
       </div>
 
-      <ScrollArea className="note-list-scroll">
+      <ScrollArea className="note-list-scroll" viewportRef={viewportRef}>
         <div className="note-groups">
-          {groups.length > 0 ? groups.map((group) => (
-            <section key={group.label}>
-              <div className="note-group-label">
-                <span>{group.label}</span>
-                <small>{group.notes.length}</small>
-              </div>
-              {group.notes.map((note) => (
-                <NoteListRow
-                  active={note.id === activeNoteId}
-                  key={note.id}
-                  note={note}
-                  onSelect={onSelectNote}
-                />
-              ))}
-            </section>
-          )) : <EmptyNoteList canCreateNote={canCreateNote} onCreateNote={onCreateNote} onOpenSettings={onOpenSettings} selectedFolder={selectedFolder} />}
+          {notes.length > 0 ? (
+            <VirtualNoteRows
+              activeNoteId={activeNoteId}
+              notes={notes}
+              onSelectNote={onSelectNote}
+              viewportRef={viewportRef}
+            />
+          ) : <EmptyNoteList canCreateNote={canCreateNote} onCreateNote={onCreateNote} onOpenSettings={onOpenSettings} selectedFolder={selectedFolder} />}
         </div>
       </ScrollArea>
     </section>
@@ -1544,7 +1537,6 @@ type MobileNoteListProps = WorkspaceProps & {
 }
 
 function MobileNoteList(props: MobileNoteListProps) {
-  const groups = groupNotes(props.notes)
   const viewportRef = useRef<HTMLDivElement>(null)
   const title = props.selectedFolder
     ?? (props.libraryView === "recent" ? "最近更新" : props.libraryView === "starred" ? "收藏" : "全部笔记")
@@ -1589,19 +1581,15 @@ function MobileNoteList(props: MobileNoteListProps) {
         viewportRef={viewportRef}
       >
         <div className="mobile-note-groups">
-          {groups.length > 0 ? groups.map((group) => (
-            <section key={group.label}>
-              <div className="note-group-label"><span>{group.label}</span></div>
-              {group.notes.map((note) => (
-                <NoteListRow
-                  active={note.id === props.activeNoteId}
-                  key={note.id}
-                  note={note}
-                  onSelect={selectNote}
-                />
-              ))}
-            </section>
-          )) : <EmptyNoteList canCreateNote={props.canCreateNote} onCreateNote={props.onCreateNote} onOpenSettings={props.onOpenSettings} selectedFolder={props.selectedFolder} />}
+          {props.notes.length > 0 ? (
+            <VirtualNoteRows
+              activeNoteId={props.activeNoteId}
+              mobile
+              notes={props.notes}
+              onSelectNote={selectNote}
+              viewportRef={viewportRef}
+            />
+          ) : <EmptyNoteList canCreateNote={props.canCreateNote} onCreateNote={props.onCreateNote} onOpenSettings={props.onOpenSettings} selectedFolder={props.selectedFolder} />}
         </div>
       </ScrollArea>
       {props.canCreateNote ? <Button aria-label="新建笔记" className="mobile-fab" disabled={props.isCreatingNote} onClick={props.onCreateNote} size="icon-lg">{props.isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}</Button> : null}
@@ -1660,6 +1648,60 @@ function groupNotes(notes: Note[]) {
     { label: "昨天", notes: notes.slice(2, 5) },
     { label: "过去 7 天", notes: notes.slice(5) },
   ].filter((group) => group.notes.length > 0)
+}
+
+type VirtualNoteItem =
+  | { key: string; kind: "heading"; label: string; noteCount: number }
+  | { key: string; kind: "note"; note: Note }
+
+function VirtualNoteRows({
+  activeNoteId,
+  mobile = false,
+  notes,
+  onSelectNote,
+  viewportRef,
+}: {
+  activeNoteId: string
+  mobile?: boolean
+  notes: Note[]
+  onSelectNote: (note: Note) => void
+  viewportRef: RefObject<HTMLDivElement | null>
+}) {
+  const items = useMemo(() => groupNotes(notes).flatMap((group): VirtualNoteItem[] => [
+    { key: `heading:${group.label}`, kind: "heading", label: group.label, noteCount: group.notes.length },
+    ...group.notes.map((note): VirtualNoteItem => ({ key: note.id, kind: "note", note })),
+  ]), [notes])
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    estimateSize: (index) => items[index]?.kind === "heading" ? 35 : mobile ? 96 : 104,
+    getItemKey: (index) => items[index]?.key ?? index,
+    getScrollElement: () => viewportRef.current,
+    overscan: 8,
+  })
+
+  return (
+    <div className="virtual-note-list" style={{ height: `${virtualizer.getTotalSize()}px` }}>
+      {virtualizer.getVirtualItems().map((virtualRow) => {
+        const item = items[virtualRow.index]
+        if (!item) return null
+        return (
+          <div
+            className="virtual-note-row"
+            data-index={virtualRow.index}
+            key={item.key}
+            ref={virtualizer.measureElement}
+            style={{ transform: `translateY(${virtualRow.start}px)` }}
+          >
+            {item.kind === "heading" ? (
+              <div className="note-group-label"><span>{item.label}</span>{mobile ? null : <small>{item.noteCount}</small>}</div>
+            ) : (
+              <NoteListRow active={item.note.id === activeNoteId} note={item.note} onSelect={onSelectNote} />
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 function deriveFolder(note: Note) {

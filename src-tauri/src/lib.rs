@@ -1,11 +1,29 @@
-use serde::Serialize;
+use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::fs;
 use std::sync::{Mutex, MutexGuard};
+use tauri::Manager;
 
 const CREDENTIAL_SERVICE: &str = "com.xmly.swell-note.webdav";
 
 struct CredentialStoreState {
     operation_lock: Mutex<()>,
     unavailable_reason: Option<String>,
+}
+
+struct SearchIndexState {
+    connection: Mutex<Connection>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchIndexEntry {
+    content: String,
+    note_id: String,
+    path: String,
+    tags: String,
+    title: String,
 }
 
 #[derive(Serialize)]
@@ -84,6 +102,137 @@ fn credential_error(_error: keyring_core::Error) -> String {
     "系统安全存储操作失败".to_string()
 }
 
+#[tauri::command]
+fn clear_note_search_index(
+    state: tauri::State<SearchIndexState>,
+    cache_id: String,
+) -> Result<(), String> {
+    let connection = state.connection.lock().map_err(|_| "搜索索引暂时被占用".to_string())?;
+    connection
+        .execute("DELETE FROM note_search WHERE cache_id = ?1", params![cache_id])
+        .map_err(search_index_error)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn upsert_note_search_index(
+    state: tauri::State<SearchIndexState>,
+    cache_id: String,
+    entries: Vec<SearchIndexEntry>,
+) -> Result<(), String> {
+    let mut connection = state.connection.lock().map_err(|_| "搜索索引暂时被占用".to_string())?;
+    let transaction = connection.transaction().map_err(search_index_error)?;
+    // FTS5 不支持普通 UPSERT；同一事务中先删后插，任何失败都会保留上一版完整索引。
+    for entry in entries {
+        transaction
+            .execute(
+                "DELETE FROM note_search WHERE cache_id = ?1 AND note_id = ?2",
+                params![cache_id, entry.note_id],
+            )
+            .map_err(search_index_error)?;
+        transaction
+            .execute(
+                "INSERT INTO note_search(cache_id, note_id, title, path, content, tags) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![cache_id, entry.note_id, entry.title, entry.path, entry.content, entry.tags],
+            )
+            .map_err(search_index_error)?;
+    }
+    transaction.commit().map_err(search_index_error)
+}
+
+#[tauri::command]
+fn search_note_index(
+    state: tauri::State<SearchIndexState>,
+    cache_id: String,
+    query: String,
+    limit: u32,
+) -> Result<Vec<String>, String> {
+    let match_query = build_match_query(&query);
+    if match_query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let connection = state.connection.lock().map_err(|_| "搜索索引暂时被占用".to_string())?;
+    let mut results = search_note_ids(&connection, &cache_id, &match_query, limit)?;
+    if results.len() < limit as usize {
+        let mut seen = results.iter().cloned().collect::<HashSet<_>>();
+        for note_id in search_note_ids_like(&connection, &cache_id, &query, limit)? {
+            if results.len() >= limit as usize {
+                break;
+            }
+            if seen.insert(note_id.clone()) {
+                results.push(note_id);
+            }
+        }
+    }
+    Ok(results)
+}
+
+fn build_match_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .filter(|token| !token.is_empty())
+        .map(|token| format!("\"{}\"*", token.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" AND ")
+}
+
+fn search_note_ids(
+    connection: &Connection,
+    cache_id: &str,
+    match_query: &str,
+    limit: u32,
+) -> Result<Vec<String>, String> {
+    let mut statement = connection
+        .prepare("SELECT note_id FROM note_search WHERE note_search MATCH ?1 AND cache_id = ?2 ORDER BY rank LIMIT ?3")
+        .map_err(search_index_error)?;
+    let rows = statement
+        .query_map(params![match_query, cache_id, limit], |row| row.get(0))
+        .map_err(search_index_error)?;
+    rows.collect::<Result<Vec<String>, _>>().map_err(search_index_error)
+}
+
+fn search_note_ids_like(
+    connection: &Connection,
+    cache_id: &str,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<String>, String> {
+    let pattern = format!("%{}%", query.to_lowercase());
+    let mut statement = connection
+        .prepare(
+            "SELECT note_id FROM note_search
+             WHERE cache_id = ?1 AND (
+               lower(title) LIKE ?2 OR lower(path) LIKE ?2 OR lower(content) LIKE ?2 OR lower(tags) LIKE ?2
+             ) LIMIT ?3",
+        )
+        .map_err(search_index_error)?;
+    let rows = statement
+        .query_map(params![cache_id, pattern, limit], |row| row.get(0))
+        .map_err(search_index_error)?;
+    rows.collect::<Result<Vec<String>, _>>().map_err(search_index_error)
+}
+
+fn search_index_error(_error: rusqlite::Error) -> String {
+    // 查询内容和本地路径不进入跨层错误信息，避免搜索词被意外记录到前端日志。
+    "SQLite 搜索索引操作失败".to_string()
+}
+
+fn initialize_search_index(connection: &Connection) -> Result<(), rusqlite::Error> {
+    connection.execute_batch(
+        "PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = NORMAL;
+         CREATE VIRTUAL TABLE IF NOT EXISTS note_search USING fts5(
+           cache_id UNINDEXED,
+           note_id UNINDEXED,
+           title,
+           path,
+           content,
+           tags,
+           tokenize = 'unicode61'
+         );",
+    )
+}
+
 fn initialize_native_credential_store() -> Result<(), keyring_core::Error> {
     #[cfg(target_os = "macos")]
     keyring_core::set_default_store(apple_native_keyring_store::keychain::Store::new()?);
@@ -121,6 +270,14 @@ pub fn run() {
             .map(|error| error.to_string()),
     };
     tauri::Builder::default()
+        .setup(|app| {
+            let data_directory = app.path().app_data_dir()?;
+            fs::create_dir_all(&data_directory)?;
+            let connection = Connection::open(data_directory.join("note-search.sqlite3"))?;
+            initialize_search_index(&connection)?;
+            app.manage(SearchIndexState { connection: Mutex::new(connection) });
+            Ok(())
+        })
         .manage(credential_store_state)
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
@@ -131,9 +288,42 @@ pub fn run() {
             save_webdav_password,
             load_webdav_password,
             delete_webdav_password,
+            clear_note_search_index,
+            upsert_note_search_index,
+            search_note_index,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sqlite_fts_index_supports_cache_isolation_and_prefix_search() {
+        let connection = Connection::open_in_memory().expect("open sqlite");
+        initialize_search_index(&connection).expect("initialize fts");
+        connection
+            .execute(
+                "INSERT INTO note_search(cache_id, note_id, title, path, content, tags) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params!["vault-a", "note-1", "周报", "工作/周报.md", "本周完成 SQLite 索引", "工作"],
+            )
+            .expect("insert note");
+        connection
+            .execute(
+                "INSERT INTO note_search(cache_id, note_id, title, path, content, tags) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params!["vault-b", "note-2", "周报", "其他/周报.md", "不应跨库命中", "工作"],
+            )
+            .expect("insert other vault");
+
+        let ids = search_note_ids(&connection, "vault-a", &build_match_query("SQLite"), 20)
+            .expect("search notes");
+        assert_eq!(ids, vec!["note-1"]);
+        let substring_ids = search_note_ids_like(&connection, "vault-a", "完成", 20)
+            .expect("search chinese substring");
+        assert_eq!(substring_ids, vec!["note-1"]);
+    }
 }
 
 /// Tauri Mobile 当前不会为第三方 Android 凭据库初始化 ndk-context；

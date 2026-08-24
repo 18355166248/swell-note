@@ -55,6 +55,13 @@ import {
 import { sortNotes, type NoteSort } from "@/services/search/note-sort"
 import { buildVaultFolders, noteBelongsToFolder } from "@/services/search/vault-folders"
 import { getFolderRenameTarget } from "@/services/search/folder-rename"
+import {
+  clearNativeSearchIndex,
+  searchNativeNoteIndex,
+  supportsNativeSearchIndex,
+  toNativeSearchEntry,
+  upsertNativeSearchIndex,
+} from "@/services/search/sqlite-note-index"
 import { setMarkdownTaskChecked, type MarkdownTask } from "@/services/tasks/markdown-tasks"
 import {
   deleteWebDavPassword,
@@ -126,6 +133,7 @@ function App() {
   const [autoSyncMode, setAutoSyncMode] = useState<AutoSyncMode>(() => loadSyncPreferences().autoSyncMode)
   const [syncLogs, setSyncLogs] = useState<SyncLogEntry[]>(loadSyncLog)
   const [pendingAttachmentCount, setPendingAttachmentCount] = useState(0)
+  const [nativeSearchResult, setNativeSearchResult] = useState<{ paths: Set<string>; query: string } | null>(null)
   const saveTimersRef = useRef(new Map<string, number>())
   const saveQueuesRef = useRef(new Map<string, Promise<void>>())
   const loadingNoteIdsRef = useRef(new Set<string>())
@@ -309,12 +317,16 @@ function App() {
     () => [...new Set(availableNotes.flatMap((note) => note.tags ?? []))].sort((left, right) => left.localeCompare(right)),
     [availableNotes],
   )
+  const nativeSearchPaths = nativeSearchResult?.query === normalizedQuery
+    ? nativeSearchResult.paths
+    : null
   const filteredNotes = normalizedQuery
-    ? libraryNotes.filter((note) =>
-        `${note.title} ${note.preview} ${note.searchText ?? ""}`
-          .toLocaleLowerCase()
-          .includes(normalizedQuery),
-      )
+    ? libraryNotes.filter((note) => nativeSearchPaths
+      ? Boolean(note.remotePath && nativeSearchPaths.has(note.remotePath))
+      : `${note.title} ${note.preview} ${note.searchText ?? ""}`
+        .toLocaleLowerCase()
+        .includes(normalizedQuery),
+    )
     : libraryNotes
   const visibleNotes = sortNotes(filteredNotes, noteSort)
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? null
@@ -328,6 +340,36 @@ function App() {
     [activeNoteId, activeTarget, availableNotes],
   )
   const connected = vaultSession !== null && vaultNoteCount > 0
+
+  useEffect(() => {
+    if (!activeCacheMeta || !activeNote?.remotePath || !activeNote.contentLoaded || !supportsNativeSearchIndex()) return
+    const timer = window.setTimeout(() => {
+      void upsertNativeSearchIndex(activeCacheMeta.id, [{
+        content: activeNote.content,
+        noteId: activeNote.remotePath!,
+        path: activeNote.remotePath!,
+        tags: activeNote.tags?.join(" ") ?? "",
+        title: activeNote.title,
+      }]).catch(() => undefined)
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [activeCacheMeta, activeNote?.content, activeNote?.contentLoaded, activeNote?.remotePath, activeNote?.tags, activeNote?.title])
+
+  useEffect(() => {
+    if (!normalizedQuery || !activeCacheMeta || !supportsNativeSearchIndex()) {
+      setNativeSearchResult(null)
+      return
+    }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      void searchNativeNoteIndex(activeCacheMeta.id, normalizedQuery)
+        .then((paths) => {
+          if (!cancelled && paths) setNativeSearchResult({ paths: new Set(paths), query: normalizedQuery })
+        })
+        .catch(() => { if (!cancelled) setNativeSearchResult(null) })
+    }, 120)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [activeCacheMeta, normalizedQuery])
   const cached = !vaultSession && activeCacheMeta !== null && vaultNoteCount > 0
   const syncSummary = useMemo(() => summarizeWebDavSync(notes), [notes])
   const pendingSyncCount = syncSummary.pending + syncSummary.failed
@@ -719,10 +761,13 @@ function App() {
       return
     }
     setIndexProgress({ indexed: 0, total: files.length })
-    void indexVaultFiles(
-      adapter,
-      files,
-      (batch, indexed, total) => {
+    void createVaultCacheId(adapter.cacheIdentity)
+      .then(async (cacheId) => {
+        await clearNativeSearchIndex(cacheId)
+        await indexVaultFiles(
+          adapter,
+          files,
+          async (batch, indexed, total) => {
         const indexedByPath = new Map(batch.map((item) => [item.path, item]))
         setNotes((current) => current.map((note) => {
           const indexedNote = note.remotePath ? indexedByPath.get(note.remotePath) : undefined
@@ -744,12 +789,15 @@ function App() {
             : note
         }))
         setIndexProgress({ indexed, total })
-      },
-      () => generation !== indexGenerationRef.current,
-      adapter.kind === "webdav"
-        ? { batchSize: 2, delayMs: 350 }
-        : { batchSize: 6 },
-    )
+            await upsertNativeSearchIndex(cacheId, batch.map(toNativeSearchEntry))
+          },
+          () => generation !== indexGenerationRef.current,
+          adapter.kind === "webdav"
+            ? { batchSize: 2, delayMs: 350 }
+            : { batchSize: 24 },
+        )
+      })
+      .catch((error) => setVaultError(error instanceof Error ? error.message : "建立搜索索引失败"))
   }
 
   const connectWebDav = async (config: WebDavConfig, password: string) => {

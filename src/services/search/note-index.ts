@@ -69,7 +69,7 @@ function cleanFrontmatterValue(value: string) {
 export async function indexVaultFiles(
   adapter: VaultAdapter,
   files: VaultFileEntry[],
-  onBatch: (batch: IndexedVaultFile[], indexed: number, total: number) => void,
+  onBatch: (batch: IndexedVaultFile[], indexed: number, total: number) => void | Promise<void>,
   isCancelled: () => boolean,
   options: { batchSize?: number; delayMs?: number } = {},
 ) {
@@ -99,7 +99,7 @@ export async function indexVaultFiles(
     }))).filter((item): item is IndexedVaultFile => item !== null)
 
     indexed += batchFiles.length
-    if (!isCancelled()) onBatch(batch, indexed, files.length)
+    if (!isCancelled()) await onBatch(batch, indexed, files.length)
     if (options.delayMs && offset + batchSize < files.length && !isCancelled()) {
       await new Promise((resolve) => setTimeout(resolve, options.delayMs))
     }
