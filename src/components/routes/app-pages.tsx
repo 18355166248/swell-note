@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   ArrowLeft,
   AlertTriangle,
@@ -29,6 +29,7 @@ import { summarizeWebDavSync } from "@/services/sync/sync-summary"
 import type { AutoSyncMode } from "@/services/sync/sync-preferences"
 import type { SyncLogEntry } from "@/services/sync/sync-log"
 import type { Note } from "@/types/note"
+import type { TrashEntry, TrashRetentionDays } from "@/services/trash/trash-entry"
 
 type NavigationProps = {
   connected: boolean
@@ -163,6 +164,7 @@ const settingsEntries = [
   { description: "查看待同步、冲突和失败项，并手动发起同步", icon: RefreshCw, label: "同步状态", path: "/settings/sync" },
   { description: "坚果云地址、账号、应用密码与远端目录", icon: Cloud, label: "WebDAV 连接", path: "/settings/webdav" },
   { description: "查看并切换保存在本机的 Vault 快照", icon: Database, label: "离线缓存", path: "/settings/cache" },
+  { description: "批量恢复已删除笔记，并设置自动清理期限", icon: Trash2, label: "回收站", path: "/settings/trash" },
   { description: "版本、数据边界与开源组件", icon: Info, label: "关于 Swell Note", path: "/settings/about" },
 ]
 
@@ -268,6 +270,87 @@ export function CacheSettingsPage({
           ))}
         </div>
       ) : <p className="settings-empty-copy">还没有离线缓存。连接坚果云或打开本地 Vault 后会自动创建。</p>}
+    </div>
+  )
+}
+
+export function TrashSettingsPage({
+  busy,
+  entries,
+  onPurge,
+  onRestore,
+  onRetentionChange,
+  retention,
+}: {
+  busy: boolean
+  entries: TrashEntry[]
+  onPurge: (entryIds: ReadonlySet<string>) => void
+  onRestore: (entryIds: ReadonlySet<string>) => void
+  onRetentionChange: (retention: TrashRetentionDays) => void
+  retention: TrashRetentionDays
+}) {
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [confirmingPurge, setConfirmingPurge] = useState(false)
+  const selectedCount = selectedIds.size
+  const allSelected = entries.length > 0 && selectedCount === entries.length
+
+  useEffect(() => {
+    const availableIds = new Set(entries.map((entry) => entry.id))
+    setSelectedIds((current) => new Set([...current].filter((id) => availableIds.has(id))))
+  }, [entries])
+
+  const toggleEntry = (entryId: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (next.has(entryId)) next.delete(entryId)
+      else next.add(entryId)
+      return next
+    })
+    setConfirmingPurge(false)
+  }
+
+  return (
+    <div className="settings-content-card trash-page">
+      <div className="trash-toolbar">
+        <div>
+          <h2>回收站</h2>
+          <p>删除项保存在当前 Vault 的本机快照中；本地文件会移动到隐藏目录 `.swell-trash`。</p>
+        </div>
+        <label>
+          <span>自动清理</span>
+          <select onChange={(event) => onRetentionChange(event.target.value === "forever" ? "forever" : Number(event.target.value) as TrashRetentionDays)} value={retention}>
+            <option value="7">7 天</option>
+            <option value="30">30 天</option>
+            <option value="90">90 天</option>
+            <option value="forever">永久保留</option>
+          </select>
+        </label>
+      </div>
+
+      {entries.length > 0 ? (
+        <>
+          <div className="trash-batch-actions">
+            <label><input checked={allSelected} onChange={() => setSelectedIds(allSelected ? new Set() : new Set(entries.map((entry) => entry.id)))} type="checkbox" />全选</label>
+            <span>已选择 {selectedCount} 项</span>
+            <Button disabled={busy || selectedCount === 0} onClick={() => { onRestore(selectedIds); setSelectedIds(new Set()) }}><Undo2 />批量恢复</Button>
+            {confirmingPurge ? (
+              <>
+                <Button onClick={() => setConfirmingPurge(false)} variant="ghost">取消</Button>
+                <Button disabled={busy} onClick={() => { onPurge(selectedIds); setSelectedIds(new Set()); setConfirmingPurge(false) }} variant="destructive">确认永久删除</Button>
+              </>
+            ) : <Button disabled={busy || selectedCount === 0} onClick={() => setConfirmingPurge(true)} variant="outline">永久删除</Button>}
+          </div>
+          <div className="trash-list">
+            {entries.map((entry) => (
+              <label className="trash-row" key={entry.id}>
+                <input checked={selectedIds.has(entry.id)} onChange={() => toggleEntry(entry.id)} type="checkbox" />
+                <span className="trash-row-icon">{entry.kind === "folder" ? <Database /> : <FileCheck2 />}</span>
+                <span><strong>{entry.kind === "folder" ? entry.folderPath : entry.notes[0]?.title ?? "未命名笔记"}</strong><small>{entry.source === "local" ? "本地 Vault" : "坚果云"} · {entry.notes.length} 篇 · {formatTrashDate(entry.deletedAt)}</small></span>
+              </label>
+            ))}
+          </div>
+        </>
+      ) : <div className="sync-empty-state"><Trash2 /><span><strong>回收站为空</strong><small>删除的笔记和文件夹会显示在这里。</small></span></div>}
     </div>
   )
 }
@@ -490,6 +573,15 @@ function formatSyncDate(lastSyncedAt?: number) {
 }
 
 function formatLogDate(timestamp: number) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(timestamp))
+}
+
+function formatTrashDate(timestamp: number) {
   return new Intl.DateTimeFormat("zh-CN", {
     month: "numeric",
     day: "numeric",

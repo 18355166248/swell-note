@@ -176,6 +176,16 @@ describe("browser vault adapter", () => {
     await expect(adapter.listMarkdownFiles()).resolves.toEqual([])
   })
 
+  it("重新扫描后仍能从隐藏回收目录恢复 Markdown", async () => {
+    const { adapter } = createVault()
+    await adapter.listMarkdownFiles()
+    await adapter.moveTextFile?.("docs/note.md", ".swell-trash/trash-1/note.md")
+    await expect(adapter.listMarkdownFiles()).resolves.toEqual([])
+
+    await adapter.moveTextFile?.(".swell-trash/trash-1/note.md", "docs/note.md")
+    await expect(adapter.readTextFile("docs/note.md")).resolves.toMatchObject({ content: "# 初始内容" })
+  })
+
   it("按相对路径读取 Vault 二进制附件", async () => {
     const { adapter, docs } = createVault()
     docs.entries.set("cover.png", new FakeFileHandle("cover.png", "image-bytes"))

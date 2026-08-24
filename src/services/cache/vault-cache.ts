@@ -1,5 +1,6 @@
 import type { Note } from "@/types/note"
 import type { VaultSourceKind } from "@/services/vault/vault-adapter"
+import type { TrashEntry } from "@/services/trash/trash-entry"
 
 const DATABASE_NAME = "swell-note-vault-cache"
 const DATABASE_VERSION = 2
@@ -17,6 +18,7 @@ export type VaultCacheSnapshot = {
   notes: Note[]
   savedAt: number
   sourceKind: VaultSourceKind
+  trash?: TrashEntry[]
 }
 
 export type VaultCacheSummary = Pick<

@@ -9,6 +9,7 @@ import {
   SettingsOverview,
   SyncSettingsPage,
   TodoPage,
+  TrashSettingsPage,
 } from "@/components/routes/app-pages"
 import { WebDavSettingsForm } from "@/components/settings/webdav-settings-form"
 import { QuickWebDavConnectDialog } from "@/components/settings/quick-webdav-connect-dialog"
@@ -73,6 +74,14 @@ import {
   saveSyncPreferences,
   type AutoSyncMode,
 } from "@/services/sync/sync-preferences"
+import {
+  buildLocalTrashPath,
+  createTrashId,
+  isTrashEntryExpired,
+  type TrashEntry,
+  type TrashRetentionDays,
+} from "@/services/trash/trash-entry"
+import { loadTrashRetention, saveTrashRetention } from "@/services/trash/trash-preferences"
 import type { Note, NoteSaveState } from "@/types/note"
 import "./App.css"
 
@@ -88,6 +97,8 @@ function App() {
   const isNotesLibraryRoute = notesLibraryRouteMatch !== null
   const [notes, setNotes] = useState<Note[]>([])
   const [vaultDirectories, setVaultDirectories] = useState<string[]>([])
+  const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([])
+  const [trashRetention, setTrashRetention] = useState<TrashRetentionDays>(loadTrashRetention)
   const [activeNoteId, setActiveNoteId] = useState("")
   const [query, setQuery] = useState("")
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
@@ -163,6 +174,7 @@ function App() {
     })
     setNotes(cachedNotes)
     setVaultDirectories(snapshot.directories ?? [])
+    setTrashEntries(snapshot.trash ?? [])
     setActiveNoteId(restoredActiveId)
     setVaultNoteCount(cachedNotes.filter((note) => note.pendingOperation !== "delete").length)
     setSelectedFolder(null)
@@ -198,6 +210,7 @@ function App() {
       directories: vaultDirectories,
       notes,
       savedAt: Date.now(),
+      trash: trashEntries,
     }
     latestCacheSnapshotRef.current = snapshot
     const timer = window.setTimeout(() => {
@@ -208,7 +221,7 @@ function App() {
         .catch((error) => setVaultError(error instanceof Error ? error.message : "保存离线缓存失败"))
     }, 450)
     return () => window.clearTimeout(timer)
-  }, [activeCacheMeta, activeNoteId, cacheReady, notes, vaultDirectories])
+  }, [activeCacheMeta, activeNoteId, cacheReady, notes, trashEntries, vaultDirectories])
 
   useEffect(() => {
     if (!activeCacheMeta || activeCacheMeta.sourceKind !== "webdav") {
@@ -880,6 +893,10 @@ function App() {
     }
 
     const cacheId = await createVaultCacheId(adapter.cacheIdentity)
+    const persistedCache = activeCacheMeta?.id === cacheId ? null : await loadVaultCache(cacheId)
+    const nextTrashEntries = activeCacheMeta?.id === cacheId
+      ? trashEntries
+      : persistedCache?.trash ?? []
     const hasUnresolvedSync = mergedNotes.some((note) => note.source === "webdav"
       && (note.syncStatus === "modified" || note.syncStatus === "conflict" || Boolean(note.syncError)))
     const cacheMeta: ActiveCacheMeta = {
@@ -897,6 +914,7 @@ function App() {
       directories: displayDirectories,
       notes: mergedNotes,
       savedAt: Date.now(),
+      trash: nextTrashEntries,
     }
     // 首次读取成功就立刻落盘，避免用户在延迟保存触发前刷新导致这次远程列表丢失。
     await saveVaultCache(snapshot)
@@ -912,6 +930,7 @@ function App() {
       : null)
     setNotes(mergedNotes)
     setVaultDirectories(displayDirectories)
+    setTrashEntries(nextTrashEntries)
     setActiveNoteId(nextActiveNoteId)
     setVaultNoteCount(mergedNotes.filter((note) => note.pendingOperation !== "delete").length)
     setSaveStates(Object.fromEntries(mergedNotes.map((note) => [note.id, getNoteSaveState(note)])))
@@ -1395,7 +1414,6 @@ function App() {
       setVaultError("笔记仍在保存，请稍后再移动")
       return
     }
-
     const pathSegments = note.remotePath.split("/").filter(Boolean)
     const normalizedTitle = requestedTitle?.trim().replace(/[\\/:*?"<>|]/g, "-")
     const filename = normalizedTitle ? `${normalizedTitle}.md` : pathSegments[pathSegments.length - 1]
@@ -1621,7 +1639,7 @@ function App() {
 
   const deleteLocalFolder = async (folderPath: string) => {
     const adapter = vaultSession
-    if (!adapter?.deleteDirectory || (adapter.kind !== "browser" && adapter.kind !== "tauri")) {
+    if (!adapter?.moveDirectory || (adapter.kind !== "browser" && adapter.kind !== "tauri")) {
       setVaultError("当前本地 Vault 不支持删除文件夹")
       return
     }
@@ -1634,7 +1652,10 @@ function App() {
     setIsManagingNote(true)
     setVaultError(null)
     try {
-      await adapter.deleteDirectory(toStorageDirectoryPath(folderPath))
+      const trashId = createTrashId()
+      const originalPath = toStorageDirectoryPath(folderPath)
+      const trashedPath = buildLocalTrashPath(trashId, originalPath)
+      await adapter.moveDirectory(originalPath, trashedPath)
       const candidateIds = new Set(candidates.map((note) => note.id))
       const remainingNotes = notes.filter((note) => !candidateIds.has(note.id))
       setNotes(remainingNotes)
@@ -1647,6 +1668,16 @@ function App() {
         return next
       })
       setVaultNoteCount((count) => Math.max(0, count - candidateIds.size))
+      setTrashEntries((current) => [{
+        deletedAt: Date.now(),
+        folderPath,
+        id: trashId,
+        kind: "folder",
+        notes: candidates,
+        originalPath,
+        source: "local",
+        trashedPath,
+      }, ...current])
       if (candidateIds.has(activeNoteId)) setActiveNoteId(remainingNotes[0]?.id ?? "")
       setSelectedFolder(null)
       setLibraryView("all")
@@ -1756,9 +1787,9 @@ function App() {
       setVaultError("当前状态不能删除该文件夹")
       return
     }
-    const candidateIds = new Set(notes
+    const candidates = notes
       .filter((note) => note.source === "webdav" && note.pendingOperation !== "delete" && noteBelongsToFolder(note, folderPath))
-      .map((note) => note.id))
+    const candidateIds = new Set(candidates.map((note) => note.id))
     if (candidateIds.size === 0) return
     const createdIds = new Set(notes
       .filter((note) => candidateIds.has(note.id) && note.pendingOperation === "create")
@@ -1791,6 +1822,15 @@ function App() {
       return next
     })
     setVaultNoteCount((count) => Math.max(0, count - candidateIds.size))
+    setTrashEntries((current) => [{
+      deletedAt: Date.now(),
+      folderPath,
+      id: createTrashId(),
+      kind: "folder",
+      notes: candidates,
+      originalPath: folderPath,
+      source: "webdav",
+    }, ...current])
     if (candidateIds.has(activeNoteId)) {
       const fallback = availableNotes.find((note) => !candidateIds.has(note.id))
       setActiveNoteId(fallback?.id ?? "")
@@ -1829,6 +1869,7 @@ function App() {
       setVaultError("笔记仍在保存，请稍后再删除")
       return
     }
+    const notePath = note.remotePath
     if (isWebDavNote && note.pendingOperation === "create" && activeCacheMeta?.sourceKind === "webdav") {
       await discardPendingVaultAttachments(activeCacheMeta.id, new Set([note.id]))
       setPendingAttachmentCount((await listPendingVaultAttachments(activeCacheMeta.id)).length)
@@ -1846,6 +1887,14 @@ function App() {
         return next
       })
       setVaultNoteCount((count) => Math.max(0, count - 1))
+      setTrashEntries((current) => [{
+        deletedAt: Date.now(),
+        id: createTrashId(),
+        kind: "note",
+        notes: [note],
+        originalPath: notePath,
+        source: "webdav",
+      }, ...current])
       setActiveNoteId(nextNote?.id ?? "")
       setMobileScreen(nextNote ? "editor" : "notes")
       navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
@@ -1870,13 +1919,21 @@ function App() {
         : candidate))
       setSaveStates((current) => ({ ...current, [note.id]: { status: "pending" } }))
       setVaultNoteCount((count) => Math.max(0, count - 1))
+      setTrashEntries((current) => [{
+        deletedAt: Date.now(),
+        id: createTrashId(),
+        kind: "note",
+        notes: [note],
+        originalPath: notePath,
+        source: "webdav",
+      }, ...current])
       setActiveNoteId(nextNote?.id ?? "")
       setMobileScreen(nextNote ? "editor" : "notes")
       navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
       return
     }
 
-    if (!adapter?.deleteTextFile) {
+    if (!adapter?.moveTextFile) {
       setVaultError("当前笔记库不支持删除文件")
       return
     }
@@ -1884,7 +1941,9 @@ function App() {
     setIsManagingNote(true)
     setVaultError(null)
     try {
-      await adapter.deleteTextFile(note.remotePath)
+      const trashId = createTrashId()
+      const trashedPath = buildLocalTrashPath(trashId, notePath)
+      await adapter.moveTextFile(notePath, trashedPath)
       const currentIndex = notes.findIndex((candidate) => candidate.id === note.id)
       const remainingNotes = notes.filter((candidate) => candidate.id !== note.id)
       const nextNote = remainingNotes[Math.min(Math.max(currentIndex, 0), remainingNotes.length - 1)] ?? null
@@ -1898,6 +1957,15 @@ function App() {
         return next
       })
       setVaultNoteCount((count) => Math.max(0, count - 1))
+      setTrashEntries((current) => [{
+        deletedAt: Date.now(),
+        id: trashId,
+        kind: "note",
+        notes: [note],
+        originalPath: notePath,
+        source: "local",
+        trashedPath,
+      }, ...current])
       setActiveNoteId(nextNote?.id ?? "")
       setMobileScreen(nextNote ? "editor" : "notes")
       navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
@@ -1908,10 +1976,130 @@ function App() {
     }
   }
 
+  const restoreTrashEntries = async (entryIds: ReadonlySet<string>) => {
+    const entries = trashEntries.filter((entry) => entryIds.has(entry.id))
+    if (entries.length === 0) return
+    setIsManagingNote(true)
+    setVaultError(null)
+    const restoredEntryIds = new Set<string>()
+    let restoredNoteCount = 0
+
+    for (const entry of entries) {
+      try {
+        if (entry.source === "local") {
+          const adapter = vaultSession
+          if (!adapter || (adapter.kind !== "browser" && adapter.kind !== "tauri") || !entry.trashedPath) {
+            throw new Error("请重新打开原本地 Vault 后再恢复")
+          }
+          if (entry.kind === "folder") {
+            if (!adapter.moveDirectory) throw new Error("当前客户端不支持恢复文件夹")
+            await adapter.moveDirectory(entry.trashedPath, entry.originalPath)
+          } else {
+            if (!adapter.moveTextFile) throw new Error("当前客户端不支持恢复文件")
+            await adapter.moveTextFile(entry.trashedPath, entry.originalPath)
+          }
+          const restoredNotes = await Promise.all(entry.notes.map(async (note) => {
+            if (!note.remotePath) return { ...note, updatedAt: "刚刚恢复" }
+            const document = await adapter.readTextFile(note.remotePath)
+            revisionByPathRef.current.set(note.remotePath, document.revision)
+            return { ...note, revision: document.revision, updatedAt: "刚刚恢复" }
+          }))
+          setNotes((current) => [...restoredNotes, ...current])
+          setSaveStates((current) => ({
+            ...current,
+            ...Object.fromEntries(entry.notes.map((note) => [note.id, { status: "saved" as const }])),
+          }))
+          if (adapter.listDirectories) {
+            const directories = await adapter.listDirectories()
+            setVaultDirectories(directories.map(deriveDirectoryPath))
+          }
+        } else {
+          // 同步前仍保留墓碑时直接撤销；远端已经删除时则以原正文建立“待创建”工作副本。
+          setNotes((current) => {
+            const next = [...current]
+            for (const snapshot of entry.notes) {
+              const existingIndex = next.findIndex((note) => note.id === snapshot.id && note.pendingOperation === "delete")
+              if (existingIndex >= 0) {
+                const existing = next[existingIndex]
+                next[existingIndex] = {
+                  ...existing,
+                  operationBeforeDelete: undefined,
+                  pendingOperation: existing.operationBeforeDelete,
+                  syncError: undefined,
+                  syncStatus: existing.operationBeforeDelete ? "modified" : "synced",
+                  updatedAt: "刚刚恢复",
+                }
+                continue
+              }
+              const remotePath = snapshot.remotePath ?? entry.originalPath
+              next.unshift({
+                ...snapshot,
+                id: `webdav:${remotePath}`,
+                operationBeforeDelete: undefined,
+                pendingOperation: "create",
+                previousRemotePath: undefined,
+                readOnly: false,
+                remotePath,
+                revision: undefined,
+                syncError: undefined,
+                syncStatus: "modified",
+                updatedAt: "已从回收站恢复 · 待同步",
+              })
+            }
+            return next
+          })
+          setSaveStates((current) => ({
+            ...current,
+            ...Object.fromEntries(entry.notes.map((note) => [note.id, { status: "pending" as const }])),
+          }))
+        }
+        restoredNoteCount += entry.notes.length
+        restoredEntryIds.add(entry.id)
+      } catch (error) {
+        setVaultError(error instanceof Error ? error.message : "恢复回收站项目失败")
+      }
+    }
+
+    if (restoredEntryIds.size > 0) {
+      setTrashEntries((current) => current.filter((entry) => !restoredEntryIds.has(entry.id)))
+      setVaultNoteCount((count) => count + restoredNoteCount)
+    }
+    setIsManagingNote(false)
+  }
+
+  const purgeTrashEntries = async (entryIds: ReadonlySet<string>) => {
+    const entries = trashEntries.filter((entry) => entryIds.has(entry.id))
+    const purgedIds = new Set<string>()
+    for (const entry of entries) {
+      try {
+        if (entry.source === "local") {
+          const adapter = vaultSession
+          if (!adapter || (adapter.kind !== "browser" && adapter.kind !== "tauri") || !entry.trashedPath) continue
+          if (entry.kind === "folder") {
+            if (!adapter.deleteDirectory) continue
+            await adapter.deleteDirectory(entry.trashedPath)
+          } else {
+            if (!adapter.deleteTextFile) continue
+            await adapter.deleteTextFile(entry.trashedPath)
+          }
+        }
+        purgedIds.add(entry.id)
+      } catch (error) {
+        setVaultError(error instanceof Error ? error.message : "清理回收站失败")
+      }
+    }
+    if (purgedIds.size > 0) setTrashEntries((current) => current.filter((entry) => !purgedIds.has(entry.id)))
+  }
+
   const restoreDeletedNote = (noteId: string) => {
+    const entry = trashEntries.find((candidate) => candidate.notes.some((note) => note.id === noteId))
+    if (!entry) return
+    if (entry.notes.length === 1) {
+      void restoreTrashEntries(new Set([entry.id]))
+      return
+    }
     const note = notes.find((candidate) => candidate.id === noteId && candidate.pendingOperation === "delete")
     if (!note) return
-    // 撤销删除会恢复删除前的移动状态，确保后续同步不会丢失尚未上传的重命名操作。
     setNotes((current) => current.map((candidate) => candidate.id === noteId
       ? {
           ...candidate,
@@ -1922,12 +2110,28 @@ function App() {
           updatedAt: "刚刚恢复",
         }
       : candidate))
+    setTrashEntries((current) => current.map((candidate) => candidate.id === entry.id
+      ? { ...candidate, notes: candidate.notes.filter((item) => item.id !== noteId) }
+      : candidate))
     setSaveStates((current) => ({
       ...current,
       [noteId]: note.operationBeforeDelete ? { status: "pending" } : { status: "saved" },
     }))
     setVaultNoteCount((count) => count + 1)
   }
+
+  const changeTrashRetention = (retention: TrashRetentionDays) => {
+    saveTrashRetention(retention)
+    setTrashRetention(retention)
+  }
+
+  useEffect(() => {
+    const expiredIds = new Set(trashEntries
+      .filter((entry) => isTrashEntryExpired(entry, trashRetention))
+      .map((entry) => entry.id))
+    if (expiredIds.size > 0) void purgeTrashEntries(expiredIds)
+    // 保留期限变化或重新连接本地 Vault 时再次尝试，未连接的本地回收项不会只删元数据而遗留孤儿文件。
+  }, [trashEntries, trashRetention, vaultSession])
 
   const openWikiLink = (target: string) => {
     const normalizedTarget = normalizeNoteTarget(target)
@@ -2116,6 +2320,19 @@ function App() {
               onSelectCache={(cacheId) => {
                 void selectVaultCache(cacheId).then(() => navigate("/notes"))
               }}
+            />
+          )}
+        />
+        <Route
+          path="trash"
+          element={(
+            <TrashSettingsPage
+              busy={isManagingNote}
+              entries={trashEntries}
+              onPurge={(entryIds) => void purgeTrashEntries(entryIds)}
+              onRestore={(entryIds) => void restoreTrashEntries(entryIds)}
+              onRetentionChange={changeTrashRetention}
+              retention={trashRetention}
             />
           )}
         />

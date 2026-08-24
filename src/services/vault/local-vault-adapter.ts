@@ -6,7 +6,7 @@ import {
   type VaultFileEntry,
 } from "@/services/vault/vault-adapter"
 
-const ignoredDirectoryNames = new Set([".git", ".obsidian", "node_modules"])
+const ignoredDirectoryNames = new Set([".git", ".obsidian", ".swell-trash", "node_modules"])
 
 type BrowserFileSystemFileHandle = {
   kind: "file"
@@ -117,8 +117,7 @@ export function createBrowserVaultAdapter(root: BrowserFileSystemDirectoryHandle
     },
     async moveTextFile(path, targetPath) {
       if (handles.has(targetPath)) throw new Error(`目标文件已存在：${targetPath}`)
-      const sourceHandle = handles.get(path)
-      if (!sourceHandle) throw new Error(`找不到本地文件：${path}`)
+      const sourceHandle = handles.get(path) ?? await getBrowserFileHandle(root, path, false)
       const content = await sourceHandle.getFile().then((file) => file.text())
       const targetHandle = await getBrowserFileHandle(root, targetPath, true)
       await writeBrowserFile(targetHandle, content)
@@ -277,6 +276,8 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
         join(rootPath, targetPath),
       ])
       if (await exists(absoluteTargetPath)) throw new Error(`目标文件已存在：${targetPath}`)
+      const targetParent = targetPath.split("/").slice(0, -1).join("/")
+      if (targetParent) await mkdir(await join(rootPath, targetParent), { recursive: true })
       await rename(absolutePath, absoluteTargetPath)
       return { path: targetPath, revision: tauriRevision(await stat(absoluteTargetPath)) }
     },
