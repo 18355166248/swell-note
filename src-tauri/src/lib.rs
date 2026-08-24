@@ -2,10 +2,13 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
 const CREDENTIAL_SERVICE: &str = "com.xmly.swell-note.webdav";
+const SEARCH_INDEX_SCHEMA_VERSION: i64 = 1;
 
 struct CredentialStoreState {
     operation_lock: Mutex<()>,
@@ -31,6 +34,16 @@ struct SearchIndexEntry {
 struct CredentialStoreStatus {
     available: bool,
     store: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchIndexStatus {
+    cache_count: u64,
+    database_size_bytes: u64,
+    healthy: bool,
+    indexed_notes: u64,
+    schema_version: i64,
 }
 
 #[tauri::command]
@@ -107,9 +120,15 @@ fn clear_note_search_index(
     state: tauri::State<SearchIndexState>,
     cache_id: String,
 ) -> Result<(), String> {
-    let connection = state.connection.lock().map_err(|_| "搜索索引暂时被占用".to_string())?;
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "搜索索引暂时被占用".to_string())?;
     connection
-        .execute("DELETE FROM note_search WHERE cache_id = ?1", params![cache_id])
+        .execute(
+            "DELETE FROM note_search WHERE cache_id = ?1",
+            params![cache_id],
+        )
         .map_err(search_index_error)?;
     Ok(())
 }
@@ -120,7 +139,10 @@ fn upsert_note_search_index(
     cache_id: String,
     entries: Vec<SearchIndexEntry>,
 ) -> Result<(), String> {
-    let mut connection = state.connection.lock().map_err(|_| "搜索索引暂时被占用".to_string())?;
+    let mut connection = state
+        .connection
+        .lock()
+        .map_err(|_| "搜索索引暂时被占用".to_string())?;
     let transaction = connection.transaction().map_err(search_index_error)?;
     // FTS5 不支持普通 UPSERT；同一事务中先删后插，任何失败都会保留上一版完整索引。
     for entry in entries {
@@ -151,7 +173,10 @@ fn search_note_index(
     if match_query.is_empty() {
         return Ok(Vec::new());
     }
-    let connection = state.connection.lock().map_err(|_| "搜索索引暂时被占用".to_string())?;
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "搜索索引暂时被占用".to_string())?;
     let mut results = search_note_ids(&connection, &cache_id, &match_query, limit)?;
     if results.len() < limit as usize {
         let mut seen = results.iter().cloned().collect::<HashSet<_>>();
@@ -165,6 +190,35 @@ fn search_note_index(
         }
     }
     Ok(results)
+}
+
+#[tauri::command]
+fn get_search_index_status(
+    state: tauri::State<SearchIndexState>,
+) -> Result<SearchIndexStatus, String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "搜索索引暂时被占用".to_string())?;
+    search_index_status(&connection).map_err(search_index_error)
+}
+
+#[tauri::command]
+fn rebuild_note_search_index(
+    state: tauri::State<SearchIndexState>,
+) -> Result<SearchIndexStatus, String> {
+    let connection = state
+        .connection
+        .lock()
+        .map_err(|_| "搜索索引暂时被占用".to_string())?;
+    // Markdown 与 IndexedDB 快照才是事实来源；索引异常时清空可重建数据，比尝试保留损坏页更安全。
+    connection
+        .execute_batch("DROP TABLE IF EXISTS note_search;")
+        .map_err(search_index_error)?;
+    initialize_search_index(&connection).map_err(search_index_error)?;
+    // VACUUM 失败不能让索引表处于缺失状态，因此必须在重建成功之后再压缩数据库。
+    connection.execute_batch("VACUUM;").map_err(search_index_error)?;
+    search_index_status(&connection).map_err(search_index_error)
 }
 
 fn build_match_query(query: &str) -> String {
@@ -188,7 +242,8 @@ fn search_note_ids(
     let rows = statement
         .query_map(params![match_query, cache_id, limit], |row| row.get(0))
         .map_err(search_index_error)?;
-    rows.collect::<Result<Vec<String>, _>>().map_err(search_index_error)
+    rows.collect::<Result<Vec<String>, _>>()
+        .map_err(search_index_error)
 }
 
 fn search_note_ids_like(
@@ -209,7 +264,8 @@ fn search_note_ids_like(
     let rows = statement
         .query_map(params![cache_id, pattern, limit], |row| row.get(0))
         .map_err(search_index_error)?;
-    rows.collect::<Result<Vec<String>, _>>().map_err(search_index_error)
+    rows.collect::<Result<Vec<String>, _>>()
+        .map_err(search_index_error)
 }
 
 fn search_index_error(_error: rusqlite::Error) -> String {
@@ -220,8 +276,16 @@ fn search_index_error(_error: rusqlite::Error) -> String {
 fn initialize_search_index(connection: &Connection) -> Result<(), rusqlite::Error> {
     connection.execute_batch(
         "PRAGMA journal_mode = WAL;
-         PRAGMA synchronous = NORMAL;
-         CREATE VIRTUAL TABLE IF NOT EXISTS note_search USING fts5(
+         PRAGMA synchronous = NORMAL;",
+    )?;
+    let current_version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if current_version > SEARCH_INDEX_SCHEMA_VERSION {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    if current_version < 1 {
+        // 每个迁移只负责从上一版本前进一级，未来扩展字段时可继续追加版本分支。
+        connection.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS note_search USING fts5(
            cache_id UNINDEXED,
            note_id UNINDEXED,
            title,
@@ -229,8 +293,64 @@ fn initialize_search_index(connection: &Connection) -> Result<(), rusqlite::Erro
            content,
            tags,
            tokenize = 'unicode61'
-         );",
-    )
+         );
+         PRAGMA user_version = 1;",
+        )?;
+    }
+    Ok(())
+}
+
+fn search_index_status(connection: &Connection) -> Result<SearchIndexStatus, rusqlite::Error> {
+    let check: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    let schema_version = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    let indexed_notes: i64 =
+        connection.query_row("SELECT count(*) FROM note_search", [], |row| row.get(0))?;
+    let cache_count: i64 = connection.query_row(
+        "SELECT count(DISTINCT cache_id) FROM note_search",
+        [],
+        |row| row.get(0),
+    )?;
+    let page_count: i64 = connection.query_row("PRAGMA page_count", [], |row| row.get(0))?;
+    let page_size: i64 = connection.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+    Ok(SearchIndexStatus {
+        cache_count: cache_count.max(0) as u64,
+        database_size_bytes: page_count.max(0).saturating_mul(page_size.max(0)) as u64,
+        healthy: check.eq_ignore_ascii_case("ok") && schema_version == SEARCH_INDEX_SCHEMA_VERSION,
+        indexed_notes: indexed_notes.max(0) as u64,
+        schema_version,
+    })
+}
+
+fn open_search_index(path: &Path) -> Result<Connection, rusqlite::Error> {
+    match try_open_search_index(path) {
+        Ok(connection) => Ok(connection),
+        Err(_) => {
+            // 搜索库不保存用户正文的唯一副本；保留损坏文件用于排查后创建空索引，启动不应被缓存损坏阻断。
+            archive_corrupt_search_index(path);
+            try_open_search_index(path)
+        }
+    }
+}
+
+fn try_open_search_index(path: &Path) -> Result<Connection, rusqlite::Error> {
+    let connection = Connection::open(path)?;
+    initialize_search_index(&connection)?;
+    if !search_index_status(&connection)?.healthy {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    Ok(connection)
+}
+
+fn archive_corrupt_search_index(path: &Path) {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let backup_path = PathBuf::from(format!("{}.corrupt-{timestamp}", path.display()));
+    let _ = fs::rename(path, backup_path);
+    for suffix in ["-wal", "-shm"] {
+        let _ = fs::remove_file(PathBuf::from(format!("{}{suffix}", path.display())));
+    }
 }
 
 fn initialize_native_credential_store() -> Result<(), keyring_core::Error> {
@@ -273,15 +393,20 @@ pub fn run() {
         .setup(|app| {
             let data_directory = app.path().app_data_dir()?;
             fs::create_dir_all(&data_directory)?;
-            let connection = Connection::open(data_directory.join("note-search.sqlite3"))?;
-            initialize_search_index(&connection)?;
-            app.manage(SearchIndexState { connection: Mutex::new(connection) });
+            let connection = open_search_index(&data_directory.join("note-search.sqlite3"))?;
+            app.manage(SearchIndexState {
+                connection: Mutex::new(connection),
+            });
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             Ok(())
         })
         .manage(credential_store_state)
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             credential_store_status,
@@ -291,6 +416,8 @@ pub fn run() {
             clear_note_search_index,
             upsert_note_search_index,
             search_note_index,
+            get_search_index_status,
+            rebuild_note_search_index,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -323,6 +450,23 @@ mod tests {
         let substring_ids = search_note_ids_like(&connection, "vault-a", "完成", 20)
             .expect("search chinese substring");
         assert_eq!(substring_ids, vec!["note-1"]);
+    }
+
+    #[test]
+    fn sqlite_index_reports_health_and_can_rebuild() {
+        let connection = Connection::open_in_memory().expect("open sqlite");
+        initialize_search_index(&connection).expect("initialize fts");
+        connection
+            .execute(
+                "INSERT INTO note_search(cache_id, note_id, title, path, content, tags) VALUES ('a', '1', '标题', 'a.md', '正文', '')",
+                [],
+            )
+            .expect("insert note");
+        let status = search_index_status(&connection).expect("read status");
+        assert!(status.healthy);
+        assert_eq!(status.indexed_notes, 1);
+        assert_eq!(status.cache_count, 1);
+        assert_eq!(status.schema_version, SEARCH_INDEX_SCHEMA_VERSION);
     }
 }
 

@@ -81,6 +81,24 @@ export async function listPendingVaultAttachments(cacheId: string) {
   return entries.filter((entry) => entry.status !== "synced").sort((left, right) => left.createdAt - right.createdAt)
 }
 
+export async function listVaultAttachments(cacheId: string) {
+  const database = await openDatabase()
+  const entries = await requestResult<VaultAttachmentCacheEntry[]>(
+    database.transaction(ATTACHMENT_STORE, "readonly").objectStore(ATTACHMENT_STORE).index("cacheId").getAll(cacheId),
+  )
+  database.close()
+  return entries.sort((left, right) => left.createdAt - right.createdAt)
+}
+
+export async function deleteVaultAttachments(keys: readonly string[]) {
+  if (keys.length === 0) return
+  const database = await openDatabase()
+  const transaction = database.transaction(ATTACHMENT_STORE, "readwrite")
+  for (const key of keys) transaction.objectStore(ATTACHMENT_STORE).delete(key)
+  await transactionDone(transaction)
+  database.close()
+}
+
 export async function updateVaultAttachmentStatus(
   entry: VaultAttachmentCacheEntry,
   status: VaultAttachmentCacheEntry["status"],

@@ -8,6 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+src-tauri/tauri.release.conf.json
 dist
 dist-ssr
 *.local

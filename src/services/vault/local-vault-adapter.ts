@@ -208,7 +208,7 @@ async function collectBrowserDirectories(
 }
 
 async function selectTauriVault(): Promise<VaultAdapter | null> {
-  const [{ open }, { exists, mkdir, readDir, readFile, readTextFile, remove, rename, stat, writeFile, writeTextFile }, { join }] = await Promise.all([
+  const [{ open }, { exists, mkdir, readDir, readFile, readTextFile, remove, rename, stat, watch, writeFile, writeTextFile }, { join }] = await Promise.all([
     import("@tauri-apps/plugin-dialog"),
     import("@tauri-apps/plugin-fs"),
     import("@tauri-apps/api/path"),
@@ -223,6 +223,16 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
     displayName: pathSegments[pathSegments.length - 1] ?? "本地笔记库",
     kind: "tauri",
     readOnly: false,
+    async watchChanges(onChange) {
+      return watch(rootPath, (event) => {
+        const relevant = event.paths.some((changedPath) => {
+          const normalized = changedPath.replace(/\\/g, "/")
+          if (["/.git/", "/.obsidian/", "/.swell-trash/", "/node_modules/", "/attachments/"].some((segment) => normalized.includes(segment))) return false
+          return normalized.toLocaleLowerCase().endsWith(".md") || !normalized.split("/").pop()?.includes(".")
+        })
+        if (relevant) onChange()
+      }, { delayMs: 700, recursive: true })
+    },
     async createDirectory(path) {
       const absolutePath = await join(rootPath, path)
       if (await exists(absolutePath)) throw new Error(`文件夹已存在：${path}`)

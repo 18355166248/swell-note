@@ -1,0 +1,31 @@
+server {
+    listen 443 ssl http2;
+    server_name notes.example.com;
+
+    root /srv/swell-note/dist;
+    index index.html;
+    client_max_body_size 21m;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+        add_header Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' blob: data:; media-src 'self' blob: data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header X-Content-Type-Options "nosniff" always;
+    }
+
+    # 上游固定为坚果云，不能把目标地址交给客户端决定，避免把代理变成 SSRF 入口。
+    location /api/webdav/ {
+        proxy_pass https://dav.jianguoyun.com/dav/;
+        proxy_ssl_server_name on;
+        proxy_set_header Host dav.jianguoyun.com;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Destination $http_destination;
+        proxy_set_header Depth $http_depth;
+        proxy_set_header If-Match $http_if_match;
+        proxy_set_header If-None-Match $http_if_none_match;
+        proxy_request_buffering off;
+        proxy_hide_header Set-Cookie;
+        add_header Cache-Control "no-store" always;
+        access_log off;
+    }
+}

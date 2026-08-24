@@ -14,6 +14,23 @@ export default defineConfig(async () => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // 编辑器、Markdown 渲染与 UI 组件按能力拆包，移动端首次进入目录页无需下载全部编辑依赖。
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("@uiw/react-codemirror")) return "editor-react";
+          if (id.includes("@codemirror/view") || id.includes("@codemirror/state")) return "editor-core";
+          if (id.includes("@codemirror/") || id.includes("@lezer/")) return "editor-features";
+          if (id.includes("react-markdown") || id.includes("remark-") || id.includes("micromark") || id.includes("mdast-") || id.includes("hast-")) return "markdown-vendor";
+          if (id.includes("radix-ui") || id.includes("lucide-react")) return "ui-vendor";
+          if (id.includes("react") || id.includes("scheduler")) return "react-vendor";
+          return undefined;
+        },
+      },
+    },
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
@@ -36,7 +53,7 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
     proxy: {
-      // Web 预览通过同源代理规避 WebDAV CORS；代理不保存或记录 Authorization。
+      // 本地预览沿用与生产部署一致的路径；生产环境必须由网关实现同源反向代理。
       "/api/webdav": {
         target: "https://dav.jianguoyun.com",
         changeOrigin: true,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowLeft,
   AlertTriangle,
@@ -7,7 +7,9 @@ import {
   Cloud,
   CloudOff,
   Database,
+  Download,
   FileCheck2,
+  HardDrive,
   Info,
   ListTodo,
   RefreshCw,
@@ -24,12 +26,24 @@ import {
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { extractMarkdownTasks, type MarkdownTask } from "@/services/tasks/markdown-tasks"
-import type { VaultCacheSummary } from "@/services/cache/vault-cache"
+import {
+  deleteVaultAttachments,
+  listVaultAttachments,
+  type VaultCacheSummary,
+} from "@/services/cache/vault-cache"
+import { inspectCachedAttachments, type AttachmentMaintenanceReport } from "@/services/vault/attachment-maintenance"
+import { getNativeSearchIndexStatus, supportsNativeSearchIndex, type NativeSearchIndexStatus } from "@/services/search/sqlite-note-index"
 import { summarizeWebDavSync } from "@/services/sync/sync-summary"
 import type { AutoSyncMode } from "@/services/sync/sync-preferences"
 import type { SyncLogEntry } from "@/services/sync/sync-log"
 import type { Note } from "@/types/note"
 import type { TrashEntry, TrashRetentionDays } from "@/services/trash/trash-entry"
+import {
+  checkForAppUpdate,
+  installAppUpdate,
+  supportsAppUpdater,
+  type AppUpdate,
+} from "@/services/release/app-updater"
 
 type NavigationProps = {
   connected: boolean
@@ -164,6 +178,7 @@ const settingsEntries = [
   { description: "查看待同步、冲突和失败项，并手动发起同步", icon: RefreshCw, label: "同步状态", path: "/settings/sync" },
   { description: "坚果云地址、账号、应用密码与远端目录", icon: Cloud, label: "WebDAV 连接", path: "/settings/webdav" },
   { description: "查看并切换保存在本机的 Vault 快照", icon: Database, label: "离线缓存", path: "/settings/cache" },
+  { description: "检查搜索索引与未使用附件缓存", icon: HardDrive, label: "存储维护", path: "/settings/storage" },
   { description: "批量恢复已删除笔记，并设置自动清理期限", icon: Trash2, label: "回收站", path: "/settings/trash" },
   { description: "版本、数据边界与开源组件", icon: Info, label: "关于 Swell Note", path: "/settings/about" },
 ]
@@ -171,6 +186,12 @@ const settingsEntries = [
 export function SettingsLayout({ connected, onNavigate, onOpenSync }: NavigationProps) {
   const location = useLocation()
   const activeEntry = settingsEntries.find((entry) => location.pathname === entry.path)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+
+  useEffect(() => {
+    // 二级路由切换后把读屏与键盘焦点送到新页面标题，避免焦点停在已经卸载的菜单按钮上。
+    if (activeEntry) headingRef.current?.focus({ preventScroll: true })
+  }, [activeEntry])
 
   return (
     <main className="settings-route-shell">
@@ -201,7 +222,7 @@ export function SettingsLayout({ connected, onNavigate, onOpenSync }: Navigation
           ) : null}
           <div>
             <span className="eyebrow">应用设置</span>
-            <h1>{activeEntry?.label ?? "设置"}</h1>
+            <h1 ref={headingRef} tabIndex={-1}>{activeEntry?.label ?? "设置"}</h1>
           </div>
         </header>
         <ScrollArea className="route-scroll-area">
@@ -210,6 +231,108 @@ export function SettingsLayout({ connected, onNavigate, onOpenSync }: Navigation
       </section>
       <AppBottomNav activeSection="settings" onNavigate={onNavigate} />
     </main>
+  )
+}
+
+export function StorageMaintenancePage({
+  activeCacheId,
+  notes,
+  onRebuildSearchIndex,
+}: {
+  activeCacheId: string | null
+  notes: Note[]
+  onRebuildSearchIndex: () => Promise<void>
+}) {
+  const [attachments, setAttachments] = useState<AttachmentMaintenanceReport | null>(null)
+  const [indexStatus, setIndexStatus] = useState<NativeSearchIndexStatus | null>(null)
+  const [busyAction, setBusyAction] = useState<"attachments" | "index" | null>(null)
+  const [message, setMessage] = useState("")
+
+  const refresh = async () => {
+    const [entries, nativeStatus] = await Promise.all([
+      activeCacheId ? listVaultAttachments(activeCacheId) : Promise.resolve([]),
+      getNativeSearchIndexStatus(),
+    ])
+    setAttachments(inspectCachedAttachments(notes, entries))
+    setIndexStatus(nativeStatus)
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    void Promise.all([
+      activeCacheId ? listVaultAttachments(activeCacheId) : Promise.resolve([]),
+      getNativeSearchIndexStatus(),
+    ]).then(([entries, nativeStatus]) => {
+      if (cancelled) return
+      setAttachments(inspectCachedAttachments(notes, entries))
+      setIndexStatus(nativeStatus)
+    }).catch(() => {
+      if (!cancelled) setMessage("读取存储状态失败，请稍后重试")
+    })
+    return () => { cancelled = true }
+  }, [activeCacheId, notes])
+
+  const cleanupAttachments = async () => {
+    if (!attachments || attachments.orphaned.length === 0) return
+    if (!window.confirm(`将删除 ${attachments.orphaned.length} 个未被正文引用的本机附件缓存，不会删除坚果云文件。是否继续？`)) return
+    setBusyAction("attachments")
+    setMessage("")
+    try {
+      await deleteVaultAttachments(attachments.orphaned.map((entry) => entry.key))
+      await refresh()
+      setMessage("未使用的本机附件缓存已清理")
+    } catch {
+      setMessage("附件缓存清理失败，现有文件未受影响")
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const rebuildIndex = async () => {
+    if (!window.confirm("搜索索引会从当前已缓存的 Markdown 正文重新建立，不会修改任何笔记。是否继续？")) return
+    setBusyAction("index")
+    setMessage("")
+    try {
+      await onRebuildSearchIndex()
+      await refresh()
+      setMessage("搜索索引已重新建立")
+    } catch {
+      setMessage("搜索索引重建失败，可以重新打开笔记库后再试")
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  return (
+    <div className="settings-content-card storage-maintenance-page">
+      <div className="settings-content-heading">
+        <HardDrive />
+        <div><h2>本机数据状态</h2><p>这里只清理可重建索引和本机附件缓存，不会直接修改 Vault 或坚果云文件。</p></div>
+      </div>
+      <div className="maintenance-card-list">
+        <section>
+          <div><strong>全文搜索索引</strong><small>{supportsNativeSearchIndex()
+            ? indexStatus
+              ? `${indexStatus.indexedNotes} 条 · ${formatBytes(indexStatus.databaseSizeBytes)} · 结构版本 ${indexStatus.schemaVersion}`
+              : "正在读取索引状态…"
+            : "Web 端使用内存索引，重新打开笔记库即可重建"}</small></div>
+          <Button disabled={!supportsNativeSearchIndex() || busyAction !== null} onClick={() => void rebuildIndex()} variant="outline">
+            {busyAction === "index" ? <RefreshCw className="spin" /> : null}重建索引
+          </Button>
+        </section>
+        <section>
+          <div><strong>附件离线缓存</strong><small>{attachments
+            ? attachments.scanComplete
+              ? `${attachments.entries.length} 个 · ${formatBytes(attachments.bytes)} · ${attachments.orphaned.length} 个未使用`
+              : `${attachments.entries.length} 个 · ${formatBytes(attachments.bytes)} · 正文索引完成后可巡检`
+            : "正在检查附件引用…"}</small></div>
+          <Button disabled={!attachments?.scanComplete || !attachments.orphaned.length || busyAction !== null} onClick={() => void cleanupAttachments()} variant="outline">
+            {busyAction === "attachments" ? <RefreshCw className="spin" /> : null}清理未使用缓存
+          </Button>
+        </section>
+      </div>
+      {message ? <p aria-live="polite" className="maintenance-message">{message}</p> : null}
+    </div>
   )
 }
 
@@ -414,6 +537,7 @@ export function SyncSettingsPage({
   const indexing = indexProgress && indexProgress.indexed < indexProgress.total
   const canSync = isOnline && !isSyncing
   const failedCount = summary.failed + failedAttachmentCount
+  const syncWorkCount = summary.pending + summary.failed + pendingAttachmentCount + failedAttachmentCount
   const syncPercent = syncProgress
     ? syncProgress.phase === "refreshing"
       ? 100
@@ -442,7 +566,9 @@ export function SyncSettingsPage({
           </Button>
         ) : (
           <Button disabled={!canSync} onClick={connected ? onSync : onOpenWebDav}>
-            {connected ? "同步全部" : hasCachedNotes ? "重新连接坚果云" : "连接坚果云"}
+            {connected
+              ? syncWorkCount > 0 ? `同步 ${syncWorkCount} 项` : "检查云端更新"
+              : hasCachedNotes ? "重新连接坚果云" : "连接坚果云"}
           </Button>
         )}
       </div>
@@ -566,7 +692,7 @@ export function SyncSettingsPage({
               </div>
             ))}
           </div>
-        ) : <div className="sync-empty-state"><RefreshCw /><span><strong>还没有同步记录</strong><small>下一次同步结果会显示在这里。</small></span></div>}
+        ) : <div className="sync-empty-state"><RefreshCw /><span><strong>此设备暂无同步日志</strong><small>{lastSyncedAt ? "上方时间来自当前 Vault 快照；下一次主动同步会在这里记录结果。" : "下一次同步结果会显示在这里。"}</small></span></div>}
       </section>
     </div>
   )
@@ -580,6 +706,40 @@ function getPendingOperationLabel(note: Note) {
 }
 
 export function AboutSettingsPage() {
+  const [update, setUpdate] = useState<AppUpdate | null>(null)
+  const [updateState, setUpdateState] = useState<"checking" | "downloading" | "idle">("idle")
+  const [updateMessage, setUpdateMessage] = useState("")
+  const [updateProgress, setUpdateProgress] = useState(0)
+  const updaterSupported = supportsAppUpdater()
+
+  const checkUpdate = async () => {
+    setUpdateState("checking")
+    setUpdateMessage("")
+    try {
+      const nextUpdate = await checkForAppUpdate()
+      setUpdate(nextUpdate)
+      setUpdateMessage(nextUpdate ? `发现新版本 ${nextUpdate.version}` : "当前已经是最新版本")
+    } catch {
+      setUpdateMessage("当前安装包未启用自动更新，仍可从 GitHub Releases 手动下载安装")
+    } finally {
+      setUpdateState("idle")
+    }
+  }
+
+  const installUpdate = async () => {
+    if (!update || !window.confirm(`将下载并安装 Swell Note ${update.version}，完成后应用会重新启动。是否继续？`)) return
+    setUpdateState("downloading")
+    setUpdateMessage("正在下载更新…")
+    try {
+      await installAppUpdate(update, ({ downloaded, total }) => {
+        setUpdateProgress(total ? Math.round((downloaded / total) * 100) : 0)
+      })
+    } catch {
+      setUpdateMessage("更新安装失败，现有版本不受影响")
+      setUpdateState("idle")
+    }
+  }
+
   return (
     <div className="settings-content-card">
       <div className="settings-content-heading">
@@ -592,6 +752,14 @@ export function AboutSettingsPage() {
         <div><dt>云端策略</dt><dd>本地优先，可配置安全同步</dd></div>
         <div><dt>密码策略</dt><dd>Web 仅当前会话 / 原生端可选系统安全存储</dd></div>
       </dl>
+      <div className="about-update-row">
+        <div><strong>版本更新</strong><small>{updaterSupported ? updateMessage || "桌面正式版可安全检查签名更新" : "Web 端随站点更新；移动端由应用商店更新"}</small></div>
+        {updaterSupported ? update ? (
+          <Button disabled={updateState !== "idle"} onClick={() => void installUpdate()}><Download />{updateState === "downloading" ? `下载 ${updateProgress || ""}%` : `安装 ${update.version}`}</Button>
+        ) : (
+          <Button disabled={updateState !== "idle"} onClick={() => void checkUpdate()} variant="outline">{updateState === "checking" ? <RefreshCw className="spin" /> : null}检查更新</Button>
+        ) : null}
+      </div>
     </div>
   )
 }
@@ -603,6 +771,12 @@ function formatCacheDate(savedAt: number) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(savedAt))
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 function formatSyncDate(lastSyncedAt?: number) {

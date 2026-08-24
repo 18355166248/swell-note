@@ -55,5 +55,6 @@ export interface VaultAdapter {
   readBinaryFile?(path: string): Promise<VaultAsset>
   readTextFile(path: string): Promise<VaultDocument>
   moveTextFile?(path: string, targetPath: string, expectedRevision?: string): Promise<VaultCreateResult>
+  watchChanges?(onChange: () => void): Promise<() => void>
   writeTextFile?(path: string, content: string, expectedRevision?: string): Promise<VaultWriteResult>
 }

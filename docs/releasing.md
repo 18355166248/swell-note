@@ -33,3 +33,11 @@ iOS 发布 Secrets：
 - `IOS_MOBILE_PROVISION`：App Store Connect provisioning profile 的 Base64 内容。
 
 Android 和 iOS 在标签发布时会强制检查证书，缺失则明确失败，避免发布调试包。macOS 当前采用 ad-hoc 签名，用户首次打开仍可能需要在“隐私与安全性”中确认；要消除此提示并完成公证，需要后续配置 Apple Developer ID 和公证凭据。Windows 未配置代码签名证书时可能触发 SmartScreen，正式面向公众分发前应补充 Windows 签名。
+
+桌面自动更新与正式签名还需要以下 Secrets：
+
+- `TAURI_UPDATER_PUBLIC_KEY`、`TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：Tauri 更新签名密钥。私钥必须另行安全备份，丢失后已安装客户端无法继续验证新版本。
+- macOS：`APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`KEYCHAIN_PASSWORD`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`。标签发布会进行 Developer ID 签名和公证。
+- Windows：`WINDOWS_CERTIFICATE`、`WINDOWS_CERTIFICATE_PASSWORD`、`WINDOWS_CERTIFICATE_THUMBPRINT`。标签发布会导入证书并签名安装包。
+
+标签工作流会生成只在 CI 使用的 `tauri.release.conf.json` 和更新签名产物；普通本地构建不需要私钥，也不会伪装成可自动更新的正式安装包。更新元数据由 GitHub Release 的 `latest.json` 提供。

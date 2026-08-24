@@ -263,12 +263,20 @@ function buildRequestUrl(config: WebDavConfig, path: string) {
   const encodedPath = encodePath(path)
   const server = new URL(config.serverUrl)
 
-  // 浏览器开发预览经 Vite 同源代理访问，原生端后续切换到 Tauri HTTP 插件。
-  if (!isTauri() && import.meta.env.DEV && server.hostname === "dav.jianguoyun.com") {
-    return `/api/webdav${encodedPath}`
+  if (!isTauri() && server.hostname === "dav.jianguoyun.com") {
+    const configuredProxy = import.meta.env.VITE_WEBDAV_PROXY_URL?.trim()
+    // Web 生产环境不能依赖坚果云的跨域策略；统一走部署方控制的同源代理，避免上线后静默失效。
+    if (configuredProxy) return buildProxyUrl(configuredProxy, encodedPath)
+    if (import.meta.env.DEV) return `/api/webdav${encodedPath}`
+    throw new Error("Web 版本尚未配置安全的 WebDAV 代理，请联系部署管理员")
   }
 
   return buildRemoteUrl(config, path)
+}
+
+function buildProxyUrl(proxyUrl: string, encodedPath: string) {
+  const normalizedProxy = proxyUrl.endsWith("/") ? proxyUrl.slice(0, -1) : proxyUrl
+  return `${normalizedProxy}${encodedPath}`
 }
 
 function buildRemoteUrl(config: WebDavConfig, path: string) {

@@ -7,6 +7,7 @@ import {
   CacheSettingsPage,
   SettingsLayout,
   SettingsOverview,
+  StorageMaintenancePage,
   SyncSettingsPage,
   TodoPage,
   TrashSettingsPage,
@@ -57,6 +58,7 @@ import { buildVaultFolders, noteBelongsToFolder } from "@/services/search/vault-
 import { getFolderRenameTarget } from "@/services/search/folder-rename"
 import {
   clearNativeSearchIndex,
+  rebuildNativeSearchIndex,
   searchNativeNoteIndex,
   supportsNativeSearchIndex,
   toNativeSearchEntry,
@@ -1008,6 +1010,16 @@ function App() {
     setSaveStates(Object.fromEntries(mergedNotes.map((note) => [note.id, getNoteSaveState(note)])))
     setVaultError(null)
     if (!preserveContext) setMobileScreen("notes")
+    const refreshedIndexEntries = mergedNotes
+      .filter((note) => note.contentLoaded && note.remotePath && loadedDocuments.has(note.remotePath))
+      .map((note) => ({
+        content: note.content,
+        noteId: note.remotePath!,
+        path: note.remotePath!,
+        tags: note.tags?.join(" ") ?? "",
+        title: note.title,
+      }))
+    await upsertNativeSearchIndex(cacheId, refreshedIndexEntries)
     // WebDAV 也建立全文索引，但降低并发并在批次间让出时间，避免触发坚果云频率限制。
     const filesToIndex = files.filter((file) => !mergedNotes.find((note) =>
       note.remotePath === file.path && typeof note.searchText === "string",
@@ -1318,6 +1330,47 @@ function App() {
     clearSyncLog()
     setSyncLogs([])
   }
+
+  const rebuildSearchIndex = async () => {
+    if (!activeCacheMeta || !supportsNativeSearchIndex()) return
+    await rebuildNativeSearchIndex()
+    const entries = notes
+      .filter((note) => note.contentLoaded && note.remotePath)
+      .map((note) => ({
+        content: note.content,
+        noteId: note.remotePath!,
+        path: note.remotePath!,
+        tags: note.tags?.join(" ") ?? "",
+        title: note.title,
+      }))
+    // 清空后立刻从当前离线快照回填，用户不需要重新连接坚果云才能恢复搜索。
+    await upsertNativeSearchIndex(activeCacheMeta.id, entries)
+  }
+
+  useEffect(() => {
+    if (!vaultSession?.watchChanges) return
+    let disposed = false
+    let refreshTimer: number | undefined
+    let stopWatching: (() => void) | undefined
+    void vaultSession.watchChanges(() => {
+      window.clearTimeout(refreshTimer)
+      refreshTimer = window.setTimeout(() => {
+        if (disposed || activeSyncRunRef.current) return
+        // 外部编辑只重新读取本地 Vault；保留当前路由、滚动位置和仍在编辑的工作副本。
+        void loadVault(vaultSession, true, notesRef.current).catch((error) => {
+          if (!disposed) setVaultError(error instanceof Error ? error.message : "刷新本地笔记库失败")
+        })
+      }, 500)
+    }).then((unwatch) => {
+      if (disposed) unwatch()
+      else stopWatching = unwatch
+    }).catch(() => undefined)
+    return () => {
+      disposed = true
+      window.clearTimeout(refreshTimer)
+      stopWatching?.()
+    }
+  }, [vaultSession])
 
   const selectVaultCache = async (cacheId: string) => {
     try {
@@ -2483,6 +2536,16 @@ function App() {
               onSelectCache={(cacheId) => {
                 void selectVaultCache(cacheId).then(() => navigate("/notes"))
               }}
+            />
+          )}
+        />
+        <Route
+          path="storage"
+          element={(
+            <StorageMaintenancePage
+              activeCacheId={activeCacheMeta?.id ?? null}
+              notes={notes}
+              onRebuildSearchIndex={rebuildSearchIndex}
             />
           )}
         />

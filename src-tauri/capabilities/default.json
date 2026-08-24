@@ -19,6 +19,8 @@
       "identifier": "http:default",
       "allow": [{ "url": "https://dav.jianguoyun.com/**" }]
     },
-    "opener:default"
+    "opener:default",
+    "process:allow-restart",
+    "updater:default"
   ]
 }

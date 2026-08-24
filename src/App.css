@@ -85,6 +85,16 @@
   }
   button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; }
   button, input, textarea { font: inherit; }
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
 }
 
 .workspace-root { height: 100dvh; overflow: hidden; background: var(--background); }
@@ -104,6 +114,7 @@
 .route-main-panel, .settings-detail-panel { display: flex; min-width: 0; min-height: 0; flex-direction: column; }
 .route-page-header, .settings-detail-header { display: flex; min-height: 74px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); padding: 13px 24px; }
 .route-page-header h1, .settings-detail-header h1 { margin: 2px 0 0; font-size: 21px; font-weight: 680; letter-spacing: -.025em; }
+.settings-detail-header h1:focus { outline: none; }
 .route-count { border-radius: 999px; background: var(--blue-soft); padding: 5px 10px; color: var(--primary); font-size: 11px; font-weight: 650; }
 .route-scroll-area { min-height: 0; flex: 1; }
 .todo-filter { display: flex; gap: 4px; border-bottom: 1px solid var(--border); padding: 10px 24px; }
@@ -234,6 +245,14 @@
 .about-list div:last-child { border-bottom: 0; }
 .about-list dt { color: var(--muted-foreground); }
 .about-list dd { margin: 0; text-align: right; }
+.about-update-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 14px; border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+.about-update-row strong, .about-update-row small { display: block; }
+.about-update-row small { margin-top: 4px; color: var(--muted-foreground); font-size: 11px; line-height: 1.5; }
+.maintenance-card-list { display: grid; gap: 12px; }
+.maintenance-card-list section { display: flex; min-height: 72px; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+.maintenance-card-list strong, .maintenance-card-list small { display: block; }
+.maintenance-card-list small { margin-top: 5px; color: var(--muted-foreground); font-size: 11px; line-height: 1.5; }
+.maintenance-message { margin: 14px 0 0; color: var(--muted-foreground); font-size: 12px; }
 .settings-form-grid { display: grid; gap: 20px; }
 .settings-field { display: grid; gap: 8px; }
 .settings-field > button, .settings-field > p { width: fit-content; margin: 0; color: var(--muted-foreground); font-size: 11px; line-height: 1.5; }
