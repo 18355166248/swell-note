@@ -1,7 +1,9 @@
 import { forwardRef, useImperativeHandle, useMemo, useRef } from "react"
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror"
-import { markdown } from "@codemirror/lang-markdown"
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { EditorView } from "@codemirror/view"
+
+import { markdownLivePreview } from "./live-preview"
 
 export type MarkdownEditorHandle = {
   insertText: (text: string) => void
@@ -21,7 +23,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   function MarkdownEditor({ onChange, onCursorChange, onInsertFiles, readOnly = false, value }, ref) {
     const editorRef = useRef<ReactCodeMirrorRef>(null)
     const extensions = useMemo(() => [
-      markdown(),
+      // GFM 基座：表格、删除线与任务列表才能进入语法树，供语法高亮与即时渲染装饰使用。
+      markdown({ base: markdownLanguage }),
+      markdownLivePreview,
       EditorView.lineWrapping,
       EditorView.updateListener.of((update) => {
         if (!update.selectionSet && !update.docChanged) return

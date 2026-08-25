@@ -460,6 +460,19 @@
 .markdown-editor-shell .cm-content ::selection { background: color-mix(in oklab,var(--primary) 18%,transparent) !important; }
 .markdown-editor-shell .cm-cursor { border-left-color: var(--primary); }
 .markdown-editor-shell .cm-placeholder { color: var(--muted-foreground); font-style: normal; }
+/* 编辑器即时渲染：非光标行隐藏语法标记并直接呈现最终样式，与阅读预览保持同一套观感。 */
+.markdown-editor-shell .cm-md-heading { font-weight: 700; letter-spacing: -.01em; color: #1d2530; line-height: 1.45; }
+.markdown-editor-shell .cm-md-h1 { font-size: 1.55em; }
+.markdown-editor-shell .cm-md-h2 { font-size: 1.35em; }
+.markdown-editor-shell .cm-md-h3 { font-size: 1.18em; }
+.markdown-editor-shell .cm-md-h4, .markdown-editor-shell .cm-md-h5, .markdown-editor-shell .cm-md-h6 { font-size: 1.05em; }
+.markdown-editor-shell .cm-md-strong { font-weight: 700; }
+.markdown-editor-shell .cm-md-em { font-style: italic; }
+.markdown-editor-shell .cm-md-strike { color: var(--muted-foreground); text-decoration: line-through; }
+.markdown-editor-shell .cm-md-inline-code { border-radius: 4px; background: var(--muted); padding: .1em .32em; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
+.markdown-editor-shell .cm-md-quote { border-left: 3px solid var(--blue-line); background: var(--panel-soft); color: var(--muted-foreground); }
+.markdown-editor-shell .cm-md-codeblock { background: #f5f7fa; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
+.markdown-editor-shell .cm-md-task-checkbox { margin: 0 .5em 0 .12em; accent-color: var(--primary); cursor: pointer; vertical-align: middle; }
 .preview-toggle[data-active="true"] { background: var(--blue-soft); color: var(--primary); }
 .note-list-actions { display: flex; align-items: center; gap: 2px; }
 .note-list-actions [data-active="true"] { background: var(--blue-soft); color: var(--primary); }
