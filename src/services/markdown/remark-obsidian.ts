@@ -70,10 +70,48 @@ function transformBlockId(node: MdNode) {
   }
 }
 
+// ==高亮== 转成 mark 节点；%%注释%% 直接从阅读视图移除（整段都是注释时隐藏该段落）。
+const inlineSyntaxPattern = /(==|%%)([\s\S]*?)\1/
+
+function expandInlineSyntax(value: string): MdNode[] {
+  const nodes: MdNode[] = []
+  let rest = value
+  while (rest) {
+    const match = rest.match(inlineSyntaxPattern)
+    if (!match || match.index === undefined) {
+      nodes.push({ type: "text", value: rest })
+      break
+    }
+    if (match.index > 0) nodes.push({ type: "text", value: rest.slice(0, match.index) })
+    if (match[1] === "==") {
+      nodes.push({ type: "text", value: match[2], data: { hName: "mark" } })
+    }
+    rest = rest.slice(match.index + match[0].length)
+  }
+  return nodes
+}
+
+function transformInlineSyntax(node: MdNode) {
+  if (!node.children?.length) return
+  const expanded: MdNode[] = []
+  for (const child of node.children) {
+    if (child.type !== "text" || !child.value) {
+      expanded.push(child)
+      continue
+    }
+    expanded.push(...expandInlineSyntax(child.value))
+  }
+  node.children = expanded.filter((child) => child.type !== "text" || child.value !== "")
+  if (node.type === "paragraph" && node.children.length === 0) {
+    node.data = { ...node.data, hProperties: { ...node.data?.hProperties, hidden: true } }
+  }
+}
+
 function visit(node: MdNode) {
   if (node.type === "blockquote") transformBlockquote(node)
   transformWikiEmbed(node)
   transformBlockId(node)
+  transformInlineSyntax(node)
   node.children?.forEach(visit)
 }
 

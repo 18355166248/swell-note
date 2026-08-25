@@ -2594,6 +2594,14 @@ function App() {
             onResolveAsset={resolveActiveAsset}
             onLoadWikiNote={loadWikiNote}
             onResolveWikiNote={resolveWikiNote}
+            onToggleNoteTask={(noteId, line, checked) => toggleTask({
+              checked,
+              id: `${noteId}:${line}`,
+              line,
+              noteId,
+              noteTitle: "",
+              text: "",
+            }, checked)}
             onSelectFolder={(folder) => {
               setLibraryView("all")
               setSelectedFolder(folder)

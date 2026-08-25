@@ -64,4 +64,55 @@ describe("remark Obsidian compatibility", () => {
     })
     expect(tree.children[0].children).toEqual([])
   })
+
+  it("wraps ==highlights== in mark nodes and keeps surrounding text", () => {
+    const tree: any = {
+      children: [{
+        children: [{ type: "text", value: "重点 ==是这里== 以及后续" }],
+        type: "paragraph",
+      }],
+      type: "root",
+    }
+
+    remarkObsidian()(tree)
+
+    const children = tree.children[0].children
+    expect(children).toHaveLength(3)
+    expect(children[0]).toEqual({ type: "text", value: "重点 " })
+    expect(children[1]).toEqual({ type: "text", value: "是这里", data: { hName: "mark" } })
+    expect(children[2]).toEqual({ type: "text", value: " 以及后续" })
+  })
+
+  it("drops inline %%comments%% from the rendered body", () => {
+    const tree: any = {
+      children: [{
+        children: [{ type: "text", value: "可见内容 %%内部注释%% 结尾" }],
+        type: "paragraph",
+      }],
+      type: "root",
+    }
+
+    remarkObsidian()(tree)
+
+    expect(tree.children[0].children).toEqual([
+      { type: "text", value: "可见内容 " },
+      { type: "text", value: " 结尾" },
+    ])
+  })
+
+  it("hides paragraphs that consist only of a comment", () => {
+    const tree: any = {
+      children: [
+        { children: [{ type: "text", value: "%%整段注释%%" }], type: "paragraph" },
+        { children: [{ type: "text", value: "正文" }], type: "paragraph" },
+      ],
+      type: "root",
+    }
+
+    remarkObsidian()(tree)
+
+    expect(tree.children[0].children).toEqual([])
+    expect(tree.children[0].data?.hProperties?.hidden).toBe(true)
+    expect(tree.children[1].children).toEqual([{ type: "text", value: "正文" }])
+  })
 })

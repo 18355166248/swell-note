@@ -152,6 +152,7 @@ type WorkspaceProps = {
   onResolveConflict: (strategy: "local" | "merge" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
+  onToggleNoteTask?: (noteId: string, line: number, checked: boolean) => void
   onSelectFolder: (folder: string | null) => void
   onSelectLibraryView: (view: LibraryView) => void
   onSelectNote: (note: Note) => void
@@ -328,6 +329,12 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           onResolveAsset={props.onResolveAsset}
           onResolveWikiNote={props.onResolveWikiNote}
           onSync={props.onRefreshVault}
+          onToggleTask={props.onToggleNoteTask
+            ? (line, checked) => {
+                const noteId = props.activeNote?.id
+                if (noteId) props.onToggleNoteTask?.(noteId, line, checked)
+              }
+            : undefined}
           saveState={props.saveState}
           syncing={props.isRefreshingVault}
         />
@@ -1001,12 +1008,13 @@ type NoteEditorProps = {
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
   onSelectNote: (note: Note) => void
   onSync: () => void
+  onToggleTask?: (line: number, checked: boolean) => void
   onUpdateNote: (patch: Partial<Note>) => void
   saveState: NoteSaveState
   syncing: boolean
 }
 
-function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, onBack, onSelectFolder, onDeleteNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onSelectNote, onSync, onUpdateNote, saveState, syncing }: NoteEditorProps) {
+function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, onBack, onSelectFolder, onDeleteNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing }: NoteEditorProps) {
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
   const isCanvas = note.format === "canvas"
   const isExcalidraw = isExcalidrawMarkdown(note.content)
@@ -1255,6 +1263,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
                 onLoadWikiNote={onLoadWikiNote}
                 onResolveAsset={onResolveAsset}
                 onResolveWikiNote={onResolveWikiNote}
+                onToggleTask={readOnly ? undefined : onToggleTask}
                 onWikiLink={onOpenWikiLink}
               />
             </Suspense>
@@ -1467,6 +1476,12 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             onResolveWikiNote={props.onResolveWikiNote}
             onSelectNote={props.onSelectNote}
             onSync={props.onRefreshVault}
+            onToggleTask={props.onToggleNoteTask
+              ? (line, checked) => {
+                  const noteId = props.activeNote?.id
+                  if (noteId) props.onToggleNoteTask?.(noteId, line, checked)
+                }
+              : undefined}
             onUpdateNote={props.onUpdateNote}
             saveState={props.saveState}
             syncing={props.isRefreshingVault}

@@ -1,9 +1,11 @@
-import { Component, Suspense, useEffect, useState, type ErrorInfo, type ReactNode } from "react"
+import { Component, Suspense, createContext, useContext, useEffect, useState, type ErrorInfo, type ReactNode } from "react"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
+import rehypeHighlight from "rehype-highlight"
 import remarkGfm from "remark-gfm"
 
 import {
   extractEmbeddedSection,
+  frontmatterLineCount,
   isRelativeAttachmentHref,
   obsidianAnchorId,
   parseVaultAssetHref,
@@ -31,10 +33,15 @@ type MarkdownPreviewProps = {
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onLoadWikiNote: (target: string) => void
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
+  onToggleTask?: (line: number, checked: boolean) => void
   onWikiLink: (target: string) => void
 }
 
 const remarkPlugins = [remarkGfm, remarkObsidian]
+const rehypePlugins = [rehypeHighlight]
+
+// 任务勾选框由 remark-gfm 合成、自身没有源码位置，行号从所属任务列表项（li）经 Context 传入。
+const TaskItemLineContext = createContext<number | null>(null)
 
 export default function MarkdownPreview(props: MarkdownPreviewProps) {
   const renderer = resolveOfficialNoteRenderer(props.content)
@@ -91,11 +98,41 @@ class NoteRendererErrorBoundary extends Component<{
   }
 }
 
-function MarkdownContent({ content, depth, onLoadWikiNote, onResolveAsset, onResolveWikiNote, onWikiLink }: MarkdownPreviewProps & { depth: number }) {
+function MarkdownContent({ content, depth, onLoadWikiNote, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink }: MarkdownPreviewProps & { depth: number }) {
+  // 预览正文已剥离 frontmatter，勾选任务时按 hast 行号补回偏移换算源文件行号。
+  const sourceLineOffset = frontmatterLineCount(content)
   return (
     <div className={depth === 0 ? "markdown-preview" : "markdown-preview markdown-preview-embedded"}>
       <ReactMarkdown
         components={{
+          input({ checked, disabled }) {
+            const previewLine = useContext(TaskItemLineContext)
+            if (!onToggleTask || !disabled || !previewLine) {
+              return <input checked={checked} disabled={disabled} readOnly type="checkbox" />
+            }
+            const sourceLine = previewLine + sourceLineOffset
+            return (
+              <input
+                aria-label="切换任务状态"
+                checked={checked}
+                className="task-checkbox"
+                data-source-line={sourceLine}
+                onChange={(event) => onToggleTask(sourceLine, event.target.checked)}
+                type="checkbox"
+              />
+            )
+          },
+          li({ children, node }) {
+            const classNames = node?.properties?.className
+            const isTaskItem = Array.isArray(classNames) && classNames.includes("task-list-item")
+            const previewLine = isTaskItem ? node?.position?.start.line : undefined
+            if (!onToggleTask || !previewLine) return <li>{children}</li>
+            return (
+              <li>
+                <TaskItemLineContext.Provider value={previewLine}>{children}</TaskItemLineContext.Provider>
+              </li>
+            )
+          },
           a({ children, href }) {
             const embedTarget = parseWikiEmbedHref(href)
             if (embedTarget) {
@@ -153,6 +190,7 @@ function MarkdownContent({ content, depth, onLoadWikiNote, onResolveAsset, onRes
           h6({ children }) { return <Heading level={6}>{children}</Heading> },
         }}
         remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
         urlTransform={(url) => parseWikiHref(url) || parseWikiEmbedHref(url) || parseVaultAssetHref(url) ? url : defaultUrlTransform(url)}
       >
         {rewriteWikiLinks(stripMarkdownFrontmatter(content))}

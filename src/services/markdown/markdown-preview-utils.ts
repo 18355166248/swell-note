@@ -247,6 +247,12 @@ export function stripMarkdownFrontmatter(content: string) {
   return content.replace(/^---\s*\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "")
 }
 
+// 预览正文去掉了 frontmatter，hast 行号换算回源文件行号时需要补回这段偏移。
+export function frontmatterLineCount(content: string) {
+  const match = content.match(/^---\s*\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/)
+  return match ? match[0].split("\n").length - 1 : 0
+}
+
 export function isRelativeAttachmentHref(href?: string) {
   if (!href || href.startsWith("#") || /^[a-z][a-z\d+.-]*:/i.test(href)) return false
   if (/(?:^|\/)attachments\/[^?#]+(?:[?#].*)?$/i.test(href.replace(/\\/g, "/"))) return true

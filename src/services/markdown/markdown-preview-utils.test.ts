@@ -4,6 +4,7 @@ import {
   isRelativeAttachmentHref,
   extractEmbeddedSection,
   extractExcalidrawTextElements,
+  frontmatterLineCount,
   obsidianAnchorId,
   parseVaultAssetHref,
   parseWikiEmbedHref,
@@ -55,6 +56,11 @@ describe("Markdown preview wiki links", () => {
   it("hides YAML frontmatter only from the rendered Markdown body", () => {
     expect(stripMarkdownFrontmatter("---\ntitle: 示例\ntags: [a]\n---\n# 正文")).toBe("# 正文")
     expect(stripMarkdownFrontmatter("---\n正文没有闭合")).toBe("---\n正文没有闭合")
+  })
+
+  it("counts frontmatter lines for preview-to-source line mapping", () => {
+    expect(frontmatterLineCount("---\ntitle: 示例\ntags: [a]\n---\n- [ ] 任务")).toBe(4)
+    expect(frontmatterLineCount("无 frontmatter\n- [ ] 任务")).toBe(0)
   })
 
   it("detects relative attachment links of any uploaded file type", () => {

@@ -533,6 +533,17 @@
 .markdown-preview code { border-radius: 4px; background: var(--muted); padding: .12em .35em; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
 .markdown-preview pre { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; border-radius: 8px; background: #f5f7fa; padding: 14px 16px; line-height: 1.65; }
 .markdown-preview pre code { background: transparent; padding: 0; }
+/* 代码高亮沿用 GitHub Light 令牌配色，未识别语言保持纯文本。 */
+.markdown-preview pre code.hljs { display: block; color: #24292f; }
+.markdown-preview .hljs-comment, .markdown-preview .hljs-quote { color: #6e7781; }
+.markdown-preview .hljs-keyword, .markdown-preview .hljs-selector-tag, .markdown-preview .hljs-literal, .markdown-preview .hljs-doctag, .markdown-preview .hljs-name { color: #cf222e; }
+.markdown-preview .hljs-string, .markdown-preview .hljs-regexp, .markdown-preview .hljs-meta .hljs-string { color: #0a3069; }
+.markdown-preview .hljs-number, .markdown-preview .hljs-symbol, .markdown-preview .hljs-bullet, .markdown-preview .hljs-variable, .markdown-preview .hljs-template-variable, .markdown-preview .hljs-link, .markdown-preview .hljs-selector-attr, .markdown-preview .hljs-selector-pseudo { color: #0550ae; }
+.markdown-preview .hljs-title, .markdown-preview .hljs-title.function_, .markdown-preview .hljs-section { color: #8250df; }
+.markdown-preview .hljs-title.class_, .markdown-preview .hljs-type, .markdown-preview .hljs-attr, .markdown-preview .hljs-attribute, .markdown-preview .hljs-built_in { color: #953800; }
+.markdown-preview .hljs-meta, .markdown-preview .hljs-selector-id, .markdown-preview .hljs-selector-class { color: #0550ae; }
+.markdown-preview .hljs-addition { color: #116329; background: #dafbe1; }
+.markdown-preview .hljs-deletion { color: #82071e; background: #ffebe9; }
 .markdown-preview table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; margin: 1em 0; }
 .markdown-preview th, .markdown-preview td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; }
 .markdown-preview th { background: var(--panel-soft); font-weight: 650; }
@@ -540,6 +551,8 @@
 .wiki-link { display: inline; padding: 0; font: inherit; }
 .wiki-link:hover, .markdown-preview a:hover { text-decoration-color: currentColor; }
 .markdown-preview input[type="checkbox"] { margin-right: .45em; accent-color: var(--primary); }
+.markdown-preview .task-checkbox { cursor: pointer; }
+.markdown-preview mark { border-radius: 3px; background: #ffe58f; padding: 0 .12em; color: inherit; }
 .markdown-preview img { display: block; max-width: 100%; height: auto; margin: 1.25em auto; border-radius: 8px; }
 .markdown-attachment-button, .markdown-attachment-download { display: inline-flex; align-items: center; min-height: 34px; margin: .35em 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); padding: 6px 10px; color: var(--primary); font: inherit; cursor: pointer; }
 .markdown-attachment-button:disabled { cursor: wait; opacity: .65; }
