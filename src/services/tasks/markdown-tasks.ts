@@ -1,6 +1,21 @@
+import { isExcalidrawMarkdown } from "@/services/markdown/markdown-preview-utils"
 import type { Note } from "@/types/note"
 
 const TASK_PATTERN = /^\s*[-*+]\s+\[([ xX])\]\s+(.+?)\s*$/
+
+export function canReceiveQuickTask(note: Note) {
+  // 画布类文档的正文由绘图数据结构托管，追加 Markdown 任务行会破坏源文件语义。
+  return Boolean(note.contentLoaded)
+    && !note.readOnly
+    && note.format !== "canvas"
+    && note.pendingOperation !== "delete"
+    && !isExcalidrawMarkdown(note.content)
+}
+
+export function resolveQuickTaskTarget(activeNote: Note | null | undefined, candidates: readonly Note[]) {
+  if (activeNote && canReceiveQuickTask(activeNote)) return activeNote
+  return candidates.find(canReceiveQuickTask) ?? null
+}
 
 export type MarkdownTask = {
   checked: boolean

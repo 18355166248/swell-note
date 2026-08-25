@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowLeft,
   AlertTriangle,
+  Check,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Cloud,
   CloudOff,
@@ -24,6 +26,12 @@ import {
   AppNavigationRail,
 } from "@/components/workspace/workspace"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { extractMarkdownTasks, type MarkdownTask } from "@/services/tasks/markdown-tasks"
 import {
@@ -61,12 +69,14 @@ export function TodoPage({
   onOpenNote,
   onOpenSync,
   onToggleTask,
+  quickTaskTargetTitle,
 }: NavigationProps & {
   indexProgress: { indexed: number; total: number } | null
   notes: Note[]
   onCreateTask: (text: string) => boolean
   onOpenNote: (note: Note) => void
   onToggleTask: (task: MarkdownTask, checked: boolean) => void
+  quickTaskTargetTitle: string | null
 }) {
   const [filter, setFilter] = useState<"all" | "completed" | "pending">("pending")
   const [newTask, setNewTask] = useState("")
@@ -112,11 +122,14 @@ export function TodoPage({
             >
               <input
                 aria-label="新待办内容"
+                disabled={!quickTaskTargetTitle}
                 onChange={(event) => setNewTask(event.target.value)}
-                placeholder="快速添加到当前笔记…"
+                placeholder={quickTaskTargetTitle
+                  ? `快速添加到「${quickTaskTargetTitle}」…`
+                  : "没有可写入的 Markdown 笔记"}
                 value={newTask}
               />
-              <Button disabled={!newTask.trim()} size="sm" type="submit">添加</Button>
+              <Button disabled={!quickTaskTargetTitle || !newTask.trim()} size="sm" type="submit">添加</Button>
             </form>
             <div className="route-hint">
               <ListTodo />
@@ -413,6 +426,13 @@ export function CacheSettingsPage({
   )
 }
 
+const retentionOptions: { label: string; value: TrashRetentionDays }[] = [
+  { label: "7 天", value: 7 },
+  { label: "30 天", value: 30 },
+  { label: "90 天", value: 90 },
+  { label: "永久保留", value: "forever" },
+]
+
 export function TrashSettingsPage({
   busy,
   entries,
@@ -455,15 +475,27 @@ export function TrashSettingsPage({
           <h2>回收站</h2>
           <p>删除项保存在当前 Vault 的本机快照中；本地文件会移动到隐藏目录 `.swell-trash`。</p>
         </div>
-        <label>
-          <span>自动清理</span>
-          <select onChange={(event) => onRetentionChange(event.target.value === "forever" ? "forever" : Number(event.target.value) as TrashRetentionDays)} value={retention}>
-            <option value="7">7 天</option>
-            <option value="30">30 天</option>
-            <option value="90">90 天</option>
-            <option value="forever">永久保留</option>
-          </select>
-        </label>
+        <div className="trash-retention">
+          <span id="trash-retention-label">自动清理</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button aria-labelledby="trash-retention-label" size="sm" variant="outline">
+                {/* 保留期若不在预设内（旧版本或被改写的本机配置），显示真实天数而不是谎报默认值。 */}
+                {retentionOptions.find((option) => option.value === retention)?.label
+                  ?? (retention === "forever" ? "永久保留" : `${retention} 天`)}
+                <ChevronDown data-icon="inline-end" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {retentionOptions.map((option) => (
+                <DropdownMenuItem key={String(option.value)} onClick={() => onRetentionChange(option.value)}>
+                  <Check className={retention === option.value ? "opacity-100" : "opacity-0"} />
+                  {option.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       {entries.length > 0 ? (

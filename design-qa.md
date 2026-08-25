@@ -65,7 +65,7 @@
 
 - Excalidraw remains a dynamic plugin chunk, so normal Markdown notes do not download its 4 MB runtime.
 - The official canvas remains pannable and zoomable in editor mode.
-- Desktop and compact views both initialize at 100%; the official viewport API centers the content while constraining the initial zoom to 1.
+- The official viewport API centers the content on open and caps zoom at 1, so drawings never open magnified; canvases wider than the viewport (notably on phones) scale down to stay fully visible instead of being clipped.
 - Raw Markdown is hidden in immersive mode, preventing horizontal overflow and the previous broken right-side layout.
 - TypeScript check, 109 unit tests, and production build passed.
 

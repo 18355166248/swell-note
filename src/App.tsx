@@ -75,8 +75,13 @@ import {
   toNativeSearchEntry,
   upsertNativeSearchIndex,
 } from "@/services/search/sqlite-note-index"
-import { setMarkdownTaskChecked, type MarkdownTask } from "@/services/tasks/markdown-tasks"
+import {
+  resolveQuickTaskTarget,
+  setMarkdownTaskChecked,
+  type MarkdownTask,
+} from "@/services/tasks/markdown-tasks"
 import { obsidianAnchorId, splitWikiTarget } from "@/services/markdown/markdown-preview-utils"
+import { buildNotePreview } from "@/services/markdown/note-preview"
 import {
   deleteWebDavPassword,
   loadWebDavPassword,
@@ -370,6 +375,11 @@ function App() {
     : libraryNotes
   const visibleNotes = sortNotes(filteredNotes, noteSort)
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? null
+  // 待办页与快速添加共用同一个目标，避免界面提示与实际写入的文件不一致。
+  const quickTaskTarget = useMemo(
+    () => resolveQuickTaskTarget(activeNote, availableNotes),
+    [activeNote, availableNotes],
+  )
   const activeTarget = activeNote ? normalizeNoteTarget(activeNote.title) : ""
   const backlinks = useMemo(
     () => activeTarget
@@ -611,7 +621,7 @@ function App() {
             ...candidate,
             content,
             ...indexNoteContent(content),
-            preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
+            preview: buildNotePreview(content, candidate.format),
             syncStatus: candidate.source === "webdav"
               ? candidate.syncStatus === "conflict" ? "conflict" : "modified"
               : candidate.syncStatus,
@@ -637,12 +647,9 @@ function App() {
       setVaultError("正在同步当前笔记库，请等待完成后再添加待办")
       return false
     }
-    const target = [activeNote, ...availableNotes].find((note, index, candidates) => note
-      && candidates.findIndex((candidate) => candidate?.id === note.id) === index
-      && note.contentLoaded
-      && !note.readOnly)
+    const target = quickTaskTarget
     if (!target) {
-      setVaultError("请先打开一篇可编辑且已加载正文的笔记")
+      setVaultError("请先打开一篇可编辑且已加载正文的 Markdown 笔记")
       return false
     }
     const separator = target.content.endsWith("\n") ? "" : "\n"
@@ -653,7 +660,7 @@ function App() {
           ...candidate,
           content,
           ...indexNoteContent(content),
-          preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
+          preview: buildNotePreview(content, candidate.format),
           syncError: candidate.source === "webdav" ? undefined : candidate.syncError,
           syncStatus: candidate.source === "webdav"
             ? candidate.syncStatus === "conflict" ? "conflict" : "modified"
@@ -762,7 +769,7 @@ function App() {
     const content = `${activeNote.content}${syntax}`
     updateActiveNote({
       content,
-      preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
+      preview: buildNotePreview(content, activeNote.format),
     })
   }
 
@@ -776,7 +783,7 @@ function App() {
           content,
           ...indexNoteContent(content),
           modifiedAt: Date.now(),
-          preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
+          preview: buildNotePreview(content, candidate.format),
           syncError: candidate.source === "webdav" ? undefined : candidate.syncError,
           syncStatus: candidate.source === "webdav"
             ? candidate.syncStatus === "conflict" ? "conflict" : "modified"
@@ -821,6 +828,8 @@ function App() {
                 contentLoaded: true,
                 outgoingLinks: indexedNote.outgoingLinks,
                 frontmatter: indexedNote.frontmatter,
+                // 建索引前列表只有文件路径可显示；读到正文后同步补上真正的摘要。
+                preview: buildNotePreview(indexedNote.content, note.format),
                 readOnly: note.format === "canvas" || (note.source === "webdav" ? false : note.readOnly),
                 revision: indexedNote.revision ?? note.revision,
                 searchText: indexedNote.searchText,
@@ -925,7 +934,9 @@ function App() {
           ? workingCopy!.preview
           : reuseCachedContent
             ? previousNote!.preview
-            : adapter.getDisplayPath?.(file.path) ?? file.path,
+            : loadedDocument
+              ? buildNotePreview(loadedDocument.content, isCanvas ? "canvas" : "markdown")
+              : adapter.getDisplayPath?.(file.path) ?? file.path,
         content,
         updatedAt: formatRemoteDate(file.updatedAt),
         modifiedAt: parseRemoteTimestamp(file.updatedAt),
@@ -1526,7 +1537,7 @@ function App() {
               ...note,
               baseContent: document.content,
               content: document.content,
-              preview: document.content.replace(/^#+\s*/gm, "").slice(0, 90),
+              preview: buildNotePreview(document.content, note.format),
               ...indexNoteContent(document.content),
               revision: document.revision,
               updatedAt: "刚刚重新加载",
@@ -1584,7 +1595,7 @@ function App() {
             baseContent: remoteDocument.content,
             content: mergeResult.content,
             mergeConflictCount: mergeResult.conflictCount || undefined,
-            preview: mergeResult.content.replace(/^#+\s*/gm, "").slice(0, 90),
+            preview: buildNotePreview(mergeResult.content, candidate.format),
             revision: remoteDocument.revision,
             syncError: undefined,
             syncStatus: mergeResult.conflictCount > 0 ? "conflict" : "modified",
@@ -1602,7 +1613,7 @@ function App() {
           mergeConflictCount: undefined,
           pendingOperation: undefined,
           previousRemotePath: undefined,
-          preview: remoteDocument.content.replace(/^#+\s*/gm, "").slice(0, 90),
+          preview: buildNotePreview(remoteDocument.content, candidate.format),
           readOnly: false,
           remotePath: path,
           revision: remoteDocument.revision,
@@ -2577,6 +2588,7 @@ function App() {
             indexProgress={indexProgress}
             notes={availableNotes}
             onCreateTask={createTask}
+            quickTaskTargetTitle={quickTaskTarget?.title ?? null}
             onNavigate={navigate}
             onOpenNote={(note) => {
               openNote(note)

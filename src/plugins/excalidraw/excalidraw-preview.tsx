@@ -56,13 +56,15 @@ export default function ExcalidrawPreview({ content, editable = false, immersive
 
   const scene = result.scene
   useEffect(() => {
-    if (!api || !scene) return
+    if (!api) return
+    // 只依赖 api：组件按 noteId 重建，切换笔记会重新居中，而自动保存改写 content 时不再打断用户的平移与缩放。
     // API 回调早于内部 App 完成挂载；延后一帧再居中，避免调用尚未挂载组件的 setState。
     const frame = window.requestAnimationFrame(() => {
-      api.scrollToContent(api.getSceneElements(), { animate: false, fitToContent: true, maxZoom: 1, minZoom: 1 })
+      // 不限制 minZoom，窄屏才能把宽于视口的画布完整缩进来；maxZoom 保持 1，避免小图被放大。
+      api.scrollToContent(api.getSceneElements(), { animate: false, fitToContent: true, maxZoom: 1 })
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [api, content, scene])
+  }, [api])
 
   if (!scene) return <ExcalidrawFallback content={content} error={result.error} />
 

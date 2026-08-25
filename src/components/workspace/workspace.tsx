@@ -80,6 +80,8 @@ import {
   getVisibleVaultFolders,
   type VaultFolder,
 } from "@/services/search/vault-folders"
+import { buildNotePreview } from "@/services/markdown/note-preview"
+import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
 import type { NoteSort } from "@/services/search/note-sort"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
@@ -252,6 +254,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         folders={props.visibleFolders}
         libraryView={props.libraryView}
         noteCount={props.totalNoteCount}
+        starredNoteCount={props.starredNoteCount}
         onCreateNote={props.onCreateNote}
         onCreateFolder={props.onCreateFolder}
         onOpenLocalVault={props.onOpenLocalVault}
@@ -299,6 +302,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
       {props.activeNote ? (
         <NoteEditor
           backlinks={props.backlinks}
+          onSelectFolder={props.onSelectFolder}
           canInsertAttachment={props.canInsertAttachment}
           cloudConnected={props.cloudConnected}
           canManageNote={Boolean(
@@ -407,6 +411,7 @@ type LibraryPanelProps = {
   libraryView: LibraryView
   localVaultSupported: boolean
   noteCount: number
+  starredNoteCount: number
   onCreateNote: () => void
   onCreateFolder: (name: string, parentFolder: string | null) => void
   onOpenLocalVault: () => void
@@ -437,6 +442,7 @@ function LibraryPanel({
   libraryView,
   localVaultSupported,
   noteCount,
+  starredNoteCount,
   onCreateNote,
   onCreateFolder,
   onOpenLocalVault,
@@ -486,7 +492,7 @@ function LibraryPanel({
         <nav className="library-navigation" aria-label="笔记库导航">
           <LibraryRow active={selectedFolder === null && libraryView === "all"} count={noteCount} icon={FileText} label="全部笔记" onClick={() => onSelectLibraryView("all")} />
           <LibraryRow active={libraryView === "recent"} count={Math.min(noteCount, 32)} icon={CheckCircle2} label="最近更新" onClick={() => onSelectLibraryView("recent")} />
-          <LibraryRow active={libraryView === "starred"} icon={Star} label="收藏" onClick={() => onSelectLibraryView("starred")} />
+          <LibraryRow active={libraryView === "starred"} count={starredNoteCount} icon={Star} label="收藏" onClick={() => onSelectLibraryView("starred")} />
 
           <div className="library-section-title">
             <span>文件夹</span>
@@ -719,6 +725,7 @@ function NoteListPanel({
             <VirtualNoteRows
               activeNoteId={activeNoteId}
               folders={childFolders}
+              noteSort={noteSort}
               notes={notes}
               onSelectFolder={onSelectFolder}
               onSelectNote={onSelectNote}
@@ -912,9 +919,11 @@ function TagFilterMenu({
 }
 
 function EmptyNoteEditor({
+  backLabel = "全部笔记",
   onBack,
   onOpenSettings,
 }: {
+  backLabel?: string
   onBack?: () => void
   onOpenSettings: () => void
 }) {
@@ -922,8 +931,8 @@ function EmptyNoteEditor({
     <article className="note-editor empty-note-editor">
       {onBack ? (
         <header className="editor-titlebar">
-          <Button aria-label="返回全部笔记" onClick={onBack} size="icon" variant="ghost"><ArrowLeft /></Button>
-          <span className="mobile-back-label">全部笔记</span>
+          <Button aria-label={`返回${backLabel}`} onClick={onBack} size="icon" variant="ghost"><ArrowLeft /></Button>
+          <span className="mobile-back-label">{backLabel}</span>
         </header>
       ) : null}
       <div className="empty-note-content">
@@ -966,6 +975,8 @@ function NoteListRow({ active, note, onSelect }: NoteListRowProps) {
 }
 
 type NoteEditorProps = {
+  backLabel?: string
+  onSelectFolder?: (folder: string) => void
   backlinks: Note[]
   canInsertAttachment: boolean
   canManageNote: boolean
@@ -995,7 +1006,7 @@ type NoteEditorProps = {
   syncing: boolean
 }
 
-function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, onBack, onDeleteNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onSelectNote, onSync, onUpdateNote, saveState, syncing }: NoteEditorProps) {
+function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, onBack, onSelectFolder, onDeleteNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onSelectNote, onSync, onUpdateNote, saveState, syncing }: NoteEditorProps) {
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
   const isCanvas = note.format === "canvas"
   const isExcalidraw = isExcalidrawMarkdown(note.content)
@@ -1013,7 +1024,18 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
   const attachmentBusyRef = useRef(false)
   const currentNoteIdRef = useRef(note.id)
   currentNoteIdRef.current = note.id
-  const breadcrumbSegments = getNoteBreadcrumbSegments(note.folder)
+  // 根目录笔记没有可跳转的目录段；标题单独作为末段，让沉浸画布也能看到当前打开的是哪张图。
+  const folderSegments = note.folder ? getNoteBreadcrumbSegments(note.folder) : []
+  // Canvas 正文是绘图 JSON，按字符计数没有意义，改用节点数量描述文档规模。
+  const documentSize = useMemo(() => {
+    if (!isCanvas) return `${note.content.length} 字符`
+    try {
+      const nodes = (JSON.parse(note.content) as { nodes?: unknown[] }).nodes
+      return `${Array.isArray(nodes) ? nodes.length : 0} 个节点`
+    } catch {
+      return "无法解析的画布"
+    }
+  }, [isCanvas, note.content])
 
   useEffect(() => {
     // 手机进入新文档时默认阅读，避免误触键盘；用户可通过明确按钮进入编辑模式。
@@ -1055,19 +1077,29 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
     <article className="note-editor" data-compact={compact} data-excalidraw={isExcalidraw}>
       <header className="editor-titlebar">
         {onBack ? (
-          <Button aria-label="返回全部笔记" onClick={onBack} size="icon" variant="ghost"><ArrowLeft /></Button>
+          <Button aria-label={`返回${backLabel}`} onClick={onBack} size="icon" variant="ghost"><ArrowLeft /></Button>
         ) : (
           <div className="editor-breadcrumb">
             <FileText />
-            {breadcrumbSegments.map((segment, index) => (
+            {folderSegments.map((segment, index) => (
               <span className="editor-breadcrumb-segment" key={`${segment}-${index}`}>
                 {index > 0 ? <ChevronRight /> : null}
-                <span>{segment}</span>
+                <button
+                  className="editor-breadcrumb-link"
+                  onClick={() => onSelectFolder?.(folderSegments.slice(0, index + 1).join(" / "))}
+                  type="button"
+                >
+                  {segment}
+                </button>
               </span>
             ))}
+            <span className="editor-breadcrumb-segment">
+              {folderSegments.length > 0 ? <ChevronRight /> : null}
+              <span className="editor-breadcrumb-current">{note.title}</span>
+            </span>
           </div>
         )}
-        {onBack ? <span className="mobile-back-label">全部笔记</span> : null}
+        {onBack ? <span className="mobile-back-label">{backLabel}</span> : null}
         <div className="editor-actions">
           <SaveStateIndicator cloudConnected={cloudConnected} note={note} state={saveState} />
           {note.source === "webdav" ? (
@@ -1187,7 +1219,7 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
               noteId={note.id}
               onContentChange={(content) => onUpdateNote({
                 content,
-                preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
+                preview: buildNotePreview(content, note.format),
               })}
               onLoadWikiNote={onLoadWikiNote}
               onResolveAsset={onResolveAsset}
@@ -1208,7 +1240,7 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
           <div className="document-meta">
             <span>{note.updatedAt === "刚刚" ? "刚刚编辑" : note.updatedAt}</span>
             <span>·</span>
-            <span>{note.content.length} 字符</span>
+            <span>{documentSize}</span>
             <span>·</span>
             <span>{deriveFolder(note)}</span>
           </div>
@@ -1234,7 +1266,7 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
                   key={note.id}
                   onChange={(content) => onUpdateNote({
                     content,
-                    preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
+                    preview: buildNotePreview(content, note.format),
                   })}
                   onCursorChange={(line, column) => setCursorPosition({ column, line })}
                   onInsertFiles={canInsertAttachment && !insertingAttachment ? handleInsertFiles : undefined}
@@ -1260,9 +1292,12 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
         />
       ) : !compact && !isExcalidraw ? (
         <footer className="editor-statusbar">
-          <span>{note.content.length} 字</span>
-          <span>Markdown</span>
-          <span className="ml-auto">行 {cursorPosition.line}，列 {cursorPosition.column}</span>
+          <span>{documentSize}</span>
+          <span>{isCanvas ? "Canvas" : "Markdown"}</span>
+          {/* 预览与 Canvas 都没有可编辑光标，此时展示行列位置只会误导。 */}
+          {!isCanvas && !previewing ? (
+            <span className="ml-auto">行 {cursorPosition.line}，列 {cursorPosition.column}</span>
+          ) : null}
         </footer>
       ) : null}
       <Dialog onOpenChange={setDeleteDialogOpen} open={deleteDialogOpen}>
@@ -1380,6 +1415,8 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
   // 使用与实际可见结果一致的延迟搜索键，避免输入态先更新时覆盖原列表滚动位置。
   const listStateKey = `${props.libraryView}\u0000${props.selectedFolder ?? "__all__"}\u0000${props.mobileListStateKey}`
   const libraryStateKey = `${props.totalNoteCount}\u0000${props.folders.map((folder) => folder.path).join("\u0000")}`
+  // 返回按钮会回到来源列表，文案必须跟着来源变化，否则从目录进入时会谎称回到「全部笔记」。
+  const backLabel = getMobileBackLabel(props.libraryView, props.selectedFolder)
 
   return (
     <div className="mobile-workspace" data-screen={props.mobileScreen}>
@@ -1412,6 +1449,8 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             compact
             moveTargets={props.folders}
             note={props.activeNote}
+            backLabel={backLabel}
+            onSelectFolder={props.onSelectFolder}
             onBack={() => props.onMobileScreenChange("notes")}
             onDeleteNote={props.onDeleteNote}
             onFormat={props.onFormat}
@@ -1432,7 +1471,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             saveState={props.saveState}
             syncing={props.isRefreshingVault}
           />
-        ) : <EmptyNoteEditor onBack={() => props.onMobileScreenChange("notes")} onOpenSettings={props.onOpenSettings} />
+        ) : <EmptyNoteEditor backLabel={backLabel} onBack={() => props.onMobileScreenChange("notes")} onOpenSettings={props.onOpenSettings} />
       ) : null}
     </div>
   )
@@ -1472,7 +1511,10 @@ function SaveStateIndicator({ cloudConnected, note, state }: { cloudConnected: b
         : state.status === "error"
           ? note.source === "webdav" ? "同步失败" : "保存失败"
           : state.status === "readonly"
-            ? note.source === "webdav" ? "正文未缓存" : "只读"
+            // Canvas 是按格式只读，正文其实已经完整缓存；只有真正没读到正文才提示未缓存。
+            ? note.format === "canvas"
+              ? "只读画布"
+              : note.source === "webdav" && !note.contentLoaded ? "正文未缓存" : "只读"
             : note.source === "webdav" ? cloudConnected ? "已同步" : "仅本机缓存" : "已保存"
   const Icon = state.status === "saving"
     ? LoaderCircle
@@ -1767,6 +1809,7 @@ function MobileNoteList(props: MobileNoteListProps) {
               activeNoteId={props.activeNoteId}
               folders={childFolders}
               mobile
+              noteSort={props.noteSort}
               notes={props.notes}
               onSelectFolder={selectFolder}
               onSelectNote={selectNote}
@@ -1823,16 +1866,6 @@ export function AppBottomNav({
   )
 }
 
-function groupNotes(notes: Note[]) {
-  if (notes.length === 0) return []
-  if (notes.length <= 2) return [{ label: "今天", notes }]
-  return [
-    { label: "今天", notes: notes.slice(0, 2) },
-    { label: "昨天", notes: notes.slice(2, 5) },
-    { label: "过去 7 天", notes: notes.slice(5) },
-  ].filter((group) => group.notes.length > 0)
-}
-
 type VirtualNoteItem =
   | { key: string; kind: "heading"; label: string; noteCount: number }
   | { key: string; kind: "folder"; folder: VaultFolder }
@@ -1842,6 +1875,7 @@ function VirtualNoteRows({
   activeNoteId,
   folders = [],
   mobile = false,
+  noteSort,
   notes,
   onSelectFolder,
   onSelectNote,
@@ -1850,21 +1884,30 @@ function VirtualNoteRows({
   activeNoteId: string
   folders?: VaultFolder[]
   mobile?: boolean
+  noteSort: NoteSort
   notes: Note[]
   onSelectFolder?: (folder: string) => void
   onSelectNote: (note: Note) => void
   viewportRef: RefObject<HTMLDivElement | null>
 }) {
+  // 分组按本地日历日划分；把当天序号纳入依赖，跨零点后的首次渲染就会重算，
+  // 否则挂夜的窗口会一直把昨天的笔记显示在「今天」下面。
+  const todayIndex = getLocalDayIndex(Date.now())
   const items = useMemo(() => [
     ...(folders.length > 0 ? [
       { key: "heading:folders", kind: "heading" as const, label: "子文件夹", noteCount: folders.length },
       ...folders.map((folder): VirtualNoteItem => ({ key: `folder:${folder.path}`, kind: "folder", folder })),
     ] : []),
-    ...groupNotes(notes).flatMap((group): VirtualNoteItem[] => [
-      { key: `heading:${group.label}`, kind: "heading", label: group.label, noteCount: group.notes.length },
+    ...groupNotesByDate(notes, noteSort).flatMap((group): VirtualNoteItem[] => [
+      ...(group.label ? [{
+        key: `heading:${group.key}`,
+        kind: "heading" as const,
+        label: group.label,
+        noteCount: group.notes.length,
+      }] : []),
       ...group.notes.map((note): VirtualNoteItem => ({ key: note.id, kind: "note", note })),
     ]),
-  ], [folders, notes])
+  ], [folders, noteSort, notes, todayIndex])
   const virtualizer = useVirtualizer({
     count: items.length,
     estimateSize: (index) => items[index]?.kind === "heading"
@@ -1926,6 +1969,14 @@ function FolderListRow({
       <ChevronRight />
     </button>
   )
+}
+
+function getMobileBackLabel(libraryView: LibraryView, selectedFolder: string | null) {
+  if (selectedFolder) {
+    const segments = getNoteBreadcrumbSegments(selectedFolder)
+    return segments[segments.length - 1] ?? "全部笔记"
+  }
+  return libraryView === "recent" ? "最近更新" : libraryView === "starred" ? "收藏" : "全部笔记"
 }
 
 function deriveFolder(note: Note) {

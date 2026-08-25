@@ -363,7 +363,9 @@
 .trash-toolbar h2, .trash-toolbar p { margin: 0; }
 .trash-toolbar p { margin-top: 5px; color: var(--muted-foreground); font-size: 12px; }
 .trash-toolbar label { display: grid; flex: 0 0 120px; gap: 5px; color: var(--muted-foreground); font-size: 11px; }
-.trash-toolbar select { height: 34px; border: 1px solid var(--border); border-radius: 7px; background: white; padding: 0 8px; color: var(--foreground); }
+.trash-retention { display: grid; flex: 0 0 120px; gap: 5px; color: var(--muted-foreground); font-size: 11px; }
+.trash-retention > span { line-height: 1; }
+.trash-retention button { justify-content: space-between; width: 100%; }
 .trash-batch-actions { display: flex; min-height: 42px; align-items: center; gap: 8px; border-block: 1px solid var(--border); }
 .trash-batch-actions > label { display: flex; align-items: center; gap: 6px; }
 .trash-batch-actions > span { flex: 1; color: var(--muted-foreground); font-size: 12px; }
@@ -417,6 +419,11 @@
 .editor-breadcrumb svg { width: 13px; height: 13px; }
 .editor-breadcrumb-segment { display: inline-flex; min-width: 0; align-items: center; gap: 7px; }
 .editor-breadcrumb-segment > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editor-breadcrumb-link { overflow: hidden; max-width: 160px; border-radius: 4px; padding: 1px 3px; color: inherit; text-overflow: ellipsis; white-space: nowrap; transition: background-color .12s, color .12s; }
+.editor-breadcrumb-link:hover { background: var(--blue-soft); color: var(--primary); }
+.editor-breadcrumb-current { color: var(--foreground); font-weight: 600; }
+.note-editor[data-excalidraw="true"] .editor-breadcrumb-current { color: #f2f2f5; }
+.note-editor[data-excalidraw="true"] .editor-breadcrumb-link:hover { background: rgb(255 255 255 / .12); color: #f2f2f5; }
 .editor-actions { display: flex; align-items: center; gap: 3px; margin-left: auto; }
 .editor-sync-button { gap: 5px; }
 .editor-sync-button svg { width: 14px; height: 14px; }
@@ -593,6 +600,7 @@
   .mobile-section-heading span { flex: 1; }
   .trash-toolbar { flex-direction: column; }
   .trash-toolbar label { width: 100%; }
+  .trash-retention { width: 100%; }
   .trash-batch-actions { flex-wrap: wrap; padding-block: 8px; }
   .mobile-bottom-nav { display: grid; min-height: calc(64px + env(safe-area-inset-bottom)); grid-template-columns: repeat(3,1fr); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); background: color-mix(in oklab,white 96%,transparent); }
   .mobile-tab { display: flex; min-height: 60px; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--muted-foreground); font-size: 10px; }
