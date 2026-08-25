@@ -38,7 +38,7 @@ export async function listMarkdownFiles(
         continue
       }
 
-      if (entry.name.toLocaleLowerCase().endsWith(".md")) {
+      if (/\.(?:canvas|md)$/i.test(entry.name)) {
         markdownFiles.push(entry)
         if (markdownFiles.length >= MAX_MARKDOWN_FILES) return markdownFiles
       }

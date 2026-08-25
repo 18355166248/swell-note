@@ -65,6 +65,7 @@ import {
   upsertNativeSearchIndex,
 } from "@/services/search/sqlite-note-index"
 import { setMarkdownTaskChecked, type MarkdownTask } from "@/services/tasks/markdown-tasks"
+import { obsidianAnchorId, splitWikiTarget } from "@/services/markdown/markdown-preview-utils"
 import {
   deleteWebDavPassword,
   loadWebDavPassword,
@@ -155,6 +156,7 @@ function App() {
   const notesRef = useRef(notes)
   const previousOnlineRef = useRef(isOnline)
   const activeSyncRunRef = useRef<SyncRun | null>(null)
+  const pendingWikiAnchorRef = useRef("")
   const refreshVaultRef = useRef<(noteIds?: ReadonlySet<string>) => Promise<void>>(async () => undefined)
   notesRef.current = notes
 
@@ -176,7 +178,7 @@ function App() {
           : "# 正文尚未缓存\n\n重新连接原笔记库后，可以读取这篇文档的完整内容。",
         contentLoaded: note.contentLoaded,
         // 旧缓存会在恢复时补建 Frontmatter/标签索引，不要求用户重新下载整个笔记库。
-        readOnly: note.source === "webdav" ? !note.contentLoaded : true,
+        readOnly: note.format === "canvas" || (note.source === "webdav" ? !note.contentLoaded : true),
         syncStatus: note.source === "webdav"
           ? note.syncStatus ?? (note.contentLoaded ? "synced" : undefined)
           : note.syncStatus,
@@ -803,7 +805,7 @@ function App() {
                 contentLoaded: true,
                 outgoingLinks: indexedNote.outgoingLinks,
                 frontmatter: indexedNote.frontmatter,
-                readOnly: note.source === "webdav" ? false : note.readOnly,
+                readOnly: note.format === "canvas" || (note.source === "webdav" ? false : note.readOnly),
                 revision: indexedNote.revision ?? note.revision,
                 searchText: indexedNote.searchText,
                 tags: indexedNote.tags,
@@ -884,6 +886,7 @@ function App() {
       .map((file) => file.path)
     const loadedDocuments = await readVaultDocuments(adapter, pathsToRead)
     const remoteNotes: Note[] = files.map((file) => {
+      const isCanvas = /\.canvas$/i.test(file.path)
       const previousNote = previousNotesByPath.get(file.path)
       const loadedDocument = loadedDocuments.get(file.path)
       const workingCopy = previousNote && isWebDavWorkingCopy(previousNote) ? previousNote : undefined
@@ -901,7 +904,7 @@ function App() {
 
       return {
         id: preserveWorkingCopy ? workingCopy!.id : `${adapter.kind}:${file.path}`,
-        title: preserveWorkingCopy ? workingCopy!.title : file.name.replace(/\.md$/i, ""),
+        title: preserveWorkingCopy ? workingCopy!.title : file.name.replace(/\.(?:canvas|md)$/i, ""),
         preview: preserveWorkingCopy
           ? workingCopy!.preview
           : reuseCachedContent
@@ -916,7 +919,8 @@ function App() {
           : deriveRemoteFolder(adapter.getDisplayPath?.(file.path) ?? file.path),
         source: adapter.kind === "webdav" ? "webdav" : "local",
         remotePath: preserveWorkingCopy ? workingCopy!.remotePath : file.path,
-        readOnly: adapter.kind === "webdav" ? !contentLoaded : adapter.readOnly,
+        readOnly: isCanvas || (adapter.kind === "webdav" ? !contentLoaded : adapter.readOnly),
+        format: isCanvas ? "canvas" : "markdown",
         baseContent: preserveWorkingCopy
           ? workingCopy!.baseContent
           : loadedDocument?.content ?? (reuseCachedContent ? previousNote!.baseContent ?? previousNote!.content : undefined),
@@ -1412,12 +1416,10 @@ function App() {
     }
   }
 
-  const selectNote = async (note: Note) => {
-    setActiveNoteId(note.id)
-    setMobileScreen("editor")
+  const loadNoteDocument = useCallback(async (note: Note) => {
     if (note.contentLoaded || !note.remotePath || !vaultSession || loadingNoteIdsRef.current.has(note.id)) return
 
-    // 路由恢复和列表点击可能同时请求同一篇正文，用集合去重，避免对坚果云产生重复 GET。
+    // 详情、路由恢复和嵌入预览共用同一读取入口，集合去重避免对坚果云产生重复 GET。
     loadingNoteIdsRef.current.add(note.id)
 
     try {
@@ -1433,7 +1435,7 @@ function App() {
                 ...indexNoteContent(document.content),
                 revision: document.revision,
                 contentLoaded: true,
-                readOnly: currentNote.source === "webdav" ? false : currentNote.readOnly,
+                readOnly: currentNote.format === "canvas" || (currentNote.source === "webdav" ? false : currentNote.readOnly),
                 syncStatus: currentNote.source === "webdav" ? "synced" : currentNote.syncStatus,
               }
             : currentNote,
@@ -1454,6 +1456,12 @@ function App() {
     } finally {
       loadingNoteIdsRef.current.delete(note.id)
     }
+  }, [vaultSession])
+
+  const selectNote = async (note: Note) => {
+    setActiveNoteId(note.id)
+    setMobileScreen("editor")
+    await loadNoteDocument(note)
   }
 
   const openNote = (note: Note) => {
@@ -2345,22 +2353,95 @@ function App() {
     // 保留期限变化或重新连接本地 Vault 时再次尝试，未连接的本地回收项不会只删元数据而遗留孤儿文件。
   }, [trashEntries, trashRetention, vaultSession])
 
-  const openWikiLink = (target: string) => {
-    const normalizedTarget = normalizeNoteTarget(target)
-    // Obsidian 链接可能写标题、相对路径或标题锚点，统一归一化后再路由到已加载笔记。
-    const linkedNote = notes.find((note) =>
+  const findWikiNote = useCallback((target: string, sourceNotes: Note[] = notes) => {
+    const { noteTarget } = splitWikiTarget(target)
+    const normalizedTarget = normalizeNoteTarget(noteTarget)
+    return sourceNotes.find((note) =>
       normalizeNoteTarget(note.title) === normalizedTarget
       || (note.remotePath && normalizeNoteTarget(note.remotePath) === normalizedTarget),
     )
+  }, [notes])
+
+  const resolveWikiNote = useCallback((target: string) => {
+    const linkedNote = findWikiNote(target)
+    if (!linkedNote) return { status: "missing" as const }
+    return linkedNote.contentLoaded
+      ? { note: { content: linkedNote.content, title: linkedNote.title }, status: "ready" as const }
+      : { status: "loading" as const }
+  }, [findWikiNote])
+
+  const loadWikiNote = useCallback((target: string) => {
+    const linkedNote = findWikiNote(target, notesRef.current)
+    if (linkedNote) void loadNoteDocument(linkedNote)
+  }, [findWikiNote, loadNoteDocument])
+
+  const openWikiLink = (target: string) => {
+    const { anchor, noteTarget } = splitWikiTarget(target)
+    const normalizedTarget = normalizeNoteTarget(noteTarget)
+    // Obsidian 链接可能写标题、相对路径或标题锚点，统一归一化后再路由到已加载笔记。
+    const linkedNote = normalizedTarget
+      ? notes.find((note) =>
+          normalizeNoteTarget(note.title) === normalizedTarget
+          || (note.remotePath && normalizeNoteTarget(note.remotePath) === normalizedTarget),
+        )
+      : activeNote
 
     if (linkedNote) {
       setVaultError(null)
+      pendingWikiAnchorRef.current = anchor
       openNote(linkedNote)
       return
     }
 
     setVaultError(`找不到链接笔记：${target}`)
   }
+
+  const openActiveSourceFile = async () => {
+    if (!activeNote?.remotePath) return
+    try {
+      if (vaultSession?.openSourceFile) {
+        await vaultSession.openSourceFile(activeNote.remotePath)
+        return
+      }
+      // Web 与 WebDAV 不能调用本机默认应用，显式下载原始文本是可恢复且不修改云端的降级路径。
+      const url = URL.createObjectURL(new Blob([activeNote.content], { type: "text/markdown;charset=utf-8" }))
+      const anchor = document.createElement("a")
+      anchor.download = activeNote.remotePath.split("/").pop() ?? `${activeNote.title}.excalidraw.md`
+      anchor.href = url
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "无法打开原始文件")
+    }
+  }
+
+  useEffect(() => {
+    const anchor = pendingWikiAnchorRef.current
+    if (!anchor || !activeNote?.contentLoaded) return
+    const id = obsidianAnchorId(anchor)
+    let attempts = 0
+    let frame = 0
+    let cancelled = false
+    // 预览模块按需加载，短暂逐帧等待目标出现，避免路由完成但标题 DOM 尚未挂载导致定位失效。
+    const scrollWhenReady = () => {
+      if (cancelled) return
+      const element = Array.from(document.querySelectorAll<HTMLElement>(`[id="${CSS.escape(id)}"]`))
+        .find((candidate) => candidate.getClientRects().length > 0)
+      if (element) {
+        element.scrollIntoView({ behavior: "smooth", block: "start" })
+        pendingWikiAnchorRef.current = ""
+        return
+      }
+      attempts += 1
+      if (attempts < 20) frame = window.requestAnimationFrame(scrollWhenReady)
+      else pendingWikiAnchorRef.current = ""
+    }
+    frame = window.requestAnimationFrame(scrollWhenReady)
+    return () => {
+      cancelled = true
+      window.cancelAnimationFrame(frame)
+    }
+  }, [activeNote?.contentLoaded, activeNote?.id])
 
   return (
     <>
@@ -2395,6 +2476,7 @@ function App() {
             isOpeningVault={isOpeningVault}
             isCreatingNote={isCreatingNote}
             isManagingNote={isManagingNote}
+            isNoteDetailRoute={Boolean(noteRouteMatch?.params.noteId)}
             isRefreshingVault={isRefreshingVault}
             libraryView={libraryView}
             localVaultSupported={canSelectLocalVault()}
@@ -2425,6 +2507,7 @@ function App() {
             onRenameFolder={renameFolder}
             onRenameNote={(title) => void moveActiveNote(activeNote?.folder === "根目录" ? null : activeNote?.folder ?? null, title)}
             onOpenLocalVault={() => void openLocalVault()}
+            onOpenSourceFile={() => void openActiveSourceFile()}
             onOpenWikiLink={openWikiLink}
             onOpenSettings={() => navigate(webDavConfigured ? "/settings/sync" : "/settings/webdav")}
             onQueryChange={setQuery}
@@ -2433,6 +2516,8 @@ function App() {
             onRefreshVault={() => void refreshVault()}
             onResolveConflict={(strategy) => void resolveActiveConflict(strategy)}
             onResolveAsset={resolveActiveAsset}
+            onLoadWikiNote={loadWikiNote}
+            onResolveWikiNote={resolveWikiNote}
             onSelectFolder={(folder) => {
               setLibraryView("all")
               setSelectedFolder(folder)

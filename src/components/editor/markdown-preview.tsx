@@ -1,29 +1,94 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { Component, Suspense, useEffect, useState, type ErrorInfo, type ReactNode } from "react"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
 import {
   isRelativeAttachmentHref,
+  obsidianAnchorId,
   parseVaultAssetHref,
+  parseWikiEmbedHref,
   parseWikiHref,
   rewriteWikiLinks,
+  stripMarkdownFrontmatter,
 } from "@/services/markdown/markdown-preview-utils"
+import { resolveOfficialNoteRenderer } from "@/plugins/official-note-renderers"
+import { remarkObsidian } from "@/services/markdown/remark-obsidian"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
+
+export type EmbeddedWikiNote = { content: string; title: string }
+export type EmbeddedWikiNoteResult =
+  | { note: EmbeddedWikiNote; status: "ready" }
+  | { status: "loading" | "missing" }
 
 type MarkdownPreviewProps = {
   content: string
+  immersive?: boolean
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
+  onLoadWikiNote: (target: string) => void
+  onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
   onWikiLink: (target: string) => void
 }
 
-const remarkPlugins = [remarkGfm]
+const remarkPlugins = [remarkGfm, remarkObsidian]
 
-export default function MarkdownPreview({ content, onResolveAsset, onWikiLink }: MarkdownPreviewProps) {
+export default function MarkdownPreview(props: MarkdownPreviewProps) {
+  const renderer = resolveOfficialNoteRenderer(props.content)
+  if (renderer) {
+    const PluginRenderer = renderer.component
+    return (
+      <NoteRendererErrorBoundary content={props.content} label={renderer.label}>
+        <Suspense fallback={<NoteRendererLoading label={renderer.label} />}>
+          <PluginRenderer content={props.content} immersive={props.immersive} onResolveAsset={props.onResolveAsset} onWikiLink={props.onWikiLink} />
+        </Suspense>
+      </NoteRendererErrorBoundary>
+    )
+  }
+  return <MarkdownContent {...props} depth={0} />
+}
+
+function NoteRendererLoading({ label }: { label: string }) {
+  return <div className="note-renderer-loading" role="status">正在加载 {label} 预览…</div>
+}
+
+class NoteRendererErrorBoundary extends Component<{
+  children: ReactNode
+  content: string
+  label: string
+}, { failed: boolean }> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error(`笔记渲染模块 ${this.props.label} 加载失败`, error, info)
+  }
+
+  componentDidUpdate(previous: Readonly<{ content: string }>) {
+    if (previous.content !== this.props.content && this.state.failed) this.setState({ failed: false })
+  }
+
+  render() {
+    if (this.state.failed) {
+      return <div className="note-renderer-error">{this.props.label} 预览加载失败，可通过右上角菜单打开原始文件。</div>
+    }
+    return this.props.children
+  }
+}
+
+function MarkdownContent({ content, depth, onLoadWikiNote, onResolveAsset, onResolveWikiNote, onWikiLink }: MarkdownPreviewProps & { depth: number }) {
   return (
-    <div className="markdown-preview">
+    <div className={depth === 0 ? "markdown-preview" : "markdown-preview markdown-preview-embedded"}>
       <ReactMarkdown
         components={{
           a({ children, href }) {
+            const embedTarget = parseWikiEmbedHref(href)
+            if (embedTarget) {
+              return (
+                <button className="wiki-link" onClick={() => onWikiLink(embedTarget)} type="button">{children}</button>
+              )
+            }
             const wikiTarget = parseWikiHref(href)
             if (wikiTarget) {
               return (
@@ -51,14 +116,85 @@ export default function MarkdownPreview({ content, onResolveAsset, onWikiLink }:
           img({ alt, src }) {
             return <VaultImage alt={alt} onResolveAsset={onResolveAsset} source={src} />
           },
+          div({ children, node }) {
+            const property = node?.properties?.["data-wiki-embed"] ?? node?.properties?.dataWikiEmbed
+            const embedTarget = typeof property === "string" ? property : ""
+            if (!embedTarget) return <div>{children}</div>
+            return (
+              <WikiEmbed
+                depth={depth}
+                onLoadWikiNote={onLoadWikiNote}
+                onResolveAsset={onResolveAsset}
+                onResolveWikiNote={onResolveWikiNote}
+                onWikiLink={onWikiLink}
+                target={embedTarget}
+              />
+            )
+          },
+          h1({ children }) { return <Heading level={1}>{children}</Heading> },
+          h2({ children }) { return <Heading level={2}>{children}</Heading> },
+          h3({ children }) { return <Heading level={3}>{children}</Heading> },
+          h4({ children }) { return <Heading level={4}>{children}</Heading> },
+          h5({ children }) { return <Heading level={5}>{children}</Heading> },
+          h6({ children }) { return <Heading level={6}>{children}</Heading> },
         }}
         remarkPlugins={remarkPlugins}
-        urlTransform={(url) => parseWikiHref(url) || parseVaultAssetHref(url) ? url : defaultUrlTransform(url)}
+        urlTransform={(url) => parseWikiHref(url) || parseWikiEmbedHref(url) || parseVaultAssetHref(url) ? url : defaultUrlTransform(url)}
       >
-        {rewriteWikiLinks(content)}
+        {rewriteWikiLinks(stripMarkdownFrontmatter(content))}
       </ReactMarkdown>
     </div>
   )
+}
+
+function Heading({ children, level }: { children: ReactNode; level: 1 | 2 | 3 | 4 | 5 | 6 }) {
+  const id = obsidianAnchorId(reactNodeText(children))
+  const Tag = `h${level}` as const
+  return <Tag id={id || undefined}>{children}</Tag>
+}
+
+function WikiEmbed({ depth, onLoadWikiNote, onResolveAsset, onResolveWikiNote, onWikiLink, target }: {
+  depth: number
+  onLoadWikiNote: MarkdownPreviewProps["onLoadWikiNote"]
+  onResolveAsset: MarkdownPreviewProps["onResolveAsset"]
+  onResolveWikiNote: MarkdownPreviewProps["onResolveWikiNote"]
+  onWikiLink: MarkdownPreviewProps["onWikiLink"]
+  target: string
+}) {
+  const result = depth < 2 ? onResolveWikiNote(target) : { status: "missing" as const }
+
+  useEffect(() => {
+    if (result.status === "loading") onLoadWikiNote(target)
+  }, [onLoadWikiNote, result.status, target])
+
+  return (
+    <section className="wiki-embed">
+      <button className="wiki-embed-title" onClick={() => onWikiLink(target)} type="button">
+        {result.status === "ready" ? result.note.title : target}
+      </button>
+      {result.status === "ready" && depth < 2 ? (
+        <MarkdownContent
+          content={result.note.content}
+          depth={depth + 1}
+          onLoadWikiNote={onLoadWikiNote}
+          onResolveAsset={onResolveAsset}
+          onResolveWikiNote={onResolveWikiNote}
+          onWikiLink={onWikiLink}
+        />
+      ) : <p className="wiki-embed-state">{depth >= 2
+        ? "嵌入层级过深，点击打开笔记"
+        : result.status === "loading" ? "正在读取嵌入笔记…" : "找不到嵌入的笔记"}</p>}
+    </section>
+  )
+}
+
+function reactNodeText(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node)
+  if (Array.isArray(node)) return node.map(reactNodeText).join("")
+  if (node && typeof node === "object" && "props" in node) {
+    return reactNodeText((node as { props?: { children?: ReactNode } }).props?.children)
+  }
+  return ""
 }
 
 type VaultImageProps = {

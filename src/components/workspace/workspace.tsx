@@ -69,7 +69,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { Note, NoteSaveState } from "@/types/note"
+import type { EmbeddedWikiNoteResult } from "@/components/editor/markdown-preview"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
+import { isExcalidrawMarkdown } from "@/services/markdown/markdown-preview-utils"
 import {
   getFolderAncestorPaths,
   getVisibleVaultFolders,
@@ -83,6 +85,7 @@ import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
 // CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
 const MarkdownEditor = lazyWithRetry(() => import("@/components/editor/markdown-editor"))
 const MarkdownPreview = lazyWithRetry(() => import("@/components/editor/markdown-preview"))
+const CanvasPreview = lazyWithRetry(() => import("@/components/editor/canvas-preview"))
 
 export type MobileScreen = "library" | "notes" | "editor"
 export type AppSection = "notes" | "settings" | "todos"
@@ -105,6 +108,7 @@ type WorkspaceProps = {
   isCreatingNote: boolean
   canInsertAttachment: boolean
   isManagingNote: boolean
+  isNoteDetailRoute: boolean
   isRefreshingVault: boolean
   libraryView: LibraryView
   localVaultSupported: boolean
@@ -122,7 +126,9 @@ type WorkspaceProps = {
   onDeleteNote: () => void
   onDeleteFolder: (folderPath: string) => void
   onOpenLocalVault: () => void
+  onLoadWikiNote: (target: string) => void
   onOpenWikiLink: (target: string) => void
+  onOpenSourceFile: () => void
   onMoveNote: (folderPath: string | null) => void
   onRenameFolder: (folderPath: string, nextName: string) => void
   onRenameNote: (title: string) => void
@@ -134,6 +140,7 @@ type WorkspaceProps = {
   onRefreshVault: () => void
   onResolveConflict: (strategy: "local" | "merge" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
+  onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
   onSelectFolder: (folder: string | null) => void
   onSelectLibraryView: (view: LibraryView) => void
   onSelectNote: (note: Note) => void
@@ -203,8 +210,14 @@ type FolderTreeProps = {
 }
 
 function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
+  // 只有详情路由才进入沉浸画布；切到目录/列表路由时必须立即恢复笔记列表，即使 activeNote 仍保留上一条笔记。
+  const immersiveExcalidraw = Boolean(
+    props.isNoteDetailRoute
+    && props.activeNote
+    && isExcalidrawMarkdown(props.activeNote.content),
+  )
   return (
-    <div className="desktop-workspace">
+    <div className="desktop-workspace" data-immersive-excalidraw={immersiveExcalidraw}>
       <AppNavigationRail
         activeSection="notes"
         connected={props.connected}
@@ -240,7 +253,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         vaultError={props.vaultError}
         vaultCaches={props.vaultCaches}
       />
-      <NoteListPanel
+      {!immersiveExcalidraw ? <NoteListPanel
         activeNoteId={props.activeNoteId}
         canCreateNote={props.canCreateNote}
         notes={props.notes}
@@ -260,7 +273,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         selectedTag={props.selectedTag}
         selectedFolder={props.selectedFolder}
         isManagingFolder={props.isManagingNote}
-      />
+      /> : null}
       {props.activeNote ? (
         <NoteEditor
           backlinks={props.backlinks}
@@ -277,7 +290,9 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           onFormat={props.onFormat}
           onFormatNote={props.onFormatNote}
           onInsertAttachments={props.onInsertAttachments}
+          onLoadWikiNote={props.onLoadWikiNote}
           onOpenWikiLink={props.onOpenWikiLink}
+          onOpenSourceFile={props.onOpenSourceFile}
           onMoveNote={props.onMoveNote}
           onRenameNote={props.onRenameNote}
           onSelectNote={props.onSelectNote}
@@ -285,6 +300,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           onReloadNote={props.onReloadNote}
           onResolveConflict={props.onResolveConflict}
           onResolveAsset={props.onResolveAsset}
+          onResolveWikiNote={props.onResolveWikiNote}
           onSync={props.onRefreshVault}
           saveState={props.saveState}
           syncing={props.isRefreshingVault}
@@ -888,12 +904,15 @@ type NoteEditorProps = {
   onFormat: (syntax: string) => void
   onFormatNote: (noteId: string, syntax: string) => void
   onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
+  onLoadWikiNote: (target: string) => void
   onOpenWikiLink: (target: string) => void
+  onOpenSourceFile: () => void
   onMoveNote: (folderPath: string | null) => void
   onRenameNote: (title: string) => void
   onReloadNote: () => void
   onResolveConflict: (strategy: "local" | "merge" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
+  onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
   onSelectNote: (note: Note) => void
   onSync: () => void
   onUpdateNote: (patch: Partial<Note>) => void
@@ -901,12 +920,15 @@ type NoteEditorProps = {
   syncing: boolean
 }
 
-function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, onBack, onDeleteNote, onFormat, onFormatNote, onInsertAttachments, onMoveNote, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onSelectNote, onSync, onUpdateNote, saveState, syncing }: NoteEditorProps) {
+function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, onBack, onDeleteNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onSelectNote, onSync, onUpdateNote, saveState, syncing }: NoteEditorProps) {
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
-  const readOnly = (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
+  const isCanvas = note.format === "canvas"
+  const isExcalidraw = isExcalidrawMarkdown(note.content)
+  const isSpecialPreview = isCanvas || isExcalidraw
+  const readOnly = isSpecialPreview || (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
   const titleReadOnly = note.source === "local" || note.source === "webdav"
   const editorRef = useRef<MarkdownEditorHandle>(null)
-  const [previewing, setPreviewing] = useState(compact)
+  const [previewing, setPreviewing] = useState(compact || isSpecialPreview)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [renameTitle, setRenameTitle] = useState(note.title)
@@ -920,8 +942,8 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
 
   useEffect(() => {
     // 手机进入新文档时默认阅读，避免误触键盘；用户可通过明确按钮进入编辑模式。
-    setPreviewing(compact)
-  }, [compact, note.id])
+    setPreviewing(compact || isSpecialPreview)
+  }, [compact, isSpecialPreview])
 
   const handleFormat = useCallback((syntax: string) => {
     if (!syntax) return
@@ -955,7 +977,7 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
   }, [canInsertAttachment, handleFormat, note.id, onFormatNote, onInsertAttachments, readOnly])
 
   return (
-    <article className="note-editor" data-compact={compact}>
+    <article className="note-editor" data-compact={compact} data-excalidraw={isExcalidraw}>
       <header className="editor-titlebar">
         {onBack ? (
           <Button aria-label="返回全部笔记" onClick={onBack} size="icon" variant="ghost"><ArrowLeft /></Button>
@@ -991,7 +1013,7 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
               <TooltipContent>上传本地修改并拉取远端更新</TooltipContent>
             </Tooltip>
           ) : null}
-          <Tooltip>
+          {!isSpecialPreview ? <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 aria-label={previewing ? "切换到编辑" : "切换到预览"}
@@ -1006,7 +1028,7 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
               </Button>
             </TooltipTrigger>
             <TooltipContent>{previewing ? "编辑 Markdown" : "预览 Markdown"}</TooltipContent>
-          </Tooltip>
+          </Tooltip> : null}
           <Button
             aria-label={note.starred ? "取消收藏" : "收藏"}
             onClick={() => onUpdateNote({ starred: !note.starred })}
@@ -1027,6 +1049,9 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
                 >
                   重新加载源文件
                 </DropdownMenuItem>
+              ) : null}
+              {note.remotePath && isExcalidrawMarkdown(note.content) ? (
+                <DropdownMenuItem onClick={onOpenSourceFile}>打开 / 下载 Excalidraw 原始文件</DropdownMenuItem>
               ) : null}
               {canManageNote ? (
                 <>
@@ -1077,7 +1102,20 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
         <p className="attachment-error" role="alert">{attachmentError}</p>
       ) : null}
 
-      <ScrollArea className="editor-scroll">
+      {isExcalidraw ? (
+        <div className="excalidraw-workspace">
+          <Suspense fallback={<div className="editor-loading">正在加载 Excalidraw…</div>}>
+            <MarkdownPreview
+              content={note.content}
+              immersive
+              onLoadWikiNote={onLoadWikiNote}
+              onResolveAsset={onResolveAsset}
+              onResolveWikiNote={onResolveWikiNote}
+              onWikiLink={onOpenWikiLink}
+            />
+          </Suspense>
+        </div>
+      ) : <ScrollArea className="editor-scroll">
         <div className="document-canvas">
           <input
             aria-label="笔记标题"
@@ -1093,11 +1131,17 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
             <span>·</span>
             <span>{deriveFolder(note)}</span>
           </div>
-          {previewing ? (
+          {isCanvas ? (
+            <Suspense fallback={<div className="editor-loading">正在加载 Canvas…</div>}>
+              <CanvasPreview content={note.content} onResolveAsset={onResolveAsset} onWikiLink={onOpenWikiLink} />
+            </Suspense>
+          ) : previewing ? (
             <Suspense fallback={<div className="editor-loading">正在生成预览…</div>}>
               <MarkdownPreview
                 content={note.content}
+                onLoadWikiNote={onLoadWikiNote}
                 onResolveAsset={onResolveAsset}
+                onResolveWikiNote={onResolveWikiNote}
                 onWikiLink={onOpenWikiLink}
               />
             </Suspense>
@@ -1122,7 +1166,7 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
           )}
           <BacklinksPanel backlinks={backlinks} onSelectNote={onSelectNote} />
         </div>
-      </ScrollArea>
+      </ScrollArea>}
 
       {compact && !previewing && !readOnly ? (
         <FormattingToolbar
@@ -1133,7 +1177,7 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
           onFormat={handleFormat}
           onInsertFiles={handleInsertFiles}
         />
-      ) : !compact ? (
+      ) : !compact && !isExcalidraw ? (
         <footer className="editor-statusbar">
           <span>{note.content.length} 字</span>
           <span>Markdown</span>
@@ -1294,12 +1338,15 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             onFormat={props.onFormat}
             onFormatNote={props.onFormatNote}
             onInsertAttachments={props.onInsertAttachments}
+            onLoadWikiNote={props.onLoadWikiNote}
             onOpenWikiLink={props.onOpenWikiLink}
+            onOpenSourceFile={props.onOpenSourceFile}
             onMoveNote={props.onMoveNote}
             onRenameNote={props.onRenameNote}
             onReloadNote={props.onReloadNote}
             onResolveAsset={props.onResolveAsset}
             onResolveConflict={props.onResolveConflict}
+            onResolveWikiNote={props.onResolveWikiNote}
             onSelectNote={props.onSelectNote}
             onSync={props.onRefreshVault}
             onUpdateNote={props.onUpdateNote}

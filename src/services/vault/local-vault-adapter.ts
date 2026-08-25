@@ -182,7 +182,7 @@ async function collectBrowserMarkdownFiles(
       }
       continue
     }
-    if (!entry.name.toLocaleLowerCase().endsWith(".md")) continue
+    if (!isVaultTextDocument(entry.name)) continue
 
     const file = await entry.getFile()
     handles.set(path, entry)
@@ -228,7 +228,7 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
         const relevant = event.paths.some((changedPath) => {
           const normalized = changedPath.replace(/\\/g, "/")
           if (["/.git/", "/.obsidian/", "/.swell-trash/", "/node_modules/", "/attachments/"].some((segment) => normalized.includes(segment))) return false
-          return normalized.toLocaleLowerCase().endsWith(".md") || !normalized.split("/").pop()?.includes(".")
+          return isVaultTextDocument(normalized) || !normalized.split("/").pop()?.includes(".")
         })
         if (relevant) onChange()
       }, { delayMs: 700, recursive: true })
@@ -279,6 +279,10 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
     },
     async readBinaryFile(path) {
       return { data: await readFile(await join(rootPath, path)), mimeType: mimeTypeFromPath(path) }
+    },
+    async openSourceFile(path) {
+      const { openPath } = await import("@tauri-apps/plugin-opener")
+      await openPath(await join(rootPath, path))
     },
     async moveTextFile(path, targetPath) {
       const [absolutePath, absoluteTargetPath] = await Promise.all([
@@ -466,10 +470,14 @@ async function collectTauriMarkdownFiles(
       }
       continue
     }
-    if (entry.isFile && entry.name.toLocaleLowerCase().endsWith(".md")) {
+    if (entry.isFile && isVaultTextDocument(entry.name)) {
       files.push({ name: entry.name, path: relativePath })
     }
   }
+}
+
+function isVaultTextDocument(path: string) {
+  return /\.(?:canvas|md)$/i.test(path)
 }
 
 async function collectTauriDirectories(

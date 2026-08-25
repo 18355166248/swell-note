@@ -295,6 +295,17 @@
 .library-panel { border-right: 1px solid var(--border); background: var(--panel-soft); }
 .note-list-panel { border-right: 1px solid var(--border); background: white; }
 .note-editor { background: white; }
+.desktop-workspace[data-immersive-excalidraw="true"] { grid-template-columns: 64px minmax(250px,290px) minmax(0,1fr); }
+.note-editor[data-excalidraw="true"] { overflow: hidden; background: #fff; }
+.note-editor[data-excalidraw="true"] .editor-titlebar { min-height: 46px; border-color: #343438; background: #242426; color: #d8d8dc; }
+.note-editor[data-excalidraw="true"] .editor-titlebar button { color: #d8d8dc; }
+.note-editor[data-excalidraw="true"] .editor-titlebar button:hover { background: rgb(255 255 255 / 10%); color: #fff; }
+.note-editor[data-excalidraw="true"] .editor-breadcrumb { color: #c9c9ce; }
+.excalidraw-workspace { min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
+.excalidraw-workspace > .excalidraw-plugin,
+.excalidraw-plugin[data-immersive="true"],
+.excalidraw-plugin[data-immersive="true"] .excalidraw-plugin-canvas { height: 100%; }
+.excalidraw-plugin[data-immersive="true"] .excalidraw-plugin-canvas { border: 0; border-radius: 0; }
 .empty-note-editor { min-height: 0; }
 .empty-note-content { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; padding: 40px; text-align: center; }
 .empty-note-icon { display: grid; width: 52px; height: 52px; place-items: center; border-radius: 15px; background: var(--blue-soft); color: var(--primary); }
@@ -319,6 +330,8 @@
 .cache-switcher-item small { margin-top: 2px; color: var(--muted-foreground); font-size: 10.5px; }
 .vault-error { margin: 0; border-radius: 7px; background: color-mix(in oklab,var(--destructive) 9%,white); padding: 8px 9px; color: var(--destructive); font-size: 10.5px; line-height: 1.45; }
 .library-scroll, .note-list-scroll, .editor-scroll, .mobile-scroll-content { min-height: 0; flex: 1; }
+/* Radix ScrollArea 默认的 table 包裹层会被超长代码撑到最小内容宽度；编辑区必须以视口宽度排版。 */
+.editor-scroll [data-radix-scroll-area-viewport] > div { display: block !important; width: 100%; min-width: 0 !important; }
 .library-navigation { padding: 2px 10px 14px; }
 .library-row { display: flex; width: 100%; height: 34px; align-items: center; border-radius: 7px; padding-left: 4px; color: #46505e; font-size: 12.5px; }
 .library-row[data-depth="1"] { padding-left: 18px; }
@@ -416,7 +429,7 @@
 .toolbar-divider { width: 1px; height: 17px; margin: 0 4px; background: var(--border); }
 .attachment-file-input { display: none; }
 .attachment-error { margin: 0; border-bottom: 1px solid var(--border); background: color-mix(in oklab,var(--destructive) 9%,white); padding: 8px 16px; color: var(--destructive); font-size: 10.5px; line-height: 1.45; }
-.document-canvas { width: min(100%,830px); margin: 0 auto; padding: 48px 64px 80px; }
+.document-canvas { width: min(100%,830px); min-width: 0; max-width: 100%; margin: 0 auto; padding: 48px 64px 80px; }
 .document-title { width: 100%; border: 0; background: transparent; outline: none; color: #1d2530; font-size: clamp(25px,2.3vw,34px); line-height: 1.2; font-weight: 720; letter-spacing: -.035em; }
 .document-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 13px 0 30px; color: var(--muted-foreground); font-size: 11px; }
 .markdown-editor-shell { width: 100%; min-height: calc(100dvh - 250px); color: #28313e; }
@@ -435,7 +448,7 @@
 .note-list-row { content-visibility: auto; contain-intrinsic-size: 118px; }
 .note-row-tags { display: flex; gap: 5px; margin-top: 7px; overflow: hidden; }
 .note-row-tags span { border-radius: 999px; background: var(--blue-soft); padding: 1px 6px; color: var(--primary); font-size: 10px; white-space: nowrap; }
-.markdown-preview { min-height: calc(100dvh - 250px); color: #28313e; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.markdown-preview { width: 100%; min-width: 0; max-width: 100%; min-height: calc(100dvh - 250px); color: #28313e; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
 .markdown-preview > :first-child { margin-top: 0; }
 .markdown-preview > :last-child { margin-bottom: 0; }
 .markdown-preview h1, .markdown-preview h2, .markdown-preview h3, .markdown-preview h4 { margin: 1.7em 0 .65em; color: #1d2530; line-height: 1.3; font-weight: 700; letter-spacing: -.02em; }
@@ -449,8 +462,49 @@
 .markdown-preview li { margin: .25em 0; }
 .markdown-preview blockquote { margin: 1.1em 0; border-left: 3px solid var(--blue-line); padding: .15em 0 .15em 1em; color: var(--muted-foreground); }
 .markdown-preview blockquote p { margin: .35em 0; }
+.markdown-preview [id] { scroll-margin-top: 88px; }
+.obsidian-callout { --callout-color: #4f6bed; margin: 1.1em 0; border: 1px solid color-mix(in oklab,var(--callout-color) 24%,var(--border)); border-left: 4px solid var(--callout-color); border-radius: 8px; background: color-mix(in oklab,var(--callout-color) 7%,white); padding: .7em 1em; color: inherit; }
+.obsidian-callout[data-callout="warning"], .obsidian-callout[data-callout="caution"] { --callout-color: #d97706; }
+.obsidian-callout[data-callout="danger"], .obsidian-callout[data-callout="error"] { --callout-color: #dc2626; }
+.obsidian-callout[data-callout="success"], .obsidian-callout[data-callout="check"] { --callout-color: #15803d; }
+.obsidian-callout[data-callout="tip"], .obsidian-callout[data-callout="example"] { --callout-color: #7c3aed; }
+.obsidian-callout .obsidian-callout-title { margin: 0 0 .3em; color: var(--callout-color); font-weight: 700; }
+.obsidian-callout .obsidian-callout-title::before { content: "◆"; margin-right: .55em; font-size: .75em; }
+.obsidian-callout > summary.obsidian-callout-title { cursor: pointer; list-style-position: outside; }
+.obsidian-callout > summary.obsidian-callout-title::before { margin-left: .2em; }
+.wiki-embed { display: block; margin: 1.15em 0; overflow: hidden; border: 1px solid var(--border); border-left: 3px solid var(--primary); border-radius: 8px; background: color-mix(in oklab,var(--panel-soft) 72%,white); }
+.wiki-embed-title { display: block; width: 100%; border-bottom: 1px solid var(--border); padding: .65em .9em; color: var(--primary); text-align: left; font-weight: 700; }
+.markdown-preview-embedded { min-height: 0; padding: .25em 1em .75em; }
+.wiki-embed-state { margin: .65em .9em; color: var(--muted-foreground); }
+.excalidraw-summary { min-width: 0; max-width: 100%; min-height: 0; }
+.excalidraw-summary-heading { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-soft); padding: 16px; }
+.excalidraw-summary-heading > span { color: var(--primary); font-size: 28px; line-height: 1; }
+.excalidraw-summary-heading p { margin: .25em 0 0; color: var(--muted-foreground); }
+.excalidraw-summary details { width: 100%; min-width: 0; max-width: 100%; margin-top: 1.25em; overflow: hidden; }
+.excalidraw-summary details summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.excalidraw-summary details pre { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; max-height: 360px; overflow: auto; white-space: pre; }
+.note-renderer-loading { display: grid; min-height: 420px; place-items: center; color: var(--muted-foreground); }
+.note-renderer-error { border: 1px solid color-mix(in oklab,var(--destructive) 25%,var(--border)); border-radius: 10px; background: color-mix(in oklab,var(--destructive) 7%,white); padding: 20px; color: var(--destructive); }
+.excalidraw-plugin { width: 100%; min-width: 0; }
+.excalidraw-plugin-canvas { width: 100%; height: clamp(440px, 68dvh, 760px); min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
+.excalidraw-plugin-canvas .excalidraw { width: 100%; height: 100%; }
+.excalidraw-plugin-source { width: 100%; min-width: 0; max-width: 100%; margin-top: 16px; overflow: hidden; }
+.excalidraw-plugin-source summary { cursor: pointer; color: var(--muted-foreground); }
+.excalidraw-plugin-source pre { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; max-height: 360px; overflow: auto; border-radius: 8px; background: #f5f7fa; padding: 14px 16px; white-space: pre; }
+.canvas-preview-viewport { width: 100%; min-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; background-color: #f8fafc; background-image: radial-gradient(#cbd5e1 1px,transparent 1px); background-size: 18px 18px; }
+.canvas-preview { position: relative; transform-origin: left top; }
+.canvas-edges { position: absolute; inset: 0; pointer-events: none; }
+.canvas-edges line { stroke: #94a3b8; stroke-width: 2; }
+.canvas-edges text { fill: #64748b; font-size: 11px; text-anchor: middle; paint-order: stroke; stroke: white; stroke-width: 3px; }
+.canvas-node { position: absolute; overflow: auto; border: 2px solid #94a3b8; border-radius: 8px; background: rgb(255 255 255 / 94%); padding: 12px; box-shadow: 0 3px 10px rgb(15 23 42 / 8%); white-space: pre-wrap; }
+.canvas-node[data-type="group"] { background: rgb(241 245 249 / 65%); }
+.canvas-node button, .canvas-node a { color: var(--primary); text-decoration: underline; }
+.canvas-node img { display: block; width: 100%; max-height: 100%; object-fit: contain; }
+.canvas-node p { margin: .45em 0; }
+.canvas-file-state { color: var(--muted-foreground); font-size: 12px; }
+.canvas-preview-empty, .canvas-preview-error { border: 1px solid var(--border); border-radius: 10px; padding: 24px; color: var(--muted-foreground); }
 .markdown-preview code { border-radius: 4px; background: var(--muted); padding: .12em .35em; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
-.markdown-preview pre { overflow-x: auto; border-radius: 8px; background: #f5f7fa; padding: 14px 16px; line-height: 1.65; }
+.markdown-preview pre { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; border-radius: 8px; background: #f5f7fa; padding: 14px 16px; line-height: 1.65; }
 .markdown-preview pre code { background: transparent; padding: 0; }
 .markdown-preview table { display: block; width: 100%; overflow-x: auto; border-collapse: collapse; margin: 1em 0; }
 .markdown-preview th, .markdown-preview td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; }
@@ -481,6 +535,7 @@
 
 @media (max-width: 1099px) and (min-width: 768px) {
   .desktop-workspace { grid-template-columns: 64px minmax(260px,300px) minmax(0,1fr); }
+  .desktop-workspace[data-immersive-excalidraw="true"] { grid-template-columns: 64px minmax(0,1fr); }
   .library-panel { display: none; }
   .document-canvas { padding-inline: 44px; }
 }
@@ -536,6 +591,8 @@
   .mobile-note-groups .note-list-row { min-height: 92px; padding: 13px 18px; }
   .mobile-fab { position: fixed; right: 20px; bottom: calc(82px + env(safe-area-inset-bottom)); z-index: 4; width: 50px; height: 50px; border-radius: 50%; box-shadow: 0 8px 22px color-mix(in oklab,var(--primary) 34%,transparent); }
   .note-editor[data-compact="true"] .editor-titlebar { min-height: 58px; padding: 0 8px; }
+  .note-editor[data-compact="true"][data-excalidraw="true"] .editor-titlebar { min-height: 52px; background: white; color: var(--foreground); border-color: var(--border); }
+  .note-editor[data-compact="true"][data-excalidraw="true"] .editor-titlebar button { color: var(--foreground); }
   .mobile-back-label { margin-left: 2px; font-size: 14px; font-weight: 620; }
   .note-editor[data-compact="true"] .saved-state { max-width: 86px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .note-editor[data-compact="true"] .editor-sync-button { padding-inline: 9px; }

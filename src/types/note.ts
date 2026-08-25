@@ -8,6 +8,7 @@ export type Note = {
   starred: boolean
   folder?: string
   frontmatter?: Record<string, string | string[]>
+  format?: "canvas" | "markdown"
   source?: "local" | "webdav"
   remotePath?: string
   readOnly?: boolean

@@ -102,9 +102,11 @@ function createVault() {
 
 describe("browser vault adapter", () => {
   it("递归读取 Markdown 并忽略 Obsidian 内部目录", async () => {
-    const { adapter } = createVault()
+    const { adapter, docs } = createVault()
+    docs.entries.set("roadmap.canvas", new FakeFileHandle("roadmap.canvas", '{"nodes":[]}'))
     await expect(adapter.listMarkdownFiles()).resolves.toEqual([
       expect.objectContaining({ name: "note.md", path: "docs/note.md" }),
+      expect.objectContaining({ name: "roadmap.canvas", path: "docs/roadmap.canvas" }),
     ])
   })
 

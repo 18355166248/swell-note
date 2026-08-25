@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest"
 
 import {
   isRelativeAttachmentHref,
+  extractExcalidrawTextElements,
+  obsidianAnchorId,
   parseVaultAssetHref,
+  parseWikiEmbedHref,
   parseWikiHref,
   rewriteWikiLinks,
+  stripMarkdownFrontmatter,
 } from "./markdown-preview-utils"
 
 describe("Markdown preview wiki links", () => {
@@ -28,11 +32,28 @@ describe("Markdown preview wiki links", () => {
   })
 
   it("rewrites Obsidian embedded files as local assets", () => {
-    const output = rewriteWikiLinks("![[assets/封面.png]]\n![[资料/方案.pdf|查看方案]]")
+    const output = rewriteWikiLinks("![[assets/封面.png]]\n![[资料/方案.pdf|查看方案]]\n![[产品灵感]]")
 
     expect(output).toContain("![封面.png](swell-note://asset/assets%2F%E5%B0%81%E9%9D%A2.png)")
     expect(output).toContain("[查看方案](swell-note://asset/%E8%B5%84%E6%96%99%2F%E6%96%B9%E6%A1%88.pdf)")
+    expect(output).toContain("[产品灵感](swell-note://embed/%E4%BA%A7%E5%93%81%E7%81%B5%E6%84%9F)")
     expect(parseVaultAssetHref("swell-note://asset/docs%2Fdemo.pdf")).toBe("docs/demo.pdf")
+    expect(parseWikiEmbedHref("swell-note://embed/%E4%BA%A7%E5%93%81%E7%81%B5%E6%84%9F")).toBe("产品灵感")
+  })
+
+  it("creates stable heading and block anchors", () => {
+    expect(obsidianAnchorId("同步 设计 / 冲突！")).toBe("同步-设计-冲突")
+    expect(obsidianAnchorId("^task-01")).toBe("block-task-01")
+  })
+
+  it("extracts readable text from Excalidraw markdown", () => {
+    const content = "---\nexcalidraw-plugin: parsed\n---\n# Excalidraw Data\n## Text Elements\n方案 A ^abc123\n第二行\n%%\n## Drawing\n```compressed-json\nN4K\n```"
+    expect(extractExcalidrawTextElements(content)).toEqual(["方案 A", "第二行"])
+  })
+
+  it("hides YAML frontmatter only from the rendered Markdown body", () => {
+    expect(stripMarkdownFrontmatter("---\ntitle: 示例\ntags: [a]\n---\n# 正文")).toBe("# 正文")
+    expect(stripMarkdownFrontmatter("---\n正文没有闭合")).toBe("---\n正文没有闭合")
   })
 
   it("detects relative attachment links of any uploaded file type", () => {

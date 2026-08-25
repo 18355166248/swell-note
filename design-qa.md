@@ -33,4 +33,57 @@
 - P1：无。
 - 未解决的 P2：无。
 
+## Excalidraw 沉浸式预览
+
+### Evidence
+
+- Source reference: `design-qa-assets/excalidraw-obsidian-reference.png`（1920 × 1080 px）
+- Implementation route: `#/notes/webdav%3A%2FSwell%2FExcalidraw%2FDrawing%202026-05-25%2014.21.56.excalidraw.md`
+- Implementation viewport: 1920 × 1080 CSS px
+- Implementation screenshot: `design-qa-assets/excalidraw-immersive-final.jpg`
+- Combined comparison: `design-qa-assets/excalidraw-side-by-side.png`
+- Tested state: desktop, WebDAV cached Excalidraw note, library sidebar open, editor controls visible, default zoom fixed at 100%
+
+### Full-view comparison
+
+| Surface | Result | Notes |
+| --- | --- | --- |
+| Overall composition | Passed | The note list and document chrome are removed. The rail plus library sidebar occupy 354 px versus roughly 377 px in the reference, leaving the rest to the canvas. |
+| Typography | Passed | Drawing text is rendered by the official Excalidraw package and keeps the authored hand-drawn font and scale. |
+| Spacing and sizing | Passed | The immersive canvas fills the available workspace. The later user-selected default is 100% zoom, with content centered without auto-fitting to another scale. |
+| Color and decoration | Passed | The canvas and strokes match Excalidraw. Swell Note keeps its existing light navigation theme while using a dark canvas title bar for focus. |
+| Assets and controls | Passed | The canvas uses native official Excalidraw rendering and controls; editing tools are available for the current page session without automatic cloud persistence. |
+
+### Comparison history
+
+- Pass 1: `design-qa-assets/excalidraw-immersive-pass-1.jpg`。P2：强制适应内容导致图形过小、留白过多。
+- Fix: desktop restores the Excalidraw file's saved zoom and scroll position; compact screens continue to fit content to avoid clipping.
+- Pass 2: `design-qa-assets/excalidraw-immersive-final.jpg`。Desktop drawing scale, placement, canvas footprint and navigation-to-canvas ratio now match the reference closely. No P0, P1 or P2 visual mismatch remains.
+- Follow-up preference: the saved 200% author viewport was superseded by the requested 100% default. Browser evidence: `design-qa-assets/excalidraw-zoom-100.png`（1200 × 800 CSS px）。
+
+### Interaction and responsive checks
+
+- Excalidraw remains a dynamic plugin chunk, so normal Markdown notes do not download its 4 MB runtime.
+- The official canvas remains pannable and zoomable in editor mode.
+- Desktop and compact views both initialize at 100%; the official viewport API centers the content while constraining the initial zoom to 1.
+- Raw Markdown is hidden in immersive mode, preventing horizontal overflow and the previous broken right-side layout.
+- TypeScript check, 109 unit tests, and production build passed.
+
+### Toolbar restoration
+
+- Source visual truth: `design-qa-assets/excalidraw-toolbar-reference.png`（770 × 326 px）。
+- Implementation screenshot: `design-qa-assets/excalidraw-toolbar-final.png`（375 × 745 px，当前右侧面板视口）。
+- Combined comparison: `design-qa-assets/excalidraw-toolbar-side-by-side.png`。
+- State: immersive Excalidraw editor, compact right panel, cached WebDAV drawing, no cloud write-back handler connected.
+- Full-view evidence: the official shape toolbar is visible above the canvas and the right utility rail remains present; the compact viewport keeps all primary tools on one row.
+- Focused-region evidence: the toolbar itself is readable in the combined comparison, so no additional crop was required.
+- Fonts/typography: native Excalidraw labels and shortcuts are used; no replacement glyphs were introduced.
+- Spacing/layout: toolbar position, rounded container, icon spacing and canvas separation follow the official component and the supplied reference.
+- Colors/tokens: native Excalidraw selected-tool tint, borders, shadow and white canvas match the reference.
+- Image/assets: all controls come from the official Excalidraw package; no custom or approximate assets are used.
+- Copy/content: shape names and shortcuts are provided by the official `zh-CN` locale.
+- Interaction check: DOM verification found selection, rectangle, diamond, ellipse, arrow, line, free draw, text, image, eraser, library and hand tools. Changes remain in the current page because no `onChange` persistence callback is connected.
+- Console/build check: TypeScript passed and all 109 tests passed.
+- Comparison history: P1 missing toolbar was caused by `viewModeEnabled`; setting it to `false` restored the official editor controls. Post-fix evidence is `design-qa-assets/excalidraw-toolbar-final.png`.
+
 final result: passed

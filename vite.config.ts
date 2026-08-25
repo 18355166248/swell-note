@@ -10,9 +10,9 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-    },
+    alias: [
+      { find: "@", replacement: path.resolve(__dirname, "./src") },
+    ],
   },
   build: {
     rollupOptions: {
@@ -21,6 +21,8 @@ export default defineConfig(async () => ({
         manualChunks(id) {
           if (!id.includes("node_modules")) return undefined;
           if (id.includes("@uiw/react-codemirror")) return "editor-react";
+          // Excalidraw 是可选官方能力，保持独立 chunk，普通笔记与应用首屏不会下载它。
+          if (id.includes("@excalidraw/excalidraw") || id.includes("@excalidraw+excalidraw") || id.includes("lz-string")) return "plugin-excalidraw";
           if (id.includes("@codemirror/view") || id.includes("@codemirror/state")) return "editor-core";
           if (id.includes("@codemirror/") || id.includes("@lezer/")) return "editor-features";
           if (id.includes("react-markdown") || id.includes("remark-") || id.includes("micromark") || id.includes("mdast-") || id.includes("hast-")) return "markdown-vendor";
