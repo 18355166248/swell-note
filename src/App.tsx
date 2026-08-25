@@ -34,6 +34,7 @@ import { createWebDavVaultAdapter } from "@/services/vault/webdav-vault-adapter"
 import {
   createVaultCacheId,
   deleteVaultCache,
+  deleteSyncedVaultAttachments,
   discardPendingVaultAttachments,
   listPendingVaultAttachments,
   listVaultCaches,
@@ -47,6 +48,12 @@ import {
   type VaultCacheSnapshot,
   type VaultCacheSummary,
 } from "@/services/cache/vault-cache"
+import {
+  loadCachePrivacyMode,
+  prepareNotesForCache,
+  saveCachePrivacyMode,
+  type CachePrivacyMode,
+} from "@/services/cache/cache-privacy"
 import {
   extractWikiLinks,
   extractFrontmatter,
@@ -142,6 +149,7 @@ function App() {
   const [vaultCaches, setVaultCaches] = useState<VaultCacheSummary[]>([])
   const [activeCacheMeta, setActiveCacheMeta] = useState<ActiveCacheMeta | null>(null)
   const [cacheReady, setCacheReady] = useState(false)
+  const [cachePrivacyMode, setCachePrivacyMode] = useState<CachePrivacyMode>(loadCachePrivacyMode)
   const [saveStates, setSaveStates] = useState<Record<string, NoteSaveState>>({})
   const [indexProgress, setIndexProgress] = useState<{ indexed: number; total: number } | null>(null)
   const [isOnline, setIsOnline] = useState(() =>
@@ -237,7 +245,7 @@ function App() {
       ...activeCacheMeta,
       activeNoteId,
       directories: vaultDirectories,
-      notes,
+      notes: prepareNotesForCache(notes, cachePrivacyMode),
       savedAt: Date.now(),
       trash: trashEntries,
     }
@@ -250,7 +258,7 @@ function App() {
         .catch((error) => setVaultError(error instanceof Error ? error.message : "保存离线缓存失败"))
     }, 450)
     return () => window.clearTimeout(timer)
-  }, [activeCacheMeta, activeNoteId, cacheReady, notes, trashEntries, vaultDirectories])
+  }, [activeCacheMeta, activeNoteId, cachePrivacyMode, cacheReady, notes, trashEntries, vaultDirectories])
 
   useEffect(() => {
     if (!activeCacheMeta || activeCacheMeta.sourceKind !== "webdav") {
@@ -2629,10 +2637,18 @@ function App() {
           element={(
             <CacheSettingsPage
               activeCacheId={activeCacheMeta?.id ?? null}
+              cachePrivacyMode={cachePrivacyMode}
               caches={vaultCaches}
               onDeleteCache={(cacheId) => void removeVaultCache(cacheId)}
               onSelectCache={(cacheId) => {
                 void selectVaultCache(cacheId).then(() => navigate("/notes"))
+              }}
+              onPrivacyModeChange={(mode) => {
+                saveCachePrivacyMode(mode)
+                setCachePrivacyMode(mode)
+                if (mode === "metadata" && activeCacheMeta) {
+                  void deleteSyncedVaultAttachments(activeCacheMeta.id)
+                }
               }}
             />
           )}

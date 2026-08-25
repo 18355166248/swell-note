@@ -99,6 +99,19 @@ export async function deleteVaultAttachments(keys: readonly string[]) {
   database.close()
 }
 
+export async function deleteSyncedVaultAttachments(cacheId: string) {
+  const database = await openDatabase()
+  const transaction = database.transaction(ATTACHMENT_STORE, "readwrite")
+  const store = transaction.objectStore(ATTACHMENT_STORE)
+  const entries = await requestResult<VaultAttachmentCacheEntry[]>(store.index("cacheId").getAll(cacheId))
+  for (const entry of entries) {
+    // 待上传附件属于未同步工作副本，隐私清理不能以数据丢失为代价。
+    if (entry.status === "synced") store.delete(entry.key)
+  }
+  await transactionDone(transaction)
+  database.close()
+}
+
 export async function updateVaultAttachmentStatus(
   entry: VaultAttachmentCacheEntry,
   status: VaultAttachmentCacheEntry["status"],

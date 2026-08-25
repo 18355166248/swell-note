@@ -37,6 +37,7 @@ import { summarizeWebDavSync } from "@/services/sync/sync-summary"
 import type { AutoSyncMode } from "@/services/sync/sync-preferences"
 import type { SyncLogEntry } from "@/services/sync/sync-log"
 import type { Note } from "@/types/note"
+import type { CachePrivacyMode } from "@/services/cache/cache-privacy"
 import type { TrashEntry, TrashRetentionDays } from "@/services/trash/trash-entry"
 import {
   checkForAppUpdate,
@@ -355,13 +356,17 @@ export function SettingsOverview({ onNavigate }: { onNavigate: (path: string) =>
 
 export function CacheSettingsPage({
   activeCacheId,
+  cachePrivacyMode,
   caches,
   onDeleteCache,
+  onPrivacyModeChange,
   onSelectCache,
 }: {
   activeCacheId: string | null
+  cachePrivacyMode: CachePrivacyMode
   caches: VaultCacheSummary[]
   onDeleteCache: (cacheId: string) => void
+  onPrivacyModeChange: (mode: CachePrivacyMode) => void
   onSelectCache: (cacheId: string) => void
 }) {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
@@ -371,6 +376,17 @@ export function CacheSettingsPage({
         <Database />
         <div><h2>本机 Vault 快照</h2><p>已缓存正文可离线阅读和编辑，重新连接后再手动同步。</p></div>
       </div>
+      <fieldset className="cache-privacy-options">
+        <legend>离线缓存隐私</legend>
+        <label>
+          <input checked={cachePrivacyMode === "full"} name="cache-privacy" onChange={() => onPrivacyModeChange("full")} type="radio" />
+          <span><strong>完整离线缓存</strong><small>保存已读取正文和附件，断网时仍可阅读。</small></span>
+        </label>
+        <label>
+          <input checked={cachePrivacyMode === "metadata"} name="cache-privacy" onChange={() => onPrivacyModeChange("metadata")} type="radio" />
+          <span><strong>仅保存目录</strong><small>移除已同步正文和附件；未同步草稿会保留，避免丢失修改。</small></span>
+        </label>
+      </fieldset>
       {caches.length > 0 ? (
         <div className="settings-cache-list">
           {caches.map((cache) => (

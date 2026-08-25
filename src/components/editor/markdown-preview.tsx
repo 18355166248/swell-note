@@ -22,7 +22,10 @@ export type EmbeddedWikiNoteResult =
 
 type MarkdownPreviewProps = {
   content: string
+  editable?: boolean
   immersive?: boolean
+  noteId?: string
+  onContentChange?: (content: string) => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onLoadWikiNote: (target: string) => void
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
@@ -38,7 +41,16 @@ export default function MarkdownPreview(props: MarkdownPreviewProps) {
     return (
       <NoteRendererErrorBoundary content={props.content} label={renderer.label}>
         <Suspense fallback={<NoteRendererLoading label={renderer.label} />}>
-          <PluginRenderer content={props.content} immersive={props.immersive} onResolveAsset={props.onResolveAsset} onWikiLink={props.onWikiLink} />
+          <PluginRenderer
+            content={props.content}
+            editable={props.editable}
+            immersive={props.immersive}
+            key={props.noteId}
+            noteId={props.noteId}
+            onContentChange={props.onContentChange}
+            onResolveAsset={props.onResolveAsset}
+            onWikiLink={props.onWikiLink}
+          />
         </Suspense>
       </NoteRendererErrorBoundary>
     )

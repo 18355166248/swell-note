@@ -52,7 +52,7 @@
 | Typography | Passed | Drawing text is rendered by the official Excalidraw package and keeps the authored hand-drawn font and scale. |
 | Spacing and sizing | Passed | The immersive canvas fills the available workspace. The later user-selected default is 100% zoom, with content centered without auto-fitting to another scale. |
 | Color and decoration | Passed | The canvas and strokes match Excalidraw. Swell Note keeps its existing light navigation theme while using a dark canvas title bar for focus. |
-| Assets and controls | Passed | The canvas uses native official Excalidraw rendering and controls; editing tools are available for the current page session without automatic cloud persistence. |
+| Assets and controls | Passed | The canvas uses native official Excalidraw rendering and controls; edits are serialized back into the Obsidian Markdown drawing block and enter the local-first sync queue. |
 
 ### Comparison history
 
@@ -74,7 +74,7 @@
 - Source visual truth: `design-qa-assets/excalidraw-toolbar-reference.png`（770 × 326 px）。
 - Implementation screenshot: `design-qa-assets/excalidraw-toolbar-final.png`（375 × 745 px，当前右侧面板视口）。
 - Combined comparison: `design-qa-assets/excalidraw-toolbar-side-by-side.png`。
-- State: immersive Excalidraw editor, compact right panel, cached WebDAV drawing, no cloud write-back handler connected.
+- State: immersive Excalidraw editor, compact right panel, cached WebDAV drawing, local-first save handler connected.
 - Full-view evidence: the official shape toolbar is visible above the canvas and the right utility rail remains present; the compact viewport keeps all primary tools on one row.
 - Focused-region evidence: the toolbar itself is readable in the combined comparison, so no additional crop was required.
 - Fonts/typography: native Excalidraw labels and shortcuts are used; no replacement glyphs were introduced.
@@ -82,7 +82,7 @@
 - Colors/tokens: native Excalidraw selected-tool tint, borders, shadow and white canvas match the reference.
 - Image/assets: all controls come from the official Excalidraw package; no custom or approximate assets are used.
 - Copy/content: shape names and shortcuts are provided by the official `zh-CN` locale.
-- Interaction check: DOM verification found selection, rectangle, diamond, ellipse, arrow, line, free draw, text, image, eraser, library and hand tools. Changes remain in the current page because no `onChange` persistence callback is connected.
+- Interaction check: DOM verification found selection, rectangle, diamond, ellipse, arrow, line, free draw, text, image, eraser, library and hand tools. User-initiated changes are debounced into the local working copy; WebDAV upload still requires the configured sync mode or an explicit sync action.
 - Console/build check: TypeScript passed and all 109 tests passed.
 - Comparison history: P1 missing toolbar was caused by `viewModeEnabled`; setting it to `false` restored the official editor controls. Post-fix evidence is `design-qa-assets/excalidraw-toolbar-final.png`.
 

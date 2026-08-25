@@ -10,7 +10,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test": "vitest run",
+    "test:webdav:live": "VITE_WEBDAV_E2E_DIRECT=1 SWELL_WEBDAV_E2E_CONFIRM=write-dedicated-test-file vitest run src/services/webdav-live.integration.test.ts",
     "preview": "vite preview",
+    "release:check": "node scripts/release-readiness.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

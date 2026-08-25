@@ -241,13 +241,36 @@ jobs:
           IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
           IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
           IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
-        run: test -n "$IOS_CERTIFICATE" && test -n "$IOS_CERTIFICATE_PASSWORD" && test -n "$IOS_MOBILE_PROVISION"
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: test -n "$IOS_CERTIFICATE" && test -n "$IOS_CERTIFICATE_PASSWORD" && test -n "$IOS_MOBILE_PROVISION" && test -n "$KEYCHAIN_PASSWORD" && test -n "$APPLE_TEAM_ID"
+      - name: Import iOS distribution certificate and profile
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          printf '%s' "$IOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/ios-distribution.p12"
+          printf '%s' "$IOS_MOBILE_PROVISION" | base64 --decode > "$RUNNER_TEMP/swell-note.mobileprovision"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" ios-build.keychain
+          security default-keychain -s ios-build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" ios-build.keychain
+          security set-keychain-settings -t 3600 -u ios-build.keychain
+          security import "$RUNNER_TEMP/ios-distribution.p12" -k ios-build.keychain -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" ios-build.keychain
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          security cms -D -i "$RUNNER_TEMP/swell-note.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/profile.plist")
+          cp "$RUNNER_TEMP/swell-note.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
       - name: Build signed iOS IPA
         if: startsWith(github.ref, 'refs/tags/')
         env:
           IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
           IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
           IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm tauri ios build --export-method app-store-connect --ci
       - name: Build iOS simulator app
         if: github.event_name == 'workflow_dispatch'

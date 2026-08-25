@@ -4,7 +4,10 @@ import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 export type NoteRendererPluginProps = {
   content: string
+  editable?: boolean
   immersive?: boolean
+  noteId?: string
+  onContentChange?: (content: string) => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onWikiLink: (target: string) => void
 }

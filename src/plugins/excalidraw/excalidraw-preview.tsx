@@ -1,10 +1,11 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { serializeAsJSON } from "@excalidraw/excalidraw"
 import type { ExcalidrawImperativeAPI, ExcalidrawInitialDataState, NormalizedZoomValue } from "@excalidraw/excalidraw/types"
 import "@excalidraw/excalidraw/index.css"
 
 import type { NoteRendererPluginProps } from "@/plugins/note-renderer"
 import { extractExcalidrawTextElements } from "@/services/markdown/markdown-preview-utils"
-import { parseExcalidrawMarkdown } from "./excalidraw-parser"
+import { parseExcalidrawMarkdown, serializeExcalidrawMarkdown, type ExcalidrawScene } from "./excalidraw-parser"
 
 const LazyExcalidraw = lazy(async () => {
   const module = await import("@excalidraw/excalidraw")
@@ -13,8 +14,13 @@ const LazyExcalidraw = lazy(async () => {
 
 const DEFAULT_ZOOM = { value: 1 as NormalizedZoomValue } as const
 
-export default function ExcalidrawPreview({ content, immersive = false }: NoteRendererPluginProps) {
+export default function ExcalidrawPreview({ content, editable = false, immersive = false, onContentChange }: NoteRendererPluginProps) {
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
+  const contentRef = useRef(content)
+  const onContentChangeRef = useRef(onContentChange)
+  const pendingSceneRef = useRef<ExcalidrawScene | null>(null)
+  const saveTimerRef = useRef<number | null>(null)
+  const userInteractedRef = useRef(false)
   const result = useMemo(() => {
     try {
       return { scene: parseExcalidrawMarkdown(content) }
@@ -22,6 +28,31 @@ export default function ExcalidrawPreview({ content, immersive = false }: NoteRe
       return { error: error instanceof Error ? error.message : "无法读取 Excalidraw 画布" }
     }
   }, [content])
+
+  contentRef.current = content
+  onContentChangeRef.current = onContentChange
+
+  const flushPendingScene = useCallback(() => {
+    if (!editable || !pendingSceneRef.current || !onContentChangeRef.current) return
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = null
+    const nextContent = serializeExcalidrawMarkdown(contentRef.current, pendingSceneRef.current)
+    pendingSceneRef.current = null
+    if (nextContent === contentRef.current) return
+    contentRef.current = nextContent
+    onContentChangeRef.current(nextContent)
+  }, [editable])
+
+  useEffect(() => {
+    const flushWhenHidden = () => {
+      if (document.visibilityState === "hidden") flushPendingScene()
+    }
+    document.addEventListener("visibilitychange", flushWhenHidden)
+    return () => {
+      document.removeEventListener("visibilitychange", flushWhenHidden)
+      flushPendingScene()
+    }
+  }, [flushPendingScene])
 
   const scene = result.scene
   useEffect(() => {
@@ -44,15 +75,23 @@ export default function ExcalidrawPreview({ content, immersive = false }: NoteRe
   } as ExcalidrawInitialDataState
 
   return (
-    <section className="excalidraw-plugin" data-immersive={immersive} data-plugin-id="official.excalidraw">
+    <section aria-label={editable ? "Excalidraw 可编辑画布" : "Excalidraw 只读画布"} className="excalidraw-plugin" data-editable={editable} data-immersive={immersive} data-plugin-id="official.excalidraw">
       <div className="excalidraw-plugin-canvas">
         <Suspense fallback={<div className="note-renderer-loading" role="status">正在初始化画布…</div>}>
           <LazyExcalidraw
             excalidrawAPI={setApi}
             initialData={initialData}
             langCode="zh-CN"
-            // 开启官方编辑界面才能显示顶部绘图快捷栏；当前未接 onChange，操作只留在本次页面内，不会写回坚果云。
-            viewModeEnabled={false}
+            onChange={(elements, appState, files) => {
+              // 初始化、居中和只读浏览也会触发 onChange；只有明确操作过画布后才进入保存队列，避免打开即污染文件。
+              if (!editable || !userInteractedRef.current || !onContentChangeRef.current) return
+              const serialized = JSON.parse(serializeAsJSON(elements, appState, files, "local")) as ExcalidrawScene
+              pendingSceneRef.current = { ...serialized, source: scene.source ?? serialized.source }
+              if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current)
+              saveTimerRef.current = window.setTimeout(flushPendingScene, 450)
+            }}
+            onPointerDown={() => { userInteractedRef.current = true }}
+            viewModeEnabled={!editable}
           />
         </Suspense>
       </div>

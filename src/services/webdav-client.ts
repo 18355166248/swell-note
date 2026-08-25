@@ -264,6 +264,10 @@ function buildRequestUrl(config: WebDavConfig, path: string) {
   const server = new URL(config.serverUrl)
 
   if (!isTauri() && server.hostname === "dav.jianguoyun.com") {
+    // 真实 WebDAV 集成测试只在显式测试模式下直连；浏览器生产包仍必须经过同源代理。
+    if (import.meta.env.MODE === "test" && import.meta.env.VITE_WEBDAV_E2E_DIRECT === "1") {
+      return buildRemoteUrl(config, path)
+    }
     const configuredProxy = import.meta.env.VITE_WEBDAV_PROXY_URL?.trim()
     // Web 生产环境不能依赖坚果云的跨域策略；统一走部署方控制的同源代理，避免上线后静默失效。
     if (configuredProxy) return buildProxyUrl(configuredProxy, encodedPath)

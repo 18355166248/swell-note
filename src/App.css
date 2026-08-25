@@ -166,6 +166,13 @@
 .settings-cache-row > button:first-child > span:first-child { min-width: 0; }
 .settings-cache-row > button:first-child > svg { width: 16px; color: var(--muted-foreground); }
 .cache-delete-confirm { display: flex; gap: 3px; }
+.cache-privacy-options { display: grid; gap: 8px; margin: 0 0 18px; border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+.cache-privacy-options legend { padding: 0 5px; font-size: 11px; font-weight: 650; }
+.cache-privacy-options label { display: flex; min-height: 52px; align-items: flex-start; gap: 10px; border-radius: 9px; padding: 9px; cursor: pointer; }
+.cache-privacy-options label:has(input:checked) { background: var(--blue-soft); }
+.cache-privacy-options input { width: 16px; height: 16px; margin-top: 2px; accent-color: var(--primary); }
+.cache-privacy-options strong, .cache-privacy-options small { display: block; }
+.cache-privacy-options small { margin-top: 4px; color: var(--muted-foreground); font-size: 11px; line-height: 1.45; }
 .settings-card-icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 10px; background: var(--blue-soft); color: var(--primary); }
 .settings-card-icon svg { width: 18px; height: 18px; }
 .settings-card-list strong, .settings-card-list small, .settings-cache-list strong, .settings-cache-list small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -624,6 +631,10 @@
   .note-editor[data-compact="true"] .markdown-preview { min-height: calc(100dvh - 215px); font-size: 15px; }
   .note-editor[data-compact="true"] .markdown-editor-shell .cm-editor { font-size: 15px; }
   .note-editor[data-compact="true"] .markdown-editor-shell .cm-scroller { line-height: 1.8; }
+  .excalidraw-plugin .App-toolbar-container { max-width: calc(100vw - 20px); overflow-x: auto; scrollbar-width: none; }
+  .excalidraw-plugin .App-toolbar-container::-webkit-scrollbar { display: none; }
+  .excalidraw-plugin .App-toolbar-container .ToolIcon__icon { height: 40px !important; }
+  .excalidraw-plugin .App-menu_top button.standalone { min-width: 40px; min-height: 40px; }
   .formatting-toolbar[data-mobile="true"] { min-height: calc(54px + env(safe-area-inset-bottom)); gap: 4px; justify-content: space-around; border-top: 1px solid var(--border); border-bottom: 0; padding: 5px 10px env(safe-area-inset-bottom); background: white; }
   .formatting-toolbar[data-mobile="true"] button { min-width: 40px; height: 42px; }
   .formatting-toolbar[data-mobile="true"] .toolbar-divider { display: none; }

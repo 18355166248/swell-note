@@ -1000,7 +1000,7 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
   const isCanvas = note.format === "canvas"
   const isExcalidraw = isExcalidrawMarkdown(note.content)
   const isSpecialPreview = isCanvas || isExcalidraw
-  const readOnly = isSpecialPreview || (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
+  const readOnly = isCanvas || (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
   const titleReadOnly = note.source === "local" || note.source === "webdav"
   const editorRef = useRef<MarkdownEditorHandle>(null)
   const [previewing, setPreviewing] = useState(compact || isSpecialPreview)
@@ -1182,7 +1182,13 @@ function NoteEditor({ backlinks, canInsertAttachment, canManageNote, cloudConnec
           <Suspense fallback={<div className="editor-loading">正在加载 Excalidraw…</div>}>
             <MarkdownPreview
               content={note.content}
+              editable={!readOnly}
               immersive
+              noteId={note.id}
+              onContentChange={(content) => onUpdateNote({
+                content,
+                preview: content.replace(/^#+\s*/gm, "").slice(0, 90),
+              })}
               onLoadWikiNote={onLoadWikiNote}
               onResolveAsset={onResolveAsset}
               onResolveWikiNote={onResolveWikiNote}
@@ -1483,7 +1489,7 @@ function SaveStateIndicator({ cloudConnected, note, state }: { cloudConnected: b
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="saved-state" data-status={state.status}>
+        <span aria-live="polite" className="saved-state" data-status={state.status} role="status">
           <Icon className={state.status === "saving" ? "animate-spin" : ""} />
           {label}
         </span>
@@ -1661,6 +1667,13 @@ type MobileNoteListProps = WorkspaceProps & {
 
 function MobileNoteList(props: MobileNoteListProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
+  const [viewportReady, setViewportReady] = useState(false)
+  const setViewportRef = useCallback((viewport: HTMLDivElement | null) => {
+    viewportRef.current = viewport
+    // 直达二级目录时，缓存和列表会在同一轮恢复。等滚动容器挂载后再创建 virtualizer，
+    // 避免它首次读取到 null 后不再测量，表现为“有笔记但列表空白”。
+    if (viewport) setViewportReady(true)
+  }, [])
   const childFolders = useMemo(
     () => props.selectedFolder ? getDirectChildVaultFolders(props.folders, props.selectedFolder) : [],
     [props.folders, props.selectedFolder],
@@ -1746,10 +1759,10 @@ function MobileNoteList(props: MobileNoteListProps) {
       </div>
       <ScrollArea
         className="mobile-scroll-content"
-        viewportRef={viewportRef}
+        viewportRef={setViewportRef}
       >
         <div className="mobile-note-groups">
-          {props.notes.length > 0 || childFolders.length > 0 ? (
+          {viewportReady && (props.notes.length > 0 || childFolders.length > 0) ? (
             <VirtualNoteRows
               activeNoteId={props.activeNoteId}
               folders={childFolders}
@@ -1759,7 +1772,7 @@ function MobileNoteList(props: MobileNoteListProps) {
               onSelectNote={selectNote}
               viewportRef={viewportRef}
             />
-          ) : <EmptyNoteList canCreateNote={props.canCreateNote} onCreateNote={props.onCreateNote} onOpenSettings={props.onOpenSettings} selectedFolder={props.selectedFolder} />}
+          ) : viewportReady ? <EmptyNoteList canCreateNote={props.canCreateNote} onCreateNote={props.onCreateNote} onOpenSettings={props.onOpenSettings} selectedFolder={props.selectedFolder} /> : null}
         </div>
       </ScrollArea>
       {props.canCreateNote ? <Button aria-label="新建笔记" className="mobile-fab" disabled={props.isCreatingNote} onClick={props.onCreateNote} size="icon-lg">{props.isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}</Button> : null}
