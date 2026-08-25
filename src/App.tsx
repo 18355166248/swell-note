@@ -256,6 +256,8 @@ function App() {
     }
     latestCacheSnapshotRef.current = snapshot
     const timer = window.setTimeout(() => {
+      // 清除缓存会把 ref 置空；此时这批防抖写入必须作废，否则会把刚删掉的快照重新写回。
+      if (!latestCacheSnapshotRef.current) return
       // 内容读取、收藏和本地编辑后统一刷新离线快照；敏感凭据不属于 Note 模型，因此不会进入缓存。
       void saveVaultCache(snapshot)
         .then(listVaultCaches)
@@ -1427,6 +1429,46 @@ function App() {
       setVaultCaches(await listVaultCaches())
     } catch (error) {
       setVaultError(error instanceof Error ? error.message : "删除缓存失败")
+    }
+  }
+
+  const clearActiveVaultCache = async () => {
+    const target = activeCacheMeta
+    if (!target) return
+
+    // 顺序不能调换：必须先切断所有写回通道再删库。
+    // latestCacheSnapshotRef 同时服务于 450ms 防抖写入和 visibilitychange 立即 flush，
+    // 置空后两者都会跳过；activeCacheMeta 变为 null 后，缓存写入 effect 也会提前返回。
+    latestCacheSnapshotRef.current = null
+    for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer)
+    saveTimersRef.current.clear()
+    saveQueuesRef.current.clear()
+    loadingNoteIdsRef.current.clear()
+    revisionByPathRef.current.clear()
+    // 递增代际让仍在运行的后台索引批次自行退出，不再往已清空的列表里回填正文。
+    indexGenerationRef.current += 1
+
+    setActiveCacheMeta(null)
+    // 适配器闭包持有 WebDAV 应用密码，断开会话即释放；Web 端密码本就不落任何存储。
+    setVaultSession(null)
+    setNotes([])
+    setVaultDirectories([])
+    setTrashEntries([])
+    setActiveNoteId("")
+    setVaultNoteCount(0)
+    setSelectedFolder(null)
+    setQuery("")
+    setIndexProgress(null)
+    setSaveStates({})
+    setVaultError(null)
+
+    try {
+      await deleteVaultCache(target.id)
+      await clearNativeSearchIndex(target.id).catch(() => undefined)
+      setVaultCaches(await listVaultCaches())
+      navigate("/notes")
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "清除缓存失败")
     }
   }
 
@@ -2651,6 +2693,7 @@ function App() {
               activeCacheId={activeCacheMeta?.id ?? null}
               cachePrivacyMode={cachePrivacyMode}
               caches={vaultCaches}
+              onClearActiveCache={() => void clearActiveVaultCache()}
               onDeleteCache={(cacheId) => void removeVaultCache(cacheId)}
               onSelectCache={(cacheId) => {
                 void selectVaultCache(cacheId).then(() => navigate("/notes"))

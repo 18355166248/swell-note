@@ -371,6 +371,7 @@ export function CacheSettingsPage({
   activeCacheId,
   cachePrivacyMode,
   caches,
+  onClearActiveCache,
   onDeleteCache,
   onPrivacyModeChange,
   onSelectCache,
@@ -378,11 +379,13 @@ export function CacheSettingsPage({
   activeCacheId: string | null
   cachePrivacyMode: CachePrivacyMode
   caches: VaultCacheSummary[]
+  onClearActiveCache: () => void
   onDeleteCache: (cacheId: string) => void
   onPrivacyModeChange: (mode: CachePrivacyMode) => void
   onSelectCache: (cacheId: string) => void
 }) {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  const [clearing, setClearing] = useState(false)
   return (
     <div className="settings-content-card">
       <div className="settings-content-heading">
@@ -422,6 +425,28 @@ export function CacheSettingsPage({
           ))}
         </div>
       ) : <p className="settings-empty-copy">还没有离线缓存。连接坚果云或打开本地 Vault 后会自动创建。</p>}
+
+      {activeCacheId ? (
+        <div className="cache-danger-zone">
+          <div>
+            <strong>断开并清除当前缓存</strong>
+            <small>
+              移除本机保存的正文、目录、回收站与附件队列，并结束当前连接会话。
+              服务器地址和账号会保留，重新连接后可再次下载；未同步的本地修改会一并丢失。
+            </small>
+          </div>
+          {clearing ? (
+            <span className="cache-delete-confirm">
+              <Button onClick={() => setClearing(false)} size="sm" variant="ghost">取消</Button>
+              <Button onClick={() => { onClearActiveCache(); setClearing(false) }} size="sm" variant="destructive">
+                确认清除
+              </Button>
+            </span>
+          ) : (
+            <Button onClick={() => setClearing(true)} size="sm" variant="outline">断开并清除</Button>
+          )}
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -204,11 +204,18 @@ export async function listVaultCaches(): Promise<VaultCacheSummary[]> {
 
 export async function deleteVaultCache(id: string) {
   const database = await openDatabase()
-  const transaction = database.transaction([VAULT_STORE, ATTACHMENT_STORE], "readwrite")
+  const transaction = database.transaction([VAULT_STORE, ATTACHMENT_STORE, SETTINGS_STORE], "readwrite")
   const done = transactionDone(transaction)
   transaction.objectStore(VAULT_STORE).delete(id)
   const attachmentStore = transaction.objectStore(ATTACHMENT_STORE)
-  const attachmentKeys = await requestResult<IDBValidKey[]>(attachmentStore.index("cacheId").getAllKeys(id))
+  const settingsStore = transaction.objectStore(SETTINGS_STORE)
+  // 两个读取同时发起，避免串行 await 之间事务自动提交。
+  const [lastCache, attachmentKeys] = await Promise.all([
+    requestResult<{ key: string; value: string } | undefined>(settingsStore.get(LAST_CACHE_KEY)),
+    requestResult<IDBValidKey[]>(attachmentStore.index("cacheId").getAllKeys(id)),
+  ])
+  // 指针若仍指向被删缓存，下次启动会读到空快照并跳过其余现存缓存，因此要一并清理。
+  if (lastCache?.value === id) settingsStore.delete(LAST_CACHE_KEY)
   for (const key of attachmentKeys) attachmentStore.delete(key)
   await done
   database.close()

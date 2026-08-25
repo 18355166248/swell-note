@@ -16,6 +16,21 @@ import {
   updateVaultAttachmentStatus,
 } from "./vault-cache"
 
+// loadLastVaultCache 在指针悬空时同样返回 null，必须直读 settings 表才能验证指针是否被清理。
+async function readLastCachePointer() {
+  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open("swell-note-vault-cache", 2)
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+  const value = await new Promise<{ key: string; value: string } | undefined>((resolve) => {
+    const request = database.transaction("settings", "readonly").objectStore("settings").get("last-cache")
+    request.onsuccess = () => resolve(request.result)
+  })
+  database.close()
+  return value?.value
+}
+
 beforeEach(async () => {
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase("swell-note-vault-cache")
@@ -133,5 +148,51 @@ describe("vault cache", () => {
     ])
     await discardPendingVaultAttachments("cache", new Set(["next"]))
     await expect(listPendingVaultAttachments("cache")).resolves.toEqual([])
+  })
+
+  it("删除最后使用的缓存会一并清掉悬空指针", async () => {
+    const base = {
+      activeNoteId: "n1",
+      notes: [{
+        content: "正文",
+        contentLoaded: true,
+        id: "n1",
+        preview: "摘要",
+        starred: false,
+        title: "笔记",
+        updatedAt: "刚刚",
+      }],
+      savedAt: 1,
+      sourceKind: "webdav" as const,
+    }
+    await saveVaultCache({ ...base, id: "keep", label: "保留库" })
+    await saveVaultCache({ ...base, id: "drop", label: "待删库" })
+    expect((await loadLastVaultCache())?.id).toBe("drop")
+
+    expect(await readLastCachePointer()).toBe("drop")
+
+    await deleteVaultCache("drop")
+
+    // 指针必须一并删除，否则 settings 表会长期留着指向不存在记录的脏数据。
+    expect(await readLastCachePointer()).toBeUndefined()
+    expect(await loadLastVaultCache()).toBeNull()
+    expect((await listVaultCaches()).map(({ id }) => id)).toEqual(["keep"])
+    expect((await loadVaultCache("keep"))?.label).toBe("保留库")
+  })
+
+  it("删除非当前缓存时保留原有指针", async () => {
+    const base = {
+      activeNoteId: "n1",
+      notes: [],
+      savedAt: 1,
+      sourceKind: "webdav" as const,
+    }
+    await saveVaultCache({ ...base, id: "other", label: "其他库" })
+    await saveVaultCache({ ...base, id: "current", label: "当前库" })
+
+    await deleteVaultCache("other")
+
+    expect(await readLastCachePointer()).toBe("current")
+    expect((await loadLastVaultCache())?.id).toBe("current")
   })
 })
