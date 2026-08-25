@@ -1020,7 +1020,6 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
   const isExcalidraw = isExcalidrawMarkdown(note.content)
   const isSpecialPreview = isCanvas || isExcalidraw
   const readOnly = isCanvas || (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
-  const titleReadOnly = note.source === "local" || note.source === "webdav"
   const editorRef = useRef<MarkdownEditorHandle>(null)
   const [previewing, setPreviewing] = useState(compact || isSpecialPreview)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -1049,6 +1048,21 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
     // 手机进入新文档时默认阅读，避免误触键盘；用户可通过明确按钮进入编辑模式。
     setPreviewing(compact || isSpecialPreview)
   }, [compact, isSpecialPreview])
+
+  // Vault 笔记的标题对应文件名：编辑时先落草稿，失焦或回车再走统一的重命名链路，避免每次按键触发文件操作。
+  const isVaultNote = note.source === "local" || note.source === "webdav"
+  const [titleDraft, setTitleDraft] = useState(note.title)
+  useEffect(() => { setTitleDraft(note.title) }, [note.id, note.title])
+
+  const commitTitle = () => {
+    const trimmed = titleDraft.trim()
+    if (!isVaultNote) return
+    if (!trimmed || trimmed === note.title) {
+      setTitleDraft(note.title)
+      return
+    }
+    onRenameNote(trimmed)
+  }
 
   const handleFormat = useCallback((syntax: string) => {
     if (!syntax) return
@@ -1241,9 +1255,22 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
           <input
             aria-label="笔记标题"
             className="document-title"
-            onChange={(event) => onUpdateNote({ title: event.target.value })}
-            readOnly={titleReadOnly}
-            value={note.title}
+            onBlur={commitTitle}
+            onChange={(event) => {
+              if (isVaultNote) {
+                setTitleDraft(event.target.value)
+                return
+              }
+              onUpdateNote({ title: event.target.value })
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== "Escape") return
+              event.preventDefault()
+              if (event.key === "Escape") setTitleDraft(note.title)
+              ;(event.target as HTMLInputElement).blur()
+            }}
+            readOnly={note.readOnly === true}
+            value={isVaultNote ? titleDraft : note.title}
           />
           <div className="document-meta">
             <span>{note.updatedAt === "刚刚" ? "刚刚编辑" : note.updatedAt}</span>
