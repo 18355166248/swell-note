@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest"
 
 import {
   buildVaultFolders,
+  getDirectChildVaultFolders,
   getFolderAncestorPaths,
+  getParentFolderPath,
   getVisibleVaultFolders,
   noteBelongsToFolder,
+  noteBelongsDirectlyToFolder,
 } from "./vault-folders"
 import type { Note } from "@/types/note"
 
@@ -40,6 +43,11 @@ describe("vault folders", () => {
     expect(notes.filter((note) => noteBelongsToFolder(note, "工作 / 项目"))).toHaveLength(2)
   })
 
+  it("逐级浏览时只返回当前目录的直属笔记", () => {
+    expect(notes.filter((note) => noteBelongsDirectlyToFolder(note, "工作"))).toHaveLength(0)
+    expect(notes.filter((note) => noteBelongsDirectlyToFolder(note, "工作 / 项目"))).toHaveLength(2)
+  })
+
   it("默认只显示一级目录，并按展开路径逐层显示后代", () => {
     const folders = buildVaultFolders([
       ...notes,
@@ -60,6 +68,25 @@ describe("vault folders", () => {
   it("返回深层目录的全部父路径", () => {
     expect(getFolderAncestorPaths("工作 / 项目 / 客户端")).toEqual(["工作", "工作 / 项目"])
     expect(getFolderAncestorPaths("工作")).toEqual([])
+    expect(getParentFolderPath("工作 / 项目 / 客户端")).toBe("工作 / 项目")
+    expect(getParentFolderPath("工作")).toBeNull()
+  })
+
+  it("只返回指定目录的直属子目录", () => {
+    const folders = buildVaultFolders([
+      ...notes,
+      { id: "4", folder: "工作 / 项目 / 客户端", title: "D" },
+      { id: "5", folder: "生活 / 旅行", title: "E" },
+    ] as Note[])
+
+    expect(getDirectChildVaultFolders(folders, null).map(({ path }) => path)).toEqual(["工作", "生活"])
+    expect(getDirectChildVaultFolders(folders, "工作").map(({ path }) => path)).toEqual([
+      "工作 / 项目",
+      "工作 / 会议",
+    ])
+    expect(getDirectChildVaultFolders(folders, "工作 / 项目").map(({ path }) => path)).toEqual([
+      "工作 / 项目 / 客户端",
+    ])
   })
 
   it("无论子目录首次出现多晚，都紧跟父目录按树形顺序输出", () => {

@@ -18,6 +18,7 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  FolderTree,
   Image,
   List,
   ListFilter,
@@ -73,7 +74,9 @@ import type { EmbeddedWikiNoteResult } from "@/components/editor/markdown-previe
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 import { isExcalidrawMarkdown } from "@/services/markdown/markdown-preview-utils"
 import {
+  getDirectChildVaultFolders,
   getFolderAncestorPaths,
+  getParentFolderPath,
   getVisibleVaultFolders,
   type VaultFolder,
 } from "@/services/search/vault-folders"
@@ -86,6 +89,10 @@ import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
 const MarkdownEditor = lazyWithRetry(() => import("@/components/editor/markdown-editor"))
 const MarkdownPreview = lazyWithRetry(() => import("@/components/editor/markdown-preview"))
 const CanvasPreview = lazyWithRetry(() => import("@/components/editor/canvas-preview"))
+
+// 路由切换可能重建 Workspace，位置缓存放在模块会话中，保证逐级进入和返回时不会因组件重挂载而清空。
+const mobileNoteListPositions = new Map<string, number>()
+const mobileLibraryPositions = new Map<string, number>()
 
 export type MobileScreen = "library" | "notes" | "editor"
 export type AppSection = "notes" | "settings" | "todos"
@@ -104,6 +111,7 @@ type WorkspaceProps = {
   canCreateFolder: boolean
   folders: VaultFolder[]
   folderManagementMode: "local" | "webdav" | null
+  includeNestedFolderNotes: boolean
   isOpeningVault: boolean
   isCreatingNote: boolean
   canInsertAttachment: boolean
@@ -122,6 +130,7 @@ type WorkspaceProps = {
   onFormat: (syntax: string) => void
   onFormatNote: (noteId: string, syntax: string) => void
   onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
+  onIncludeNestedFolderNotesChange: (include: boolean) => void
   onMobileScreenChange: (screen: MobileScreen) => void
   onDeleteNote: () => void
   onDeleteFolder: (folderPath: string) => void
@@ -180,7 +189,16 @@ export function Workspace(props: WorkspaceProps) {
     setExpandedFolderPaths((current) => {
       const next = new Set(current)
       if (next.has(folderPath)) next.delete(folderPath)
-      else next.add(folderPath)
+      else {
+        const folder = props.folders.find(({ path }) => path === folderPath)
+        if (folder?.depth === 0) {
+          // 一级目录使用手风琴规则，避免多个大型子树同时展开挤满侧栏；目标分支内的二级展开状态继续保留。
+          for (const path of next) {
+            if (!path.startsWith(`${folderPath} / `)) next.delete(path)
+          }
+        }
+        next.add(folderPath)
+      }
       return next
     })
   }
@@ -256,17 +274,21 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
       {!immersiveExcalidraw ? <NoteListPanel
         activeNoteId={props.activeNoteId}
         canCreateNote={props.canCreateNote}
+        folders={props.folders}
+        includeNestedFolderNotes={props.includeNestedFolderNotes}
         notes={props.notes}
         noteSort={props.noteSort}
         folderLabel={props.selectedFolder ?? (props.libraryView === "recent" ? "最近更新" : props.libraryView === "starred" ? "收藏" : "全部笔记")}
         folderManagementMode={props.folderManagementMode}
         onOpenSettings={props.onOpenSettings}
         onCreateNote={props.onCreateNote}
+        onIncludeNestedFolderNotesChange={props.onIncludeNestedFolderNotesChange}
         onQueryChange={props.onQueryChange}
         onNoteSortChange={props.onNoteSortChange}
         onDeleteFolder={props.onDeleteFolder}
         onRenameFolder={props.onRenameFolder}
         onSelectNote={props.onSelectNote}
+        onSelectFolder={props.onSelectFolder}
         availableTags={props.availableTags}
         onSelectTag={props.onSelectTag}
         query={props.query}
@@ -602,18 +624,22 @@ type NoteListPanelProps = {
   activeNoteId: string
   availableTags: string[]
   canCreateNote: boolean
+  folders: VaultFolder[]
   folderLabel: string
   folderManagementMode: "local" | "webdav" | null
+  includeNestedFolderNotes: boolean
   notes: Note[]
   noteSort: NoteSort
   isManagingFolder: boolean
   onCreateNote: () => void
+  onIncludeNestedFolderNotesChange: (include: boolean) => void
   onOpenSettings: () => void
   onQueryChange: (query: string) => void
   onNoteSortChange: (sort: NoteSort) => void
   onDeleteFolder: (folderPath: string) => void
   onRenameFolder: (folderPath: string, nextName: string) => void
   onSelectNote: (note: Note) => void
+  onSelectFolder: (folder: string | null) => void
   onSelectTag: (tag: string | null) => void
   query: string
   selectedTag: string | null
@@ -624,24 +650,38 @@ function NoteListPanel({
   activeNoteId,
   availableTags,
   canCreateNote,
+  folders,
   folderLabel,
   folderManagementMode,
+  includeNestedFolderNotes,
   isManagingFolder,
   notes,
   noteSort,
   onCreateNote,
+  onIncludeNestedFolderNotesChange,
   onOpenSettings,
   onQueryChange,
   onNoteSortChange,
   onDeleteFolder,
   onRenameFolder,
   onSelectNote,
+  onSelectFolder,
   onSelectTag,
   query,
   selectedTag,
   selectedFolder,
 }: NoteListPanelProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
+  const [viewportReady, setViewportReady] = useState(false)
+  const setViewportRef = useCallback((viewport: HTMLDivElement | null) => {
+    viewportRef.current = viewport
+    // 沉浸画布会卸载整个列表；等待新的 ScrollArea 真正挂载后再创建 virtualizer，避免首次返回得到空行集。
+    if (viewport) setViewportReady(true)
+  }, [])
+  const childFolders = useMemo(
+    () => selectedFolder ? getDirectChildVaultFolders(folders, selectedFolder) : [],
+    [folders, selectedFolder],
+  )
 
   return (
     <section className="note-list-panel">
@@ -652,6 +692,12 @@ function NoteListPanel({
         </div>
         <div className="note-list-actions">
           {selectedFolder && folderManagementMode ? <FolderRenameButton disabled={isManagingFolder} folderPath={selectedFolder} mode={folderManagementMode} onDelete={onDeleteFolder} onRename={onRenameFolder} /> : null}
+          {childFolders.length > 0 ? (
+            <NestedNotesToggle
+              includeNested={includeNestedFolderNotes}
+              onChange={onIncludeNestedFolderNotesChange}
+            />
+          ) : null}
           <TagFilterMenu availableTags={availableTags} onChange={onSelectTag} selectedTag={selectedTag} />
           <NoteSortMenu onChange={onNoteSortChange} sort={noteSort} />
         </div>
@@ -667,19 +713,48 @@ function NoteListPanel({
         />
       </div>
 
-      <ScrollArea className="note-list-scroll" viewportRef={viewportRef}>
+      <ScrollArea className="note-list-scroll" viewportRef={setViewportRef}>
         <div className="note-groups">
-          {notes.length > 0 ? (
+          {viewportReady && (notes.length > 0 || childFolders.length > 0) ? (
             <VirtualNoteRows
               activeNoteId={activeNoteId}
+              folders={childFolders}
               notes={notes}
+              onSelectFolder={onSelectFolder}
               onSelectNote={onSelectNote}
               viewportRef={viewportRef}
             />
-          ) : <EmptyNoteList canCreateNote={canCreateNote} onCreateNote={onCreateNote} onOpenSettings={onOpenSettings} selectedFolder={selectedFolder} />}
+          ) : viewportReady ? <EmptyNoteList canCreateNote={canCreateNote} onCreateNote={onCreateNote} onOpenSettings={onOpenSettings} selectedFolder={selectedFolder} /> : null}
         </div>
       </ScrollArea>
     </section>
+  )
+}
+
+function NestedNotesToggle({
+  includeNested,
+  onChange,
+}: {
+  includeNested: boolean
+  onChange: (include: boolean) => void
+}) {
+  const label = includeNested ? "仅显示当前目录" : "包含子目录笔记"
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          aria-label={label}
+          aria-pressed={includeNested}
+          data-active={includeNested}
+          onClick={() => onChange(!includeNested)}
+          size="icon-sm"
+          variant="ghost"
+        >
+          <FolderTree />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -1296,8 +1371,6 @@ function FormatButton({ busy = false, children, icon: Icon, label, onClick }: Fo
 }
 
 function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
-  const noteListPositionsRef = useRef(new Map<string, number>())
-  const libraryPositionsRef = useRef(new Map<string, number>())
   // 使用与实际可见结果一致的延迟搜索键，避免输入态先更新时覆盖原列表滚动位置。
   const listStateKey = `${props.libraryView}\u0000${props.selectedFolder ?? "__all__"}\u0000${props.mobileListStateKey}`
   const libraryStateKey = `${props.totalNoteCount}\u0000${props.folders.map((folder) => folder.path).join("\u0000")}`
@@ -1307,16 +1380,16 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
       {props.mobileScreen === "library" ? (
         <MobileLibrary
           {...props}
-          initialScrollTop={libraryPositionsRef.current.get(libraryStateKey) ?? 0}
-          onScrollPositionChange={(scrollTop) => libraryPositionsRef.current.set(libraryStateKey, scrollTop)}
+          initialScrollTop={mobileLibraryPositions.get(libraryStateKey) ?? 0}
+          onScrollPositionChange={(scrollTop) => mobileLibraryPositions.set(libraryStateKey, scrollTop)}
         />
       ) : null}
       {props.mobileScreen === "notes" ? (
         <MobileNoteList
           {...props}
-          initialScrollTop={noteListPositionsRef.current.get(listStateKey) ?? 0}
+          initialScrollTop={mobileNoteListPositions.get(listStateKey) ?? 0}
           key={listStateKey}
-          onScrollPositionChange={(scrollTop) => noteListPositionsRef.current.set(listStateKey, scrollTop)}
+          onScrollPositionChange={(scrollTop) => mobileNoteListPositions.set(listStateKey, scrollTop)}
         />
       ) : null}
       {props.mobileScreen === "editor" ? (
@@ -1427,6 +1500,10 @@ type MobileLibraryProps = WorkspaceProps & FolderTreeProps & {
 
 function MobileLibrary(props: MobileLibraryProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
+  const rootFolders = useMemo(
+    () => getDirectChildVaultFolders(props.folders, null),
+    [props.folders],
+  )
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current
@@ -1512,17 +1589,13 @@ function MobileLibrary(props: MobileLibraryProps) {
             ) : null}
           </div>
           <div className="mobile-folder-list">
-            {props.visibleFolders.map((folder) => (
+            {rootFolders.map((folder) => (
               <MobileLibraryRow
                 count={folder.count}
-                depth={folder.depth}
-                expanded={folder.hasChildren ? props.expandedFolderPaths.has(folder.path) : undefined}
-                folderTree
-                icon={props.selectedFolder === folder.path ? FolderOpen : Folder}
+                icon={Folder}
                 key={folder.path}
                 label={folder.label}
                 onClick={() => selectFolder(folder.path)}
-                onToggle={folder.hasChildren ? () => props.onToggleFolder(folder.path) : undefined}
               />
             ))}
           </div>
@@ -1588,41 +1661,86 @@ type MobileNoteListProps = WorkspaceProps & {
 
 function MobileNoteList(props: MobileNoteListProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
-  const title = props.selectedFolder
+  const childFolders = useMemo(
+    () => props.selectedFolder ? getDirectChildVaultFolders(props.folders, props.selectedFolder) : [],
+    [props.folders, props.selectedFolder],
+  )
+  const folderSegments = props.selectedFolder?.split(/\s*\/\s*/).filter(Boolean) ?? []
+  const folderPaths = folderSegments.map((_, index) => folderSegments.slice(0, index + 1).join(" / "))
+  const parentFolder = props.selectedFolder ? getParentFolderPath(props.selectedFolder) : null
+  const title = folderSegments[folderSegments.length - 1]
     ?? (props.libraryView === "recent" ? "最近更新" : props.libraryView === "starred" ? "收藏" : "全部笔记")
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current
     if (!viewport) return
-    // 列表重新挂载时在首次绘制前恢复位置，并按当前内容高度收敛，避免返回详情时闪到顶部。
-    const restore = () => {
-      viewport.scrollTop = Math.min(
-        props.initialScrollTop,
-        Math.max(0, viewport.scrollHeight - viewport.clientHeight),
-      )
+    let frame = 0
+    let attempts = 0
+    // 虚拟列表需要等缓存和目录行完成测量；在可滚动高度就绪前不把目标位置错误收敛为 0。
+    const restoreWhenReady = () => {
+      const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
+      if (props.initialScrollTop <= 0 || maxScrollTop > 0) {
+        viewport.scrollTop = Math.min(props.initialScrollTop, maxScrollTop)
+      }
+      attempts += 1
+      // Virtualizer 可能在首轮测量后主动归零，因此短暂跨帧保持目标值，直到布局稳定。
+      if (attempts < 12) {
+        frame = window.requestAnimationFrame(restoreWhenReady)
+      }
     }
-    restore()
-    // Radix Viewport 在筛选结果切换时可能下一帧才完成尺寸计算，因此再校准一次最终位置。
-    const frame = window.requestAnimationFrame(restore)
+    restoreWhenReady()
     return () => window.cancelAnimationFrame(frame)
-  }, [props.initialScrollTop, props.notes.length])
+  }, [childFolders.length, props.initialScrollTop, props.notes.length])
 
   const selectNote = (note: Note) => {
     props.onScrollPositionChange(viewportRef.current?.scrollTop ?? 0)
     props.onSelectNote(note)
   }
 
+  const selectFolder = (folder: string) => {
+    props.onScrollPositionChange(viewportRef.current?.scrollTop ?? 0)
+    props.onSelectFolder(folder)
+  }
+
+  const goBack = () => {
+    props.onScrollPositionChange(viewportRef.current?.scrollTop ?? 0)
+    if (parentFolder) {
+      props.onSelectFolder(parentFolder)
+      return
+    }
+    props.onMobileScreenChange("library")
+  }
+
   return (
     <section className="mobile-screen">
       <header className="mobile-titlebar">
-        <Button aria-label="返回笔记库" onClick={() => props.onMobileScreenChange("library")} size="icon" variant="ghost"><ArrowLeft /></Button>
+        <Button aria-label={parentFolder ? `返回${parentFolder}` : "返回笔记库"} onClick={goBack} size="icon" variant="ghost"><ArrowLeft /></Button>
         <h1>{title}</h1>
         <div>
           {props.selectedFolder && props.folderManagementMode ? <FolderRenameButton disabled={props.isManagingNote} folderPath={props.selectedFolder} mode={props.folderManagementMode} onDelete={props.onDeleteFolder} onRename={props.onRenameFolder} /> : null}
+          {childFolders.length > 0 ? <NestedNotesToggle includeNested={props.includeNestedFolderNotes} onChange={props.onIncludeNestedFolderNotesChange} /> : null}
           <TagFilterMenu availableTags={props.availableTags} onChange={props.onSelectTag} selectedTag={props.selectedTag} />
           <NoteSortMenu mobile onChange={props.onNoteSortChange} sort={props.noteSort} />
         </div>
       </header>
+      {props.selectedFolder ? (
+        <nav aria-label="目录路径" className="mobile-folder-breadcrumbs">
+          <button onClick={() => props.onMobileScreenChange("library")} type="button">笔记库</button>
+          {folderPaths.map((path, index) => (
+            <span key={path}>
+              <ChevronRight />
+              <button
+                aria-current={index === folderPaths.length - 1 ? "page" : undefined}
+                disabled={index === folderPaths.length - 1}
+                onClick={() => selectFolder(path)}
+                type="button"
+              >
+                {folderSegments[index]}
+              </button>
+            </span>
+          ))}
+        </nav>
+      ) : null}
       <div className="mobile-list-search">
         <div className="note-search-wrap"><Search /><Input onChange={(event) => props.onQueryChange(event.target.value)} placeholder="搜索笔记" value={props.query} /></div>
       </div>
@@ -1631,11 +1749,13 @@ function MobileNoteList(props: MobileNoteListProps) {
         viewportRef={viewportRef}
       >
         <div className="mobile-note-groups">
-          {props.notes.length > 0 ? (
+          {props.notes.length > 0 || childFolders.length > 0 ? (
             <VirtualNoteRows
               activeNoteId={props.activeNoteId}
+              folders={childFolders}
               mobile
               notes={props.notes}
+              onSelectFolder={selectFolder}
               onSelectNote={selectNote}
               viewportRef={viewportRef}
             />
@@ -1702,28 +1822,41 @@ function groupNotes(notes: Note[]) {
 
 type VirtualNoteItem =
   | { key: string; kind: "heading"; label: string; noteCount: number }
+  | { key: string; kind: "folder"; folder: VaultFolder }
   | { key: string; kind: "note"; note: Note }
 
 function VirtualNoteRows({
   activeNoteId,
+  folders = [],
   mobile = false,
   notes,
+  onSelectFolder,
   onSelectNote,
   viewportRef,
 }: {
   activeNoteId: string
+  folders?: VaultFolder[]
   mobile?: boolean
   notes: Note[]
+  onSelectFolder?: (folder: string) => void
   onSelectNote: (note: Note) => void
   viewportRef: RefObject<HTMLDivElement | null>
 }) {
-  const items = useMemo(() => groupNotes(notes).flatMap((group): VirtualNoteItem[] => [
-    { key: `heading:${group.label}`, kind: "heading", label: group.label, noteCount: group.notes.length },
-    ...group.notes.map((note): VirtualNoteItem => ({ key: note.id, kind: "note", note })),
-  ]), [notes])
+  const items = useMemo(() => [
+    ...(folders.length > 0 ? [
+      { key: "heading:folders", kind: "heading" as const, label: "子文件夹", noteCount: folders.length },
+      ...folders.map((folder): VirtualNoteItem => ({ key: `folder:${folder.path}`, kind: "folder", folder })),
+    ] : []),
+    ...groupNotes(notes).flatMap((group): VirtualNoteItem[] => [
+      { key: `heading:${group.label}`, kind: "heading", label: group.label, noteCount: group.notes.length },
+      ...group.notes.map((note): VirtualNoteItem => ({ key: note.id, kind: "note", note })),
+    ]),
+  ], [folders, notes])
   const virtualizer = useVirtualizer({
     count: items.length,
-    estimateSize: (index) => items[index]?.kind === "heading" ? 35 : mobile ? 96 : 104,
+    estimateSize: (index) => items[index]?.kind === "heading"
+      ? 35
+      : items[index]?.kind === "folder" ? mobile ? 58 : 56 : mobile ? 96 : 104,
     getItemKey: (index) => items[index]?.key ?? index,
     getScrollElement: () => viewportRef.current,
     overscan: 8,
@@ -1744,6 +1877,8 @@ function VirtualNoteRows({
           >
             {item.kind === "heading" ? (
               <div className="note-group-label"><span>{item.label}</span>{mobile ? null : <small>{item.noteCount}</small>}</div>
+            ) : item.kind === "folder" ? (
+              <FolderListRow folder={item.folder} mobile={mobile} onSelect={onSelectFolder} />
             ) : (
               <NoteListRow active={item.note.id === activeNoteId} note={item.note} onSelect={onSelectNote} />
             )}
@@ -1751,6 +1886,32 @@ function VirtualNoteRows({
         )
       })}
     </div>
+  )
+}
+
+function FolderListRow({
+  folder,
+  mobile,
+  onSelect,
+}: {
+  folder: VaultFolder
+  mobile: boolean
+  onSelect?: (folder: string) => void
+}) {
+  return (
+    <button
+      className="folder-list-row"
+      data-mobile={mobile}
+      onClick={() => onSelect?.(folder.path)}
+      type="button"
+    >
+      <span className="folder-list-icon"><Folder /></span>
+      <span>
+        <strong>{folder.label}</strong>
+        <small>{folder.count} 篇笔记 · 含子目录</small>
+      </span>
+      <ChevronRight />
+    </button>
   )
 }
 

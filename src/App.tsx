@@ -54,7 +54,11 @@ import {
   normalizeNoteTarget,
 } from "@/services/search/note-index"
 import { sortNotes, type NoteSort } from "@/services/search/note-sort"
-import { buildVaultFolders, noteBelongsToFolder } from "@/services/search/vault-folders"
+import {
+  buildVaultFolders,
+  noteBelongsDirectlyToFolder,
+  noteBelongsToFolder,
+} from "@/services/search/vault-folders"
 import { getFolderRenameTarget } from "@/services/search/folder-rename"
 import {
   clearNativeSearchIndex,
@@ -120,6 +124,8 @@ function App() {
   const [activeNoteId, setActiveNoteId] = useState("")
   const [query, setQuery] = useState("")
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
+  const [nestedFolderNotesPath, setNestedFolderNotesPath] = useState<string | null>(null)
+  const includeNestedFolderNotes = Boolean(selectedFolder && nestedFolderNotesPath === selectedFolder)
   const [libraryView, setLibraryView] = useState<LibraryView>("all")
   const [noteSort, setNoteSort] = useState<NoteSort>("updated-desc")
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
@@ -327,7 +333,9 @@ function App() {
     [availableNotes, vaultDirectories],
   )
   const folderNotes = selectedFolder
-    ? availableNotes.filter((note) => noteBelongsToFolder(note, selectedFolder))
+    ? availableNotes.filter((note) => includeNestedFolderNotes
+      ? noteBelongsToFolder(note, selectedFolder)
+      : noteBelongsDirectlyToFolder(note, selectedFolder))
     : availableNotes
   const taggedNotes = selectedTag
     ? folderNotes.filter((note) => note.tags?.includes(selectedTag))
@@ -2477,6 +2485,7 @@ function App() {
             isCreatingNote={isCreatingNote}
             isManagingNote={isManagingNote}
             isNoteDetailRoute={Boolean(noteRouteMatch?.params.noteId)}
+            includeNestedFolderNotes={includeNestedFolderNotes}
             isRefreshingVault={isRefreshingVault}
             libraryView={libraryView}
             localVaultSupported={canSelectLocalVault()}
@@ -2492,6 +2501,10 @@ function App() {
             onFormat={formatActiveNote}
             onFormatNote={formatNoteById}
             onInsertAttachments={insertActiveNoteAttachments}
+            onIncludeNestedFolderNotesChange={(include) => {
+              // 聚合偏好绑定到当前路径，切换目录时无需等待 effect 即可恢复“仅当前层”，避免旧内容闪现。
+              setNestedFolderNotesPath(include ? selectedFolder : null)
+            }}
             onMobileScreenChange={(screen) => {
               setMobileScreen(screen)
               if (screen === "library") {

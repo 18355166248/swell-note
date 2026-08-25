@@ -74,6 +74,27 @@ export function noteBelongsToFolder(note: Note, folderPath: string) {
   return note.folder === folderPath || note.folder?.startsWith(`${folderPath} / `) === true
 }
 
+export function noteBelongsDirectlyToFolder(note: Note, folderPath: string) {
+  return note.folder === folderPath
+}
+
+export function getDirectChildVaultFolders(
+  folders: VaultFolder[],
+  parentPath: string | null,
+) {
+  const parentDepth = parentPath ? folderSegments(parentPath).length : 0
+  return folders.filter((folder) => {
+    const segments = folderSegments(folder.path)
+    if (segments.length !== parentDepth + 1) return false
+    return parentPath === null || getParentFolderPath(folder.path) === parentPath
+  })
+}
+
+export function getParentFolderPath(folderPath: string) {
+  const segments = folderSegments(folderPath)
+  return segments.slice(0, -1).join(" / ") || null
+}
+
 export function getFolderAncestorPaths(folderPath?: string | null) {
   const segments = folderSegments(folderPath ?? undefined)
   return segments.slice(0, -1).map((_, index) => segments.slice(0, index + 1).join(" / "))
@@ -91,9 +112,4 @@ export function getVisibleVaultFolders(
 
 function folderSegments(path?: string) {
   return path?.split(/\s*\/\s*/).filter(Boolean) ?? []
-}
-
-function getParentFolderPath(path: string) {
-  const segments = folderSegments(path)
-  return segments.slice(0, -1).join(" / ") || null
 }
