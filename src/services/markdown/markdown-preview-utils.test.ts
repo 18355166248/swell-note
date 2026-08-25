@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   isRelativeAttachmentHref,
+  extractEmbeddedSection,
   extractExcalidrawTextElements,
   obsidianAnchorId,
   parseVaultAssetHref,
@@ -66,5 +67,93 @@ describe("Markdown preview wiki links", () => {
     expect(isRelativeAttachmentHref("notes/next.md")).toBe(false)
     expect(isRelativeAttachmentHref("notes/NEXT.MD")).toBe(false)
     expect(isRelativeAttachmentHref("docs/readme")).toBe(false)
+  })
+})
+
+describe("Embedded section extraction", () => {
+  const content = [
+    "---",
+    "title: 示例笔记",
+    "---",
+    "# 概述",
+    "",
+    "开头段落。",
+    "",
+    "## 方案",
+    "",
+    "第一段引用目标 ^para-01",
+    "",
+    "- 第一项 ^task-01",
+    "  - 子项 A",
+    "- 第二项",
+    "",
+    "| 列 A | 列 B |",
+    "| --- | --- |",
+    "| 1 | 2 |",
+    "^table-01",
+    "",
+    "```md",
+    "代码块里的 ^fake-id",
+    "```",
+    "",
+    "## 风险",
+    "",
+    "后续内容。",
+  ].join("\n")
+
+  it("extracts a paragraph block reference and strips the block id", () => {
+    expect(extractEmbeddedSection(content, "^para-01")).toBe("第一段引用目标")
+  })
+
+  it("extracts a list item block with its nested children only", () => {
+    expect(extractEmbeddedSection(content, "^task-01")).toBe("- 第一项\n  - 子项 A")
+  })
+
+  it("extracts the whole preceding block for a standalone block id line", () => {
+    expect(extractEmbeddedSection(content, "^table-01")).toBe("| 列 A | 列 B |\n| --- | --- |\n| 1 | 2 |")
+  })
+
+  it("ignores block ids inside fenced code blocks", () => {
+    expect(extractEmbeddedSection(content, "^fake-id")).toBeNull()
+  })
+
+  it("extracts a heading section up to the next same-level heading", () => {
+    const section = extractEmbeddedSection(content, "方案")
+    expect(section).toContain("## 方案")
+    expect(section).toContain("第一段引用目标")
+    expect(section).toContain("| 列 A | 列 B |")
+    expect(section).not.toContain("## 风险")
+    expect(section).not.toContain("后续内容")
+    expect(section).not.toContain("title: 示例笔记")
+  })
+
+  it("matches headings case-insensitively and supports chained anchors", () => {
+    expect(extractEmbeddedSection(content, "#概述")).toContain("# 概述")
+    const chained = extractEmbeddedSection(content, "概述#方案")
+    expect(chained).toContain("第一段引用目标")
+    expect(chained).not.toContain("## 风险")
+    expect(extractEmbeddedSection(content, "不存在的章节#方案")).toBeNull()
+  })
+
+  it("returns null for missing or empty anchors", () => {
+    expect(extractEmbeddedSection(content, "")).toBeNull()
+    expect(extractEmbeddedSection(content, "^missing")).toBeNull()
+    expect(extractEmbeddedSection(content, "不存在的标题")).toBeNull()
+  })
+
+  it("extracts from a sub-heading until the parent-level heading", () => {
+    const nested = [
+      "# 父级",
+      "",
+      "父级正文。",
+      "",
+      "## 子级",
+      "",
+      "子级正文。",
+      "",
+      "# 兄弟",
+    ].join("\n")
+    const section = extractEmbeddedSection(nested, "子级")
+    expect(section).toBe("## 子级\n\n子级正文。")
   })
 })

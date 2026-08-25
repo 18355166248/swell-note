@@ -25,6 +25,24 @@ describe("Markdown preview integration", () => {
     expect(output).not.toContain("不应显示")
   })
 
+  it("renders only the referenced block for anchored embeds", () => {
+    const output = renderToStaticMarkup(
+      <MarkdownPreview
+        {...baseProps}
+        content={"![[目标笔记#^quote-01]]\n\n![[目标笔记#不存在的章节]]"}
+        onResolveWikiNote={() => ({
+          note: { content: "引用目标段落 ^quote-01\n\n其他段落", title: "目标笔记" },
+          status: "ready",
+        })}
+      />,
+    )
+
+    expect(output).toContain("目标笔记 › quote-01")
+    expect(output).toContain("引用目标段落")
+    expect(output).not.toContain("其他段落")
+    expect(output).toContain("找不到引用的块或标题：不存在的章节")
+  })
+
   it("renders collapsed and expanded callouts with native details", () => {
     const collapsed = renderToStaticMarkup(
       <MarkdownPreview {...baseProps} content={"> [!warning]- 注意\n> 正文"} onResolveWikiNote={() => ({ status: "missing" })} />,

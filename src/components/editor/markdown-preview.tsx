@@ -3,12 +3,14 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import remarkGfm from "remark-gfm"
 
 import {
+  extractEmbeddedSection,
   isRelativeAttachmentHref,
   obsidianAnchorId,
   parseVaultAssetHref,
   parseWikiEmbedHref,
   parseWikiHref,
   rewriteWikiLinks,
+  splitWikiTarget,
   stripMarkdownFrontmatter,
 } from "@/services/markdown/markdown-preview-utils"
 import { resolveOfficialNoteRenderer } from "@/plugins/official-note-renderers"
@@ -174,6 +176,10 @@ function WikiEmbed({ depth, onLoadWikiNote, onResolveAsset, onResolveWikiNote, o
   target: string
 }) {
   const result = depth < 2 ? onResolveWikiNote(target) : { status: "missing" as const }
+  const { anchor } = splitWikiTarget(target)
+  // 带锚点的嵌入（![[笔记#^块id]] / ![[笔记#标题]]）只渲染被引用的块或小节，锚点无效时提示而不降级为整篇。
+  const embeddedSection = result.status === "ready" && anchor ? extractEmbeddedSection(result.note.content, anchor) : null
+  const embeddedContent = result.status === "ready" ? embeddedSection ?? result.note.content : ""
 
   useEffect(() => {
     if (result.status === "loading") onLoadWikiNote(target)
@@ -182,17 +188,21 @@ function WikiEmbed({ depth, onLoadWikiNote, onResolveAsset, onResolveWikiNote, o
   return (
     <section className="wiki-embed">
       <button className="wiki-embed-title" onClick={() => onWikiLink(target)} type="button">
-        {result.status === "ready" ? result.note.title : target}
+        {result.status === "ready"
+          ? anchor ? `${result.note.title} › ${anchor.replace(/^\^/, "")}` : result.note.title
+          : target}
       </button>
       {result.status === "ready" && depth < 2 ? (
-        <MarkdownContent
-          content={result.note.content}
-          depth={depth + 1}
-          onLoadWikiNote={onLoadWikiNote}
-          onResolveAsset={onResolveAsset}
-          onResolveWikiNote={onResolveWikiNote}
-          onWikiLink={onWikiLink}
-        />
+        embeddedSection || !anchor ? (
+          <MarkdownContent
+            content={embeddedContent}
+            depth={depth + 1}
+            onLoadWikiNote={onLoadWikiNote}
+            onResolveAsset={onResolveAsset}
+            onResolveWikiNote={onResolveWikiNote}
+            onWikiLink={onWikiLink}
+          />
+        ) : <p className="wiki-embed-state">找不到引用的块或标题：{anchor}</p>
       ) : <p className="wiki-embed-state">{depth >= 2
         ? "嵌入层级过深，点击打开笔记"
         : result.status === "loading" ? "正在读取嵌入笔记…" : "找不到嵌入的笔记"}</p>}

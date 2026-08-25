@@ -2425,11 +2425,13 @@ function App() {
   const findWikiNote = useCallback((target: string, sourceNotes: Note[] = notes) => {
     const { noteTarget } = splitWikiTarget(target)
     const normalizedTarget = normalizeNoteTarget(noteTarget)
+    // 同笔记锚点（![[#^块id]]、[[#标题]]）省略笔记名，与 openWikiLink 一致回退当前打开的笔记。
+    if (!normalizedTarget) return activeNote ?? null
     return sourceNotes.find((note) =>
       normalizeNoteTarget(note.title) === normalizedTarget
       || (note.remotePath && normalizeNoteTarget(note.remotePath) === normalizedTarget),
     )
-  }, [notes])
+  }, [activeNote, notes])
 
   const resolveWikiNote = useCallback((target: string) => {
     const linkedNote = findWikiNote(target)
