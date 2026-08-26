@@ -255,6 +255,7 @@ describe("markdown live preview table cells", () => {
     cell.click()
 
     const editor = cell.querySelector("textarea") as HTMLTextAreaElement
+    const stack = cell.querySelector(".cm-md-table-cell-stack") as HTMLDivElement
     expect(editor).not.toBeNull()
     expect(cell.classList.contains("cm-md-table-cell-editing")).toBe(true)
     expect(cell.contains(display)).toBe(true)
@@ -262,10 +263,14 @@ describe("markdown live preview table cells", () => {
     expect(editor.style.height).toBe("64px")
     expect(focus).toHaveBeenCalledWith({ preventScroll: true })
 
+    editor.dispatchEvent(new Event("input", { bubbles: true }))
+    expect(editor.style.height).toBe("120px")
+    expect(stack.style.minHeight).toBe("120px")
     editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
     expect(cell.querySelector("textarea")).toBeNull()
     expect(cell.classList.contains("cm-md-table-cell-editing")).toBe(false)
     expect(cell.contains(display)).toBe(true)
+    expect(stack.style.minHeight).toBe("")
     focus.mockRestore()
     scrollHeight.mockRestore()
     view.destroy()

@@ -43,12 +43,13 @@
 .markdown-editor-shell .cm-md-table-cell-editable { min-width: 0; overflow-wrap: anywhere; cursor: text; }
 .markdown-editor-shell .cm-md-table-cell-editable:focus { outline: none; }
 .markdown-editor-shell .cm-md-table-cell-editable:focus-visible { outline: 1px dashed color-mix(in oklab,var(--primary) 62%,transparent); outline-offset: -2px; }
-.markdown-editor-shell .cm-md-table-cell-stack { display: grid; min-width: 0; }
+.markdown-editor-shell .cm-md-table-cell-stack { position: relative; min-width: 0; }
 .markdown-editor-shell .cm-md-table-cell-display,
-.markdown-editor-shell .cm-md-table-cell-input { grid-area: 1 / 1; min-width: 0; }
+.markdown-editor-shell .cm-md-table-cell-input { min-width: 0; }
+.markdown-editor-shell .cm-md-table-cell-display { min-height: 1lh; }
 .markdown-editor-shell .cm-md-table-cell-editing .cm-md-table-cell-display { visibility: hidden; }
 /* Chromium 会把 textarea 的文字行框向上取整约半个 CSS 像素；仅移动绘制层，不参与布局。 */
-.markdown-editor-shell .cm-md-table-cell-input { position: relative; top: .5px; display: block; box-sizing: border-box; width: 100%; border: 0; padding: 0; overflow: hidden; resize: none; background: transparent; outline: none; color: inherit; font: inherit; line-height: inherit; text-align: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.markdown-editor-shell .cm-md-table-cell-input { position: absolute; top: .5px; left: 0; z-index: 1; display: block; box-sizing: border-box; width: 100%; border: 0; padding: 0; overflow: hidden; resize: none; background: transparent; outline: none; color: inherit; font: inherit; line-height: inherit; text-align: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 640px) {
   .markdown-editor-shell .cm-md-table-toolbar::after { display: none; }

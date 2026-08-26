@@ -503,7 +503,10 @@ export class TableWidget extends WidgetType {
     // 只有用户真正输入后才允许单元格按内容增长；单纯获得焦点不会改变表格几何尺寸。
     const resizeInput = () => {
       input.style.height = "0"
-      input.style.height = `${Math.max(24, initialContentHeight, input.scrollHeight)}px`
+      const nextHeight = Math.max(24, initialContentHeight, input.scrollHeight)
+      input.style.height = `${nextHeight}px`
+      // 输入层绝对定位，不参与表格布局；只有内容真实增长时才同步扩大占位层。
+      contentStack.style.minHeight = `${nextHeight}px`
       input.style.overflowY = "hidden"
     }
     input.addEventListener("input", resizeInput)
@@ -514,6 +517,7 @@ export class TableWidget extends WidgetType {
     let finished = false
     const restoreCell = () => {
       input.remove()
+      contentStack.style.removeProperty("min-height")
       cell.classList.remove("cm-md-table-cell-editing")
     }
     const commit = (navigation?: CellTarget & { appendRow?: boolean }) => {
