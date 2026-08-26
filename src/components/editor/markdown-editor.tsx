@@ -15,17 +15,18 @@ type MarkdownEditorProps = {
   onChange: (value: string) => void
   onCursorChange?: (line: number, column: number) => void
   onInsertFiles?: (files: File[]) => void
+  onOpenWikiLink?: (target: string) => void
   readOnly?: boolean
   value: string
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ onChange, onCursorChange, onInsertFiles, readOnly = false, value }, ref) {
+  function MarkdownEditor({ onChange, onCursorChange, onInsertFiles, onOpenWikiLink, readOnly = false, value }, ref) {
     const editorRef = useRef<ReactCodeMirrorRef>(null)
     const extensions = useMemo(() => [
       // GFM 基座：表格、删除线与任务列表才能进入语法树，供语法高亮与即时渲染装饰使用。
       markdown({ base: markdownLanguage }),
-      markdownLivePreview,
+      markdownLivePreview({ onOpenWikiLink }),
       EditorView.lineWrapping,
       EditorView.updateListener.of((update) => {
         if (!update.selectionSet && !update.docChanged) return
@@ -71,7 +72,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           return true
         },
       }),
-    ], [onCursorChange, onInsertFiles, readOnly])
+    ], [onCursorChange, onInsertFiles, onOpenWikiLink, readOnly])
 
     useImperativeHandle(ref, () => ({
       insertText(text) {

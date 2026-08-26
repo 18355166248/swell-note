@@ -1,5 +1,6 @@
 import { syntaxTree } from "@codemirror/language"
-import type { Range } from "@codemirror/state"
+import type { EditorState, Range } from "@codemirror/state"
+import { Facet, StateEffect, StateField } from "@codemirror/state"
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view"
 
 // Typora / Obsidian Live Preview 风格的即时渲染：
@@ -12,9 +13,23 @@ type MdSyntaxNode = {
   getChild(name: string): MdSyntaxNode | null
   name: string
   nextSibling: MdSyntaxNode | null
+  parent: MdSyntaxNode | null
   prevSibling: MdSyntaxNode | null
   to: number
 }
+
+// 打开链接是宿主行为：笔记内链交给工作区路由，外部链接默认走浏览器新窗口。
+export type LivePreviewOptions = {
+  onOpenExternalLink?: (href: string) => void
+  onOpenWikiLink?: (target: string) => void
+}
+
+const livePreviewOptions = Facet.define<LivePreviewOptions, LivePreviewOptions>({
+  combine: (values) => values[0] ?? {},
+})
+
+const LINK_HINT = "\u2318 / Ctrl + \u70b9\u51fb\u6253\u5f00\u94fe\u63a5"
+const WIKI_HINT = "\u2318 / Ctrl + \u70b9\u51fb\u6253\u5f00\u7b14\u8bb0"
 
 export class TaskCheckboxWidget extends WidgetType {
   constructor(
@@ -54,27 +69,274 @@ export class TaskCheckboxWidget extends WidgetType {
   }
 }
 
-function collectCursorLines(view: EditorView) {
+type ParsedTable = {
+  aligns: Array<"center" | "left" | "right" | "">
+  header: string[]
+  rows: string[][]
+}
+
+const tableCellSplitPattern = /(?<!\\)\|/
+
+function splitTableRow(line: string) {
+  return line.replace(/^\|/, "").replace(/\|$/, "").split(tableCellSplitPattern).map((cell) => cell.trim())
+}
+
+// GFM 语法树只对含分隔行的表格生成 Table 节点，这里做轻量二次解析供 Widget 直接建 DOM。
+export function parseMarkdownTable(source: string): ParsedTable | null {
+  const lines = source.split("\n").map((line) => line.trim()).filter(Boolean)
+  if (lines.length < 2) return null
+  const header = splitTableRow(lines[0])
+  const delimiter = splitTableRow(lines[1])
+  if (!delimiter.length || !delimiter.every((cell) => /^:?-{1,}:?$/.test(cell))) return null
+  const aligns = delimiter.map((cell) => {
+    const start = cell.startsWith(":")
+    const end = cell.endsWith(":")
+    if (start && end) return "center" as const
+    if (end) return "right" as const
+    return "left" as const
+  })
+  return { aligns, header, rows: lines.slice(2).map(splitTableRow) }
+}
+
+// 单元格内只保留加粗/斜体/行内代码三类高频行内语法，全部用 textContent 装配，不引入 HTML 注入面。
+const tableInlinePattern = /(\*\*|__)(.+?)\1|(\*|_)(.+?)\3|`([^`]+)`/g
+
+function appendInlineMarkdown(parent: HTMLElement, text: string) {
+  let cursor = 0
+  for (const match of text.matchAll(tableInlinePattern)) {
+    const index = match.index ?? 0
+    if (index > cursor) parent.appendChild(document.createTextNode(text.slice(cursor, index)))
+    if (match[2] !== undefined) {
+      const strong = document.createElement("strong")
+      strong.textContent = match[2]
+      parent.appendChild(strong)
+    } else if (match[4] !== undefined) {
+      const em = document.createElement("em")
+      em.textContent = match[4]
+      parent.appendChild(em)
+    } else {
+      const code = document.createElement("code")
+      code.textContent = match[5] ?? ""
+      parent.appendChild(code)
+    }
+    cursor = index + match[0].length
+  }
+  if (cursor < text.length) parent.appendChild(document.createTextNode(text.slice(cursor)))
+}
+
+export class TableWidget extends WidgetType {
+  constructor(
+    readonly source: string,
+    readonly from: number,
+    readonly view: EditorView,
+  ) {
+    super()
+  }
+
+  eq(other: TableWidget) {
+    return other.source === this.source
+  }
+
+  toDOM() {
+    const table = parseMarkdownTable(this.source)
+    const wrapper = document.createElement("div")
+    wrapper.className = "cm-md-table-wrap"
+    if (!table) return wrapper
+
+    const element = document.createElement("table")
+    element.className = "cm-md-table"
+    const headRow = document.createElement("tr")
+    table.header.forEach((cell, index) => {
+      const th = document.createElement("th")
+      th.style.textAlign = table.aligns[index] ?? "left"
+      appendInlineMarkdown(th, cell)
+      headRow.appendChild(th)
+    })
+    const thead = document.createElement("thead")
+    thead.appendChild(headRow)
+    element.appendChild(thead)
+
+    const tbody = document.createElement("tbody")
+    for (const row of table.rows) {
+      const tr = document.createElement("tr")
+      row.forEach((cell, index) => {
+        const td = document.createElement("td")
+        td.style.textAlign = table.aligns[index] ?? "left"
+        appendInlineMarkdown(td, cell)
+        tr.appendChild(td)
+      })
+      tbody.appendChild(tr)
+    }
+    element.appendChild(tbody)
+    wrapper.appendChild(element)
+
+    // 点击渲染后的表格即进入源码编辑：把光标放到表格首行，下一次装饰构建会还原原始 Markdown。
+    if (this.view.state.readOnly) return wrapper
+    wrapper.addEventListener("mousedown", (event) => {
+      event.preventDefault()
+      this.view.dispatch({ selection: { anchor: this.from }, scrollIntoView: true })
+      this.view.focus()
+    })
+    return wrapper
+  }
+}
+
+function collectCursorLines(state: EditorState) {
   const lines = new Set<number>()
-  for (const range of view.state.selection.ranges) {
-    const from = view.state.doc.lineAt(Math.min(range.from, range.to)).number
-    const to = view.state.doc.lineAt(Math.max(range.from, range.to)).number
+  for (const range of state.selection.ranges) {
+    const from = state.doc.lineAt(Math.min(range.from, range.to)).number
+    const to = state.doc.lineAt(Math.max(range.from, range.to)).number
     for (let number = from; number <= to; number += 1) lines.add(number)
   }
   return lines
 }
 
-function buildLivePreviewDecorations(view: EditorView): DecorationSet {
-  const cursorLines = collectCursorLines(view)
+function cursorLineChecker(state: EditorState) {
+  const cursorLines = collectCursorLines(state)
   // 节点跨多行时，只要任一行处于选区就保持原样，避免只隐藏一半标记。
-  const isCursorActive = (from: number, to: number) => {
-    const fromLine = view.state.doc.lineAt(from).number
-    const toLine = view.state.doc.lineAt(to).number
+  return (from: number, to: number) => {
+    const fromLine = state.doc.lineAt(from).number
+    const toLine = state.doc.lineAt(to).number
     for (let number = fromLine; number <= toLine; number += 1) {
       if (cursorLines.has(number)) return true
     }
     return false
   }
+}
+
+type DocRange = { from: number; to: number }
+
+// frontmatter 在 CommonMark 里没有对应节点：首行 --- 被解析成分割线，其余属性行被并入 SetextHeading2。
+// 先单独识别整段范围，避免属性区被放大成标题、分隔线被隐藏，同时保持纯文本可编辑。
+const frontmatterFencePattern = /^---\s*$/
+
+function findFrontmatterRange(state: EditorState): DocRange | null {
+  if (state.doc.lines < 2) return null
+  const first = state.doc.line(1)
+  if (!frontmatterFencePattern.test(first.text)) return null
+  for (let number = 2; number <= state.doc.lines; number += 1) {
+    const line = state.doc.line(number)
+    if (frontmatterFencePattern.test(line.text)) return { from: first.from, to: line.to }
+  }
+  // 没有闭合分隔行时不算 frontmatter，按普通正文渲染。
+  return null
+}
+
+// 围栏代码块与行内代码里的 [[...]] 必须保持原文，避免即时渲染改变代码语义。
+function isInsideCode(state: EditorState, position: number) {
+  for (let node: MdSyntaxNode | null = syntaxTree(state).resolveInner(position, 1); node; node = node.parent) {
+    if (node.name.includes("Code")) return true
+  }
+  return false
+}
+
+// [[笔记|别名]] 不属于 CommonMark，语法树只会拆成普通文本与不带 URL 的 Link 节点，
+// 因此按可见范围做正则扫描，跳过代码与 frontmatter 后单独装饰。
+const wikiLinkPattern = /(!?)\[\[([^\[\]\n]+)\]\]/g
+
+function decorateWikiLinks(
+  state: EditorState,
+  from: number,
+  to: number,
+  isCursorActive: (from: number, to: number) => boolean,
+  frontmatter: DocRange | null,
+  push: (decoration: Range<Decoration>) => void,
+) {
+  for (const match of state.sliceDoc(from, to).matchAll(wikiLinkPattern)) {
+    const start = from + (match.index ?? 0)
+    const end = start + match[0].length
+    if (frontmatter && start < frontmatter.to && end > frontmatter.from) continue
+    if (isInsideCode(state, start + match[1].length + 2)) continue
+
+    // 嵌入（![[...]]）在编辑器里没有等价的渲染形态，只上色不隐藏标记，避免与普通链接混淆。
+    if (match[1]) {
+      push(Decoration.mark({ class: "cm-md-wiki-embed" }).range(start, end))
+      continue
+    }
+
+    const value = match[2]
+    const pipe = value.indexOf("|")
+    const target = (pipe < 0 ? value : value.slice(0, pipe)).trim()
+    if (!target) continue
+    push(Decoration.mark({
+      attributes: { "data-wiki-target": target, title: WIKI_HINT },
+      class: "cm-md-wiki-link",
+    }).range(start, end))
+
+    if (isCursorActive(start, end)) continue
+    // 有别名时连同目标与竖线一起隐藏，只留别名；别名为空则保持原样，避免整段消失。
+    const labelStart = pipe < 0 ? start + 2 : start + 2 + pipe + 1
+    if (labelStart >= end - 2) continue
+    push(Decoration.replace({}).range(start, labelStart))
+    push(Decoration.replace({}).range(end - 2, end))
+  }
+}
+
+// 只有明确的外链协议才挂可点击属性，相对路径与自定义协议留给源码编辑。
+const externalHrefPattern = /^(?:https?|mailto):/i
+
+function openExternalLink(href: string, options: LivePreviewOptions) {
+  if (options.onOpenExternalLink) {
+    options.onOpenExternalLink(href)
+    return
+  }
+  window.open(href, "_blank", "noopener,noreferrer")
+}
+
+// 表格整块替换属于块级装饰，CodeMirror 要求块级装饰由 StateField 提供，插件只能携带行内装饰。
+type TableBlock = { from: number; source: string; to: number }
+
+function collectTableBlocks(state: EditorState): TableBlock[] {
+  const isCursorActive = cursorLineChecker(state)
+  const blocks: TableBlock[] = []
+
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (node.name !== "Table") return
+      if (isCursorActive(node.from, node.to)) return
+      const source = state.sliceDoc(node.from, node.to)
+      if (!parseMarkdownTable(source)) return
+      // 块替换必须覆盖整行，范围取首行行首到末行行尾。
+      const firstLine = state.doc.lineAt(node.from)
+      const lastLine = state.doc.lineAt(node.to)
+      blocks.push({ from: firstLine.from, source, to: lastLine.to })
+      return false
+    },
+  })
+
+  return blocks
+}
+
+function tableBlocksKey(blocks: TableBlock[]) {
+  return blocks.map((block) => `${block.from}:${block.to}:${block.source.length}`).join("|")
+}
+
+function tableBlocksDecorations(blocks: TableBlock[], view: EditorView): DecorationSet {
+  return Decoration.set(
+    blocks.map((block) =>
+      Decoration.replace({
+        block: true,
+        widget: new TableWidget(block.source, block.from, view),
+      }).range(block.from, block.to),
+    ),
+    true,
+  )
+}
+
+const setTableDecorations = StateEffect.define<DecorationSet>()
+
+const tableDecorationsField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, transaction) {
+    const effect = transaction.effects.find((candidate) => candidate.is(setTableDecorations))
+    return effect ? effect.value : value.map(transaction.changes)
+  },
+  provide: (field) => EditorView.decorations.from(field),
+})
+
+function buildLivePreviewDecorations(view: EditorView): DecorationSet {
+  const isCursorActive = cursorLineChecker(view.state)
+  const frontmatter = findFrontmatterRange(view.state)
 
   const decorations: Range<Decoration>[] = []
   const hide = (node: MdSyntaxNode) => {
@@ -95,11 +357,28 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
     }
   }
 
+  // frontmatter 很短，只要与视口有交集就整段装饰，不必按可见范围切分。
+  if (frontmatter && view.visibleRanges.some((range) => range.from <= frontmatter.to && range.to >= frontmatter.from)) {
+    const firstLine = view.state.doc.lineAt(frontmatter.from).number
+    const lastLine = view.state.doc.lineAt(frontmatter.to).number
+    for (let number = firstLine; number <= lastLine; number += 1) {
+      const fence = number === firstLine || number === lastLine
+      decorations.push(
+        Decoration.line({ class: fence ? "cm-md-frontmatter cm-md-frontmatter-fence" : "cm-md-frontmatter" })
+          .range(view.state.doc.line(number).from),
+      )
+    }
+  }
+
   for (const { from, to } of view.visibleRanges) {
+    decorateWikiLinks(view.state, from, to, isCursorActive, frontmatter, (decoration) => decorations.push(decoration))
+
     syntaxTree(view.state).iterate({
       from,
       to,
       enter(node) {
+        // frontmatter 内部不再套用正文规则（否则属性行会被当成 SetextHeading2 放大）。
+        if (frontmatter && node.from >= frontmatter.from && node.to <= frontmatter.to) return false
         const active = isCursorActive(node.from, node.to)
         // 标题节点名带级别后缀（ATXHeading1..6 / SetextHeading1..2）。
         const heading = node.name.match(/^(?:ATX|Setext)Heading([1-6])$/)
@@ -162,6 +441,46 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             if (listMark?.name === "ListMark") hide(listMark)
             break
           }
+          case "Link":
+          case "Autolink": {
+            // 引用式链接与 [[wiki]] 内层节点都没有 URL 子节点，跳过后由各自逻辑处理。
+            const url = node.node.getChild("URL")
+            if (!url) break
+            const href = view.state.sliceDoc(url.from, url.to)
+            decorations.push(
+              Decoration.mark({
+                attributes: externalHrefPattern.test(href) ? { "data-md-href": href, title: LINK_HINT } : undefined,
+                class: "cm-md-link",
+              }).range(node.from, node.to),
+            )
+            if (active) break
+            if (node.name === "Autolink") {
+              hideMarkChildren(node.node, active, "LinkMark")
+              break
+            }
+            const marks: MdSyntaxNode[] = []
+            for (let child = node.node.firstChild; child; child = child.nextSibling) {
+              if (child.name === "LinkMark") marks.push(child)
+            }
+            const open = marks[0]
+            const close = marks.find((mark) => view.state.sliceDoc(mark.from, mark.to) === "]")
+            // 链接文本为空时隐藏会让整行看不见内容，保持原样。
+            if (!open || !close || close.from <= open.to) break
+            decorations.push(Decoration.replace({}).range(open.from, open.to))
+            decorations.push(Decoration.replace({}).range(close.from, node.to))
+            break
+          }
+          case "HorizontalRule": {
+            decorateLines(node.from, node.to, "cm-md-hr")
+            if (!active) hide(node.node)
+            break
+          }
+          case "Table": {
+            // 表格整块替换由 tableDecorationsField 提供；插件在表格被替换时不再下钻，
+            // 避免替换范围内叠加行内装饰；光标在表格内时正常继续，行内样式照常生效。
+            if (!active) return false
+            break
+          }
         }
       },
     })
@@ -170,19 +489,73 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   return Decoration.set(decorations, true)
 }
 
-export const markdownLivePreview = ViewPlugin.fromClass(
+const markdownLivePreviewPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet
+    destroyed = false
+    tableBlocksKey = ""
 
     constructor(view: EditorView) {
       this.decorations = buildLivePreviewDecorations(view)
+      // 初次构建即提交表格装饰（构造期 dispatch 延迟到挂载后执行）。
+      this.syncTableDecorations(view)
     }
 
     update(update: ViewUpdate) {
       if (update.docChanged || update.selectionSet || update.viewportChanged) {
         this.decorations = buildLivePreviewDecorations(update.view)
+        this.syncTableDecorations(update.view)
       }
     }
+
+    destroy() {
+      this.destroyed = true
+    }
+
+    // 表格装饰变化时经 effect 写入 StateField；RangeSet 没有值相等接口，
+    // 用轻量 key（位置 + 源长度）判断是否有变化，内容不变则跳过，避免无意义的重绘。
+    // 插件 update 期间不允许同步 dispatch，延迟到当前更新结束后提交。
+    syncTableDecorations(view: EditorView) {
+      const blocks = collectTableBlocks(view.state)
+      const key = tableBlocksKey(blocks)
+      if (key === this.tableBlocksKey) return
+      this.tableBlocksKey = key
+      const decorations = tableBlocksDecorations(blocks, view)
+      window.setTimeout(() => {
+        if (!this.destroyed) view.dispatch({ effects: setTableDecorations.of(decorations) })
+      }, 0)
+    }
   },
-  { decorations: (plugin) => plugin.decorations },
+  {
+    decorations: (plugin) => plugin.decorations,
+    // 普通点击仍然只是把光标放进链接、还原源码；修饰键点击才跳转，避免链接行无法编辑。
+    eventHandlers: {
+      mousedown(event: MouseEvent, view: EditorView) {
+        if (!(event.metaKey || event.ctrlKey) || event.altKey) return false
+        const element = event.target instanceof Element ? event.target : null
+        if (!element) return false
+        const options = view.state.facet(livePreviewOptions)
+
+        const wikiTarget = element.closest("[data-wiki-target]")?.getAttribute("data-wiki-target")
+        if (wikiTarget) {
+          event.preventDefault()
+          options.onOpenWikiLink?.(wikiTarget)
+          return true
+        }
+
+        const href = element.closest("[data-md-href]")?.getAttribute("data-md-href")
+        if (!href) return false
+        event.preventDefault()
+        openExternalLink(href, options)
+        return true
+      },
+    },
+  },
 )
+
+export { markdownLivePreviewPlugin, tableDecorationsField }
+
+// 表格块替换必须经 StateField 提供，与行内装饰插件一起注册。
+export function markdownLivePreview(options: LivePreviewOptions = {}) {
+  return [livePreviewOptions.of(options), markdownLivePreviewPlugin, tableDecorationsField]
+}

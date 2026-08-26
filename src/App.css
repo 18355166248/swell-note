@@ -473,6 +473,18 @@
 .markdown-editor-shell .cm-md-quote { border-left: 3px solid var(--blue-line); background: var(--panel-soft); color: var(--muted-foreground); }
 .markdown-editor-shell .cm-md-codeblock { background: #f5f7fa; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
 .markdown-editor-shell .cm-md-task-checkbox { margin: 0 .5em 0 .12em; accent-color: var(--primary); cursor: pointer; vertical-align: middle; }
+.markdown-editor-shell .cm-md-link, .markdown-editor-shell .cm-md-wiki-link { color: var(--primary); text-decoration: underline; text-decoration-color: color-mix(in oklab,var(--primary) 35%,transparent); text-underline-offset: 3px; }
+.markdown-editor-shell .cm-md-wiki-embed { color: color-mix(in oklab,var(--primary) 75%,var(--muted-foreground)); }
+/* 分割线正文被隐藏后只剩空行，靠行底边框呈现横线；光标进入该行会还原 --- 原文。 */
+.markdown-editor-shell .cm-md-hr { border-bottom: 1px solid var(--border); }
+/* frontmatter 属性区保持纯文本可编辑，只做视觉降噪，避免与正文标题混淆。 */
+.markdown-editor-shell .cm-md-frontmatter { background: var(--panel-soft); color: var(--muted-foreground); font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .88em; }
+.markdown-editor-shell .cm-md-frontmatter-fence { color: color-mix(in oklab,var(--muted-foreground) 60%,transparent); }
+.markdown-editor-shell .cm-md-table-wrap { margin: 4px 0; cursor: text; overflow-x: auto; }
+.markdown-editor-shell .cm-md-table { border-collapse: collapse; font-size: .95em; line-height: 1.6; }
+.markdown-editor-shell .cm-md-table th, .markdown-editor-shell .cm-md-table td { border: 1px solid var(--border); padding: 5px 10px; }
+.markdown-editor-shell .cm-md-table th { background: var(--panel-soft); font-weight: 650; }
+.markdown-editor-shell .cm-md-table code { border-radius: 4px; background: var(--muted); padding: .1em .32em; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
 .preview-toggle[data-active="true"] { background: var(--blue-soft); color: var(--primary); }
 .note-list-actions { display: flex; align-items: center; gap: 2px; }
 .note-list-actions [data-active="true"] { background: var(--blue-soft); color: var(--primary); }
