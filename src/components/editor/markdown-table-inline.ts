@@ -13,7 +13,7 @@ const WIKI_HINT = "点击打开笔记"
 // 行内内容始终使用 DOM API 和 textContent 装配，不解析原始 HTML，避免云端笔记形成注入面。
 // 下划线强调要求两侧不是字母数字，避免把 snake_case_name 错误渲染成强调。
 const tableInlinePattern
-  = /!\[([^\]\n]*)\]\((\S+?)(?:\s+["'][^"']*["'])?\)|\[([^\]\n]+)\]\((\S+?)(?:\s+["'][^"']*["'])?\)|~~(.+?)~~|\*\*(.+?)\*\*|(?<![\p{L}\p{N}])__(.+?)__(?![\p{L}\p{N}])|\*(.+?)\*|(?<![\p{L}\p{N}])_(.+?)_(?![\p{L}\p{N}])|`([^`]+)`|(https?:\/\/[^\s<>]+)/gu
+  = /!\[([^\]\n]*)\]\((\S+?)(?:\s+["'][^"']*["'])?\)|\[([^\]\n]+)\]\((\S+?)(?:\s+["'][^"']*["'])?\)|~~(.+?)~~|\*\*(.+?)\*\*|(?<![\p{L}\p{N}])__(.+?)__(?![\p{L}\p{N}])|\*(.+?)\*|(?<![\p{L}\p{N}])_(.+?)_(?![\p{L}\p{N}])|`([^`]+)`|(https?:\/\/[^\s<>]+)|(<br\s*\/?>)/giu
 
 export function renderTableInlineMarkdown(
   parent: HTMLElement,
@@ -34,6 +34,7 @@ export function renderTableInlineMarkdown(
     const emphasisText = match[8] ?? match[9]
     const codeText = match[10]
     const bareHref = match[11]
+    const lineBreak = match[12]
 
     if (imageSource !== undefined) {
       appendImage(parent, imageAlt ?? "", imageSource, options, registerObjectUrl)
@@ -51,10 +52,12 @@ export function renderTableInlineMarkdown(
       const em = document.createElement("em")
       em.textContent = emphasisText
       parent.appendChild(em)
-    } else {
+    } else if (codeText !== undefined) {
       const code = document.createElement("code")
-      code.textContent = codeText ?? ""
+      code.textContent = codeText
       parent.appendChild(code)
+    } else if (lineBreak !== undefined) {
+      parent.appendChild(document.createElement("br"))
     }
     cursor = index + match[0].length
   }

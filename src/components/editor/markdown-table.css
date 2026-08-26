@@ -1,10 +1,11 @@
 /* 表格 Widget 的视觉规则跟随实现就近维护，避免编辑器全局样式继续承担组件细节。 */
-.markdown-editor-shell .cm-md-table-wrap { margin: 8px 0; cursor: text; overflow-x: auto; border: 1px solid var(--border); border-radius: 9px; background: white; }
+.markdown-editor-shell .cm-md-table-wrap { margin: 8px 0; cursor: text; border: 1px solid var(--border); border-radius: 9px; background: white; }
 .markdown-editor-shell .cm-md-table-wrap[data-width-mode="content"] { width: fit-content; max-width: 100%; }
 .markdown-editor-shell .cm-md-table-wrap[data-width-mode="full"],
 .markdown-editor-shell .cm-md-table-wrap[data-width-mode="equal"] { width: 100%; }
-.markdown-editor-shell .cm-md-table-toolbar { position: sticky; left: 0; display: flex; min-width: max-content; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); background: var(--panel-soft); padding: 4px 6px; }
-.markdown-editor-shell .cm-md-table-toolbar::after { content: "Tab 切换 · Enter 下移"; margin-left: auto; padding-left: 14px; color: var(--muted-foreground); font-size: 10px; }
+.markdown-editor-shell .cm-md-table-scroll { width: 100%; overflow-x: auto; border-radius: 0 0 9px 9px; }
+.markdown-editor-shell .cm-md-table-toolbar { position: relative; z-index: 3; display: flex; min-width: 0; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); background: var(--panel-soft); padding: 4px 6px; }
+.markdown-editor-shell .cm-md-table-toolbar::after { content: "Tab 切换 · Enter 下移 · Shift+Enter 换行"; margin-left: auto; padding-left: 14px; color: var(--muted-foreground); font-size: 10px; }
 .markdown-editor-shell .cm-md-table-toolbar button { border: 0; border-radius: 5px; background: transparent; padding: 3px 7px; color: var(--muted-foreground); font: inherit; font-size: 11px; cursor: pointer; }
 .markdown-editor-shell .cm-md-table-toolbar button:hover { background: var(--blue-soft); color: var(--primary); }
 .markdown-editor-shell .cm-md-table-toolbar button:disabled { opacity: .4; cursor: not-allowed; }
@@ -14,6 +15,13 @@
 .markdown-editor-shell .cm-md-table-toolbar [data-table-align="left"] { margin-left: 4px; }
 .markdown-editor-shell .cm-md-table-toolbar [data-table-vertical="top"] { margin-left: 4px; }
 .markdown-editor-shell .cm-md-table-toolbar [data-table-vertical][data-active="true"] { background: var(--blue-soft); color: var(--primary); }
+.markdown-editor-shell .cm-md-table-menu { position: relative; }
+.markdown-editor-shell .cm-md-table-menu > summary { min-height: 26px; border-radius: 5px; padding: 5px 7px; color: var(--muted-foreground); font-size: 11px; cursor: pointer; user-select: none; }
+.markdown-editor-shell .cm-md-table-menu[open] > summary,
+.markdown-editor-shell .cm-md-table-menu > summary:hover { background: var(--blue-soft); color: var(--primary); }
+.markdown-editor-shell .cm-md-table-menu-panel { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; display: grid; min-width: 112px; gap: 2px; border: 1px solid var(--border); border-radius: 8px; background: white; padding: 5px; box-shadow: 0 10px 30px rgb(15 23 42 / 14%); }
+.markdown-editor-shell .cm-md-table-menu-panel button { min-height: 30px; text-align: left; white-space: nowrap; }
+.markdown-editor-shell .cm-md-table-selection-status { min-width: 0; overflow: hidden; color: var(--muted-foreground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .markdown-editor-shell .cm-md-table { border-collapse: collapse; font-size: .95em; line-height: 1.6; }
 .markdown-editor-shell .cm-md-table tr { height: calc(1.6em + 13px); }
 .markdown-editor-shell .cm-md-table th, .markdown-editor-shell .cm-md-table td { border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 6px 10px; }
@@ -34,4 +42,10 @@
 .markdown-editor-shell .cm-md-table-asset-state { color: var(--muted-foreground); font-size: .9em; }
 .markdown-editor-shell .cm-md-table-cell-editable { min-width: 0; overflow-wrap: anywhere; cursor: text; }
 .markdown-editor-shell .cm-md-table-cell-editable:focus { outline: none; }
+.markdown-editor-shell .cm-md-table-cell-editable:focus-visible { outline: 1px dashed color-mix(in oklab,var(--primary) 62%,transparent); outline-offset: -2px; }
 .markdown-editor-shell .cm-md-table-cell-input { display: block; box-sizing: border-box; width: 100%; min-width: 0; border: 0; padding: 0; overflow: hidden; resize: none; background: transparent; outline: none; color: inherit; font: inherit; line-height: inherit; text-align: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@media (max-width: 640px) {
+  .markdown-editor-shell .cm-md-table-toolbar::after { display: none; }
+  .markdown-editor-shell .cm-md-table-selection-status { margin-left: auto; }
+}

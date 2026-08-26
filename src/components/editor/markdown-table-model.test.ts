@@ -37,4 +37,11 @@ describe("markdown table model", () => {
     const table = parseMarkdownTable(["| 唯一列 |", "| --- |"].join("\n"))!
     expect(deleteTableColumn(table, 0)).toBeNull()
   })
+
+  it("serializes physical cell line breaks without breaking the table structure", () => {
+    const table = parseMarkdownTable(source)!
+    table.rows[0][0] = "第一行\n第二行"
+
+    expect(serializeMarkdownTable(table)).toContain("| 第一行<br>第二行 | 正常 |")
+  })
 })

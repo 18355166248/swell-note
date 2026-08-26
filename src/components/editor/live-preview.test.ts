@@ -289,6 +289,9 @@ describe("markdown live preview table cells", () => {
     await settle()
 
     const buttons = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
+    expect([...view.contentDOM.querySelectorAll(".cm-md-table-menu > summary")].map((summary) => summary.textContent))
+      .toEqual(["行列", "水平", "垂直"])
+    expect(view.contentDOM.querySelector(".cm-md-table-selection-status")?.textContent).toBe("未选择单元格")
     expect(buttons.map((button) => button.textContent)).toEqual([
       "宽度：适应",
       "添加行",
@@ -328,6 +331,7 @@ describe("markdown live preview table cells", () => {
 
     const secondRowFirstCell = view.contentDOM.querySelector("tbody tr:nth-child(2) td") as HTMLTableCellElement
     secondRowFirstCell.click()
+    expect(view.contentDOM.querySelector(".cm-md-table-selection-status")?.textContent).toBe("第 2 行 · 第 1 列")
     expect(deleteRow.disabled).toBe(false)
     expect(deleteColumn.disabled).toBe(false)
     deleteRow.click()
@@ -514,6 +518,26 @@ describe("markdown live preview table cells", () => {
     expect(view.state.doc.toString()).toContain("| 1 | 完成 |")
     expect(view.state.doc.toString()).toContain("|  |  |")
     expect(view.contentDOM.querySelector("tbody tr:last-child td textarea")).not.toBeNull()
+    view.destroy()
+  })
+
+  it("uses Shift+Enter for a portable line break inside a cell", async () => {
+    const source = ["| 内容 |", "| --- |", "| 第一行 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    const cell = view.contentDOM.querySelector("tbody td") as HTMLTableCellElement
+    cell.click()
+    const input = cell.querySelector("textarea") as HTMLTextAreaElement
+    input.setSelectionRange(input.value.length, input.value.length)
+    input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter", shiftKey: true }))
+    input.setRangeText("第二行", input.selectionStart, input.selectionEnd, "end")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+    input.dispatchEvent(new FocusEvent("blur"))
+    await settle()
+
+    expect(view.state.doc.toString()).toContain("| 第一行<br>第二行 |")
+    expect(view.contentDOM.querySelector("tbody td br")).not.toBeNull()
     view.destroy()
   })
 

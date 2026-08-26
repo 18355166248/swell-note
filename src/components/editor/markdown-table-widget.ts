@@ -102,6 +102,7 @@ function applyTableVerticalMode(wrapper: HTMLElement, mode: TableVerticalMode) {
 
 export class TableWidget extends WidgetType {
   readonly objectUrls = new Set<string>()
+  readonly cleanupCallbacks = new Set<() => void>()
 
   constructor(
     readonly source: string,
@@ -125,12 +126,15 @@ export class TableWidget extends WidgetType {
     if (!table) return wrapper
 
     const element = this.createTableElement(table, wrapper)
-    wrapper.appendChild(element)
+    const tableScroll = document.createElement("div")
+    tableScroll.className = "cm-md-table-scroll"
+    tableScroll.appendChild(element)
+    wrapper.appendChild(tableScroll)
     applyTableWidthMode(wrapper, loadTableWidthMode())
     applyTableVerticalMode(wrapper, loadTableVerticalMode())
 
     if (!this.view.state.readOnly) {
-      wrapper.insertBefore(this.createToolbar(wrapper, table), element)
+      wrapper.insertBefore(this.createToolbar(wrapper, table), tableScroll)
       applyTableWidthMode(wrapper, loadTableWidthMode())
       applyTableVerticalMode(wrapper, loadTableVerticalMode())
     }
@@ -140,6 +144,8 @@ export class TableWidget extends WidgetType {
   destroy() {
     for (const url of this.objectUrls) URL.revokeObjectURL(url)
     this.objectUrls.clear()
+    for (const cleanup of this.cleanupCallbacks) cleanup()
+    this.cleanupCallbacks.clear()
   }
 
   private createTableElement(table: MarkdownTable, wrapper: HTMLDivElement) {
@@ -196,20 +202,59 @@ export class TableWidget extends WidgetType {
     const toolbar = document.createElement("div")
     toolbar.className = "cm-md-table-toolbar"
     toolbar.setAttribute("aria-label", "表格操作")
+    const selectionStatus = document.createElement("span")
+    selectionStatus.className = "cm-md-table-selection-status"
+    selectionStatus.setAttribute("aria-live", "polite")
+    selectionStatus.textContent = "未选择单元格"
     toolbar.append(
       this.createWidthButton(wrapper),
-      this.createMutationButton("添加行", wrapper, () => appendTableRow(table)),
-      this.createMutationButton("添加列", wrapper, () => appendTableColumn(table)),
-      this.createDeleteButton("删除行", "row", wrapper, table),
-      this.createDeleteButton("删除列", "column", wrapper, table),
-      this.createAlignButton("左对齐", "left", wrapper, table),
-      this.createAlignButton("居中", "center", wrapper, table),
-      this.createAlignButton("右对齐", "right", wrapper, table),
-      this.createVerticalAlignButton("顶对齐", "top"),
-      this.createVerticalAlignButton("垂直居中", "middle"),
-      this.createVerticalAlignButton("底对齐", "bottom"),
+      this.createToolbarMenu("行列", [
+        this.createMutationButton("添加行", wrapper, () => appendTableRow(table)),
+        this.createMutationButton("添加列", wrapper, () => appendTableColumn(table)),
+        this.createDeleteButton("删除行", "row", wrapper, table),
+        this.createDeleteButton("删除列", "column", wrapper, table),
+      ]),
+      this.createToolbarMenu("水平", [
+        this.createAlignButton("左对齐", "left", wrapper, table),
+        this.createAlignButton("居中", "center", wrapper, table),
+        this.createAlignButton("右对齐", "right", wrapper, table),
+      ]),
+      this.createToolbarMenu("垂直", [
+        this.createVerticalAlignButton("顶对齐", "top"),
+        this.createVerticalAlignButton("垂直居中", "middle"),
+        this.createVerticalAlignButton("底对齐", "bottom"),
+      ]),
+      selectionStatus,
     )
     return toolbar
+  }
+
+  private createToolbarMenu(label: string, buttons: HTMLButtonElement[]) {
+    const menu = document.createElement("details")
+    menu.className = "cm-md-table-menu"
+    const trigger = document.createElement("summary")
+    trigger.textContent = label
+    trigger.setAttribute("aria-label", `${label}操作`)
+    trigger.addEventListener("mousedown", (event) => event.preventDefault())
+    const panel = document.createElement("div")
+    panel.className = "cm-md-table-menu-panel"
+    panel.append(...buttons)
+    panel.addEventListener("click", (event) => {
+      if (event.target instanceof HTMLButtonElement && !event.target.disabled) menu.open = false
+    })
+    menu.addEventListener("toggle", () => {
+      if (!menu.open) return
+      for (const sibling of menu.parentElement?.querySelectorAll<HTMLDetailsElement>(".cm-md-table-menu[open]") ?? []) {
+        if (sibling !== menu) sibling.open = false
+      }
+    })
+    const closeOnOutside = (event: PointerEvent) => {
+      if (menu.open && event.target instanceof Node && !menu.contains(event.target)) menu.open = false
+    }
+    document.addEventListener("pointerdown", closeOnOutside)
+    this.cleanupCallbacks.add(() => document.removeEventListener("pointerdown", closeOnOutside))
+    menu.append(trigger, panel)
+    return menu
   }
 
   private createWidthButton(wrapper: HTMLDivElement) {
@@ -355,6 +400,12 @@ export class TableWidget extends WidgetType {
     // 选中状态只驱动工具栏操作，不添加边框或背景，避免表格在展示态和编辑态之间产生视觉抖动。
     wrapper.dataset.selectedRow = String(rowIndex)
     wrapper.dataset.selectedColumn = String(columnIndex)
+    const selectionStatus = wrapper.querySelector<HTMLElement>(".cm-md-table-selection-status")
+    if (selectionStatus) {
+      selectionStatus.textContent = rowIndex < 0
+        ? `表头 · 第 ${columnIndex + 1} 列`
+        : `第 ${rowIndex + 1} 行 · 第 ${columnIndex + 1} 列`
+    }
     const deleteRow = wrapper.querySelector<HTMLButtonElement>('[data-table-action="delete-row"]')
     const deleteColumn = wrapper.querySelector<HTMLButtonElement>('[data-table-action="delete-column"]')
     if (deleteRow) {
@@ -477,6 +528,15 @@ export class TableWidget extends WidgetType {
         finished = true
         restoreCell()
         cell.focus()
+        return
+      }
+      if (event.key === "Enter" && event.shiftKey) {
+        event.preventDefault()
+        event.stopPropagation()
+        const start = input.selectionStart ?? input.value.length
+        const end = input.selectionEnd ?? start
+        input.setRangeText("\n", start, end, "end")
+        input.dispatchEvent(new Event("input", { bubbles: true }))
         return
       }
       if (event.key !== "Tab" && event.key !== "Enter") return

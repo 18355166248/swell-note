@@ -35,7 +35,8 @@ export function parseMarkdownTable(source: string): MarkdownTable | null {
 }
 
 function serializeTableCell(value: string) {
-  return value.trim().replace(/(?<!\\)\|/g, "\\|")
+  // Markdown 表格不能包含物理换行，统一转成兼容 CommonMark/GFM 的 HTML 换行标签。
+  return value.trim().replace(/\r?\n/g, "<br>").replace(/(?<!\\)\|/g, "\\|")
 }
 
 export function serializeMarkdownTable(table: MarkdownTable) {
@@ -94,9 +95,13 @@ function textDisplayUnits(value: string) {
   return Array.from(value).reduce((total, character) => total + (/^[\x00-\xff]$/.test(character) ? 1 : 2), 0)
 }
 
+function tableCellDisplayUnits(value: string) {
+  return Math.max(...value.split(/<br\s*\/?>/i).map(textDisplayUnits))
+}
+
 export function tableColumnWidths(table: MarkdownTable) {
   return table.header.map((header, column) => {
-    const maxUnits = Math.max(textDisplayUnits(header), ...table.rows.map((row) => textDisplayUnits(row[column] ?? "")))
+    const maxUnits = Math.max(tableCellDisplayUnits(header), ...table.rows.map((row) => tableCellDisplayUnits(row[column] ?? "")))
     return Math.min(360, Math.max(96, maxUnits * 7 + 28))
   })
 }
