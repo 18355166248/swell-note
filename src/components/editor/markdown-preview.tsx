@@ -164,8 +164,11 @@ function MarkdownContent({ content, depth, onLoadWikiNote, onResolveAsset, onRes
               </a>
             )
           },
-          img({ alt, src }) {
-            return <VaultImage alt={alt} onResolveAsset={onResolveAsset} source={src} />
+          img({ alt, src, title }) {
+            return <VaultImage alt={alt} onResolveAsset={onResolveAsset} source={src} title={title} />
+          },
+          pre({ children, node }) {
+            return <CodeBlock node={node}>{children}</CodeBlock>
           },
           div({ children, node }) {
             const property = node?.properties?.["data-wiki-embed"] ?? node?.properties?.dataWikiEmbed
@@ -203,6 +206,73 @@ function Heading({ children, level }: { children: ReactNode; level: 1 | 2 | 3 | 
   const id = obsidianAnchorId(reactNodeText(children))
   const Tag = `h${level}` as const
   return <Tag id={id || undefined}>{children}</Tag>
+}
+
+// 只读取 hast 的结构信息（子节点、className），不引入 hast 类型依赖。
+type HastNode = {
+  children?: HastNode[]
+  properties?: { className?: unknown }
+  tagName?: string
+  type: string
+  value?: string
+}
+
+function hastElementText(node: HastNode): string {
+  if (node.type === "text") return node.value ?? ""
+  return node.children?.map(hastElementText).join("") ?? ""
+}
+
+function codeBlockLanguage(node?: HastNode): string {
+  const codeChild = node?.children?.find((child) => child.type === "element" && child.tagName === "code")
+  const classNames = codeChild?.properties?.className
+  if (!Array.isArray(classNames)) return ""
+  const languageClass = classNames.find((name) => typeof name === "string" && name.startsWith("language-"))
+  return typeof languageClass === "string" ? languageClass.slice("language-".length) : ""
+}
+
+// 优先使用剪贴板 API；部分 WebView（iOS/Android 内嵌）未开放时降级为临时输入框复制。
+function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text)
+  return new Promise<void>((resolve, reject) => {
+    const area = document.createElement("textarea")
+    area.value = text
+    area.style.opacity = "0"
+    area.style.position = "fixed"
+    document.body.appendChild(area)
+    area.select()
+    try {
+      document.execCommand("copy") ? resolve() : reject(new Error("copy failed"))
+    } finally {
+      area.remove()
+    }
+  })
+}
+
+// 代码块头部：显示语言标签并提供复制按钮，正文（含高亮）仍由 children 原样渲染。
+function CodeBlock({ children, node }: { children: ReactNode; node?: HastNode }) {
+  const [copied, setCopied] = useState(false)
+
+  const copyCode = () => {
+    void copyTextToClipboard(hastElementText(node ?? { type: "root" })).then(
+      () => {
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1600)
+      },
+      () => {},
+    )
+  }
+
+  return (
+    <div className="markdown-code-block">
+      <div className="markdown-code-block-header">
+        <span className="markdown-code-block-lang">{codeBlockLanguage(node) || "text"}</span>
+        <button className="markdown-code-block-copy" onClick={copyCode} type="button">
+          {copied ? "已复制" : "复制"}
+        </button>
+      </div>
+      <pre>{children}</pre>
+    </div>
+  )
 }
 
 function WikiEmbed({ depth, onLoadWikiNote, onResolveAsset, onResolveWikiNote, onWikiLink, target }: {
@@ -261,9 +331,17 @@ type VaultImageProps = {
   alt?: string
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   source?: string
+  title?: string
 }
 
-function VaultImage({ alt, onResolveAsset, source }: VaultImageProps) {
+// title 承载 Obsidian 尺寸别名（"300" 或 "300x200"），单值只限宽、高自适应。
+function parseImageSize(title?: string) {
+  const match = title?.match(/^(\d+)(?:x(\d+))?$/)
+  if (!match) return null
+  return { height: match[2] ? Number(match[2]) : undefined, width: Number(match[1]) }
+}
+
+function VaultImage({ alt, onResolveAsset, source, title }: VaultImageProps) {
   const [state, setState] = useState<{ status: "loading" | "ready" | "error"; url?: string }>({
     status: "loading",
   })
@@ -300,7 +378,15 @@ function VaultImage({ alt, onResolveAsset, source }: VaultImageProps) {
   }, [onResolveAsset, source])
 
   if (state.status === "ready" && state.url) {
-    return <img alt={alt ?? "笔记图片"} loading="lazy" src={state.url} />
+    const size = parseImageSize(title)
+    return (
+      <img
+        alt={alt ?? "笔记图片"}
+        loading="lazy"
+        src={state.url}
+        style={size ? { height: size.height, width: size.width } : undefined}
+      />
+    )
   }
 
   return (

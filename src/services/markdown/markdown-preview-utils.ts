@@ -3,18 +3,29 @@ const ASSET_SCHEME = "swell-note://asset/"
 const EMBED_SCHEME = "swell-note://embed/"
 const imageExtensionPattern = /\.(avif|gif|jpe?g|png|svg|webp)$/i
 const fileExtensionPattern = /\.[a-z\d]{1,8}(?:#.*)?$/i
+// Obsidian 图片尺寸别名：|300 只限宽，|300x200 同时限高；尺寸经 markdown title 传递给图片渲染器。
+const imageSizePattern = /^(\d+)(?:x(\d+))?$/
 
 function rewriteEmbeddedAssetsInLine(line: string) {
   return line.replace(/!\[\[([^\[\]\n]+)\]\]/g, (match, value: string) => {
     const [rawTarget, rawAlias] = value.split("|", 2)
     const target = rawTarget.trim()
     if (!target) return match
-    const label = rawAlias?.trim() || target.split("/").pop() || "附件"
+    const alias = rawAlias?.trim() ?? ""
+    const label = alias || target.split("/").pop() || "附件"
     if (!fileExtensionPattern.test(target) || /\.md(?:#.*)?$/i.test(target)) {
       return `[${label}](${EMBED_SCHEME}${encodeURIComponent(target)})`
     }
     const href = `${ASSET_SCHEME}${encodeURIComponent(target)}`
-    return imageExtensionPattern.test(target) ? `![${label}](${href})` : `[${label}](${href})`
+    if (imageExtensionPattern.test(target)) {
+      const size = alias.match(imageSizePattern)
+      if (size) {
+        const dimensions = size[2] ? `${size[1]}x${size[2]}` : size[1]
+        return `![${target.split("/").pop() || "图片"}](${href} "${dimensions}")`
+      }
+      return `![${label}](${href})`
+    }
+    return `[${label}](${href})`
   })
 }
 

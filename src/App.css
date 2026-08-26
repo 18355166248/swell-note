@@ -546,6 +546,12 @@
 .markdown-preview code { border-radius: 4px; background: var(--muted); padding: .12em .35em; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
 .markdown-preview pre { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; border-radius: 8px; background: #f5f7fa; padding: 14px 16px; line-height: 1.65; }
 .markdown-preview pre code { background: transparent; padding: 0; }
+.markdown-code-block { margin: 1em 0; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; }
+.markdown-code-block > pre { margin: 0; border-radius: 0; }
+.markdown-code-block-header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); background: var(--panel-soft); padding: 4px 6px 4px 12px; }
+.markdown-code-block-lang { color: var(--muted-foreground); font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 12px; text-transform: lowercase; }
+.markdown-code-block-copy { border: 0; border-radius: 5px; background: transparent; color: var(--primary); cursor: pointer; font-size: 12px; padding: 3px 8px; }
+.markdown-code-block-copy:hover { background: var(--muted); }
 /* 代码高亮沿用 GitHub Light 令牌配色，未识别语言保持纯文本。 */
 .markdown-preview pre code.hljs { display: block; color: #24292f; }
 .markdown-preview .hljs-comment, .markdown-preview .hljs-quote { color: #6e7781; }

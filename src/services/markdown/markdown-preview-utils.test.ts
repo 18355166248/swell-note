@@ -43,6 +43,15 @@ describe("Markdown preview wiki links", () => {
     expect(parseWikiEmbedHref("swell-note://embed/%E4%BA%A7%E5%93%81%E7%81%B5%E6%84%9F")).toBe("产品灵感")
   })
 
+  it("turns image size aliases into markdown titles", () => {
+    const output = rewriteWikiLinks("![[截图.png|300]]\n![[assets/封面.jpg|640x480]]\n![[示意图.png|产品截图]]")
+
+    expect(output).toContain('![截图.png](swell-note://asset/%E6%88%AA%E5%9B%BE.png "300")')
+    expect(output).toContain('![封面.jpg](swell-note://asset/assets%2F%E5%B0%81%E9%9D%A2.jpg "640x480")')
+    // 非尺寸别名仍作为替代文本使用。
+    expect(output).toContain("![产品截图](swell-note://asset/%E7%A4%BA%E6%84%8F%E5%9B%BE.png)")
+  })
+
   it("creates stable heading and block anchors", () => {
     expect(obsidianAnchorId("同步 设计 / 冲突！")).toBe("同步-设计-冲突")
     expect(obsidianAnchorId("^task-01")).toBe("block-task-01")
