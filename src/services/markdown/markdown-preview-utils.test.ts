@@ -6,6 +6,7 @@ import {
   extractExcalidrawTextElements,
   frontmatterLineCount,
   obsidianAnchorId,
+  parseMarkdownNoteHref,
   parseVaultAssetHref,
   parseWikiEmbedHref,
   parseWikiHref,
@@ -33,6 +34,16 @@ describe("Markdown preview wiki links", () => {
     expect(parseWikiHref("swell-note://wiki/%E0%A4%A")).toBeNull()
   })
 
+  it("recognizes standard Markdown note links as internal routes", () => {
+    expect(parseMarkdownNoteHref("../docs/方案%20A.md#目标")).toBe("../docs/方案 A.md#目标")
+    expect(parseMarkdownNoteHref("<../docs/方案 A.md#目标>")).toBe("../docs/方案 A.md#目标")
+    expect(parseMarkdownNoteHref("/Swell/README.MD")).toBe("/Swell/README.MD")
+    expect(parseMarkdownNoteHref("#目标")).toBeNull()
+    expect(parseMarkdownNoteHref("https://example.com/readme.md")).toBeNull()
+    expect(parseMarkdownNoteHref("//example.com/readme.md")).toBeNull()
+    expect(parseMarkdownNoteHref("../attachments/image.png")).toBeNull()
+  })
+
   it("rewrites Obsidian embedded files as local assets", () => {
     const output = rewriteWikiLinks("![[assets/封面.png]]\n![[资料/方案.pdf|查看方案]]\n![[产品灵感]]")
 
@@ -50,6 +61,18 @@ describe("Markdown preview wiki links", () => {
     expect(output).toContain('![封面.jpg](swell-note://asset/assets%2F%E5%B0%81%E9%9D%A2.jpg "640x480")')
     // 非尺寸别名仍作为替代文本使用。
     expect(output).toContain("![产品截图](swell-note://asset/%E7%A4%BA%E6%84%8F%E5%9B%BE.png)")
+  })
+
+  it("normalizes hybrid Obsidian labels with Markdown image paths", () => {
+    const output = rewriteWikiLinks([
+      "![[截图.png]](../attachments/IMG.png)",
+      "![[截图.png|300]](../attachments/IMG.png)",
+      "![[截图.png|640x360]](../attachments/IMG.png)",
+    ].join("\n"))
+
+    expect(output).toContain("![截图.png](../attachments/IMG.png)")
+    expect(output).toContain("![截图.png|300](../attachments/IMG.png)")
+    expect(output).toContain("![截图.png|640x360](../attachments/IMG.png)")
   })
 
   it("creates stable heading and block anchors", () => {

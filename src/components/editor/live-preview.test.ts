@@ -133,11 +133,11 @@ describe("markdown live preview", () => {
     expect(tables[0].to).toBe(tableDoc.indexOf("| 普通 | 2 |") + "| 普通 | 2 |".length)
   })
 
-  it("reveals raw table source when the cursor enters the table", async () => {
+  it("keeps the rendered table when the cursor enters its source range", async () => {
     const view = createView({ anchor: tableDoc.indexOf("| 普通") + 2 }, tableDoc)
     const { tables } = collect(await settleTableDecorations(view))
 
-    expect(tables).toHaveLength(0)
+    expect(tables).toHaveLength(1)
   })
 
   it("renders table widget dom with alignment and inline syntax", async () => {
@@ -222,18 +222,41 @@ describe("markdown live preview table cells", () => {
     expect(widget?.toDOM().querySelector("tbody tr")?.textContent).toBe("89")
   })
 
-  it("resolves the click target from the dom instead of a stale offset", async () => {
+  it("edits a cell in place without removing the rendered table", async () => {
     const source = ["正文", "", "| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n")
     const view = createView({ anchor: 0 }, source)
     await settle()
 
     const wrapper = view.contentDOM.querySelector(".cm-md-table-wrap")
     expect(wrapper).not.toBeNull()
-    wrapper!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }))
-    const anchor = view.state.selection.main.anchor
+    const firstCell = wrapper!.querySelector("tbody td") as HTMLTableCellElement
+    firstCell.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    const input = firstCell.querySelector("input") as HTMLInputElement
+    expect(input).not.toBeNull()
+    input.value = "9"
+    input.dispatchEvent(new FocusEvent("blur"))
+    await settle()
+
+    expect(view.state.doc.toString()).toContain("| 9 | 2 |")
+    expect(view.contentDOM.querySelector(".cm-md-table-wrap")).not.toBeNull()
     view.destroy()
-    // 光标落进表格首行，下一次装饰构建即还原源码。
-    expect(anchor).toBe(source.indexOf("| A | B |"))
+  })
+
+  it("restores formatted cell content when editing is cancelled", async () => {
+    const source = ["| A | B |", "| --- | --- |", "| **重点** | 2 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    const firstCell = view.contentDOM.querySelector("tbody td") as HTMLTableCellElement
+    firstCell.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    const input = firstCell.querySelector("input") as HTMLInputElement
+    input.value = "不保存"
+    input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+
+    expect(view.state.doc.toString()).toBe(source)
+    expect(firstCell.querySelector("input")).toBeNull()
+    expect(firstCell.querySelector("strong")?.textContent).toBe("重点")
+    view.destroy()
   })
 })
 
@@ -299,6 +322,19 @@ describe("markdown live preview links", () => {
     element!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, metaKey: true }))
     view.destroy()
     expect(opened).toEqual(["产品灵感"])
+  })
+
+  it("treats standard relative Markdown files as note links", async () => {
+    const opened: string[] = []
+    const content = "查看 [标准笔记](../docs/标准%20笔记.md#目标)"
+    const view = createView({ anchor: 0 }, content, { onOpenWikiLink: (target) => opened.push(target) })
+    await settle()
+
+    const element = view.contentDOM.querySelector("[data-md-note-target]")
+    expect(element?.getAttribute("data-md-note-target")).toBe("../docs/标准 笔记.md#目标")
+    element!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, metaKey: true }))
+    view.destroy()
+    expect(opened).toEqual(["../docs/标准 笔记.md#目标"])
   })
 })
 

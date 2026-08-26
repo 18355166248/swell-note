@@ -1,4 +1,5 @@
 import type { VaultAdapter, VaultFileEntry } from "@/services/vault/vault-adapter"
+import { parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
 
 export type IndexedVaultFile = {
   content: string
@@ -11,6 +12,7 @@ export type IndexedVaultFile = {
 }
 
 const wikiLinkPattern = /\[\[([^\]]+)\]\]/g
+const markdownLinkPattern = /(?<!!)\[[^\]\n]*\]\((<[^>]+>|[^)\s]+)(?:\s+["'][^"']*["'])?\)/g
 
 export function normalizeNoteTarget(value: string) {
   const withoutAlias = value.split("|", 1)[0]
@@ -23,9 +25,15 @@ export function normalizeNoteTarget(value: string) {
 }
 
 export function extractWikiLinks(content: string) {
+  // 新内容以标准 Markdown 链接为准；函数名暂时保留，避免旧索引和调用方迁移时产生数据断层。
   const links = new Set<string>()
   for (const match of content.matchAll(wikiLinkPattern)) {
     const target = normalizeNoteTarget(match[1])
+    if (target) links.add(target)
+  }
+  for (const match of content.matchAll(markdownLinkPattern)) {
+    const href = parseMarkdownNoteHref(match[1])
+    const target = href ? normalizeNoteTarget(href) : ""
     if (target) links.add(target)
   }
   return [...links]

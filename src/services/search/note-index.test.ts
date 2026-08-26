@@ -8,9 +8,14 @@ describe("note index", () => {
     expect(normalizeNoteTarget("docs/产品规划.md#目标|查看规划")).toBe("产品规划")
   })
 
-  it("提取去重后的双向链接目标", () => {
-    expect(extractWikiLinks("关联 [[产品规划]]、[[docs/技术方案.md|方案]] 和 [[产品规划#目标]]"))
-      .toEqual(["产品规划", "技术方案"])
+  it("提取标准 Markdown 笔记链接，并兼容旧双链", () => {
+    const content = [
+      "关联 [产品规划](../docs/产品规划.md#目标) 与 [技术方案](<../docs/技术 方案.md>)",
+      "旧内容 [[产品规划]] 和 [[docs/历史方案.md|历史方案]]",
+      "排除 ![图片](../attachments/产品规划.md) 与 [外站](https://example.com/readme.md)",
+    ].join("\n")
+
+    expect(extractWikiLinks(content)).toEqual(["产品规划", "历史方案", "技术 方案"])
   })
 
   it("解析 Obsidian Frontmatter 的行内与列表标签", () => {

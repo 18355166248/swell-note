@@ -89,11 +89,15 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const view = editorRef.current?.view
         if (!view || readOnly || !text) return
 
-        // 格式工具栏应作用于当前光标或选区，不能把 Markdown 语法机械追加到文末。
+        // 格式工具栏优先包装当前选区；没有选区时才插入带占位文案的模板。
         const selection = view.state.selection.main
+        const selected = view.state.sliceDoc(selection.from, selection.to)
+        const formatted = formatToolbarText(text, selected)
         view.dispatch({
-          changes: { from: selection.from, to: selection.to, insert: text },
-          selection: { anchor: selection.from + text.length },
+          changes: { from: selection.from, to: selection.to, insert: formatted.text },
+          selection: formatted.selection
+            ? { anchor: selection.from + formatted.selection.from, head: selection.from + formatted.selection.to }
+            : { anchor: selection.from + formatted.text.length },
           scrollIntoView: true,
         })
         view.focus()
@@ -132,6 +136,22 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
 function collectTransferFiles(transfer: DataTransfer | null) {
   return Array.from(transfer?.files ?? [])
+}
+
+export function formatToolbarText(template: string, selected: string) {
+  if (!selected) return { text: template }
+  if (template === "**加粗文字**") return { text: `**${selected}**` }
+  if (template === "*斜体文字*") return { text: `*${selected}*` }
+  if (template === "[链接](https://)") {
+    const text = `[${selected}](https://)`
+    const urlStart = selected.length + 3
+    return { selection: { from: urlStart, to: urlStart + 8 }, text }
+  }
+  if (template === "\n```\n\n```\n") return { text: `\n\`\`\`\n${selected}\n\`\`\`\n` }
+
+  const prefix = template.match(/^\n(#{2,3} |> |- |- \[ \] )$/)?.[1]
+  if (prefix) return { text: selected.split("\n").map((line) => `${prefix}${line}`).join("\n") }
+  return { text: template }
 }
 
 function dispatchHistoryShortcut(view: EditorView | undefined, redo: boolean) {

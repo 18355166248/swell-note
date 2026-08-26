@@ -15,8 +15,8 @@ const entry = (path: string, status: VaultAttachmentCacheEntry["status"] = "sync
 
 describe("attachment maintenance", () => {
   it("识别标准 Markdown 与 Obsidian 附件引用", () => {
-    expect(extractAttachmentSources("![图](../attachments/a.png)\n![[../attachments/b.pdf|资料]]"))
-      .toEqual(["../attachments/a.png", "../attachments/b.pdf"])
+    expect(extractAttachmentSources("![图](../attachments/a.png)\n![[../attachments/b.pdf|资料]]\n![[图|300]](../attachments/c.png)"))
+      .toEqual(["../attachments/c.png", "../attachments/a.png", "../attachments/b.pdf"])
   })
 
   it("只把已上传且未被正文引用的缓存标记为孤儿", () => {

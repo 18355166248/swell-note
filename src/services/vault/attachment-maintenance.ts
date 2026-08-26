@@ -3,7 +3,8 @@ import { resolveVaultAssetPath } from "@/services/vault/vault-path"
 import type { Note } from "@/types/note"
 
 const MARKDOWN_LINK_PATTERN = /!?(?:\[[^\]]*\])\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g
-const OBSIDIAN_EMBED_PATTERN = /!\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g
+const HYBRID_IMAGE_PATTERN = /!\[\[[^\]]+\]\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g
+const OBSIDIAN_EMBED_PATTERN = /!\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\](?!\()/g
 
 export type AttachmentMaintenanceReport = {
   bytes: number
@@ -46,7 +47,7 @@ export function inspectCachedAttachments(
 
 export function extractAttachmentSources(content: string) {
   const sources: string[] = []
-  for (const pattern of [MARKDOWN_LINK_PATTERN, OBSIDIAN_EMBED_PATTERN]) {
+  for (const pattern of [HYBRID_IMAGE_PATTERN, MARKDOWN_LINK_PATTERN, OBSIDIAN_EMBED_PATTERN]) {
     pattern.lastIndex = 0
     let match: RegExpExecArray | null
     while ((match = pattern.exec(content))) sources.push(match[1])

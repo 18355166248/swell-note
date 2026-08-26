@@ -80,7 +80,7 @@ import {
   setMarkdownTaskChecked,
   type MarkdownTask,
 } from "@/services/tasks/markdown-tasks"
-import { obsidianAnchorId, splitWikiTarget } from "@/services/markdown/markdown-preview-utils"
+import { obsidianAnchorId, parseMarkdownNoteHref, splitWikiTarget } from "@/services/markdown/markdown-preview-utils"
 import { buildNotePreview } from "@/services/markdown/note-preview"
 import {
   deleteWebDavPassword,
@@ -2425,8 +2425,17 @@ function App() {
   const findWikiNote = useCallback((target: string, sourceNotes: Note[] = notes) => {
     const { noteTarget } = splitWikiTarget(target)
     const normalizedTarget = normalizeNoteTarget(noteTarget)
-    // 同笔记锚点（![[#^块id]]、[[#标题]]）省略笔记名，与 openWikiLink 一致回退当前打开的笔记。
+    // 空笔记目标表示同文档锚点；标准 Markdown 与旧双链都回退到当前打开的笔记。
     if (!normalizedTarget) return activeNote ?? null
+    const markdownHref = parseMarkdownNoteHref(noteTarget)
+    const resolvedPath = markdownHref && activeNote?.remotePath
+      ? resolveVaultAssetPath(activeNote.remotePath, markdownHref)
+      : null
+    if (resolvedPath) {
+      const normalizedPath = resolvedPath.replace(/^\/+/, "").toLocaleLowerCase()
+      const exactNote = sourceNotes.find((note) => note.remotePath?.replace(/^\/+/, "").toLocaleLowerCase() === normalizedPath)
+      if (exactNote) return exactNote
+    }
     return sourceNotes.find((note) =>
       normalizeNoteTarget(note.title) === normalizedTarget
       || (note.remotePath && normalizeNoteTarget(note.remotePath) === normalizedTarget),
@@ -2449,9 +2458,15 @@ function App() {
   const openWikiLink = (target: string) => {
     const { anchor, noteTarget } = splitWikiTarget(target)
     const normalizedTarget = normalizeNoteTarget(noteTarget)
-    // Obsidian 链接可能写标题、相对路径或标题锚点，统一归一化后再路由到已加载笔记。
-    const linkedNote = normalizedTarget
-      ? notes.find((note) =>
+    // 标准 Markdown 优先按相对文件路径精确匹配；旧双链再按标题兼容匹配。
+    const markdownHref = parseMarkdownNoteHref(noteTarget)
+    const resolvedPath = markdownHref && activeNote?.remotePath
+      ? resolveVaultAssetPath(activeNote.remotePath, markdownHref)
+      : null
+    const normalizedPath = resolvedPath?.replace(/^\/+/, "").toLocaleLowerCase()
+    const linkedNote = normalizedPath
+      ? notes.find((note) => note.remotePath?.replace(/^\/+/, "").toLocaleLowerCase() === normalizedPath)
+      : normalizedTarget ? notes.find((note) =>
           normalizeNoteTarget(note.title) === normalizedTarget
           || (note.remotePath && normalizeNoteTarget(note.remotePath) === normalizedTarget),
         )

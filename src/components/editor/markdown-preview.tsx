@@ -1,4 +1,4 @@
-import { Component, Suspense, createContext, useContext, useEffect, useState, type ErrorInfo, type ReactNode } from "react"
+import { Component, Suspense, createContext, useContext, useEffect, useState, type ErrorInfo, type MouseEvent, type ReactNode } from "react"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
 import remarkGfm from "remark-gfm"
@@ -8,6 +8,7 @@ import {
   frontmatterLineCount,
   isRelativeAttachmentHref,
   obsidianAnchorId,
+  parseMarkdownNoteHref,
   parseVaultAssetHref,
   parseWikiEmbedHref,
   parseWikiHref,
@@ -17,6 +18,7 @@ import {
 } from "@/services/markdown/markdown-preview-utils"
 import { resolveOfficialNoteRenderer } from "@/plugins/official-note-renderers"
 import { remarkObsidian } from "@/services/markdown/remark-obsidian"
+import { extractFrontmatter } from "@/services/search/note-index"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 export type EmbeddedWikiNote = { content: string; title: string }
@@ -98,11 +100,20 @@ class NoteRendererErrorBoundary extends Component<{
   }
 }
 
-function MarkdownContent({ content, depth, onLoadWikiNote, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink }: MarkdownPreviewProps & { depth: number }) {
+function MarkdownContent({ content, depth, editable, onLoadWikiNote, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink }: MarkdownPreviewProps & { depth: number }) {
   // 预览正文已剥离 frontmatter，勾选任务时按 hast 行号补回偏移换算源文件行号。
   const sourceLineOffset = frontmatterLineCount(content)
+  const body = stripMarkdownFrontmatter(content)
+  const properties = depth === 0 ? Object.entries(extractFrontmatter(content).properties) : []
   return (
     <div className={depth === 0 ? "markdown-preview" : "markdown-preview markdown-preview-embedded"}>
+      {properties.length > 0 ? <MarkdownProperties properties={properties} /> : null}
+      {!body.trim() && depth === 0 ? (
+        <div className="markdown-empty-state">
+          <strong>这篇笔记还没有正文</strong>
+          <span>{editable ? "切换到编辑模式开始记录。" : "源文件目前没有可预览的 Markdown 内容。"}</span>
+        </div>
+      ) : null}
       <ReactMarkdown
         components={{
           input({ checked, disabled }) {
@@ -149,6 +160,15 @@ function MarkdownContent({ content, depth, onLoadWikiNote, onResolveAsset, onRes
               )
             }
 
+            const markdownNoteTarget = parseMarkdownNoteHref(href)
+            if (markdownNoteTarget) {
+              return (
+                <button className="wiki-link markdown-note-link" onClick={() => onWikiLink(markdownNoteTarget)} type="button">
+                  {children}
+                </button>
+              )
+            }
+
             const assetSource = parseVaultAssetHref(href) ?? (isRelativeAttachmentHref(href) ? href : null)
             if (assetSource) {
               return (
@@ -158,8 +178,13 @@ function MarkdownContent({ content, depth, onLoadWikiNote, onResolveAsset, onRes
               )
             }
 
+            // Hash Router 会把原生 #标题 当成页面路由；页内锚点必须在预览容器内自行定位。
+            if (href?.startsWith("#")) {
+              return <MarkdownAnchorLink href={href}>{children}</MarkdownAnchorLink>
+            }
+
             return (
-              <a href={href} rel="noreferrer noopener" target="_blank">
+              <a className="markdown-external-link" href={href} rel="noreferrer noopener" target="_blank">
                 {children}
               </a>
             )
@@ -169,6 +194,9 @@ function MarkdownContent({ content, depth, onLoadWikiNote, onResolveAsset, onRes
           },
           pre({ children, node }) {
             return <CodeBlock node={node}>{children}</CodeBlock>
+          },
+          table({ children }) {
+            return <div className="markdown-table-wrap"><table>{children}</table></div>
           },
           div({ children, node }) {
             const property = node?.properties?.["data-wiki-embed"] ?? node?.properties?.dataWikiEmbed
@@ -196,10 +224,49 @@ function MarkdownContent({ content, depth, onLoadWikiNote, onResolveAsset, onRes
         rehypePlugins={rehypePlugins}
         urlTransform={(url) => parseWikiHref(url) || parseWikiEmbedHref(url) || parseVaultAssetHref(url) ? url : defaultUrlTransform(url)}
       >
-        {rewriteWikiLinks(stripMarkdownFrontmatter(content))}
+        {rewriteWikiLinks(body)}
       </ReactMarkdown>
     </div>
   )
+}
+
+function MarkdownProperties({ properties }: { properties: [string, string | string[]][] }) {
+  return (
+    <details className="markdown-properties" open>
+      <summary>属性 <span>{properties.length}</span></summary>
+      <dl>
+        {properties.map(([key, rawValue]) => {
+          const values = Array.isArray(rawValue) ? rawValue : [rawValue]
+          const isTags = key === "tags" || key === "tag"
+          return (
+            <div className="markdown-property-row" key={key}>
+              <dt>{key}</dt>
+              <dd data-tags={isTags || undefined}>
+                {values.length > 0 ? values.map((value, index) => (
+                  <span key={`${value}-${index}`}>{isTags ? `#${value.replace(/^#/, "")}` : value || "—"}</span>
+                )) : <span>—</span>}
+              </dd>
+            </div>
+          )
+        })}
+      </dl>
+    </details>
+  )
+}
+
+function MarkdownAnchorLink({ children, href }: { children: ReactNode; href: string }) {
+  const scrollToAnchor = (event: MouseEvent<HTMLButtonElement>) => {
+    const rawTarget = href.slice(1)
+    let decodedTarget = rawTarget
+    try { decodedTarget = decodeURIComponent(rawTarget) } catch { /* 保留原值作为兼容回退。 */ }
+    const targetId = obsidianAnchorId(decodedTarget)
+    const preview = event.currentTarget.closest(".markdown-preview")
+    const target = Array.from(preview?.querySelectorAll<HTMLElement>("[id]") ?? [])
+      .find((element) => element.id === targetId)
+    target?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }
+
+  return <button className="wiki-link markdown-anchor-link" onClick={scrollToAnchor} type="button">{children}</button>
 }
 
 function Heading({ children, level }: { children: ReactNode; level: 1 | 2 | 3 | 4 | 5 | 6 }) {
@@ -334,21 +401,40 @@ type VaultImageProps = {
   title?: string
 }
 
-// title 承载 Obsidian 尺寸别名（"300" 或 "300x200"），单值只限宽、高自适应。
-function parseImageSize(title?: string) {
-  const match = title?.match(/^(\d+)(?:x(\d+))?$/)
-  if (!match) return null
-  return { height: match[2] ? Number(match[2]) : undefined, width: Number(match[1]) }
+// 仅为旧 Vault 保留图片尺寸别名读取；新内容始终使用标准 Markdown 图片语法。
+function parseImagePresentation(alt?: string, title?: string) {
+  const titleSize = title?.match(/^(\d+)(?:x(\d+))?$/)
+  const altSize = alt?.match(/^(.*)\|(\d+)(?:x(\d+))?$/)
+  const match = titleSize ?? altSize?.slice(1)
+  return {
+    alt: altSize?.[1].trim() || alt || "笔记图片",
+    size: match ? { height: match[2] ? Number(match[2]) : undefined, width: Number(match[1]) } : null,
+  }
+}
+
+function isRemoteImageSource(source?: string) {
+  return Boolean(source && /^https?:\/\//i.test(source))
 }
 
 function VaultImage({ alt, onResolveAsset, source, title }: VaultImageProps) {
   const [state, setState] = useState<{ status: "loading" | "ready" | "error"; url?: string }>({
-    status: "loading",
+    status: isRemoteImageSource(source) ? "ready" : "loading",
+    url: isRemoteImageSource(source) ? source : undefined,
   })
 
   useEffect(() => {
     const resolvedSource = parseVaultAssetHref(source) ?? source
-    if (!resolvedSource || /^[a-z][a-z\d+.-]*:/i.test(resolvedSource)) {
+    if (!resolvedSource) {
+      setState({ status: "error" })
+      return
+    }
+
+    // 远程图片无需经过 Vault 读取器；仅允许 http(s)，其他协议继续拒绝以避免执行型 URL。
+    if (isRemoteImageSource(resolvedSource)) {
+      setState({ status: "ready", url: resolvedSource })
+      return
+    }
+    if (/^[a-z][a-z\d+.-]*:/i.test(resolvedSource)) {
       setState({ status: "error" })
       return
     }
@@ -378,20 +464,23 @@ function VaultImage({ alt, onResolveAsset, source, title }: VaultImageProps) {
   }, [onResolveAsset, source])
 
   if (state.status === "ready" && state.url) {
-    const size = parseImageSize(title)
+    const presentation = parseImagePresentation(alt, title)
     return (
       <img
-        alt={alt ?? "笔记图片"}
+        alt={presentation.alt}
+        decoding="async"
         loading="lazy"
+        onError={() => setState({ status: "error" })}
+        referrerPolicy="no-referrer"
         src={state.url}
-        style={size ? { height: size.height, width: size.width } : undefined}
+        style={presentation.size ? { height: presentation.size.height, width: presentation.size.width } : undefined}
       />
     )
   }
 
   return (
     <span className="markdown-image-state" data-status={state.status}>
-      {state.status === "loading" ? "正在读取图片…" : `无法读取图片${alt ? `：${alt}` : ""}`}
+      {state.status === "loading" ? "正在读取图片…" : `无法读取图片${alt ? `：${parseImagePresentation(alt, title).alt}` : ""}`}
     </span>
   )
 }

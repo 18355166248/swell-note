@@ -3,8 +3,14 @@ const ASSET_SCHEME = "swell-note://asset/"
 const EMBED_SCHEME = "swell-note://embed/"
 const imageExtensionPattern = /\.(avif|gif|jpe?g|png|svg|webp)$/i
 const fileExtensionPattern = /\.[a-z\d]{1,8}(?:#.*)?$/i
-// Obsidian 图片尺寸别名：|300 只限宽，|300x200 同时限高；尺寸经 markdown title 传递给图片渲染器。
+// 旧 Vault 图片尺寸别名：|300 只限宽，|300x200 同时限高；仅用于读取历史内容。
 const imageSizePattern = /^(\d+)(?:x(\d+))?$/
+const hybridMarkdownImagePattern = /!\[\[([^\[\]\n]+)\]\]\(/g
+
+function rewriteHybridMarkdownImagesInLine(line: string) {
+  // 兼容历史内容里的 ![[说明|300]](path) 混合写法，统一转换为标准 Markdown 图片后再解析。
+  return line.replace(hybridMarkdownImagePattern, "![$1](")
+}
 
 function rewriteEmbeddedAssetsInLine(line: string) {
   return line.replace(/!\[\[([^\[\]\n]+)\]\]/g, (match, value: string) => {
@@ -51,7 +57,9 @@ export function rewriteWikiLinks(content: string) {
         fencedCode = !fencedCode
         return line
       }
-      return fencedCode ? line : rewriteWikiLinksInLine(rewriteEmbeddedAssetsInLine(line))
+      if (fencedCode) return line
+      const normalized = rewriteHybridMarkdownImagesInLine(line)
+      return rewriteWikiLinksInLine(rewriteEmbeddedAssetsInLine(normalized))
     })
     .join("\n")
 }
@@ -81,6 +89,18 @@ export function parseWikiEmbedHref(href?: string) {
 
   try {
     return decodeURIComponent(href.slice(EMBED_SCHEME.length))
+  } catch {
+    return null
+  }
+}
+
+export function parseMarkdownNoteHref(href?: string) {
+  const value = href?.trim().replace(/^<|>$/g, "")
+  if (!value || value.startsWith("#") || value.startsWith("//") || /^[a-z][a-z\d+.-]*:/i.test(value)) return null
+  const notePart = value.split("#", 1)[0].split("?", 1)[0]
+  if (!/\.md$/i.test(notePart)) return null
+  try {
+    return decodeURIComponent(value).replace(/\\/g, "/")
   } catch {
     return null
   }

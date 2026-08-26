@@ -1049,6 +1049,18 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
     setPreviewing(compact || isSpecialPreview)
   }, [compact, isSpecialPreview])
 
+  useEffect(() => {
+    if (isSpecialPreview) return
+    const togglePreview = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLocaleLowerCase() !== "e") return
+      event.preventDefault()
+      setPreviewing((current) => !current)
+    }
+    // 保留高频快捷切换：⌘/Ctrl+E 在编辑和阅读视图之间切换。
+    document.addEventListener("keydown", togglePreview)
+    return () => document.removeEventListener("keydown", togglePreview)
+  }, [isSpecialPreview])
+
   // Vault 笔记的标题对应文件名：编辑时先落草稿，失焦或回车再走统一的重命名链路，避免每次按键触发文件操作。
   const isVaultNote = note.source === "local" || note.source === "webdav"
   const [titleDraft, setTitleDraft] = useState(note.title)
@@ -1153,10 +1165,10 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
                 variant="ghost"
               >
                 {previewing ? <PencilLine /> : <Eye />}
-                {compact ? <span>{previewing ? "编辑" : "阅读"}</span> : null}
+                <span>{previewing ? "编辑" : "阅读"}</span>
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{previewing ? "编辑 Markdown" : "预览 Markdown"}</TooltipContent>
+            <TooltipContent>{previewing ? "编辑 Markdown（⌘/Ctrl+E）" : "预览 Markdown（⌘/Ctrl+E）"}</TooltipContent>
           </Tooltip> : null}
           <Button
             aria-label={note.starred ? "取消收藏" : "收藏"}
@@ -1287,6 +1299,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
             <Suspense fallback={<div className="editor-loading">正在生成预览…</div>}>
               <MarkdownPreview
                 content={note.content}
+                editable={!readOnly}
                 onLoadWikiNote={onLoadWikiNote}
                 onResolveAsset={onResolveAsset}
                 onResolveWikiNote={onResolveWikiNote}
@@ -1576,7 +1589,7 @@ function SaveStateIndicator({ cloudConnected, note, state }: { cloudConnected: b
       <TooltipTrigger asChild>
         <span aria-live="polite" className="saved-state" data-status={state.status} role="status">
           <Icon className={state.status === "saving" ? "animate-spin" : ""} />
-          {label}
+          <span>{label}</span>
         </span>
       </TooltipTrigger>
       <TooltipContent>{state.message ?? label}</TooltipContent>

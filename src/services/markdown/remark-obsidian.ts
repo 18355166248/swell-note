@@ -1,5 +1,7 @@
 import { parseWikiEmbedHref } from "./markdown-preview-utils"
 
+// 旧 Vault 的单向读取适配层：只转换渲染树，不生成或改写用户 Markdown 源文件。
+
 type MdNode = {
   children?: MdNode[]
   data?: { hName?: string; hProperties?: Record<string, unknown> }

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { MarkdownEditorHandle } from "./markdown-editor"
-import MarkdownEditor from "./markdown-editor"
+import MarkdownEditor, { formatToolbarText } from "./markdown-editor"
 
 // React 19 在测试里要求显式打开 act 环境标记。
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -27,6 +27,17 @@ afterEach(() => {
 })
 
 describe("MarkdownEditor", () => {
+  it("formats the current selection instead of discarding it", () => {
+    expect(formatToolbarText("**加粗文字**", "重点").text).toBe("**重点**")
+    expect(formatToolbarText("\n> ", "第一行\n第二行").text).toBe("> 第一行\n> 第二行")
+    expect(formatToolbarText("\n```\n\n```\n", "const value = 1").text)
+      .toBe("\n```\nconst value = 1\n```\n")
+    expect(formatToolbarText("[链接](https://)", "官网")).toEqual({
+      selection: { from: 5, to: 13 },
+      text: "[官网](https://)",
+    })
+  })
+
   it("reports the cursor position through the latest callback", () => {
     const handle = createRef<MarkdownEditorHandle>()
     const first = vi.fn()

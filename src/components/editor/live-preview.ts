@@ -3,7 +3,9 @@ import type { EditorState, Range } from "@codemirror/state"
 import { Facet, StateEffect, StateField } from "@codemirror/state"
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view"
 
-// Typora / Obsidian Live Preview 风格的即时渲染：
+import { parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
+
+// Markdown 即时预览：
 // 非光标行隐藏语法标记并直接呈现最终样式，光标进入该行时还原原始 Markdown 文本，源文件始终保持纯文本。
 
 // 只用到语法节点的结构信息；这里按结构声明，避免为类型引入 @lezer/common 显式依赖。
@@ -103,6 +105,16 @@ export function parseMarkdownTable(source: string): ParsedTable | null {
   return { aligns, header, rows: lines.slice(2).map(splitTableRow) }
 }
 
+function serializeTableCell(value: string) {
+  return value.trim().replace(/(?<!\\)\|/g, "\\|")
+}
+
+function serializeMarkdownTable(table: ParsedTable) {
+  const row = (cells: string[]) => `| ${cells.map(serializeTableCell).join(" | ")} |`
+  const delimiter = table.aligns.map((align) => align === "center" ? ":---:" : align === "right" ? "---:" : "---")
+  return [row(table.header), row(delimiter), ...table.rows.map(row)].join("\n")
+}
+
 // 单元格内只保留加粗/斜体/行内代码三类高频行内语法，全部用 textContent 装配，不引入 HTML 注入面。
 // 下划线形式要求两侧是非字母数字，否则 snake_case_name 这类标识符会被当成强调吞掉下划线。
 const tableInlinePattern
@@ -158,6 +170,7 @@ export class TableWidget extends WidgetType {
       const th = document.createElement("th")
       th.style.textAlign = table.aligns[index] ?? "left"
       appendInlineMarkdown(th, cell)
+      this.enableCellEditing(th, wrapper, table, -1, index, cell)
       headRow.appendChild(th)
     })
     const thead = document.createElement("thead")
@@ -171,6 +184,7 @@ export class TableWidget extends WidgetType {
         const td = document.createElement("td")
         td.style.textAlign = table.aligns[index] ?? "left"
         appendInlineMarkdown(td, cell)
+        this.enableCellEditing(td, wrapper, table, table.rows.indexOf(row), index, cell)
         tr.appendChild(td)
       })
       tbody.appendChild(tr)
@@ -178,15 +192,85 @@ export class TableWidget extends WidgetType {
     element.appendChild(tbody)
     wrapper.appendChild(element)
 
-    // 点击渲染后的表格即进入源码编辑：把光标放到表格首行，下一次装饰构建会还原原始 Markdown。
-    // 装饰范围会随文档变化被映射，但 Widget 实例可能被复用，因此按 DOM 反查当前位置而不是记录构造期偏移。
-    if (this.view.state.readOnly) return wrapper
-    wrapper.addEventListener("mousedown", (event) => {
-      event.preventDefault()
-      this.view.dispatch({ selection: { anchor: this.view.posAtDOM(wrapper) }, scrollIntoView: true })
-      this.view.focus()
-    })
     return wrapper
+  }
+
+  private enableCellEditing(
+    cellElement: HTMLTableCellElement,
+    wrapper: HTMLDivElement,
+    table: ParsedTable,
+    rowIndex: number,
+    columnIndex: number,
+    originalValue: string,
+  ) {
+    if (this.view.state.readOnly) return
+    cellElement.classList.add("cm-md-table-cell-editable")
+    cellElement.tabIndex = 0
+    cellElement.setAttribute("aria-label", `编辑表格${rowIndex < 0 ? "表头" : `第 ${rowIndex + 1} 行`}第 ${columnIndex + 1} 列`)
+
+    const beginEditing = (event: Event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      if (cellElement.querySelector("input")) return
+
+      const input = document.createElement("input")
+      input.className = "cm-md-table-cell-input"
+      input.value = originalValue
+      input.setAttribute("aria-label", cellElement.getAttribute("aria-label") ?? "编辑表格单元格")
+      cellElement.replaceChildren(input)
+      input.focus()
+      input.setSelectionRange(input.value.length, input.value.length)
+
+      let cancelled = false
+      const restoreCell = () => {
+        cellElement.replaceChildren()
+        appendInlineMarkdown(cellElement, originalValue)
+      }
+      const commit = () => {
+        if (cancelled || input.value === originalValue) {
+          restoreCell()
+          return
+        }
+        const nextTable: ParsedTable = {
+          aligns: [...table.aligns],
+          header: [...table.header],
+          rows: table.rows.map((row) => [...row]),
+        }
+        if (rowIndex < 0) nextTable.header[columnIndex] = input.value
+        else nextTable.rows[rowIndex][columnIndex] = input.value
+
+        // Widget 可能在同步合并后短暂复用；提交前核对原文，避免把旧表格覆盖到新版本。
+        const from = this.view.posAtDOM(wrapper)
+        if (this.view.state.sliceDoc(from, from + this.source.length) !== this.source) {
+          restoreCell()
+          return
+        }
+        this.view.dispatch({
+          changes: { from, to: from + this.source.length, insert: serializeMarkdownTable(nextTable) },
+        })
+      }
+      input.addEventListener("blur", commit, { once: true })
+      input.addEventListener("keydown", (keyboardEvent) => {
+        if (keyboardEvent.key === "Escape") {
+          cancelled = true
+          input.blur()
+          return
+        }
+        if (keyboardEvent.key === "Enter" && !keyboardEvent.shiftKey) {
+          keyboardEvent.preventDefault()
+          input.blur()
+        }
+      })
+    }
+    cellElement.addEventListener("click", beginEditing)
+    cellElement.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") beginEditing(event)
+    })
+  }
+
+  ignoreEvent() {
+    // 单元格输入完全由 Widget 接管，避免 CodeMirror 把点击重新映射到被替换的源码范围。
+    return true
   }
 }
 
@@ -231,7 +315,7 @@ function findFrontmatterRange(state: EditorState): DocRange | null {
   return null
 }
 
-// 围栏代码块与行内代码里的 [[...]] 必须保持原文，避免即时渲染改变代码语义。
+// 以下双链逻辑只服务旧 Vault 的编辑显示；围栏代码块与行内代码必须保持原文，避免改变代码语义。
 function isInsideCode(state: EditorState, position: number) {
   for (let node: MdSyntaxNode | null = syntaxTree(state).resolveInner(position, 1); node; node = node.parent) {
     if (node.name.includes("Code")) return true
@@ -296,13 +380,11 @@ function openExternalLink(href: string, options: LivePreviewOptions) {
 type TableBlock = { from: number; source: string; to: number }
 
 function collectTableBlocks(state: EditorState): TableBlock[] {
-  const isCursorActive = cursorLineChecker(state)
   const blocks: TableBlock[] = []
 
   syntaxTree(state).iterate({
     enter(node) {
       if (node.name !== "Table") return
-      if (isCursorActive(node.from, node.to)) return
       const source = state.sliceDoc(node.from, node.to)
       if (!parseMarkdownTable(source)) return
       // 块替换必须覆盖整行，范围取首行行首到末行行尾。
@@ -458,9 +540,12 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             const url = node.node.getChild("URL")
             if (!url) break
             const href = view.state.sliceDoc(url.from, url.to)
+            const noteTarget = parseMarkdownNoteHref(href)
             decorations.push(
               Decoration.mark({
-                attributes: externalHrefPattern.test(href) ? { "data-md-href": href, title: LINK_HINT } : undefined,
+                attributes: noteTarget
+                  ? { "data-md-note-target": noteTarget, title: WIKI_HINT }
+                  : externalHrefPattern.test(href) ? { "data-md-href": href, title: LINK_HINT } : undefined,
                 class: "cm-md-link",
               }).range(node.from, node.to),
             )
@@ -487,10 +572,8 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             break
           }
           case "Table": {
-            // 表格整块替换由 tableDecorationsField 提供；插件在表格被替换时不再下钻，
-            // 避免替换范围内叠加行内装饰；光标在表格内时正常继续，行内样式照常生效。
-            if (!active) return false
-            break
+            // 表格由可编辑 Widget 始终接管，避免光标进入后整块退回 Markdown 源码。
+            return false
           }
         }
       },
@@ -548,9 +631,11 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
         const options = view.state.facet(livePreviewOptions)
 
         const wikiTarget = element.closest("[data-wiki-target]")?.getAttribute("data-wiki-target")
-        if (wikiTarget) {
+        const markdownNoteTarget = element.closest("[data-md-note-target]")?.getAttribute("data-md-note-target")
+        const noteTarget = wikiTarget || markdownNoteTarget
+        if (noteTarget) {
           event.preventDefault()
-          options.onOpenWikiLink?.(wikiTarget)
+          options.onOpenWikiLink?.(noteTarget)
           return true
         }
 
