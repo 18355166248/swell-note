@@ -248,16 +248,24 @@ describe("markdown live preview table cells", () => {
     await settle()
 
     const cell = view.contentDOM.querySelector("tbody td") as HTMLTableCellElement
-    vi.spyOn(cell, "getBoundingClientRect").mockReturnValue({ height: 64 } as DOMRect)
+    const display = cell.querySelector(".cm-md-table-cell-display") as HTMLDivElement
+    vi.spyOn(display, "getBoundingClientRect").mockReturnValue({ height: 64 } as DOMRect)
     const scrollHeight = vi.spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get").mockReturnValue(120)
     const focus = vi.spyOn(HTMLTextAreaElement.prototype, "focus")
     cell.click()
 
     const editor = cell.querySelector("textarea") as HTMLTextAreaElement
     expect(editor).not.toBeNull()
+    expect(cell.classList.contains("cm-md-table-cell-editing")).toBe(true)
+    expect(cell.contains(display)).toBe(true)
     // 原始 Markdown 标记可能让编辑文本比渲染内容更高，聚焦时仍锁定原高度，避免整行抖动。
     expect(editor.style.height).toBe("64px")
     expect(focus).toHaveBeenCalledWith({ preventScroll: true })
+
+    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))
+    expect(cell.querySelector("textarea")).toBeNull()
+    expect(cell.classList.contains("cm-md-table-cell-editing")).toBe(false)
+    expect(cell.contains(display)).toBe(true)
     focus.mockRestore()
     scrollHeight.mockRestore()
     view.destroy()

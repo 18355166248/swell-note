@@ -189,13 +189,19 @@ export class TableWidget extends WidgetType {
   ) {
     const cell = document.createElement(tag)
     cell.style.textAlign = table.aligns[columnIndex] || "left"
-    this.renderCell(cell, value)
+    const contentStack = document.createElement("div")
+    contentStack.className = "cm-md-table-cell-stack"
+    const display = document.createElement("div")
+    display.className = "cm-md-table-cell-display"
+    this.renderCell(display, value)
+    contentStack.appendChild(display)
+    cell.appendChild(contentStack)
     this.enableCellEditing(cell, wrapper, table, rowIndex, columnIndex, value)
     return cell
   }
 
-  private renderCell(cell: HTMLTableCellElement, value: string) {
-    renderTableInlineMarkdown(cell, value, this.options, (url) => this.objectUrls.add(url))
+  private renderCell(parent: HTMLElement, value: string) {
+    renderTableInlineMarkdown(parent, value, this.options, (url) => this.objectUrls.add(url))
   }
 
   private createToolbar(wrapper: HTMLDivElement, table: MarkdownTable) {
@@ -479,17 +485,18 @@ export class TableWidget extends WidgetType {
     columnIndex: number,
     originalValue: string,
   ) {
-    const cellStyle = window.getComputedStyle(cell)
-    const initialContentHeight = cell.getBoundingClientRect().height
-      - Number.parseFloat(cellStyle.paddingTop || "0")
-      - Number.parseFloat(cellStyle.paddingBottom || "0")
+    const contentStack = cell.querySelector<HTMLElement>(":scope > .cm-md-table-cell-stack")
+    const display = contentStack?.querySelector<HTMLElement>(":scope > .cm-md-table-cell-display")
+    if (!contentStack || !display) return
+    const initialContentHeight = display.getBoundingClientRect().height
     const input = document.createElement("textarea")
     input.className = "cm-md-table-cell-input"
     input.value = originalValue
     input.rows = 1
     input.setAttribute("aria-label", cell.getAttribute("aria-label") ?? "编辑表格单元格")
-    cell.replaceChildren(input)
-    // 聚焦时先锁定展示态内容高度，避免 Markdown 标记显现后因为额外字符换行而让整行跳动。
+    // 展示层继续留在网格中占位，输入层与其重叠；聚焦不会再替换 DOM 或触发表格重新布局。
+    contentStack.appendChild(input)
+    cell.classList.add("cm-md-table-cell-editing")
     const stableHeight = Math.max(24, initialContentHeight)
     input.style.height = `${stableHeight}px`
     if (input.scrollHeight > stableHeight) input.style.overflowY = "auto"
@@ -506,8 +513,8 @@ export class TableWidget extends WidgetType {
 
     let finished = false
     const restoreCell = () => {
-      cell.replaceChildren()
-      this.renderCell(cell, originalValue)
+      input.remove()
+      cell.classList.remove("cm-md-table-cell-editing")
     }
     const commit = (navigation?: CellTarget & { appendRow?: boolean }) => {
       if (finished) return
