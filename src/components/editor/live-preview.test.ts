@@ -163,6 +163,80 @@ describe("markdown live preview", () => {
   })
 })
 
+describe("markdown live preview table cells", () => {
+  const cellDoc = [
+    "正文",
+    "",
+    "| 字段 | 说明 |",
+    "| --- | --- |",
+    "| snake_case_name | 管道 a \\| b |",
+    "| _强调_ | **重点** |",
+  ].join("\n")
+
+  async function tableDom(content: string, selection = { anchor: 0 }) {
+    const view = createView(selection, content)
+    const decorations = await settleTableDecorations(view)
+    let widget: TableWidget | undefined
+    const cursor = decorations.iter()
+    while (cursor.value) {
+      if (cursor.value.spec.widget instanceof TableWidget) widget = cursor.value.spec.widget
+      cursor.next()
+    }
+    expect(widget).toBeDefined()
+    return widget!.toDOM()
+  }
+
+  it("keeps identifiers with underscores intact", async () => {
+    const cells = [...(await tableDom(cellDoc)).querySelectorAll("tbody td")]
+
+    // 词内下划线不是强调，snake_case_name 必须原样保留。
+    expect(cells[0].textContent).toBe("snake_case_name")
+    expect(cells[0].querySelector("em")).toBeNull()
+    // 词边界上的下划线仍然是强调。
+    expect(cells[2].querySelector("em")?.textContent).toBe("强调")
+    expect(cells[3].querySelector("strong")?.textContent).toBe("重点")
+  })
+
+  it("unescapes pipes inside cells", async () => {
+    const cells = [...(await tableDom(cellDoc)).querySelectorAll("tbody td")]
+
+    expect(cells[1].textContent).toBe("管道 a | b")
+  })
+
+  it("re-renders after an equal-length edit inside the table", async () => {
+    const source = ["正文", "", "| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    // 同步合并与撤销都可能带来等长改写，位置和长度都不变，必须靠原文判断是否重绘。
+    const from = source.indexOf("| 1 | 2 |")
+    view.dispatch({ changes: { from, to: from + "| 1 | 2 |".length, insert: "| 8 | 9 |" } })
+    const decorations = await settleTableDecorations(view)
+
+    let widget: TableWidget | undefined
+    const cursor = decorations.iter()
+    while (cursor.value) {
+      if (cursor.value.spec.widget instanceof TableWidget) widget = cursor.value.spec.widget
+      cursor.next()
+    }
+    expect(widget?.toDOM().querySelector("tbody tr")?.textContent).toBe("89")
+  })
+
+  it("resolves the click target from the dom instead of a stale offset", async () => {
+    const source = ["正文", "", "| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    const wrapper = view.contentDOM.querySelector(".cm-md-table-wrap")
+    expect(wrapper).not.toBeNull()
+    wrapper!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }))
+    const anchor = view.state.selection.main.anchor
+    view.destroy()
+    // 光标落进表格首行，下一次装饰构建即还原源码。
+    expect(anchor).toBe(source.indexOf("| A | B |"))
+  })
+})
+
 describe("markdown live preview links", () => {
   it("hides markdown link urls and keeps the label", async () => {
     const view = createView({ anchor: 0 }, linkDoc)

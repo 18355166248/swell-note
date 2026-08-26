@@ -78,7 +78,12 @@ type ParsedTable = {
 const tableCellSplitPattern = /(?<!\\)\|/
 
 function splitTableRow(line: string) {
-  return line.replace(/^\|/, "").replace(/\|$/, "").split(tableCellSplitPattern).map((cell) => cell.trim())
+  // 拆分后还原转义管道，单元格里应显示 | 而不是 \|。
+  return line
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split(tableCellSplitPattern)
+    .map((cell) => cell.trim().replace(/\\\|/g, "|"))
 }
 
 // GFM 语法树只对含分隔行的表格生成 Table 节点，这里做轻量二次解析供 Widget 直接建 DOM。
@@ -99,20 +104,24 @@ export function parseMarkdownTable(source: string): ParsedTable | null {
 }
 
 // 单元格内只保留加粗/斜体/行内代码三类高频行内语法，全部用 textContent 装配，不引入 HTML 注入面。
-const tableInlinePattern = /(\*\*|__)(.+?)\1|(\*|_)(.+?)\3|`([^`]+)`/g
+// 下划线形式要求两侧是非字母数字，否则 snake_case_name 这类标识符会被当成强调吞掉下划线。
+const tableInlinePattern
+  = /\*\*(.+?)\*\*|(?<![\p{L}\p{N}])__(.+?)__(?![\p{L}\p{N}])|\*(.+?)\*|(?<![\p{L}\p{N}])_(.+?)_(?![\p{L}\p{N}])|`([^`]+)`/gu
 
 function appendInlineMarkdown(parent: HTMLElement, text: string) {
   let cursor = 0
   for (const match of text.matchAll(tableInlinePattern)) {
     const index = match.index ?? 0
     if (index > cursor) parent.appendChild(document.createTextNode(text.slice(cursor, index)))
-    if (match[2] !== undefined) {
+    const strongText = match[1] ?? match[2]
+    const emphasisText = match[3] ?? match[4]
+    if (strongText !== undefined) {
       const strong = document.createElement("strong")
-      strong.textContent = match[2]
+      strong.textContent = strongText
       parent.appendChild(strong)
-    } else if (match[4] !== undefined) {
+    } else if (emphasisText !== undefined) {
       const em = document.createElement("em")
-      em.textContent = match[4]
+      em.textContent = emphasisText
       parent.appendChild(em)
     } else {
       const code = document.createElement("code")
@@ -127,7 +136,6 @@ function appendInlineMarkdown(parent: HTMLElement, text: string) {
 export class TableWidget extends WidgetType {
   constructor(
     readonly source: string,
-    readonly from: number,
     readonly view: EditorView,
   ) {
     super()
@@ -171,10 +179,11 @@ export class TableWidget extends WidgetType {
     wrapper.appendChild(element)
 
     // 点击渲染后的表格即进入源码编辑：把光标放到表格首行，下一次装饰构建会还原原始 Markdown。
+    // 装饰范围会随文档变化被映射，但 Widget 实例可能被复用，因此按 DOM 反查当前位置而不是记录构造期偏移。
     if (this.view.state.readOnly) return wrapper
     wrapper.addEventListener("mousedown", (event) => {
       event.preventDefault()
-      this.view.dispatch({ selection: { anchor: this.from }, scrollIntoView: true })
+      this.view.dispatch({ selection: { anchor: this.view.posAtDOM(wrapper) }, scrollIntoView: true })
       this.view.focus()
     })
     return wrapper
@@ -307,8 +316,10 @@ function collectTableBlocks(state: EditorState): TableBlock[] {
   return blocks
 }
 
+// RangeSet 没有值相等接口，用位置加原文构成轻量 key；只比长度会漏掉同步合并、
+// 撤销等带来的等长改写，导致表格继续渲染旧内容。
 function tableBlocksKey(blocks: TableBlock[]) {
-  return blocks.map((block) => `${block.from}:${block.to}:${block.source.length}`).join("|")
+  return blocks.map((block) => `${block.from}:${block.to}:${block.source.length}:${block.source}`).join("|")
 }
 
 function tableBlocksDecorations(blocks: TableBlock[], view: EditorView): DecorationSet {
@@ -316,7 +327,7 @@ function tableBlocksDecorations(blocks: TableBlock[], view: EditorView): Decorat
     blocks.map((block) =>
       Decoration.replace({
         block: true,
-        widget: new TableWidget(block.source, block.from, view),
+        widget: new TableWidget(block.source, view),
       }).range(block.from, block.to),
     ),
     true,
@@ -512,17 +523,17 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
       this.destroyed = true
     }
 
-    // 表格装饰变化时经 effect 写入 StateField；RangeSet 没有值相等接口，
-    // 用轻量 key（位置 + 源长度）判断是否有变化，内容不变则跳过，避免无意义的重绘。
+    // 表格装饰变化时经 effect 写入 StateField，内容不变则跳过，避免无意义的重绘。
     // 插件 update 期间不允许同步 dispatch，延迟到当前更新结束后提交。
     syncTableDecorations(view: EditorView) {
-      const blocks = collectTableBlocks(view.state)
-      const key = tableBlocksKey(blocks)
-      if (key === this.tableBlocksKey) return
-      this.tableBlocksKey = key
-      const decorations = tableBlocksDecorations(blocks, view)
+      if (tableBlocksKey(collectTableBlocks(view.state)) === this.tableBlocksKey) return
       window.setTimeout(() => {
-        if (!this.destroyed) view.dispatch({ effects: setTableDecorations.of(decorations) })
+        if (this.destroyed) return
+        // 等待期间文档可能已被同步合并或撤销改写，必须按当前状态重算，
+        // 否则会把基于旧文档的位置派发到新文档上。
+        const blocks = collectTableBlocks(view.state)
+        this.tableBlocksKey = tableBlocksKey(blocks)
+        view.dispatch({ effects: setTableDecorations.of(tableBlocksDecorations(blocks, view)) })
       }, 0)
     }
   },
