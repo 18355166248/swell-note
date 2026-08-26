@@ -3,6 +3,8 @@ import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { EditorView } from "@codemirror/view"
 
+import type { VaultAsset } from "@/services/vault/vault-adapter"
+
 import { markdownLivePreview } from "./live-preview"
 
 export type MarkdownEditorHandle = {
@@ -16,25 +18,29 @@ type MarkdownEditorProps = {
   onCursorChange?: (line: number, column: number) => void
   onInsertFiles?: (files: File[]) => void
   onOpenWikiLink?: (target: string) => void
+  onResolveAsset?: (source: string) => Promise<VaultAsset | null>
   readOnly?: boolean
   value: string
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ onChange, onCursorChange, onInsertFiles, onOpenWikiLink, readOnly = false, value }, ref) {
+  function MarkdownEditor({ onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, readOnly = false, value }, ref) {
     const editorRef = useRef<ReactCodeMirrorRef>(null)
 
     // CodeMirror 的扩展数组一旦换引用就会整体重配置（语言也会重新解析）；
     // 调用方传入的回调多为内联函数，用 ref 中转后扩展只在只读状态切换时重建。
-    const handlers = useRef({ onCursorChange, onInsertFiles, onOpenWikiLink })
+    const handlers = useRef({ onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset })
     useEffect(() => {
-      handlers.current = { onCursorChange, onInsertFiles, onOpenWikiLink }
+      handlers.current = { onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset }
     })
 
     const extensions = useMemo(() => [
       // GFM 基座：表格、删除线与任务列表才能进入语法树，供语法高亮与即时渲染装饰使用。
       markdown({ base: markdownLanguage }),
-      markdownLivePreview({ onOpenWikiLink: (target) => handlers.current.onOpenWikiLink?.(target) }),
+      markdownLivePreview({
+        onOpenWikiLink: (target) => handlers.current.onOpenWikiLink?.(target),
+        onResolveAsset: (source) => handlers.current.onResolveAsset?.(source) ?? Promise.resolve(null),
+      }),
       EditorView.lineWrapping,
       EditorView.updateListener.of((update) => {
         if (!update.selectionSet && !update.docChanged) return

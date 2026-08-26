@@ -2,7 +2,7 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { EditorState } from "@codemirror/state"
 import { DecorationSet, EditorView } from "@codemirror/view"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import type { LivePreviewOptions } from "./live-preview"
 import { markdownLivePreview, markdownLivePreviewPlugin, tableDecorationsField, TableWidget, TaskCheckboxWidget } from "./live-preview"
@@ -242,14 +242,43 @@ describe("markdown live preview table cells", () => {
     view.destroy()
   })
 
+  it("commits the previous cell before editing another cell", async () => {
+    const source = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    const firstCell = view.contentDOM.querySelector("tbody td") as HTMLTableCellElement
+    firstCell.click()
+    const firstInput = firstCell.querySelector("input") as HTMLInputElement
+    firstInput.value = "已写回"
+
+    const secondCell = view.contentDOM.querySelector("tbody td:nth-child(2)") as HTMLTableCellElement
+    secondCell.click()
+    await settle()
+
+    expect(view.state.doc.toString()).toContain("| 已写回 | 2 |")
+    expect(view.contentDOM.querySelectorAll(".cm-md-table-cell-input")).toHaveLength(1)
+    expect(view.contentDOM.querySelector("tbody td:nth-child(2) input")).not.toBeNull()
+    view.destroy()
+  })
+
   it("adds rows and columns from the table toolbar", async () => {
     const source = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n")
     const view = createView({ anchor: 0 }, source)
     await settle()
 
     const buttons = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
-    expect(buttons.map((button) => button.textContent)).toEqual(["添加行", "添加列"])
-    buttons[0].click()
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      "宽度：适应",
+      "添加行",
+      "添加列",
+      "删除行",
+      "删除列",
+      "左对齐",
+      "居中",
+      "右对齐",
+    ])
+    buttons[1].click()
     await settle()
     expect(view.state.doc.toString()).toContain("|  |  |")
 
@@ -258,6 +287,159 @@ describe("markdown live preview table cells", () => {
     addColumn.click()
     await settle()
     expect(view.state.doc.toString()).toContain("| A | B | 新列 |")
+    view.destroy()
+  })
+
+  it("deletes the selected row and column while keeping a valid table", async () => {
+    const source = ["| A | B |", "| --- | --- |", "| 1 | 2 |", "| 3 | 4 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    const deleteRow = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
+      .find((button) => button.textContent === "删除行")!
+    const deleteColumn = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
+      .find((button) => button.textContent === "删除列")!
+    expect(deleteRow.disabled).toBe(true)
+    expect(deleteColumn.disabled).toBe(true)
+
+    const secondRowFirstCell = view.contentDOM.querySelector("tbody tr:nth-child(2) td") as HTMLTableCellElement
+    secondRowFirstCell.click()
+    expect(deleteRow.disabled).toBe(false)
+    expect(deleteColumn.disabled).toBe(false)
+    deleteRow.click()
+    await settle()
+    expect(view.state.doc.toString()).toContain("| 1 | 2 |")
+    expect(view.state.doc.toString()).not.toContain("| 3 | 4 |")
+
+    const secondHeader = view.contentDOM.querySelector("thead th:nth-child(2)") as HTMLTableCellElement
+    secondHeader.click()
+    const refreshedDeleteColumn = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
+      .find((button) => button.textContent === "删除列")!
+    refreshedDeleteColumn.click()
+    await settle()
+    expect(view.state.doc.toString()).toBe(["| A |", "| --- |", "| 1 |"].join("\n"))
+
+    const onlyHeader = view.contentDOM.querySelector("thead th") as HTMLTableCellElement
+    onlyHeader.click()
+    const protectedDeleteColumn = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
+      .find((button) => button.textContent === "删除列")!
+    expect(protectedDeleteColumn.disabled).toBe(true)
+    view.destroy()
+  })
+
+  it("changes the selected column alignment", async () => {
+    const source = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    const secondCell = view.contentDOM.querySelector("tbody td:nth-child(2)") as HTMLTableCellElement
+    secondCell.click()
+    const center = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
+      .find((button) => button.textContent === "居中")!
+    expect(center.disabled).toBe(false)
+    center.click()
+    await settle()
+
+    expect(view.state.doc.toString()).toContain("| --- | :---: |")
+    expect((view.contentDOM.querySelector("tbody td:nth-child(2)") as HTMLTableCellElement).style.textAlign).toBe("center")
+    view.destroy()
+  })
+
+  it("renders strikethrough links bare URLs and standard Markdown images inside cells", async () => {
+    const content = [
+      "| 类型 | 内容 |",
+      "| --- | --- |",
+      "| 删除线 | ~~旧内容~~ |",
+      "| 链接 | [官网](https://example.com) |",
+      "| 裸链接 | https://example.com/docs |",
+      "| 图片 | ![示意图](https://example.com/a.png) |",
+    ].join("\n")
+    const dom = await tableDom(content)
+
+    expect(dom.querySelector("del")?.textContent).toBe("旧内容")
+    expect([...dom.querySelectorAll("a")].map((link) => link.textContent)).toEqual(["官网", "https://example.com/docs"])
+    const image = dom.querySelector("img") as HTMLImageElement
+    expect(image.alt).toBe("示意图")
+    expect(image.src).toBe("https://example.com/a.png")
+  })
+
+  it("adds rows and columns while preserving the active cell edit", async () => {
+    const source = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    // Chromium 对块级 replace widget 的 DOM 位置可能映射到范围末端；表格写回应使用解析阶段的确定位置。
+    vi.spyOn(view, "posAtDOM").mockReturnValue(source.length)
+
+    const firstCell = view.contentDOM.querySelector("tbody td") as HTMLTableCellElement
+    firstCell.click()
+    const input = firstCell.querySelector("input") as HTMLInputElement
+    input.value = "未提交"
+
+    const addRow = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
+      .find((button) => button.textContent === "添加行")!
+    addRow.click()
+    await settle()
+    expect(view.state.doc.toString()).toContain("| 未提交 | 2 |")
+    expect(view.state.doc.toString()).toContain("|  |  |")
+
+    const editedCell = view.contentDOM.querySelector("tbody td") as HTMLTableCellElement
+    editedCell.click()
+    const editedInput = editedCell.querySelector("input") as HTMLInputElement
+    editedInput.value = "继续编辑"
+
+    const addColumn = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
+      .find((button) => button.textContent === "添加列")!
+    addColumn.click()
+    await settle()
+    expect(view.state.doc.toString()).toContain("| A | B | 新列 |")
+    expect(view.state.doc.toString()).toContain("| 继续编辑 | 2 |  |")
+    view.destroy()
+  })
+
+  it("adds a row when the Markdown table has leading indentation", async () => {
+    const source = ["  | A | B |", "  | --- | --- |", "  | 1 | 2 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    const addRow = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
+      .find((button) => button.textContent === "添加行")!
+    addRow.click()
+    await settle()
+
+    expect(view.state.doc.toString()).toContain("| 1 | 2 |\n|  |  |")
+    view.destroy()
+  })
+
+  it("switches between content and full width without resizing during cell editing", async () => {
+    localStorage.removeItem("swell-note:editor-table-width")
+    const source = ["| 短标题 | 更长的说明列 |", "| --- | --- |", "| 1 | 内容 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    const wrapper = view.contentDOM.querySelector(".cm-md-table-wrap") as HTMLElement
+    const table = wrapper.querySelector("table") as HTMLTableElement
+    const initialWidth = table.style.width
+    const initialColumns = [...table.querySelectorAll("col")].map((column) => column.getAttribute("style"))
+    expect(wrapper.dataset.widthMode).toBe("content")
+    expect(initialWidth).toMatch(/px$/)
+
+    const cell = wrapper.querySelector("tbody td") as HTMLTableCellElement
+    cell.click()
+    const input = cell.querySelector("input") as HTMLInputElement
+    input.value = "输入一段明显更长但不应撑开列宽的内容"
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+    expect(table.style.width).toBe(initialWidth)
+    expect([...table.querySelectorAll("col")].map((column) => column.getAttribute("style"))).toEqual(initialColumns)
+    input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+
+    const widthButton = wrapper.querySelector(".cm-md-table-width-toggle") as HTMLButtonElement
+    widthButton.click()
+    expect(wrapper.dataset.widthMode).toBe("full")
+    expect(table.style.width).toBe("100%")
+    expect(widthButton.textContent).toBe("宽度：铺满")
+    expect(localStorage.getItem("swell-note:editor-table-width")).toBe("full")
+    localStorage.removeItem("swell-note:editor-table-width")
     view.destroy()
   })
 

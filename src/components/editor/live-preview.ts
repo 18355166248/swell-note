@@ -4,6 +4,7 @@ import { Facet, StateEffect, StateField } from "@codemirror/state"
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view"
 
 import { parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
+import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 // Markdown 即时预览：
 // 非光标行隐藏语法标记并直接呈现最终样式，光标进入该行时还原原始 Markdown 文本，源文件始终保持纯文本。
@@ -24,6 +25,7 @@ type MdSyntaxNode = {
 export type LivePreviewOptions = {
   onOpenExternalLink?: (href: string) => void
   onOpenWikiLink?: (target: string) => void
+  onResolveAsset?: (source: string) => Promise<VaultAsset | null>
 }
 
 const livePreviewOptions = Facet.define<LivePreviewOptions, LivePreviewOptions>({
@@ -115,19 +117,134 @@ function serializeMarkdownTable(table: ParsedTable) {
   return [row(table.header), row(delimiter), ...table.rows.map(row)].join("\n")
 }
 
-// 单元格内只保留加粗/斜体/行内代码三类高频行内语法，全部用 textContent 装配，不引入 HTML 注入面。
+type TableWidthMode = "content" | "full"
+
+const TABLE_WIDTH_MODE_KEY = "swell-note:editor-table-width"
+
+function loadTableWidthMode(): TableWidthMode {
+  try {
+    return window.localStorage.getItem(TABLE_WIDTH_MODE_KEY) === "full" ? "full" : "content"
+  } catch {
+    return "content"
+  }
+}
+
+function saveTableWidthMode(mode: TableWidthMode) {
+  try {
+    window.localStorage.setItem(TABLE_WIDTH_MODE_KEY, mode)
+  } catch {
+    // 隐私模式可能禁用 localStorage；当前表格仍可切换，只是不跨会话保留。
+  }
+}
+
+function textDisplayUnits(value: string) {
+  return Array.from(value).reduce((total, character) => total + (/^[\x00-\xff]$/.test(character) ? 1 : 2), 0)
+}
+
+function tableColumnWidths(table: ParsedTable) {
+  return table.header.map((header, column) => {
+    const maxUnits = Math.max(textDisplayUnits(header), ...table.rows.map((row) => textDisplayUnits(row[column] ?? "")))
+    return Math.min(360, Math.max(96, maxUnits * 7 + 28))
+  })
+}
+
+function applyTableWidthMode(wrapper: HTMLElement, mode: TableWidthMode) {
+  const table = wrapper.querySelector<HTMLTableElement>(".cm-md-table")
+  const columns = Array.from(table?.querySelectorAll<HTMLTableColElement>("col[data-content-width]") ?? [])
+  if (!table || columns.length === 0) return
+  const widths = columns.map((column) => Number(column.dataset.contentWidth) || 96)
+  const totalWidth = widths.reduce((total, width) => total + width, 0)
+
+  wrapper.dataset.widthMode = mode
+  table.style.tableLayout = "fixed"
+  table.style.width = mode === "full" ? "100%" : `${totalWidth}px`
+  columns.forEach((column, index) => {
+    column.style.width = mode === "full" ? `${(widths[index] / totalWidth) * 100}%` : `${widths[index]}px`
+  })
+  const button = wrapper.querySelector<HTMLButtonElement>(".cm-md-table-width-toggle")
+  if (button) {
+    button.textContent = mode === "full" ? "宽度：铺满" : "宽度：适应"
+    button.title = mode === "full" ? "切换为适应内容" : "切换为铺满正文"
+    button.setAttribute("aria-pressed", String(mode === "full"))
+  }
+}
+
+// 单元格行内内容始终使用 DOM API 和 textContent 装配，不解析原始 HTML，避免把云端笔记内容变成注入面。
 // 下划线形式要求两侧是非字母数字，否则 snake_case_name 这类标识符会被当成强调吞掉下划线。
 const tableInlinePattern
-  = /\*\*(.+?)\*\*|(?<![\p{L}\p{N}])__(.+?)__(?![\p{L}\p{N}])|\*(.+?)\*|(?<![\p{L}\p{N}])_(.+?)_(?![\p{L}\p{N}])|`([^`]+)`/gu
+  = /!\[([^\]\n]*)\]\((\S+?)(?:\s+["'][^"']*["'])?\)|\[([^\]\n]+)\]\((\S+?)(?:\s+["'][^"']*["'])?\)|~~(.+?)~~|\*\*(.+?)\*\*|(?<![\p{L}\p{N}])__(.+?)__(?![\p{L}\p{N}])|\*(.+?)\*|(?<![\p{L}\p{N}])_(.+?)_(?![\p{L}\p{N}])|`([^`]+)`|(https?:\/\/[^\s<>]+)/gu
 
-function appendInlineMarkdown(parent: HTMLElement, text: string) {
+function appendInlineMarkdown(
+  parent: HTMLElement,
+  text: string,
+  options: LivePreviewOptions = {},
+  registerObjectUrl?: (url: string) => void,
+) {
   let cursor = 0
   for (const match of text.matchAll(tableInlinePattern)) {
     const index = match.index ?? 0
     if (index > cursor) parent.appendChild(document.createTextNode(text.slice(cursor, index)))
-    const strongText = match[1] ?? match[2]
-    const emphasisText = match[3] ?? match[4]
-    if (strongText !== undefined) {
+    const imageAlt = match[1]
+    const imageSource = match[2]
+    const linkLabel = match[3]
+    const linkHref = match[4]
+    const strikeText = match[5]
+    const strongText = match[6] ?? match[7]
+    const emphasisText = match[8] ?? match[9]
+    const codeText = match[10]
+    const bareHref = match[11]
+    if (imageSource !== undefined) {
+      const image = document.createElement("img")
+      image.alt = imageAlt ?? ""
+      image.className = "cm-md-table-image"
+      image.decoding = "async"
+      image.loading = "lazy"
+      if (/^(?:https?:|data:|blob:)/i.test(imageSource)) {
+        image.src = imageSource
+        parent.appendChild(image)
+      } else if (options.onResolveAsset) {
+        const loading = document.createElement("span")
+        loading.className = "cm-md-table-asset-state"
+        loading.textContent = image.alt ? `正在读取图片：${image.alt}` : "正在读取图片…"
+        parent.appendChild(loading)
+        void options.onResolveAsset(imageSource).then((asset) => {
+          if (!asset || !loading.isConnected) {
+            if (loading.isConnected) loading.textContent = image.alt ? `无法读取图片：${image.alt}` : "无法读取图片"
+            return
+          }
+          const objectUrl = URL.createObjectURL(new Blob([new Uint8Array(asset.data).buffer], { type: asset.mimeType }))
+          registerObjectUrl?.(objectUrl)
+          image.src = objectUrl
+          loading.replaceWith(image)
+        }).catch(() => {
+          if (loading.isConnected) loading.textContent = image.alt ? `无法读取图片：${image.alt}` : "无法读取图片"
+        })
+      } else {
+        const fallback = document.createElement("span")
+        fallback.className = "cm-md-table-asset-state"
+        fallback.textContent = image.alt || imageSource
+        parent.appendChild(fallback)
+      }
+    } else if (linkHref !== undefined || bareHref !== undefined) {
+      const href = linkHref ?? bareHref ?? ""
+      const link = document.createElement("a")
+      link.className = "cm-md-table-link"
+      link.textContent = linkLabel ?? href
+      const noteTarget = parseMarkdownNoteHref(href)
+      if (noteTarget) link.dataset.mdNoteTarget = noteTarget
+      else if (/^(?:https?|mailto):/i.test(href)) link.dataset.mdHref = href
+      link.title = noteTarget ? WIKI_HINT : link.dataset.mdHref ? LINK_HINT : href
+      link.addEventListener("click", (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        openActionableLink(link, options)
+      })
+      parent.appendChild(link)
+    } else if (strikeText !== undefined) {
+      const del = document.createElement("del")
+      del.textContent = strikeText
+      parent.appendChild(del)
+    } else if (strongText !== undefined) {
       const strong = document.createElement("strong")
       strong.textContent = strongText
       parent.appendChild(strong)
@@ -137,7 +254,7 @@ function appendInlineMarkdown(parent: HTMLElement, text: string) {
       parent.appendChild(em)
     } else {
       const code = document.createElement("code")
-      code.textContent = match[5] ?? ""
+      code.textContent = codeText ?? ""
       parent.appendChild(code)
     }
     cursor = index + match[0].length
@@ -146,28 +263,47 @@ function appendInlineMarkdown(parent: HTMLElement, text: string) {
 }
 
 export class TableWidget extends WidgetType {
+  readonly objectUrls = new Set<string>()
+
   constructor(
     readonly source: string,
     readonly view: EditorView,
+    readonly from: number,
+    readonly to: number,
   ) {
     super()
   }
 
   eq(other: TableWidget) {
-    return other.source === this.source
+    return other.source === this.source && other.from === this.from && other.to === this.to
   }
 
   toDOM() {
     const table = parseMarkdownTable(this.source)
+    const options = this.view.state.facet(livePreviewOptions)
     const wrapper = document.createElement("div")
     wrapper.className = "cm-md-table-wrap"
+    wrapper.dataset.tableFrom = String(this.from)
     if (!table) return wrapper
+
+    const element = document.createElement("table")
+    element.className = "cm-md-table"
+    const colgroup = document.createElement("colgroup")
+    for (const width of tableColumnWidths(table)) {
+      const column = document.createElement("col")
+      column.dataset.contentWidth = String(width)
+      colgroup.appendChild(column)
+    }
+    element.appendChild(colgroup)
+    wrapper.appendChild(element)
+    applyTableWidthMode(wrapper, loadTableWidthMode())
 
     if (!this.view.state.readOnly) {
       const toolbar = document.createElement("div")
       toolbar.className = "cm-md-table-toolbar"
       toolbar.setAttribute("aria-label", "表格操作")
       toolbar.append(
+        this.createWidthButton(wrapper),
         this.createTableButton("添加行", wrapper, () => ({
           ...table,
           header: [...table.header],
@@ -179,17 +315,21 @@ export class TableWidget extends WidgetType {
           aligns: [...table.aligns, "left"],
           rows: table.rows.map((row) => [...row, ""]),
         })),
+        this.createDeleteButton("删除行", "row", wrapper, table),
+        this.createDeleteButton("删除列", "column", wrapper, table),
+        this.createAlignButton("左对齐", "left", wrapper, table),
+        this.createAlignButton("居中", "center", wrapper, table),
+        this.createAlignButton("右对齐", "right", wrapper, table),
       )
-      wrapper.appendChild(toolbar)
+      wrapper.insertBefore(toolbar, element)
+      applyTableWidthMode(wrapper, loadTableWidthMode())
     }
 
-    const element = document.createElement("table")
-    element.className = "cm-md-table"
     const headRow = document.createElement("tr")
     table.header.forEach((cell, index) => {
       const th = document.createElement("th")
       th.style.textAlign = table.aligns[index] ?? "left"
-      appendInlineMarkdown(th, cell)
+      appendInlineMarkdown(th, cell, options, (url) => this.objectUrls.add(url))
       this.enableCellEditing(th, wrapper, table, -1, index, cell)
       headRow.appendChild(th)
     })
@@ -203,16 +343,37 @@ export class TableWidget extends WidgetType {
       row.forEach((cell, index) => {
         const td = document.createElement("td")
         td.style.textAlign = table.aligns[index] ?? "left"
-        appendInlineMarkdown(td, cell)
+        appendInlineMarkdown(td, cell, options, (url) => this.objectUrls.add(url))
         this.enableCellEditing(td, wrapper, table, rowIndex, index, cell)
         tr.appendChild(td)
       })
       tbody.appendChild(tr)
     })
     element.appendChild(tbody)
-    wrapper.appendChild(element)
-
     return wrapper
+  }
+
+  destroy() {
+    for (const url of this.objectUrls) URL.revokeObjectURL(url)
+    this.objectUrls.clear()
+  }
+
+  private createWidthButton(wrapper: HTMLDivElement) {
+    const button = document.createElement("button")
+    button.type = "button"
+    button.className = "cm-md-table-width-toggle"
+    button.addEventListener("mousedown", (event) => event.preventDefault())
+    button.addEventListener("click", (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      const mode: TableWidthMode = wrapper.dataset.widthMode === "full" ? "content" : "full"
+      saveTableWidthMode(mode)
+      // 宽度是编辑器级显示偏好，同一篇笔记中的表格同步切换，且不改写 Markdown。
+      for (const candidate of this.view.contentDOM.querySelectorAll<HTMLElement>(".cm-md-table-wrap")) {
+        applyTableWidthMode(candidate, mode)
+      }
+    })
+    return button
   }
 
   private createTableButton(
@@ -228,22 +389,142 @@ export class TableWidget extends WidgetType {
     button.addEventListener("click", (event) => {
       event.preventDefault()
       event.stopPropagation()
-      if (wrapper.querySelector("input")) return
-      this.replaceTable(wrapper, update())
+      const nextTable = update()
+      const input = wrapper.querySelector<HTMLInputElement>(".cm-md-table-cell-input")
+      const editingCell = input?.closest<HTMLTableCellElement>("th, td")
+      const rowIndex = Number(editingCell?.dataset.rowIndex)
+      const columnIndex = Number(editingCell?.dataset.columnIndex)
+
+      // 工具栏的 mousedown 会保留单元格焦点；结构变更前合并尚未失焦的输入，避免按钮看似失效或丢字。
+      if (input && Number.isInteger(rowIndex) && Number.isInteger(columnIndex)) {
+        if (rowIndex < 0) nextTable.header[columnIndex] = input.value
+        else if (nextTable.rows[rowIndex]) nextTable.rows[rowIndex][columnIndex] = input.value
+      }
+      this.replaceTable(wrapper, nextTable)
     })
     return button
   }
 
-  private replaceTable(
+  private createDeleteButton(
+    label: string,
+    kind: "column" | "row",
     wrapper: HTMLDivElement,
+    table: ParsedTable,
+  ) {
+    const button = document.createElement("button")
+    button.type = "button"
+    button.textContent = label
+    button.dataset.tableAction = kind === "row" ? "delete-row" : "delete-column"
+    button.disabled = true
+    button.title = kind === "row" ? "先选择需要删除的正文行" : "先选择需要删除的列"
+    button.addEventListener("mousedown", (event) => event.preventDefault())
+    button.addEventListener("click", (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      const rowIndex = Number(wrapper.dataset.selectedRow)
+      const columnIndex = Number(wrapper.dataset.selectedColumn)
+      if (!Number.isInteger(columnIndex)) return
+
+      const nextTable = this.tableWithActiveEdit(wrapper, table)
+      if (kind === "row") {
+        if (!Number.isInteger(rowIndex) || rowIndex < 0 || !nextTable.rows[rowIndex]) return
+        nextTable.rows.splice(rowIndex, 1)
+        const focusRow = nextTable.rows.length === 0 ? 0 : Math.min(rowIndex, nextTable.rows.length - 1) + 1
+        this.replaceTable(wrapper, nextTable, { column: Math.min(columnIndex, nextTable.header.length - 1), row: focusRow })
+        return
+      }
+
+      // Markdown 表格至少保留一列；否则分隔行不再构成有效表格，用户会突然看到源码。
+      if (nextTable.header.length <= 1 || columnIndex < 0 || columnIndex >= nextTable.header.length) return
+      nextTable.header.splice(columnIndex, 1)
+      nextTable.aligns.splice(columnIndex, 1)
+      nextTable.rows.forEach((row) => row.splice(columnIndex, 1))
+      const focusColumn = Math.min(columnIndex, nextTable.header.length - 1)
+      const focusRow = rowIndex < 0 ? 0 : Math.min(rowIndex, Math.max(0, nextTable.rows.length - 1)) + 1
+      this.replaceTable(wrapper, nextTable, { column: focusColumn, row: focusRow })
+    })
+    return button
+  }
+
+  private createAlignButton(
+    label: string,
+    align: "center" | "left" | "right",
+    wrapper: HTMLDivElement,
+    table: ParsedTable,
+  ) {
+    const button = document.createElement("button")
+    button.type = "button"
+    button.textContent = label
+    button.dataset.tableAction = "align"
+    button.dataset.tableAlign = align
+    button.disabled = true
+    button.title = `选中单元格后将所在列设为${label}`
+    button.addEventListener("mousedown", (event) => event.preventDefault())
+    button.addEventListener("click", (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      const rowIndex = Number(wrapper.dataset.selectedRow)
+      const columnIndex = Number(wrapper.dataset.selectedColumn)
+      if (!Number.isInteger(columnIndex) || columnIndex < 0 || columnIndex >= table.header.length) return
+      const nextTable = this.tableWithActiveEdit(wrapper, table)
+      nextTable.aligns[columnIndex] = align
+      this.replaceTable(wrapper, nextTable, { column: columnIndex, row: rowIndex < 0 ? 0 : rowIndex + 1 })
+    })
+    return button
+  }
+
+  private tableWithActiveEdit(wrapper: HTMLDivElement, table: ParsedTable) {
+    const nextTable: ParsedTable = {
+      aligns: [...table.aligns],
+      header: [...table.header],
+      rows: table.rows.map((row) => [...row]),
+    }
+    const input = wrapper.querySelector<HTMLInputElement>(".cm-md-table-cell-input")
+    const editingCell = input?.closest<HTMLTableCellElement>("th, td")
+    const rowIndex = Number(editingCell?.dataset.rowIndex)
+    const columnIndex = Number(editingCell?.dataset.columnIndex)
+    if (!input || !Number.isInteger(rowIndex) || !Number.isInteger(columnIndex)) return nextTable
+    if (rowIndex < 0) nextTable.header[columnIndex] = input.value
+    else if (nextTable.rows[rowIndex]) nextTable.rows[rowIndex][columnIndex] = input.value
+    return nextTable
+  }
+
+  private selectCell(
+    cellElement: HTMLTableCellElement,
+    wrapper: HTMLDivElement,
+    table: ParsedTable,
+    rowIndex: number,
+    columnIndex: number,
+  ) {
+    wrapper.querySelector(".cm-md-table-cell-selected")?.classList.remove("cm-md-table-cell-selected")
+    cellElement.classList.add("cm-md-table-cell-selected")
+    wrapper.dataset.selectedRow = String(rowIndex)
+    wrapper.dataset.selectedColumn = String(columnIndex)
+    const deleteRow = wrapper.querySelector<HTMLButtonElement>('[data-table-action="delete-row"]')
+    const deleteColumn = wrapper.querySelector<HTMLButtonElement>('[data-table-action="delete-column"]')
+    if (deleteRow) {
+      deleteRow.disabled = rowIndex < 0 || table.rows.length === 0
+      deleteRow.title = rowIndex < 0 ? "表头不能作为正文行删除" : `删除第 ${rowIndex + 1} 行`
+    }
+    if (deleteColumn) {
+      deleteColumn.disabled = table.header.length <= 1
+      deleteColumn.title = table.header.length <= 1 ? "表格至少需要保留一列" : `删除第 ${columnIndex + 1} 列`
+    }
+    for (const button of wrapper.querySelectorAll<HTMLButtonElement>('[data-table-action="align"]')) {
+      button.disabled = false
+    }
+  }
+
+  private replaceTable(
+    _wrapper: HTMLDivElement,
     table: ParsedTable,
     focus?: { column: number; row: number },
   ) {
-    const from = this.view.posAtDOM(wrapper)
+    const from = this.from
     // 同步或撤销可能在交互期间替换正文；写回前核验原始范围，避免旧 Widget 覆盖新表格。
-    if (this.view.state.sliceDoc(from, from + this.source.length) !== this.source) return false
+    if (this.view.state.sliceDoc(from, this.to) !== this.source) return false
     this.view.dispatch({
-      changes: { from, to: from + this.source.length, insert: serializeMarkdownTable(table) },
+      changes: { from, to: this.to, insert: serializeMarkdownTable(table) },
     })
     if (focus) this.focusCellAfterUpdate(from, focus)
     return true
@@ -252,7 +533,7 @@ export class TableWidget extends WidgetType {
   private focusCellAfterUpdate(tableFrom: number, target: { column: number; row: number }) {
     window.setTimeout(() => {
       const wrapper = Array.from(this.view.contentDOM.querySelectorAll<HTMLElement>(".cm-md-table-wrap"))
-        .find((candidate) => this.view.posAtDOM(candidate) === tableFrom)
+        .find((candidate) => Number(candidate.dataset.tableFrom) === tableFrom)
       const rows = wrapper?.querySelectorAll("tr")
       const cell = rows?.[target.row]?.children[target.column]
       if (cell instanceof HTMLElement) cell.click()
@@ -269,12 +550,21 @@ export class TableWidget extends WidgetType {
   ) {
     if (this.view.state.readOnly) return
     cellElement.classList.add("cm-md-table-cell-editable")
+    cellElement.dataset.rowIndex = String(rowIndex)
+    cellElement.dataset.columnIndex = String(columnIndex)
     cellElement.tabIndex = 0
     cellElement.setAttribute("aria-label", `编辑表格${rowIndex < 0 ? "表头" : `第 ${rowIndex + 1} 行`}第 ${columnIndex + 1} 列`)
 
     const beginEditing = (event: Event) => {
       event.preventDefault()
       event.stopPropagation()
+      this.selectCell(cellElement, wrapper, table, rowIndex, columnIndex)
+      const activeInput = wrapper.querySelector<HTMLInputElement>(".cm-md-table-cell-input")
+      if (activeInput && !cellElement.contains(activeInput)) {
+        // 直接点击另一个单元格时先写回旧输入，再在重绘后的目标格继续编辑，避免残留多个输入框。
+        this.replaceTable(wrapper, this.tableWithActiveEdit(wrapper, table), { column: columnIndex, row: rowIndex + 1 })
+        return
+      }
       if (cellElement.querySelector("input")) return
 
       const input = document.createElement("input")
@@ -288,7 +578,12 @@ export class TableWidget extends WidgetType {
       let finished = false
       const restoreCell = () => {
         cellElement.replaceChildren()
-        appendInlineMarkdown(cellElement, originalValue)
+        appendInlineMarkdown(
+          cellElement,
+          originalValue,
+          this.view.state.facet(livePreviewOptions),
+          (url) => this.objectUrls.add(url),
+        )
       }
       const commit = (navigation?: { appendRow?: boolean; column: number; row: number }) => {
         if (finished) return
@@ -516,11 +811,11 @@ function collectTableBlocks(state: EditorState): TableBlock[] {
   syntaxTree(state).iterate({
     enter(node) {
       if (node.name !== "Table") return
-      const source = state.sliceDoc(node.from, node.to)
-      if (!parseMarkdownTable(source)) return
       // 块替换必须覆盖整行，范围取首行行首到末行行尾。
       const firstLine = state.doc.lineAt(node.from)
       const lastLine = state.doc.lineAt(node.to)
+      const source = state.sliceDoc(firstLine.from, lastLine.to)
+      if (!parseMarkdownTable(source)) return
       blocks.push({ from: firstLine.from, source, to: lastLine.to })
       return false
     },
@@ -540,7 +835,8 @@ function tableBlocksDecorations(blocks: TableBlock[], view: EditorView): Decorat
     blocks.map((block) =>
       Decoration.replace({
         block: true,
-        widget: new TableWidget(block.source, view),
+        // 块级替换节点在不同浏览器中通过 posAtDOM 可能映射到范围末端，直接传递解析得到的源码起点。
+        widget: new TableWidget(block.source, view, block.from, block.to),
       }).range(block.from, block.to),
     ),
     true,

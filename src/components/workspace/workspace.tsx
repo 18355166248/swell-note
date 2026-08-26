@@ -1320,6 +1320,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
                   onCursorChange={(line, column) => setCursorPosition({ column, line })}
                   onInsertFiles={canInsertAttachment && !insertingAttachment ? handleInsertFiles : undefined}
                   onOpenWikiLink={onOpenWikiLink}
+                  onResolveAsset={onResolveAsset}
                   readOnly={readOnly}
                   ref={editorRef}
                   value={note.content}
