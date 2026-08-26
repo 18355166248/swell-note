@@ -242,6 +242,43 @@ describe("markdown live preview table cells", () => {
     view.destroy()
   })
 
+  it("adds rows and columns from the table toolbar", async () => {
+    const source = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    const buttons = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
+    expect(buttons.map((button) => button.textContent)).toEqual(["添加行", "添加列"])
+    buttons[0].click()
+    await settle()
+    expect(view.state.doc.toString()).toContain("|  |  |")
+
+    const addColumn = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
+      .find((button) => button.textContent === "添加列")!
+    addColumn.click()
+    await settle()
+    expect(view.state.doc.toString()).toContain("| A | B | 新列 |")
+    view.destroy()
+  })
+
+  it("uses Tab to move cells and appends a row after the last cell", async () => {
+    const source = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    const lastCell = view.contentDOM.querySelector("tbody td:last-child") as HTMLTableCellElement
+    lastCell.click()
+    const input = lastCell.querySelector("input") as HTMLInputElement
+    input.value = "完成"
+    input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }))
+    await settle()
+
+    expect(view.state.doc.toString()).toContain("| 1 | 完成 |")
+    expect(view.state.doc.toString()).toContain("|  |  |")
+    expect(view.contentDOM.querySelector("tbody tr:last-child td input")).not.toBeNull()
+    view.destroy()
+  })
+
   it("restores formatted cell content when editing is cancelled", async () => {
     const source = ["| A | B |", "| --- | --- |", "| **重点** | 2 |"].join("\n")
     const view = createView({ anchor: 0 }, source)
@@ -261,14 +298,35 @@ describe("markdown live preview table cells", () => {
 })
 
 describe("markdown live preview links", () => {
+  it("recognizes bare GFM urls while excluding code and existing Markdown links", async () => {
+    const content = [
+      "产品文档",
+      "https://tapd.example.com/story/123",
+      "带标点 https://example.com/docs。",
+      "[正式链接](https://example.com/markdown)",
+      "`https://example.com/code`",
+    ].join("\n")
+    const view = createView({ anchor: 0 }, content)
+    const { marks } = collect(await settleInlineDecorations(view))
+    const urls = markOf(marks, "cm-md-link-actionable")
+      .map((mark) => mark.attributes?.["data-md-href"])
+
+    expect(urls).toEqual([
+      "https://tapd.example.com/story/123",
+      "https://example.com/docs",
+      "https://example.com/markdown",
+    ])
+  })
+
   it("hides markdown link urls and keeps the label", async () => {
     const view = createView({ anchor: 0 }, linkDoc)
     const { hidden, marks } = collect(await settleInlineDecorations(view))
 
     const start = linkDoc.indexOf("[文档]")
     const link = markOf(marks, "cm-md-link")
+    const actionable = markOf(marks, "cm-md-link-actionable")
     expect(link).toHaveLength(1)
-    expect(link[0].attributes?.["data-md-href"]).toBe("https://example.com")
+    expect(actionable[0].attributes?.["data-md-href"]).toBe("https://example.com")
     // 只留下链接文本：方括号与 (url) 两段都被隐藏。
     expect(hidden).toContainEqual({ from: start, to: start + 1 })
     expect(hidden).toContainEqual({ from: start + "[文档".length, to: linkDoc.indexOf(")", start) + 1 })
@@ -281,7 +339,10 @@ describe("markdown live preview links", () => {
     const aliased = linkDoc.indexOf("[[产品灵感|灵感]]")
     const plain = linkDoc.indexOf("[[原样]]")
     const wiki = markOf(marks, "cm-md-wiki-link")
-    expect(wiki.map((mark) => mark.attributes?.["data-wiki-target"])).toEqual(["产品灵感", "原样"])
+    const actionable = markOf(marks, "cm-md-link-actionable")
+    expect(wiki).toHaveLength(2)
+    expect(actionable.filter((mark) => mark.attributes?.["data-wiki-target"])
+      .map((mark) => mark.attributes?.["data-wiki-target"])).toEqual(["产品灵感", "原样"])
     // 带别名时目标与竖线一起隐藏，只显示别名。
     expect(hidden).toContainEqual({ from: aliased, to: aliased + "[[产品灵感|".length })
     expect(hidden).toContainEqual({ from: plain, to: plain + 2 })
@@ -309,7 +370,7 @@ describe("markdown live preview links", () => {
     expect(hidden).not.toContainEqual({ from: aliased, to: aliased + "[[产品灵感|".length })
   })
 
-  it("opens wiki links on modifier click only", async () => {
+  it("opens link labels directly even while their source line is active", async () => {
     const opened: string[] = []
     const view = createView({ anchor: 0 }, linkDoc, { onOpenWikiLink: (target) => opened.push(target) })
     await settle()
@@ -317,11 +378,21 @@ describe("markdown live preview links", () => {
     const element = view.contentDOM.querySelector("[data-wiki-target]")
     expect(element).not.toBeNull()
     element!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }))
-    expect(opened).toEqual([])
-
-    element!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, metaKey: true }))
-    view.destroy()
     expect(opened).toEqual(["产品灵感"])
+    view.destroy()
+
+    const activePosition = linkDoc.indexOf("产品灵感") + 2
+    const activeView = createView({ anchor: activePosition }, linkDoc, { onOpenWikiLink: (target) => opened.push(target) })
+    await settle()
+    const activeElement = activeView.contentDOM.querySelector("[data-wiki-target]")
+    expect(activeElement?.textContent).toBe("灵感")
+    activeElement!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }))
+    expect(opened).toEqual(["产品灵感", "产品灵感"])
+
+    const refreshedActiveElement = activeView.contentDOM.querySelector("[data-wiki-target]")
+    refreshedActiveElement!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, metaKey: true }))
+    activeView.destroy()
+    expect(opened).toEqual(["产品灵感", "产品灵感", "产品灵感"])
   })
 
   it("treats standard relative Markdown files as note links", async () => {
@@ -335,6 +406,19 @@ describe("markdown live preview links", () => {
     element!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, metaKey: true }))
     view.destroy()
     expect(opened).toEqual(["../docs/标准 笔记.md#目标"])
+  })
+
+  it("opens the link at the cursor with modifier Enter", async () => {
+    const opened: string[] = []
+    const content = "查看 [标准笔记](../docs/标准.md)"
+    const view = createView({ anchor: content.indexOf("标准笔记") + 2 }, content, {
+      onOpenWikiLink: (target) => opened.push(target),
+    })
+    await settle()
+
+    view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter", metaKey: true }))
+    view.destroy()
+    expect(opened).toEqual(["../docs/标准.md"])
   })
 })
 

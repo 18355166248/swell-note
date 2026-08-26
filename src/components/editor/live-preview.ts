@@ -30,8 +30,8 @@ const livePreviewOptions = Facet.define<LivePreviewOptions, LivePreviewOptions>(
   combine: (values) => values[0] ?? {},
 })
 
-const LINK_HINT = "\u2318 / Ctrl + \u70b9\u51fb\u6253\u5f00\u94fe\u63a5"
-const WIKI_HINT = "\u2318 / Ctrl + \u70b9\u51fb\u6253\u5f00\u7b14\u8bb0"
+const LINK_HINT = "点击打开链接"
+const WIKI_HINT = "点击打开笔记"
 
 export class TaskCheckboxWidget extends WidgetType {
   constructor(
@@ -163,6 +163,26 @@ export class TableWidget extends WidgetType {
     wrapper.className = "cm-md-table-wrap"
     if (!table) return wrapper
 
+    if (!this.view.state.readOnly) {
+      const toolbar = document.createElement("div")
+      toolbar.className = "cm-md-table-toolbar"
+      toolbar.setAttribute("aria-label", "表格操作")
+      toolbar.append(
+        this.createTableButton("添加行", wrapper, () => ({
+          ...table,
+          header: [...table.header],
+          aligns: [...table.aligns],
+          rows: [...table.rows.map((row) => [...row]), Array(table.header.length).fill("")],
+        })),
+        this.createTableButton("添加列", wrapper, () => ({
+          header: [...table.header, "新列"],
+          aligns: [...table.aligns, "left"],
+          rows: table.rows.map((row) => [...row, ""]),
+        })),
+      )
+      wrapper.appendChild(toolbar)
+    }
+
     const element = document.createElement("table")
     element.className = "cm-md-table"
     const headRow = document.createElement("tr")
@@ -178,21 +198,65 @@ export class TableWidget extends WidgetType {
     element.appendChild(thead)
 
     const tbody = document.createElement("tbody")
-    for (const row of table.rows) {
+    table.rows.forEach((row, rowIndex) => {
       const tr = document.createElement("tr")
       row.forEach((cell, index) => {
         const td = document.createElement("td")
         td.style.textAlign = table.aligns[index] ?? "left"
         appendInlineMarkdown(td, cell)
-        this.enableCellEditing(td, wrapper, table, table.rows.indexOf(row), index, cell)
+        this.enableCellEditing(td, wrapper, table, rowIndex, index, cell)
         tr.appendChild(td)
       })
       tbody.appendChild(tr)
-    }
+    })
     element.appendChild(tbody)
     wrapper.appendChild(element)
 
     return wrapper
+  }
+
+  private createTableButton(
+    label: string,
+    wrapper: HTMLDivElement,
+    update: () => ParsedTable,
+  ) {
+    const button = document.createElement("button")
+    button.type = "button"
+    button.textContent = label
+    button.title = label
+    button.addEventListener("mousedown", (event) => event.preventDefault())
+    button.addEventListener("click", (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      if (wrapper.querySelector("input")) return
+      this.replaceTable(wrapper, update())
+    })
+    return button
+  }
+
+  private replaceTable(
+    wrapper: HTMLDivElement,
+    table: ParsedTable,
+    focus?: { column: number; row: number },
+  ) {
+    const from = this.view.posAtDOM(wrapper)
+    // 同步或撤销可能在交互期间替换正文；写回前核验原始范围，避免旧 Widget 覆盖新表格。
+    if (this.view.state.sliceDoc(from, from + this.source.length) !== this.source) return false
+    this.view.dispatch({
+      changes: { from, to: from + this.source.length, insert: serializeMarkdownTable(table) },
+    })
+    if (focus) this.focusCellAfterUpdate(from, focus)
+    return true
+  }
+
+  private focusCellAfterUpdate(tableFrom: number, target: { column: number; row: number }) {
+    window.setTimeout(() => {
+      const wrapper = Array.from(this.view.contentDOM.querySelectorAll<HTMLElement>(".cm-md-table-wrap"))
+        .find((candidate) => this.view.posAtDOM(candidate) === tableFrom)
+      const rows = wrapper?.querySelectorAll("tr")
+      const cell = rows?.[target.row]?.children[target.column]
+      if (cell instanceof HTMLElement) cell.click()
+    }, 0)
   }
 
   private enableCellEditing(
@@ -221,13 +285,15 @@ export class TableWidget extends WidgetType {
       input.focus()
       input.setSelectionRange(input.value.length, input.value.length)
 
-      let cancelled = false
+      let finished = false
       const restoreCell = () => {
         cellElement.replaceChildren()
         appendInlineMarkdown(cellElement, originalValue)
       }
-      const commit = () => {
-        if (cancelled || input.value === originalValue) {
+      const commit = (navigation?: { appendRow?: boolean; column: number; row: number }) => {
+        if (finished) return
+        finished = true
+        if (!navigation && input.value === originalValue) {
           restoreCell()
           return
         }
@@ -238,28 +304,42 @@ export class TableWidget extends WidgetType {
         }
         if (rowIndex < 0) nextTable.header[columnIndex] = input.value
         else nextTable.rows[rowIndex][columnIndex] = input.value
-
-        // Widget 可能在同步合并后短暂复用；提交前核对原文，避免把旧表格覆盖到新版本。
-        const from = this.view.posAtDOM(wrapper)
-        if (this.view.state.sliceDoc(from, from + this.source.length) !== this.source) {
-          restoreCell()
-          return
-        }
-        this.view.dispatch({
-          changes: { from, to: from + this.source.length, insert: serializeMarkdownTable(nextTable) },
-        })
+        if (navigation?.appendRow) nextTable.rows.push(Array(nextTable.header.length).fill(""))
+        this.replaceTable(wrapper, nextTable, navigation)
       }
-      input.addEventListener("blur", commit, { once: true })
+      input.addEventListener("blur", () => commit(), { once: true })
       input.addEventListener("keydown", (keyboardEvent) => {
         if (keyboardEvent.key === "Escape") {
-          cancelled = true
-          input.blur()
+          finished = true
+          restoreCell()
+          cellElement.focus()
           return
         }
-        if (keyboardEvent.key === "Enter" && !keyboardEvent.shiftKey) {
-          keyboardEvent.preventDefault()
-          input.blur()
+        if (keyboardEvent.key !== "Tab" && keyboardEvent.key !== "Enter") return
+        keyboardEvent.preventDefault()
+        const visualRow = rowIndex + 1
+        const lastColumn = table.header.length - 1
+        const lastVisualRow = table.rows.length
+        let next = { column: columnIndex, row: visualRow }
+        let appendRow = false
+        if (keyboardEvent.key === "Enter") {
+          next.row = visualRow + 1
+          if (next.row > lastVisualRow) appendRow = true
+        } else if (keyboardEvent.shiftKey) {
+          next.column = columnIndex - 1
+          if (next.column < 0) {
+            next.column = lastColumn
+            next.row = Math.max(0, visualRow - 1)
+          }
+        } else {
+          next.column = columnIndex + 1
+          if (next.column > lastColumn) {
+            next.column = 0
+            next.row = visualRow + 1
+            if (next.row > lastVisualRow) appendRow = true
+          }
         }
+        commit({ ...next, appendRow })
       })
     }
     cellElement.addEventListener("click", beginEditing)
@@ -323,6 +403,13 @@ function isInsideCode(state: EditorState, position: number) {
   return false
 }
 
+function isInsideParsedLinkOrCode(state: EditorState, position: number) {
+  for (let node: MdSyntaxNode | null = syntaxTree(state).resolveInner(position, 1); node; node = node.parent) {
+    if (node.name.includes("Code") || node.name === "Link" || node.name === "Autolink") return true
+  }
+  return false
+}
+
 // [[笔记|别名]] 不属于 CommonMark，语法树只会拆成普通文本与不带 URL 的 Link 节点，
 // 因此按可见范围做正则扫描，跳过代码与 frontmatter 后单独装饰。
 const wikiLinkPattern = /(!?)\[\[([^\[\]\n]+)\]\]/g
@@ -351,15 +438,20 @@ function decorateWikiLinks(
     const pipe = value.indexOf("|")
     const target = (pipe < 0 ? value : value.slice(0, pipe)).trim()
     if (!target) continue
+    const active = isCursorActive(start, end)
+    push(Decoration.mark({ class: "cm-md-wiki-link" }).range(start, end))
+
+    const labelStart = pipe < 0 ? start + 2 : start + 2 + pipe + 1
+    const labelEnd = end - 2
+    if (labelStart >= labelEnd) continue
+    // 只把可见文字设为跳转热区；编辑态仍可点击括号或目标源码定位修改。
     push(Decoration.mark({
       attributes: { "data-wiki-target": target, title: WIKI_HINT },
-      class: "cm-md-wiki-link",
-    }).range(start, end))
+      class: "cm-md-link-actionable",
+    }).range(labelStart, labelEnd))
 
-    if (isCursorActive(start, end)) continue
-    // 有别名时连同目标与竖线一起隐藏，只留别名；别名为空则保持原样，避免整段消失。
-    const labelStart = pipe < 0 ? start + 2 : start + 2 + pipe + 1
-    if (labelStart >= end - 2) continue
+    if (active) continue
+    // 有别名时连同目标与竖线一起隐藏，只留别名。
     push(Decoration.replace({}).range(start, labelStart))
     push(Decoration.replace({}).range(end - 2, end))
   }
@@ -367,6 +459,31 @@ function decorateWikiLinks(
 
 // 只有明确的外链协议才挂可点击属性，相对路径与自定义协议留给源码编辑。
 const externalHrefPattern = /^(?:https?|mailto):/i
+const bareUrlPattern = /https?:\/\/[^\s<>]+/gi
+const bareUrlTrailingPunctuation = /[.,;!?，。；！？、]+$/
+
+function decorateBareUrls(
+  state: EditorState,
+  from: number,
+  to: number,
+  frontmatter: DocRange | null,
+  push: (decoration: Range<Decoration>) => void,
+) {
+  for (const match of state.sliceDoc(from, to).matchAll(bareUrlPattern)) {
+    const rawHref = match[0]
+    const href = rawHref.replace(bareUrlTrailingPunctuation, "")
+    if (!href) continue
+    const start = from + (match.index ?? 0)
+    const end = start + href.length
+    if (frontmatter && start < frontmatter.to && end > frontmatter.from) continue
+    // 正式 Markdown 链接和代码区域由语法树处理，裸 URL 扫描只补齐 GFM 自动链接。
+    if (isInsideParsedLinkOrCode(state, start + 1)) continue
+    push(Decoration.mark({
+      attributes: { "data-md-href": href, title: LINK_HINT },
+      class: "cm-md-link cm-md-link-actionable",
+    }).range(start, end))
+  }
+}
 
 function openExternalLink(href: string, options: LivePreviewOptions) {
   if (options.onOpenExternalLink) {
@@ -374,6 +491,20 @@ function openExternalLink(href: string, options: LivePreviewOptions) {
     return
   }
   window.open(href, "_blank", "noopener,noreferrer")
+}
+
+function openActionableLink(element: Element, options: LivePreviewOptions) {
+  const noteTarget = element.closest("[data-wiki-target]")?.getAttribute("data-wiki-target")
+    || element.closest("[data-md-note-target]")?.getAttribute("data-md-note-target")
+  if (noteTarget) {
+    options.onOpenWikiLink?.(noteTarget)
+    return true
+  }
+
+  const href = element.closest("[data-md-href]")?.getAttribute("data-md-href")
+  if (!href) return false
+  openExternalLink(href, options)
+  return true
 }
 
 // 表格整块替换属于块级装饰，CodeMirror 要求块级装饰由 StateField 提供，插件只能携带行内装饰。
@@ -465,6 +596,7 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
 
   for (const { from, to } of view.visibleRanges) {
     decorateWikiLinks(view.state, from, to, isCursorActive, frontmatter, (decoration) => decorations.push(decoration))
+    decorateBareUrls(view.state, from, to, frontmatter, (decoration) => decorations.push(decoration))
 
     syntaxTree(view.state).iterate({
       from,
@@ -541,25 +673,33 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             if (!url) break
             const href = view.state.sliceDoc(url.from, url.to)
             const noteTarget = parseMarkdownNoteHref(href)
-            decorations.push(
-              Decoration.mark({
-                attributes: noteTarget
-                  ? { "data-md-note-target": noteTarget, title: WIKI_HINT }
-                  : externalHrefPattern.test(href) ? { "data-md-href": href, title: LINK_HINT } : undefined,
-                class: "cm-md-link",
-              }).range(node.from, node.to),
-            )
-            if (active) break
-            if (node.name === "Autolink") {
-              hideMarkChildren(node.node, active, "LinkMark")
-              break
-            }
+            const linkAttributes: Record<string, string> | undefined = noteTarget
+              ? { "data-md-note-target": noteTarget, title: WIKI_HINT }
+              : externalHrefPattern.test(href)
+                ? { "data-md-href": href, title: LINK_HINT }
+                : undefined
             const marks: MdSyntaxNode[] = []
             for (let child = node.node.firstChild; child; child = child.nextSibling) {
               if (child.name === "LinkMark") marks.push(child)
             }
             const open = marks[0]
             const close = marks.find((mark) => view.state.sliceDoc(mark.from, mark.to) === "]")
+            decorations.push(
+              Decoration.mark({ class: "cm-md-link" }).range(node.from, node.to),
+            )
+            const actionFrom = node.name === "Autolink" ? url.from : open?.to
+            const actionTo = node.name === "Autolink" ? url.to : close?.from
+            if (linkAttributes && actionFrom !== undefined && actionTo !== undefined && actionFrom < actionTo) {
+              decorations.push(Decoration.mark({
+                attributes: linkAttributes,
+                class: "cm-md-link-actionable",
+              }).range(actionFrom, actionTo))
+            }
+            if (active) break
+            if (node.name === "Autolink") {
+              hideMarkChildren(node.node, active, "LinkMark")
+              break
+            }
             // 链接文本为空时隐藏会让整行看不见内容，保持原样。
             if (!open || !close || close.from <= open.to) break
             decorations.push(Decoration.replace({}).range(open.from, open.to))
@@ -622,27 +762,21 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
   },
   {
     decorations: (plugin) => plugin.decorations,
-    // 普通点击仍然只是把光标放进链接、还原源码；修饰键点击才跳转，避免链接行无法编辑。
+    // 编辑态也允许单击链接文字跳转；括号和 URL 区域仍用于源码定位与修改。
     eventHandlers: {
+      keydown(event: KeyboardEvent, view: EditorView) {
+        if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey) || event.altKey) return false
+        const dom = view.domAtPos(view.state.selection.main.head).node
+        const element = dom instanceof Element ? dom : dom.parentElement
+        if (!element || !openActionableLink(element, view.state.facet(livePreviewOptions))) return false
+        event.preventDefault()
+        return true
+      },
       mousedown(event: MouseEvent, view: EditorView) {
-        if (!(event.metaKey || event.ctrlKey) || event.altKey) return false
         const element = event.target instanceof Element ? event.target : null
         if (!element) return false
-        const options = view.state.facet(livePreviewOptions)
-
-        const wikiTarget = element.closest("[data-wiki-target]")?.getAttribute("data-wiki-target")
-        const markdownNoteTarget = element.closest("[data-md-note-target]")?.getAttribute("data-md-note-target")
-        const noteTarget = wikiTarget || markdownNoteTarget
-        if (noteTarget) {
-          event.preventDefault()
-          options.onOpenWikiLink?.(noteTarget)
-          return true
-        }
-
-        const href = element.closest("[data-md-href]")?.getAttribute("data-md-href")
-        if (!href) return false
+        if (!openActionableLink(element, view.state.facet(livePreviewOptions))) return false
         event.preventDefault()
-        openExternalLink(href, options)
         return true
       },
     },

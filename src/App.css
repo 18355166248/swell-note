@@ -473,16 +473,24 @@
 .markdown-editor-shell .cm-md-quote { border-left: 3px solid var(--blue-line); background: var(--panel-soft); color: var(--muted-foreground); }
 .markdown-editor-shell .cm-md-codeblock { background: #f5f7fa; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
 .markdown-editor-shell .cm-md-task-checkbox { margin: 0 .5em 0 .12em; accent-color: var(--primary); cursor: pointer; vertical-align: middle; }
-.markdown-editor-shell .cm-md-link, .markdown-editor-shell .cm-md-wiki-link { color: var(--primary); text-decoration: underline; text-decoration-color: color-mix(in oklab,var(--primary) 35%,transparent); text-underline-offset: 3px; }
+.markdown-editor-shell .cm-md-link, .markdown-editor-shell .cm-md-wiki-link { color: var(--primary); text-decoration-line: underline; text-decoration-color: color-mix(in oklab,var(--primary) 52%,transparent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.markdown-editor-shell .cm-md-link-actionable { cursor: pointer; }
+.markdown-editor-shell .cm-md-link-actionable:hover, .markdown-editor-shell .cm-md-wiki-link:hover { text-decoration-color: currentColor; text-decoration-thickness: 2px; }
 .markdown-editor-shell .cm-md-wiki-embed { color: color-mix(in oklab,var(--primary) 75%,var(--muted-foreground)); }
 /* 分割线正文被隐藏后只剩空行，靠行底边框呈现横线；光标进入该行会还原 --- 原文。 */
 .markdown-editor-shell .cm-md-hr { border-bottom: 1px solid var(--border); }
 /* frontmatter 属性区保持纯文本可编辑，只做视觉降噪，避免与正文标题混淆。 */
 .markdown-editor-shell .cm-md-frontmatter { background: var(--panel-soft); color: var(--muted-foreground); font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .88em; }
 .markdown-editor-shell .cm-md-frontmatter-fence { color: color-mix(in oklab,var(--muted-foreground) 60%,transparent); }
-.markdown-editor-shell .cm-md-table-wrap { margin: 4px 0; cursor: text; overflow-x: auto; }
+.markdown-editor-shell .cm-md-table-wrap { margin: 8px 0; cursor: text; overflow-x: auto; border: 1px solid var(--border); border-radius: 9px; background: white; }
+.markdown-editor-shell .cm-md-table-toolbar { position: sticky; left: 0; display: flex; min-width: max-content; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); background: var(--panel-soft); padding: 4px 6px; }
+.markdown-editor-shell .cm-md-table-toolbar::after { content: "Tab 切换 · Enter 下移"; margin-left: auto; padding-left: 14px; color: var(--muted-foreground); font-size: 10px; }
+.markdown-editor-shell .cm-md-table-toolbar button { border: 0; border-radius: 5px; background: transparent; padding: 3px 7px; color: var(--muted-foreground); font: inherit; font-size: 11px; cursor: pointer; }
+.markdown-editor-shell .cm-md-table-toolbar button:hover { background: var(--blue-soft); color: var(--primary); }
 .markdown-editor-shell .cm-md-table { border-collapse: collapse; font-size: .95em; line-height: 1.6; }
-.markdown-editor-shell .cm-md-table th, .markdown-editor-shell .cm-md-table td { border: 1px solid var(--border); padding: 5px 10px; }
+.markdown-editor-shell .cm-md-table th, .markdown-editor-shell .cm-md-table td { border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 6px 10px; }
+.markdown-editor-shell .cm-md-table tr:last-child td { border-bottom: 0; }
+.markdown-editor-shell .cm-md-table th:last-child, .markdown-editor-shell .cm-md-table td:last-child { border-right: 0; }
 .markdown-editor-shell .cm-md-table th { background: var(--panel-soft); font-weight: 650; }
 .markdown-editor-shell .cm-md-table code { border-radius: 4px; background: var(--muted); padding: .1em .32em; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
 .markdown-editor-shell .cm-md-table-cell-editable { min-width: 88px; cursor: text; transition: background-color .12s,box-shadow .12s; }
