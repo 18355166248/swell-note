@@ -12,9 +12,17 @@
 .markdown-editor-shell .cm-md-table-toolbar [data-table-action="delete-row"] { margin-left: 4px; }
 .markdown-editor-shell .cm-md-table-toolbar [data-table-action^="delete"]:not(:disabled):hover { background: #fff0f0; color: #c93636; }
 .markdown-editor-shell .cm-md-table-toolbar [data-table-align="left"] { margin-left: 4px; }
+.markdown-editor-shell .cm-md-table-toolbar [data-table-vertical="top"] { margin-left: 4px; }
+.markdown-editor-shell .cm-md-table-toolbar [data-table-vertical][data-active="true"] { background: var(--blue-soft); color: var(--primary); }
 .markdown-editor-shell .cm-md-table { border-collapse: collapse; font-size: .95em; line-height: 1.6; }
 .markdown-editor-shell .cm-md-table tr { height: calc(1.6em + 13px); }
-.markdown-editor-shell .cm-md-table th, .markdown-editor-shell .cm-md-table td { border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 6px 10px; vertical-align: top; }
+.markdown-editor-shell .cm-md-table th, .markdown-editor-shell .cm-md-table td { border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 6px 10px; }
+.markdown-editor-shell .cm-md-table-wrap[data-vertical-align="top"] th,
+.markdown-editor-shell .cm-md-table-wrap[data-vertical-align="top"] td { vertical-align: top; }
+.markdown-editor-shell .cm-md-table-wrap[data-vertical-align="middle"] th,
+.markdown-editor-shell .cm-md-table-wrap[data-vertical-align="middle"] td { vertical-align: middle; }
+.markdown-editor-shell .cm-md-table-wrap[data-vertical-align="bottom"] th,
+.markdown-editor-shell .cm-md-table-wrap[data-vertical-align="bottom"] td { vertical-align: bottom; }
 .markdown-editor-shell .cm-md-table tr:last-child td { border-bottom: 0; }
 .markdown-editor-shell .cm-md-table th:last-child, .markdown-editor-shell .cm-md-table td:last-child { border-right: 0; }
 .markdown-editor-shell .cm-md-table th { background: var(--panel-soft); font-weight: 650; }

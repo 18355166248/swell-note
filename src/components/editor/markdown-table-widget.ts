@@ -16,9 +16,11 @@ import {
 import { renderTableInlineMarkdown, type TableInlineOptions } from "./markdown-table-inline"
 
 type TableWidthMode = "content" | "equal" | "full"
+type TableVerticalMode = "bottom" | "middle" | "top"
 type CellTarget = { column: number; row: number }
 
 const TABLE_WIDTH_MODE_KEY = "swell-note:editor-table-width"
+const TABLE_VERTICAL_MODE_KEY = "swell-note:editor-table-vertical-align"
 const widthModeOrder: TableWidthMode[] = ["content", "full", "equal"]
 
 function loadTableWidthMode(): TableWidthMode {
@@ -35,6 +37,23 @@ function saveTableWidthMode(mode: TableWidthMode) {
     window.localStorage.setItem(TABLE_WIDTH_MODE_KEY, mode)
   } catch {
     // 隐私模式可能禁用 localStorage；当前表格仍可切换，只是不跨会话保留。
+  }
+}
+
+function loadTableVerticalMode(): TableVerticalMode {
+  try {
+    const value = window.localStorage.getItem(TABLE_VERTICAL_MODE_KEY)
+    return value === "middle" || value === "bottom" ? value : "top"
+  } catch {
+    return "top"
+  }
+}
+
+function saveTableVerticalMode(mode: TableVerticalMode) {
+  try {
+    window.localStorage.setItem(TABLE_VERTICAL_MODE_KEY, mode)
+  } catch {
+    // 显示偏好写入失败不影响当前表格继续编辑。
   }
 }
 
@@ -72,6 +91,15 @@ function applyTableWidthMode(wrapper: HTMLElement, mode: TableWidthMode) {
   button.setAttribute("aria-pressed", String(mode !== "content"))
 }
 
+function applyTableVerticalMode(wrapper: HTMLElement, mode: TableVerticalMode) {
+  wrapper.dataset.verticalAlign = mode
+  for (const button of wrapper.querySelectorAll<HTMLButtonElement>("[data-table-vertical]")) {
+    const active = button.dataset.tableVertical === mode
+    button.setAttribute("aria-pressed", String(active))
+    button.dataset.active = String(active)
+  }
+}
+
 export class TableWidget extends WidgetType {
   readonly objectUrls = new Set<string>()
 
@@ -99,10 +127,12 @@ export class TableWidget extends WidgetType {
     const element = this.createTableElement(table, wrapper)
     wrapper.appendChild(element)
     applyTableWidthMode(wrapper, loadTableWidthMode())
+    applyTableVerticalMode(wrapper, loadTableVerticalMode())
 
     if (!this.view.state.readOnly) {
       wrapper.insertBefore(this.createToolbar(wrapper, table), element)
       applyTableWidthMode(wrapper, loadTableWidthMode())
+      applyTableVerticalMode(wrapper, loadTableVerticalMode())
     }
     return wrapper
   }
@@ -175,6 +205,9 @@ export class TableWidget extends WidgetType {
       this.createAlignButton("左对齐", "left", wrapper, table),
       this.createAlignButton("居中", "center", wrapper, table),
       this.createAlignButton("右对齐", "right", wrapper, table),
+      this.createVerticalAlignButton("顶对齐", "top"),
+      this.createVerticalAlignButton("垂直居中", "middle"),
+      this.createVerticalAlignButton("底对齐", "bottom"),
     )
     return toolbar
   }
@@ -274,6 +307,25 @@ export class TableWidget extends WidgetType {
       const next = alignTableColumn(this.tableWithActiveEdit(wrapper, table), columnIndex, align)
       if (!next) return
       this.replaceTable(next, { column: columnIndex, row: rowIndex < 0 ? 0 : rowIndex + 1 })
+    })
+    return button
+  }
+
+  private createVerticalAlignButton(label: string, align: TableVerticalMode) {
+    const button = document.createElement("button")
+    button.type = "button"
+    button.textContent = label
+    button.dataset.tableVertical = align
+    button.title = `${label}（显示偏好，不改写 Markdown）`
+    button.addEventListener("mousedown", (event) => event.preventDefault())
+    button.addEventListener("click", (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      saveTableVerticalMode(align)
+      // Markdown 没有垂直对齐语法，因此作为编辑器级显示偏好应用到当前正文的所有表格。
+      for (const candidate of this.view.contentDOM.querySelectorAll<HTMLElement>(".cm-md-table-wrap")) {
+        applyTableVerticalMode(candidate, align)
+      }
     })
     return button
   }
@@ -386,14 +438,19 @@ export class TableWidget extends WidgetType {
     input.rows = 1
     input.setAttribute("aria-label", cell.getAttribute("aria-label") ?? "编辑表格单元格")
     cell.replaceChildren(input)
-    // 展示态允许长内容换行；编辑控件必须按相同宽度测量并至少保留原高度，避免获得焦点时整行跳动。
+    // 聚焦时先锁定展示态内容高度，避免 Markdown 标记显现后因为额外字符换行而让整行跳动。
+    const stableHeight = Math.max(24, initialContentHeight)
+    input.style.height = `${stableHeight}px`
+    if (input.scrollHeight > stableHeight) input.style.overflowY = "auto"
+    // 只有用户真正输入后才允许单元格按内容增长；单纯获得焦点不会改变表格几何尺寸。
     const resizeInput = () => {
       input.style.height = "0"
       input.style.height = `${Math.max(24, initialContentHeight, input.scrollHeight)}px`
+      input.style.overflowY = "hidden"
     }
-    resizeInput()
     input.addEventListener("input", resizeInput)
-    input.focus()
+    // 单元格本身已经在视口内，禁止 focus 再次滚动页面，否则整张表会产生明显位移。
+    input.focus({ preventScroll: true })
     input.setSelectionRange(input.value.length, input.value.length)
 
     let finished = false

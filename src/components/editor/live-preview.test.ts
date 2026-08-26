@@ -249,11 +249,17 @@ describe("markdown live preview table cells", () => {
 
     const cell = view.contentDOM.querySelector("tbody td") as HTMLTableCellElement
     vi.spyOn(cell, "getBoundingClientRect").mockReturnValue({ height: 64 } as DOMRect)
+    const scrollHeight = vi.spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get").mockReturnValue(120)
+    const focus = vi.spyOn(HTMLTextAreaElement.prototype, "focus")
     cell.click()
 
     const editor = cell.querySelector("textarea") as HTMLTextAreaElement
     expect(editor).not.toBeNull()
+    // 原始 Markdown 标记可能让编辑文本比渲染内容更高，聚焦时仍锁定原高度，避免整行抖动。
     expect(editor.style.height).toBe("64px")
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true })
+    focus.mockRestore()
+    scrollHeight.mockRestore()
     view.destroy()
   })
 
@@ -292,6 +298,9 @@ describe("markdown live preview table cells", () => {
       "左对齐",
       "居中",
       "右对齐",
+      "顶对齐",
+      "垂直居中",
+      "底对齐",
     ])
     buttons[1].click()
     await settle()
@@ -462,6 +471,31 @@ describe("markdown live preview table cells", () => {
     expect([...table.querySelectorAll<HTMLTableColElement>("col")].map((column) => column.style.width))
       .toEqual(["50%", "50%"])
     localStorage.removeItem("swell-note:editor-table-width")
+    view.destroy()
+  })
+
+  it("switches vertical alignment as a display preference without rewriting Markdown", async () => {
+    localStorage.removeItem("swell-note:editor-table-vertical-align")
+    const source = ["| A | B |", "| --- | --- |", "| 短 | 较长内容 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    const wrapper = view.contentDOM.querySelector(".cm-md-table-wrap") as HTMLElement
+    const middle = wrapper.querySelector<HTMLButtonElement>('[data-table-vertical="middle"]')!
+    const bottom = wrapper.querySelector<HTMLButtonElement>('[data-table-vertical="bottom"]')!
+    expect(wrapper.dataset.verticalAlign).toBe("top")
+
+    middle.click()
+    expect(wrapper.dataset.verticalAlign).toBe("middle")
+    expect(middle.getAttribute("aria-pressed")).toBe("true")
+    expect(localStorage.getItem("swell-note:editor-table-vertical-align")).toBe("middle")
+    expect(view.state.doc.toString()).toBe(source)
+
+    bottom.click()
+    expect(wrapper.dataset.verticalAlign).toBe("bottom")
+    expect(bottom.getAttribute("aria-pressed")).toBe("true")
+    expect(view.state.doc.toString()).toBe(source)
+    localStorage.removeItem("swell-note:editor-table-vertical-align")
     view.destroy()
   })
 
