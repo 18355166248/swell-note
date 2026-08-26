@@ -6,6 +6,7 @@ import { EditorView } from "@codemirror/view"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 import { markdownLivePreview } from "./live-preview"
+import "./markdown-table.css"
 
 export type MarkdownEditorHandle = {
   insertText: (text: string) => void

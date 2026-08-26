@@ -231,7 +231,7 @@ describe("markdown live preview table cells", () => {
     expect(wrapper).not.toBeNull()
     const firstCell = wrapper!.querySelector("tbody td") as HTMLTableCellElement
     firstCell.dispatchEvent(new MouseEvent("click", { bubbles: true }))
-    const input = firstCell.querySelector("input") as HTMLInputElement
+    const input = firstCell.querySelector("textarea") as HTMLTextAreaElement
     expect(input).not.toBeNull()
     input.value = "9"
     input.dispatchEvent(new FocusEvent("blur"))
@@ -242,6 +242,21 @@ describe("markdown live preview table cells", () => {
     view.destroy()
   })
 
+  it("keeps the rendered cell height when long content enters edit mode", async () => {
+    const source = ["| 较长的表头内容 |", "| --- |", "| 较长的正文单元格内容 |"].join("\n")
+    const view = createView({ anchor: 0 }, source)
+    await settle()
+
+    const cell = view.contentDOM.querySelector("tbody td") as HTMLTableCellElement
+    vi.spyOn(cell, "getBoundingClientRect").mockReturnValue({ height: 64 } as DOMRect)
+    cell.click()
+
+    const editor = cell.querySelector("textarea") as HTMLTextAreaElement
+    expect(editor).not.toBeNull()
+    expect(editor.style.height).toBe("64px")
+    view.destroy()
+  })
+
   it("commits the previous cell before editing another cell", async () => {
     const source = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n")
     const view = createView({ anchor: 0 }, source)
@@ -249,7 +264,7 @@ describe("markdown live preview table cells", () => {
 
     const firstCell = view.contentDOM.querySelector("tbody td") as HTMLTableCellElement
     firstCell.click()
-    const firstInput = firstCell.querySelector("input") as HTMLInputElement
+    const firstInput = firstCell.querySelector("textarea") as HTMLTextAreaElement
     firstInput.value = "已写回"
 
     const secondCell = view.contentDOM.querySelector("tbody td:nth-child(2)") as HTMLTableCellElement
@@ -258,7 +273,7 @@ describe("markdown live preview table cells", () => {
 
     expect(view.state.doc.toString()).toContain("| 已写回 | 2 |")
     expect(view.contentDOM.querySelectorAll(".cm-md-table-cell-input")).toHaveLength(1)
-    expect(view.contentDOM.querySelector("tbody td:nth-child(2) input")).not.toBeNull()
+    expect(view.contentDOM.querySelector("tbody td:nth-child(2) textarea")).not.toBeNull()
     view.destroy()
   })
 
@@ -373,7 +388,7 @@ describe("markdown live preview table cells", () => {
 
     const firstCell = view.contentDOM.querySelector("tbody td") as HTMLTableCellElement
     firstCell.click()
-    const input = firstCell.querySelector("input") as HTMLInputElement
+    const input = firstCell.querySelector("textarea") as HTMLTextAreaElement
     input.value = "未提交"
 
     const addRow = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
@@ -385,7 +400,7 @@ describe("markdown live preview table cells", () => {
 
     const editedCell = view.contentDOM.querySelector("tbody td") as HTMLTableCellElement
     editedCell.click()
-    const editedInput = editedCell.querySelector("input") as HTMLInputElement
+    const editedInput = editedCell.querySelector("textarea") as HTMLTextAreaElement
     editedInput.value = "继续编辑"
 
     const addColumn = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
@@ -426,7 +441,7 @@ describe("markdown live preview table cells", () => {
 
     const cell = wrapper.querySelector("tbody td") as HTMLTableCellElement
     cell.click()
-    const input = cell.querySelector("input") as HTMLInputElement
+    const input = cell.querySelector("textarea") as HTMLTextAreaElement
     input.value = "输入一段明显更长但不应撑开列宽的内容"
     input.dispatchEvent(new Event("input", { bubbles: true }))
     expect(table.style.width).toBe(initialWidth)
@@ -439,6 +454,13 @@ describe("markdown live preview table cells", () => {
     expect(table.style.width).toBe("100%")
     expect(widthButton.textContent).toBe("宽度：铺满")
     expect(localStorage.getItem("swell-note:editor-table-width")).toBe("full")
+
+    widthButton.click()
+    expect(wrapper.dataset.widthMode).toBe("equal")
+    expect(table.style.width).toBe("100%")
+    expect(widthButton.textContent).toBe("宽度：均分")
+    expect([...table.querySelectorAll<HTMLTableColElement>("col")].map((column) => column.style.width))
+      .toEqual(["50%", "50%"])
     localStorage.removeItem("swell-note:editor-table-width")
     view.destroy()
   })
@@ -450,14 +472,14 @@ describe("markdown live preview table cells", () => {
 
     const lastCell = view.contentDOM.querySelector("tbody td:last-child") as HTMLTableCellElement
     lastCell.click()
-    const input = lastCell.querySelector("input") as HTMLInputElement
+    const input = lastCell.querySelector("textarea") as HTMLTextAreaElement
     input.value = "完成"
     input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }))
     await settle()
 
     expect(view.state.doc.toString()).toContain("| 1 | 完成 |")
     expect(view.state.doc.toString()).toContain("|  |  |")
-    expect(view.contentDOM.querySelector("tbody tr:last-child td input")).not.toBeNull()
+    expect(view.contentDOM.querySelector("tbody tr:last-child td textarea")).not.toBeNull()
     view.destroy()
   })
 
@@ -468,12 +490,12 @@ describe("markdown live preview table cells", () => {
 
     const firstCell = view.contentDOM.querySelector("tbody td") as HTMLTableCellElement
     firstCell.dispatchEvent(new MouseEvent("click", { bubbles: true }))
-    const input = firstCell.querySelector("input") as HTMLInputElement
+    const input = firstCell.querySelector("textarea") as HTMLTextAreaElement
     input.value = "不保存"
     input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
 
     expect(view.state.doc.toString()).toBe(source)
-    expect(firstCell.querySelector("input")).toBeNull()
+    expect(firstCell.querySelector("textarea")).toBeNull()
     expect(firstCell.querySelector("strong")?.textContent).toBe("重点")
     view.destroy()
   })
