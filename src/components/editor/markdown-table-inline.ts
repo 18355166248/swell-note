@@ -5,6 +5,7 @@ export type TableInlineOptions = {
   onOpenExternalLink?: (href: string) => void
   onOpenWikiLink?: (target: string) => void
   onResolveAsset?: (source: string) => Promise<VaultAsset | null>
+  tableStorageKey?: string
 }
 
 const LINK_HINT = "点击打开链接"

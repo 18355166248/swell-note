@@ -14,14 +14,23 @@ import {
   type TableAlignment,
 } from "./markdown-table-model"
 import { renderTableInlineMarkdown, type TableInlineOptions } from "./markdown-table-inline"
+import {
+  loadTableColumnPreference,
+  MIN_TABLE_COLUMN_WIDTH,
+  resizeAdjacentColumnWidths,
+  saveTableColumnPreference,
+  tableColumnPercentages,
+  type TableColumnPreference,
+  type TableWidthMode,
+} from "./markdown-table-width"
 
-type TableWidthMode = "content" | "equal" | "full"
 type TableVerticalMode = "bottom" | "middle" | "top"
 type CellTarget = { column: number; row: number }
 
 const TABLE_WIDTH_MODE_KEY = "swell-note:editor-table-width"
 const TABLE_VERTICAL_MODE_KEY = "swell-note:editor-table-vertical-align"
-const widthModeOrder: TableWidthMode[] = ["content", "full", "equal"]
+const widthModeOrder: Array<Exclude<TableWidthMode, "manual">> = ["content", "full", "equal"]
+const sessionTableColumnPreferences = new WeakMap<EditorView, Map<number, TableColumnPreference>>()
 
 function loadTableWidthMode(): TableWidthMode {
   try {
@@ -57,26 +66,41 @@ function saveTableVerticalMode(mode: TableVerticalMode) {
   }
 }
 
-function nextTableWidthMode(mode: TableWidthMode) {
-  return widthModeOrder[(widthModeOrder.indexOf(mode) + 1) % widthModeOrder.length]
+function nextTableWidthMode(mode: TableWidthMode): Exclude<TableWidthMode, "manual"> {
+  if (mode === "manual") return "content"
+  return widthModeOrder[(widthModeOrder.indexOf(mode) + 1) % widthModeOrder.length] ?? "content"
 }
 
-function applyTableWidthMode(wrapper: HTMLElement, mode: TableWidthMode) {
+function applyTableWidthMode(wrapper: HTMLElement, mode: TableWidthMode, configuredWidths?: number[]) {
   const table = wrapper.querySelector<HTMLTableElement>(".cm-md-table")
   const columns = Array.from(table?.querySelectorAll<HTMLTableColElement>("col[data-content-width]") ?? [])
   if (!table || columns.length === 0) return
-  const widths = columns.map((column) => Number(column.dataset.contentWidth) || 96)
+  const widths = configuredWidths?.length === columns.length
+    ? configuredWidths
+    : columns.map((column) => Number(column.dataset.configuredWidth || column.dataset.contentWidth) || 96)
   const totalWidth = widths.reduce((total, width) => total + width, 0)
+  const percentages = tableColumnPercentages(widths)
 
   wrapper.dataset.widthMode = mode
+  wrapper.dataset.columnWidths = widths.join(",")
   table.style.tableLayout = "fixed"
   table.style.width = mode === "content" ? `${totalWidth}px` : "100%"
+  table.style.minWidth = mode === "manual" ? `${totalWidth}px` : ""
   columns.forEach((column, index) => {
+    column.dataset.configuredWidth = String(widths[index])
     column.style.width = mode === "equal"
       ? `${100 / columns.length}%`
-      : mode === "full"
-        ? `${(widths[index] / totalWidth) * 100}%`
+      : mode === "full" || mode === "manual"
+        ? `${percentages[index]}%`
         : `${widths[index]}px`
+  })
+
+  const headerCells = Array.from(table.tHead?.rows[0]?.cells ?? [])
+  headerCells.slice(0, -1).forEach((cell, index) => {
+    const handle = cell.querySelector<HTMLElement>(".cm-md-table-resize-handle")
+    if (!handle) return
+    handle.setAttribute("aria-valuenow", String(Math.round(percentages[index])))
+    handle.setAttribute("aria-valuetext", `第 ${index + 1} 列宽度 ${Math.round(percentages[index])}%`)
   })
 
   const button = wrapper.querySelector<HTMLButtonElement>(".cm-md-table-width-toggle")
@@ -85,9 +109,10 @@ function applyTableWidthMode(wrapper: HTMLElement, mode: TableWidthMode) {
     content: "宽度：适应",
     equal: "宽度：均分",
     full: "宽度：铺满",
+    manual: "宽度：自定义",
   }
   button.textContent = labels[mode]
-  button.title = `当前${labels[mode].slice(3)}，点击切换列宽模式`
+  button.title = mode === "manual" ? "列宽已锁定，点击重置为内容适应" : `当前${labels[mode].slice(3)}，点击切换列宽模式`
   button.setAttribute("aria-pressed", String(mode !== "content"))
 }
 
@@ -110,12 +135,50 @@ export class TableWidget extends WidgetType {
     readonly from: number,
     readonly to: number,
     readonly options: TableInlineOptions = {},
+    readonly tableIndex = 0,
   ) {
     super()
   }
 
   eq(other: TableWidget) {
-    return other.source === this.source && other.from === this.from && other.to === this.to
+    return other.source === this.source
+      && other.from === this.from
+      && other.to === this.to
+      && other.tableIndex === this.tableIndex
+      && other.options.tableStorageKey === this.options.tableStorageKey
+  }
+
+  private loadColumnPreference(initialWidths: number[]) {
+    let preferences = sessionTableColumnPreferences.get(this.view)
+    if (!preferences) {
+      preferences = new Map()
+      sessionTableColumnPreferences.set(this.view, preferences)
+    }
+    const sessionPreference = preferences.get(this.tableIndex)
+    if (sessionPreference?.widths.length === initialWidths.length) return sessionPreference
+
+    const stored = this.options.tableStorageKey
+      ? loadTableColumnPreference(this.options.tableStorageKey, this.tableIndex, initialWidths.length)
+      : null
+    const preference = stored ?? { mode: loadTableWidthMode(), widths: initialWidths }
+    preferences.set(this.tableIndex, preference)
+    if (!stored && this.options.tableStorageKey) {
+      // 第一次渲染即锁定内容推导出的基准宽度，后续长文本提交不会重新分配整张表。
+      saveTableColumnPreference(this.options.tableStorageKey, this.tableIndex, preference)
+    }
+    return preference
+  }
+
+  private saveColumnPreference(preference: TableColumnPreference) {
+    let preferences = sessionTableColumnPreferences.get(this.view)
+    if (!preferences) {
+      preferences = new Map()
+      sessionTableColumnPreferences.set(this.view, preferences)
+    }
+    preferences.set(this.tableIndex, { mode: preference.mode, widths: [...preference.widths] })
+    if (this.options.tableStorageKey) {
+      saveTableColumnPreference(this.options.tableStorageKey, this.tableIndex, preference)
+    }
   }
 
   toDOM() {
@@ -125,17 +188,18 @@ export class TableWidget extends WidgetType {
     wrapper.dataset.tableFrom = String(this.from)
     if (!table) return wrapper
 
-    const element = this.createTableElement(table, wrapper)
+    const preference = this.loadColumnPreference(tableColumnWidths(table))
+    const element = this.createTableElement(table, wrapper, preference.widths)
     const tableScroll = document.createElement("div")
     tableScroll.className = "cm-md-table-scroll"
     tableScroll.appendChild(element)
     wrapper.appendChild(tableScroll)
-    applyTableWidthMode(wrapper, loadTableWidthMode())
+    applyTableWidthMode(wrapper, preference.mode, preference.widths)
     applyTableVerticalMode(wrapper, loadTableVerticalMode())
 
     if (!this.view.state.readOnly) {
       wrapper.insertBefore(this.createToolbar(wrapper, table), tableScroll)
-      applyTableWidthMode(wrapper, loadTableWidthMode())
+      applyTableWidthMode(wrapper, preference.mode, preference.widths)
       applyTableVerticalMode(wrapper, loadTableVerticalMode())
     }
     return wrapper
@@ -148,13 +212,14 @@ export class TableWidget extends WidgetType {
     this.cleanupCallbacks.clear()
   }
 
-  private createTableElement(table: MarkdownTable, wrapper: HTMLDivElement) {
+  private createTableElement(table: MarkdownTable, wrapper: HTMLDivElement, configuredWidths: number[]) {
     const element = document.createElement("table")
     element.className = "cm-md-table"
     const colgroup = document.createElement("colgroup")
-    for (const width of tableColumnWidths(table)) {
+    for (const width of configuredWidths) {
       const column = document.createElement("col")
       column.dataset.contentWidth = String(width)
+      column.dataset.configuredWidth = String(width)
       colgroup.appendChild(column)
     }
     element.appendChild(colgroup)
@@ -163,6 +228,7 @@ export class TableWidget extends WidgetType {
     table.header.forEach((cell, columnIndex) => {
       headRow.appendChild(this.createCell("th", cell, table, wrapper, -1, columnIndex))
     })
+    if (!this.view.state.readOnly) this.addColumnResizeHandles(headRow, wrapper)
     const thead = document.createElement("thead")
     thead.appendChild(headRow)
     element.appendChild(thead)
@@ -204,6 +270,83 @@ export class TableWidget extends WidgetType {
     renderTableInlineMarkdown(parent, value, this.options, (url) => this.objectUrls.add(url))
   }
 
+  private renderedColumnWidths(wrapper: HTMLElement) {
+    const table = wrapper.querySelector<HTMLTableElement>(".cm-md-table")
+    const rendered = Array.from(table?.tHead?.rows[0]?.cells ?? []).map((cell) => cell.getBoundingClientRect().width)
+    if (rendered.length > 1 && rendered.every((width) => width >= MIN_TABLE_COLUMN_WIDTH)) return rendered
+    return (wrapper.dataset.columnWidths ?? "")
+      .split(",")
+      .map(Number)
+      .filter((width) => Number.isFinite(width))
+  }
+
+  private applyManualColumnWidths(wrapper: HTMLElement, widths: number[]) {
+    const preference = { mode: "manual", widths } satisfies TableColumnPreference
+    applyTableWidthMode(wrapper, preference.mode, preference.widths)
+    this.saveColumnPreference(preference)
+  }
+
+  private addColumnResizeHandles(headRow: HTMLTableRowElement, wrapper: HTMLDivElement) {
+    Array.from(headRow.cells).slice(0, -1).forEach((cell, columnIndex) => {
+      const handle = document.createElement("button")
+      handle.type = "button"
+      handle.className = "cm-md-table-resize-handle"
+      handle.setAttribute("aria-label", `调整第 ${columnIndex + 1} 列宽度`)
+      handle.setAttribute("aria-orientation", "vertical")
+      handle.setAttribute("aria-valuemin", "0")
+      handle.setAttribute("aria-valuemax", "100")
+      handle.setAttribute("role", "separator")
+      handle.title = "拖拽调整相邻列宽；方向键可微调"
+      handle.addEventListener("click", (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+      })
+      handle.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+        event.preventDefault()
+        event.stopPropagation()
+        const widths = this.renderedColumnWidths(wrapper)
+        if (widths.length !== headRow.cells.length) return
+        this.applyManualColumnWidths(
+          wrapper,
+          resizeAdjacentColumnWidths(widths, columnIndex, event.key === "ArrowLeft" ? -12 : 12),
+        )
+      })
+      handle.addEventListener("mousedown", (event) => {
+        if (event.button !== 0) return
+        event.preventDefault()
+        event.stopPropagation()
+        const startWidths = this.renderedColumnWidths(wrapper)
+        if (startWidths.length !== headRow.cells.length) return
+        const startX = event.clientX
+        let nextWidths = startWidths
+        wrapper.classList.add("cm-md-table-resizing")
+
+        const move = (moveEvent: MouseEvent) => {
+          moveEvent.preventDefault()
+          nextWidths = resizeAdjacentColumnWidths(startWidths, columnIndex, moveEvent.clientX - startX)
+          applyTableWidthMode(wrapper, "manual", nextWidths)
+        }
+        const finish = () => {
+          wrapper.classList.remove("cm-md-table-resizing")
+          document.removeEventListener("mousemove", move)
+          document.removeEventListener("mouseup", finish)
+          this.cleanupCallbacks.delete(cleanup)
+          this.applyManualColumnWidths(wrapper, nextWidths)
+        }
+        const cleanup = () => {
+          wrapper.classList.remove("cm-md-table-resizing")
+          document.removeEventListener("mousemove", move)
+          document.removeEventListener("mouseup", finish)
+        }
+        document.addEventListener("mousemove", move)
+        document.addEventListener("mouseup", finish, { once: true })
+        this.cleanupCallbacks.add(cleanup)
+      })
+      cell.appendChild(handle)
+    })
+  }
+
   private createToolbar(wrapper: HTMLDivElement, table: MarkdownTable) {
     const toolbar = document.createElement("div")
     toolbar.className = "cm-md-table-toolbar"
@@ -213,7 +356,7 @@ export class TableWidget extends WidgetType {
     selectionStatus.setAttribute("aria-live", "polite")
     selectionStatus.textContent = "未选择单元格"
     toolbar.append(
-      this.createWidthButton(wrapper),
+      this.createWidthButton(wrapper, table),
       this.createToolbarMenu("行列", [
         this.createMutationButton("添加行", wrapper, () => appendTableRow(table)),
         this.createMutationButton("添加列", wrapper, () => appendTableColumn(table)),
@@ -263,7 +406,7 @@ export class TableWidget extends WidgetType {
     return menu
   }
 
-  private createWidthButton(wrapper: HTMLDivElement) {
+  private createWidthButton(wrapper: HTMLDivElement, table: MarkdownTable) {
     const button = document.createElement("button")
     button.type = "button"
     button.className = "cm-md-table-width-toggle"
@@ -271,15 +414,18 @@ export class TableWidget extends WidgetType {
     button.addEventListener("click", (event) => {
       event.preventDefault()
       event.stopPropagation()
-      const current = widthModeOrder.includes(wrapper.dataset.widthMode as TableWidthMode)
-        ? wrapper.dataset.widthMode as TableWidthMode
-        : "content"
+      const current = widthModeOrder.includes(wrapper.dataset.widthMode as Exclude<TableWidthMode, "manual">)
+        ? wrapper.dataset.widthMode as Exclude<TableWidthMode, "manual">
+        : wrapper.dataset.widthMode === "manual" ? "manual" : "content"
       const mode = nextTableWidthMode(current)
       saveTableWidthMode(mode)
-      // 列宽是编辑器级显示偏好，同一篇笔记中的表格同步切换，且不改写 Markdown。
-      for (const candidate of this.view.contentDOM.querySelectorAll<HTMLElement>(".cm-md-table-wrap")) {
-        applyTableWidthMode(candidate, mode)
-      }
+      const widths = current === "manual"
+        ? tableColumnWidths(this.tableWithActiveEdit(wrapper, table))
+        : this.renderedColumnWidths(wrapper)
+      const preference = { mode, widths } satisfies TableColumnPreference
+      this.saveColumnPreference(preference)
+      // 列宽是当前表格的显示偏好，不改写 Markdown；新表格仍沿用最近选择的基础模式。
+      applyTableWidthMode(wrapper, mode, widths)
     })
     return button
   }

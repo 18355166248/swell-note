@@ -34,6 +34,14 @@
 .markdown-editor-shell .cm-md-table tr:last-child td { border-bottom: 0; }
 .markdown-editor-shell .cm-md-table th:last-child, .markdown-editor-shell .cm-md-table td:last-child { border-right: 0; }
 .markdown-editor-shell .cm-md-table th { background: var(--panel-soft); font-weight: 650; }
+.markdown-editor-shell .cm-md-table th { position: relative; }
+.markdown-editor-shell .cm-md-table-resize-handle { position: absolute; top: 0; right: -6px; z-index: 4; width: 12px; height: 100%; border: 0; padding: 0; touch-action: none; background: transparent; cursor: col-resize; }
+.markdown-editor-shell .cm-md-table-resize-handle::after { position: absolute; top: 4px; bottom: 4px; left: 5px; width: 2px; border-radius: 2px; background: var(--primary); content: ""; opacity: 0; transition: opacity 120ms ease; }
+.markdown-editor-shell .cm-md-table th:hover > .cm-md-table-resize-handle::after,
+.markdown-editor-shell .cm-md-table-resize-handle:focus-visible::after,
+.markdown-editor-shell .cm-md-table-resizing .cm-md-table-resize-handle::after { opacity: .7; }
+.markdown-editor-shell .cm-md-table-resize-handle:focus-visible { outline: 2px solid color-mix(in oklab,var(--primary) 55%,transparent); outline-offset: -3px; }
+.markdown-editor-shell .cm-md-table-resizing { cursor: col-resize; user-select: none; }
 .markdown-editor-shell .cm-md-table code { border-radius: 4px; background: var(--muted); padding: .1em .32em; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
 .markdown-editor-shell .cm-md-table del { color: var(--muted-foreground); }
 .markdown-editor-shell .cm-md-table-link { color: var(--primary); text-decoration: underline; text-decoration-color: color-mix(in oklab,var(--primary) 52%,transparent); text-underline-offset: 3px; cursor: pointer; }
@@ -54,4 +62,5 @@
 @media (max-width: 640px) {
   .markdown-editor-shell .cm-md-table-toolbar::after { display: none; }
   .markdown-editor-shell .cm-md-table-selection-status { margin-left: auto; }
+  .markdown-editor-shell .cm-md-table-resize-handle { display: none; }
 }

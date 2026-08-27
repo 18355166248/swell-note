@@ -258,11 +258,11 @@ function tableBlocksKey(blocks: TableBlock[]) {
 
 function tableBlocksDecorations(blocks: TableBlock[], view: EditorView): DecorationSet {
   return Decoration.set(
-    blocks.map((block) =>
+    blocks.map((block, tableIndex) =>
       Decoration.replace({
         block: true,
         // 块级替换节点在不同浏览器中通过 posAtDOM 可能映射到范围末端，直接传递解析得到的源码起点。
-        widget: new TableWidget(block.source, view, block.from, block.to, view.state.facet(livePreviewOptions)),
+        widget: new TableWidget(block.source, view, block.from, block.to, view.state.facet(livePreviewOptions), tableIndex),
       }).range(block.from, block.to),
     ),
     true,

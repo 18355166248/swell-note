@@ -21,11 +21,12 @@ type MarkdownEditorProps = {
   onOpenWikiLink?: (target: string) => void
   onResolveAsset?: (source: string) => Promise<VaultAsset | null>
   readOnly?: boolean
+  storageKey?: string
   value: string
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, readOnly = false, value }, ref) {
+  function MarkdownEditor({ onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, readOnly = false, storageKey, value }, ref) {
     const editorRef = useRef<ReactCodeMirrorRef>(null)
 
     // CodeMirror 的扩展数组一旦换引用就会整体重配置（语言也会重新解析）；
@@ -41,6 +42,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       markdownLivePreview({
         onOpenWikiLink: (target) => handlers.current.onOpenWikiLink?.(target),
         onResolveAsset: (source) => handlers.current.onResolveAsset?.(source) ?? Promise.resolve(null),
+        tableStorageKey: storageKey,
       }),
       EditorView.lineWrapping,
       EditorView.updateListener.of((update) => {
@@ -89,7 +91,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           return true
         },
       }),
-    ], [readOnly])
+    ], [readOnly, storageKey])
 
     useImperativeHandle(ref, () => ({
       insertText(text) {

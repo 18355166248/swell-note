@@ -1323,6 +1323,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
                   onResolveAsset={onResolveAsset}
                   readOnly={readOnly}
                   ref={editorRef}
+                  storageKey={note.id}
                   value={note.content}
                 />
               </Suspense>

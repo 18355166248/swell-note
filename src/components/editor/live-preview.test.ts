@@ -276,6 +276,36 @@ describe("markdown live preview table cells", () => {
     view.destroy()
   })
 
+  it("keeps column widths stable after long text commits and supports keyboard resizing", async () => {
+    window.localStorage.removeItem("swell-note:editor-table-width")
+    const source = ["| A | B |", "| --- | --- |", "| 短文本 | 正常 |"].join("\n")
+    const view = createView({ anchor: 0 }, source, { tableStorageKey: "width-stability-note" })
+    await settle()
+
+    const initialColumns = [...view.contentDOM.querySelectorAll<HTMLTableColElement>(".cm-md-table col")]
+      .map((column) => column.dataset.configuredWidth)
+    const cell = view.contentDOM.querySelector("tbody td") as HTMLTableCellElement
+    cell.click()
+    const input = cell.querySelector("textarea") as HTMLTextAreaElement
+    input.value = "这是提交后也不应该重新分配列宽的很长文本内容"
+    input.dispatchEvent(new Event("blur"))
+    await settle()
+
+    const wrapper = view.contentDOM.querySelector(".cm-md-table-wrap") as HTMLDivElement
+    const committedColumns = [...wrapper.querySelectorAll<HTMLTableColElement>("col")]
+      .map((column) => column.dataset.configuredWidth)
+    expect(committedColumns).toEqual(initialColumns)
+
+    const handles = wrapper.querySelectorAll<HTMLButtonElement>('.cm-md-table-resize-handle[role="separator"]')
+    expect(handles).toHaveLength(1)
+    handles[0].dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }))
+    expect(wrapper.dataset.widthMode).toBe("manual")
+    expect(wrapper.querySelector(".cm-md-table-width-toggle")?.textContent).toBe("宽度：自定义")
+    expect([...wrapper.querySelectorAll<HTMLTableColElement>("col")].map((column) => column.style.width))
+      .toEqual(["56.25%", "43.75%"])
+    view.destroy()
+  })
+
   it("commits the previous cell before editing another cell", async () => {
     const source = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n")
     const view = createView({ anchor: 0 }, source)
