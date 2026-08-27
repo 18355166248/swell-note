@@ -109,6 +109,7 @@ import {
   type TrashRetentionDays,
 } from "@/services/trash/trash-entry"
 import { loadTrashRetention, saveTrashRetention } from "@/services/trash/trash-preferences"
+import { loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
 import type { Note, NoteSaveState } from "@/types/note"
 import "./App.css"
 
@@ -142,6 +143,11 @@ function App() {
   const [noteSort, setNoteSort] = useState<NoteSort>("updated-desc")
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
   const [mobileScreen, setMobileScreen] = useState<MobileScreen>("library")
+  const [noteViewMode, setNoteViewMode] = useState<NoteViewMode>(() => loadUiPreferences().noteViewMode)
+  const changeNoteViewMode = useCallback((mode: NoteViewMode) => {
+    setNoteViewMode(mode)
+    saveUiPreferences({ noteViewMode: mode })
+  }, [])
   const [isCreatingNote, setIsCreatingNote] = useState(false)
   const [isManagingNote, setIsManagingNote] = useState(false)
   const [isOpeningVault, setIsOpeningVault] = useState(false)
@@ -2570,6 +2576,7 @@ function App() {
             mobileScreen={mobileScreen}
             mobileConnectionLabel={mobileConnectionLabel}
             mobileListStateKey={normalizedQuery}
+            noteViewMode={noteViewMode}
             noteSort={noteSort}
             notes={visibleNotes}
             onCreateNote={() => void createNote()}
@@ -2595,6 +2602,7 @@ function App() {
             }}
             onNavigate={navigate}
             onMoveNote={(folderPath) => void moveActiveNote(folderPath)}
+            onNoteViewModeChange={changeNoteViewMode}
             onRenameFolder={renameFolder}
             onRenameNote={(title) => void moveActiveNote(activeNote?.folder === "根目录" ? null : activeNote?.folder ?? null, title)}
             onOpenLocalVault={() => void openLocalVault()}

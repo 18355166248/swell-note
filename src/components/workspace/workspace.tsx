@@ -83,6 +83,7 @@ import {
 import { buildNotePreview } from "@/services/markdown/note-preview"
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
 import type { NoteSort } from "@/services/search/note-sort"
+import type { NoteViewMode } from "@/services/preferences/ui-preferences"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
@@ -125,6 +126,7 @@ type WorkspaceProps = {
   mobileScreen: MobileScreen
   mobileConnectionLabel: string
   mobileListStateKey: string
+  noteViewMode: NoteViewMode
   noteSort: NoteSort
   notes: Note[]
   onCreateNote: () => void
@@ -134,6 +136,7 @@ type WorkspaceProps = {
   onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
   onIncludeNestedFolderNotesChange: (include: boolean) => void
   onMobileScreenChange: (screen: MobileScreen) => void
+  onNoteViewModeChange: (mode: NoteViewMode) => void
   onDeleteNote: () => void
   onDeleteFolder: (folderPath: string) => void
   onOpenLocalVault: () => void
@@ -172,6 +175,22 @@ type WorkspaceProps = {
 
 export function Workspace(props: WorkspaceProps) {
   const [expandedFolderPaths, setExpandedFolderPaths] = useState<Set<string>>(() => new Set())
+  const activeNoteUsesSpecialPreview = Boolean(
+    props.activeNote
+    && (props.activeNote.format === "canvas" || isExcalidrawMarkdown(props.activeNote.content)),
+  )
+
+  useEffect(() => {
+    if (!props.activeNote || activeNoteUsesSpecialPreview) return
+    const toggleViewMode = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLocaleLowerCase() !== "e") return
+      event.preventDefault()
+      props.onNoteViewModeChange(props.noteViewMode === "preview" ? "edit" : "preview")
+    }
+    // 桌面与移动布局会同时挂载，快捷键统一放在 Workspace，避免两个编辑器各触发一次相互抵消。
+    document.addEventListener("keydown", toggleViewMode)
+    return () => document.removeEventListener("keydown", toggleViewMode)
+  }, [activeNoteUsesSpecialPreview, props.activeNote?.id, props.noteViewMode, props.onNoteViewModeChange])
 
   useEffect(() => {
     const ancestors = getFolderAncestorPaths(props.selectedFolder)
@@ -313,6 +332,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           isManagingNote={props.isManagingNote}
           moveTargets={props.folders}
           note={props.activeNote}
+          noteViewMode={props.noteViewMode}
           onDeleteNote={props.onDeleteNote}
           onFormat={props.onFormat}
           onFormatNote={props.onFormatNote}
@@ -321,6 +341,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           onOpenWikiLink={props.onOpenWikiLink}
           onOpenSourceFile={props.onOpenSourceFile}
           onMoveNote={props.onMoveNote}
+          onNoteViewModeChange={props.onNoteViewModeChange}
           onRenameNote={props.onRenameNote}
           onSelectNote={props.onSelectNote}
           onUpdateNote={props.onUpdateNote}
@@ -992,6 +1013,7 @@ type NoteEditorProps = {
   isManagingNote: boolean
   moveTargets: VaultFolder[]
   note: Note
+  noteViewMode: NoteViewMode
   onBack?: () => void
   onDeleteNote: () => void
   onFormat: (syntax: string) => void
@@ -1001,6 +1023,7 @@ type NoteEditorProps = {
   onOpenWikiLink: (target: string) => void
   onOpenSourceFile: () => void
   onMoveNote: (folderPath: string | null) => void
+  onNoteViewModeChange: (mode: NoteViewMode) => void
   onRenameNote: (title: string) => void
   onReloadNote: () => void
   onResolveConflict: (strategy: "local" | "merge" | "remote") => void
@@ -1014,14 +1037,15 @@ type NoteEditorProps = {
   syncing: boolean
 }
 
-function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, onBack, onSelectFolder, onDeleteNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing }: NoteEditorProps) {
+function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing }: NoteEditorProps) {
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
   const isCanvas = note.format === "canvas"
   const isExcalidraw = isExcalidrawMarkdown(note.content)
   const isSpecialPreview = isCanvas || isExcalidraw
   const readOnly = isCanvas || (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
   const editorRef = useRef<MarkdownEditorHandle>(null)
-  const [previewing, setPreviewing] = useState(compact || isSpecialPreview)
+  // 特殊画布始终使用专属预览；普通 Markdown 读取 App 级偏好，切换笔记或路由不会重置。
+  const previewing = isSpecialPreview || noteViewMode === "preview"
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [renameTitle, setRenameTitle] = useState(note.title)
@@ -1043,23 +1067,6 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
       return "无法解析的画布"
     }
   }, [isCanvas, note.content])
-
-  useEffect(() => {
-    // 手机进入新文档时默认阅读，避免误触键盘；用户可通过明确按钮进入编辑模式。
-    setPreviewing(compact || isSpecialPreview)
-  }, [compact, isSpecialPreview])
-
-  useEffect(() => {
-    if (isSpecialPreview) return
-    const togglePreview = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLocaleLowerCase() !== "e") return
-      event.preventDefault()
-      setPreviewing((current) => !current)
-    }
-    // 保留高频快捷切换：⌘/Ctrl+E 在编辑和阅读视图之间切换。
-    document.addEventListener("keydown", togglePreview)
-    return () => document.removeEventListener("keydown", togglePreview)
-  }, [isSpecialPreview])
 
   // Vault 笔记的标题对应文件名：编辑时先落草稿，失焦或回车再走统一的重命名链路，避免每次按键触发文件操作。
   const isVaultNote = note.source === "local" || note.source === "webdav"
@@ -1160,7 +1167,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
                 aria-label={previewing ? "切换到编辑" : "切换到预览"}
                 className="preview-toggle"
                 data-active={previewing}
-                onClick={() => setPreviewing((current) => !current)}
+                onClick={() => onNoteViewModeChange(previewing ? "edit" : "preview")}
                 size="icon-sm"
                 variant="ghost"
               >
@@ -1501,6 +1508,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             compact
             moveTargets={props.folders}
             note={props.activeNote}
+            noteViewMode={props.noteViewMode}
             backLabel={backLabel}
             onSelectFolder={props.onSelectFolder}
             onBack={() => props.onMobileScreenChange("notes")}
@@ -1512,6 +1520,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             onOpenWikiLink={props.onOpenWikiLink}
             onOpenSourceFile={props.onOpenSourceFile}
             onMoveNote={props.onMoveNote}
+            onNoteViewModeChange={props.onNoteViewModeChange}
             onRenameNote={props.onRenameNote}
             onReloadNote={props.onReloadNote}
             onResolveAsset={props.onResolveAsset}
