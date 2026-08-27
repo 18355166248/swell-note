@@ -468,7 +468,9 @@
 .document-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 13px 0 30px; color: var(--muted-foreground); font-size: 11px; }
 .markdown-editor-shell { width: 100%; min-height: calc(100dvh - 250px); color: #28313e; }
 .markdown-editor-shell .cm-editor { min-height: inherit; background: transparent; font-size: 14px; }
-.markdown-editor-shell .cm-editor.cm-focused { outline: none; }
+.markdown-editor-shell .cm-editor.cm-focused,
+.markdown-editor-shell .cm-content:focus,
+.markdown-editor-shell .cm-content:focus-visible { outline: none !important; }
 .markdown-editor-shell .cm-scroller { overflow: visible; font-family: "Geist Variable","PingFang SC",sans-serif; line-height: 1.85; }
 .markdown-editor-shell .cm-content { padding: 0; caret-color: var(--primary); }
 .markdown-editor-shell .cm-line { padding: 0; }
@@ -488,7 +490,8 @@
 .markdown-editor-shell .cm-md-inline-code { border-radius: 4px; background: var(--muted); padding: .1em .32em; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
 .markdown-editor-shell .cm-md-quote { border-left: 3px solid var(--blue-line); background: var(--panel-soft); color: var(--muted-foreground); }
 .markdown-editor-shell .cm-md-codeblock { background: #f5f7fa; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
-.markdown-editor-shell .cm-md-task-checkbox { margin: 0 .5em 0 .12em; accent-color: var(--primary); cursor: pointer; vertical-align: middle; }
+.markdown-editor-shell .cm-widgetBuffer { display: inline !important; width: 0 !important; }
+.markdown-editor-shell .cm-md-task-checkbox { display: inline-block !important; box-sizing: border-box; width: 15px; height: 15px; margin: 0 .5em 0 0; accent-color: var(--primary); cursor: pointer; vertical-align: -2px; }
 .markdown-editor-shell .cm-md-link, .markdown-editor-shell .cm-md-wiki-link { color: var(--primary); text-decoration-line: underline; text-decoration-color: color-mix(in oklab,var(--primary) 52%,transparent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .markdown-editor-shell .cm-md-link-actionable { cursor: pointer; }
 .markdown-editor-shell .cm-md-link-actionable:hover, .markdown-editor-shell .cm-md-wiki-link:hover { text-decoration-color: currentColor; text-decoration-thickness: 2px; }

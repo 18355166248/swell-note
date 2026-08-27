@@ -7,6 +7,8 @@
   "scripts": {
     "build:android:debug": "tauri android build --debug --apk --target aarch64 --ci",
     "build:ios:sim": "tauri ios build --debug --target aarch64-sim --no-sign --ci",
+    "build:mac": "tauri build --bundles app,dmg",
+    "build:mac:universal": "tauri build --target universal-apple-darwin --bundles app,dmg",
     "dev": "vite",
     "build": "tsc && vite build",
     "test": "vitest run",

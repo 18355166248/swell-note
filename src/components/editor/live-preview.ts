@@ -384,8 +384,13 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
                 widget: new TaskCheckboxWidget(checked, node.from, node.to, view),
               }).range(node.from, node.to),
             )
-            const listMark = node.node.prevSibling
-            if (listMark?.name === "ListMark") hide(listMark)
+            // TaskMarker 的前一个语法兄弟并不稳定，直接按当前行定位列表标记；仅隐藏 `- ` 等标记并保留嵌套缩进。
+            const line = view.state.doc.lineAt(node.from)
+            const prefix = view.state.sliceDoc(line.from, node.from)
+            const listMarker = prefix.match(/(?:[-+*]|\d+[.)])\s+$/)
+            if (listMarker?.index !== undefined) {
+              decorations.push(Decoration.replace({}).range(line.from + listMarker.index, node.from))
+            }
             break
           }
           case "Link":

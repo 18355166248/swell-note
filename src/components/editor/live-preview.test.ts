@@ -114,6 +114,8 @@ describe("markdown live preview", () => {
       { checked: false, from: doc.indexOf("[ ]") },
       { checked: true, from: doc.indexOf("[x]") },
     ])
+    expect(hidden).toContainEqual({ from: doc.indexOf("- [ ]"), to: doc.indexOf("[ ]") })
+    expect(hidden).toContainEqual({ from: doc.indexOf("- [x]"), to: doc.indexOf("[x]") })
   })
 
   it("reveals raw syntax on the cursor line", async () => {
