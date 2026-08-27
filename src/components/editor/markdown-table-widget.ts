@@ -85,7 +85,8 @@ function applyTableWidthMode(wrapper: HTMLElement, mode: TableWidthMode, configu
   wrapper.dataset.columnWidths = widths.join(",")
   table.style.tableLayout = "fixed"
   table.style.width = mode === "content" ? `${totalWidth}px` : "100%"
-  table.style.minWidth = mode === "manual" ? `${totalWidth}px` : ""
+  // 自定义模式保存的是列宽比例；整表只保留可用性下限，避免窄窗口继续沿用旧像素总宽而撑破编辑区。
+  table.style.minWidth = mode === "manual" ? `${columns.length * MIN_TABLE_COLUMN_WIDTH}px` : ""
   columns.forEach((column, index) => {
     column.dataset.configuredWidth = String(widths[index])
     column.style.width = mode === "equal"
@@ -643,13 +644,14 @@ export class TableWidget extends WidgetType {
     // 展示层继续留在网格中占位，输入层与其重叠；聚焦不会再替换 DOM 或触发表格重新布局。
     contentStack.appendChild(input)
     cell.classList.add("cm-md-table-cell-editing")
-    const stableHeight = Math.max(24, initialContentHeight)
+    const singleLineHeight = Number.parseFloat(window.getComputedStyle(display).lineHeight) || 24
+    const stableHeight = Math.max(singleLineHeight, initialContentHeight)
     input.style.height = `${stableHeight}px`
     if (input.scrollHeight > stableHeight) input.style.overflowY = "auto"
     // 只有用户真正输入后才允许单元格按内容增长；单纯获得焦点不会改变表格几何尺寸。
     const resizeInput = () => {
       input.style.height = "0"
-      const nextHeight = Math.max(24, initialContentHeight, input.scrollHeight)
+      const nextHeight = Math.max(singleLineHeight, initialContentHeight, input.scrollHeight)
       input.style.height = `${nextHeight}px`
       // 输入层绝对定位，不参与表格布局；只有内容真实增长时才同步扩大占位层。
       contentStack.style.minHeight = `${nextHeight}px`

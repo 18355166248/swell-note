@@ -591,6 +591,7 @@
 .markdown-preview .hljs-deletion { color: #82071e; background: #ffebe9; }
 .markdown-table-wrap { width: 100%; margin: 1.1em 0; overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
 .markdown-preview table { width: 100%; min-width: 520px; border-collapse: collapse; }
+.markdown-preview table tr { height: calc(1lh + 15px); }
 .markdown-preview th, .markdown-preview td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; }
 .markdown-preview tr > :first-child { border-left: 0; }
 .markdown-preview tr > :last-child { border-right: 0; }

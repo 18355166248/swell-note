@@ -303,6 +303,8 @@ describe("markdown live preview table cells", () => {
     expect(wrapper.querySelector(".cm-md-table-width-toggle")?.textContent).toBe("宽度：自定义")
     expect([...wrapper.querySelectorAll<HTMLTableColElement>("col")].map((column) => column.style.width))
       .toEqual(["56.25%", "43.75%"])
+    // 自定义列宽只锁定比例，整表下限按列数计算，不能沿用历史像素总宽撑破窄窗口。
+    expect(wrapper.querySelector<HTMLTableElement>("table")?.style.minWidth).toBe("144px")
     view.destroy()
   })
 
