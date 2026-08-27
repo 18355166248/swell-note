@@ -105,6 +105,8 @@ type WorkspaceProps = {
   activeCacheId: string | null
   activeNote: Note | null
   activeNoteId: string
+  activeNoteLoadError: string | null
+  activeNoteLoading: boolean
   availableTags: string[]
   backlinks: Note[]
   connectionLabel: string
@@ -151,6 +153,7 @@ type WorkspaceProps = {
   onQueryChange: (query: string) => void
   onNoteSortChange: (sort: NoteSort) => void
   onReloadNote: () => void
+  onRetryNoteLoad: () => void
   onRefreshVault: () => void
   onResolveConflict: (strategy: "local" | "merge" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
@@ -318,8 +321,16 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         selectedTag={props.selectedTag}
         selectedFolder={props.selectedFolder}
         isManagingFolder={props.isManagingNote}
+        isLoading={props.isRefreshingVault}
       /> : null}
-      {props.activeNote ? (
+      {props.activeNote ? props.activeNoteLoading || props.activeNoteLoadError ? (
+        <NoteDocumentState
+          error={props.activeNoteLoadError}
+          loading={props.activeNoteLoading}
+          onRetry={props.onRetryNoteLoad}
+          title={props.activeNote.title}
+        />
+      ) : (
         <NoteEditor
           backlinks={props.backlinks}
           onSelectFolder={props.onSelectFolder}
@@ -359,7 +370,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           saveState={props.saveState}
           syncing={props.isRefreshingVault}
         />
-      ) : <EmptyNoteEditor onOpenSettings={props.onOpenSettings} />}
+      ) : <EmptyNoteEditor canCreateNote={props.canCreateNote} hasNotes={props.totalNoteCount > 0} isLoading={props.isRefreshingVault} onOpenSettings={props.onOpenSettings} />}
     </div>
   )
 }
@@ -665,6 +676,7 @@ type NoteListPanelProps = {
   notes: Note[]
   noteSort: NoteSort
   isManagingFolder: boolean
+  isLoading: boolean
   onCreateNote: () => void
   onIncludeNestedFolderNotesChange: (include: boolean) => void
   onOpenSettings: () => void
@@ -689,6 +701,7 @@ function NoteListPanel({
   folderManagementMode,
   includeNestedFolderNotes,
   isManagingFolder,
+  isLoading,
   notes,
   noteSort,
   onCreateNote,
@@ -759,7 +772,7 @@ function NoteListPanel({
               onSelectNote={onSelectNote}
               viewportRef={viewportRef}
             />
-          ) : viewportReady ? <EmptyNoteList canCreateNote={canCreateNote} onCreateNote={onCreateNote} onOpenSettings={onOpenSettings} selectedFolder={selectedFolder} /> : null}
+          ) : viewportReady ? <EmptyNoteList canCreateNote={canCreateNote} isLoading={isLoading} onCreateNote={onCreateNote} onOpenSettings={onOpenSettings} selectedFolder={selectedFolder} /> : null}
         </div>
       </ScrollArea>
     </section>
@@ -795,15 +808,27 @@ function NestedNotesToggle({
 
 function EmptyNoteList({
   canCreateNote,
+  isLoading,
   onCreateNote,
   onOpenSettings,
   selectedFolder,
 }: {
   canCreateNote: boolean
+  isLoading: boolean
   onCreateNote: () => void
   onOpenSettings: () => void
   selectedFolder: string | null
 }) {
+  if (isLoading) {
+    return (
+      <div className="note-list-empty" data-status="loading" role="status" aria-live="polite">
+        <LoaderCircle className="app-loading-spinner" />
+        <strong>正在读取笔记</strong>
+        <p>正在检查远端目录和本机缓存，完成后会在这里显示结果。</p>
+      </div>
+    )
+  }
+
   const localEmptyState = selectedFolder || canCreateNote
   return (
     <div className="note-list-empty">
@@ -946,15 +971,61 @@ function TagFilterMenu({
   )
 }
 
+function NoteDocumentState({
+  backLabel,
+  error,
+  loading,
+  onBack,
+  onRetry,
+  title,
+}: {
+  backLabel?: string
+  error: string | null
+  loading: boolean
+  onBack?: () => void
+  onRetry: () => void
+  title: string
+}) {
+  return (
+    <article className="note-editor empty-note-editor">
+      <header className="editor-titlebar">
+        {onBack ? <Button aria-label={`返回${backLabel ?? "笔记列表"}`} onClick={onBack} size="icon" variant="ghost"><ArrowLeft /></Button> : null}
+        <span className="editor-breadcrumb"><FileText /><span className="editor-breadcrumb-current">{title}</span></span>
+      </header>
+      <div className="empty-note-content" data-status={error ? "error" : "loading"} role={error ? "alert" : "status"} aria-live="polite">
+        <span className="empty-note-icon">{error ? <AlertTriangle /> : <LoaderCircle className="app-loading-spinner" />}</span>
+        <h2>{error ? "正文没有加载成功" : "正在读取正文"}</h2>
+        <p>{error ?? "正在从笔记库读取完整内容，请稍候。"}</p>
+        {error && !loading ? <Button onClick={onRetry}><RefreshCw data-icon="inline-start" />重新读取</Button> : null}
+      </div>
+    </article>
+  )
+}
+
 function EmptyNoteEditor({
   backLabel = "全部笔记",
+  canCreateNote,
+  hasNotes,
+  isLoading,
   onBack,
   onOpenSettings,
 }: {
   backLabel?: string
+  canCreateNote: boolean
+  hasNotes: boolean
+  isLoading: boolean
   onBack?: () => void
   onOpenSettings: () => void
 }) {
+  const title = isLoading ? "正在读取笔记" : hasNotes ? "选择一篇笔记" : canCreateNote ? "笔记库还是空的" : "连接或打开笔记库"
+  const description = isLoading
+    ? "正在检查远端内容和本机缓存，请稍候。"
+    : hasNotes
+      ? "从左侧列表选择一篇笔记，即可在这里阅读或编辑。"
+      : canCreateNote
+        ? "可以从左侧新建第一篇 Markdown 笔记。"
+        : "连接坚果云或打开本地 Vault 后，即可读取真实 Markdown 文档。"
+
   return (
     <article className="note-editor empty-note-editor">
       {onBack ? (
@@ -963,11 +1034,11 @@ function EmptyNoteEditor({
           <span className="mobile-back-label">{backLabel}</span>
         </header>
       ) : null}
-      <div className="empty-note-content">
-        <span className="empty-note-icon"><Cloud /></span>
-        <h2>连接后展示远程文档</h2>
-        <p>当前没有注入任何 Mock 内容。连接坚果云后，将在这里按需读取并展示真实 Markdown。</p>
-        <Button onClick={onOpenSettings}><Cloud data-icon="inline-start" />连接坚果云</Button>
+      <div className="empty-note-content" data-status={isLoading ? "loading" : hasNotes ? "idle" : "empty"} role={isLoading ? "status" : undefined} aria-live={isLoading ? "polite" : undefined}>
+        <span className="empty-note-icon">{isLoading ? <LoaderCircle className="app-loading-spinner" /> : hasNotes ? <FileText /> : <Cloud />}</span>
+        <h2>{title}</h2>
+        <p>{description}</p>
+        {!isLoading && !hasNotes && !canCreateNote ? <Button onClick={onOpenSettings}><Cloud data-icon="inline-start" />连接坚果云</Button> : null}
       </div>
     </article>
   )
@@ -1252,7 +1323,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
 
       {isExcalidraw ? (
         <div className="excalidraw-workspace">
-          <Suspense fallback={<div className="editor-loading">正在加载 Excalidraw…</div>}>
+          <Suspense fallback={<EditorLoadingState label="Excalidraw 画布" />}>
             <MarkdownPreview
               content={note.content}
               editable={!readOnly}
@@ -1299,11 +1370,11 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
             <span>{deriveFolder(note)}</span>
           </div>
           {isCanvas ? (
-            <Suspense fallback={<div className="editor-loading">正在加载 Canvas…</div>}>
+            <Suspense fallback={<EditorLoadingState label="Canvas 画布" />}>
               <CanvasPreview content={note.content} onResolveAsset={onResolveAsset} onWikiLink={onOpenWikiLink} />
             </Suspense>
           ) : previewing ? (
-            <Suspense fallback={<div className="editor-loading">正在生成预览…</div>}>
+            <Suspense fallback={<EditorLoadingState label="Markdown 预览" />}>
               <MarkdownPreview
                 content={note.content}
                 editable={!readOnly}
@@ -1316,7 +1387,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
             </Suspense>
           ) : (
             <div className="markdown-editor-shell">
-              <Suspense fallback={<div className="editor-loading">正在加载编辑器…</div>}>
+              <Suspense fallback={<EditorLoadingState label="Markdown 编辑器" />}>
                 {/* CodeMirror 会在提交后同步受控 value；按笔记重建实例，避免切换瞬间残留上一份正文。 */}
                 <MarkdownEditor
                   key={note.id}
@@ -1385,6 +1456,18 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
         </DialogContent>
       </Dialog>
     </article>
+  )
+}
+
+function EditorLoadingState({ label }: { label: string }) {
+  return (
+    <div className="editor-loading" role="status" aria-live="polite">
+      <LoaderCircle className="app-loading-spinner" />
+      <span>
+        <strong>正在加载{label}</strong>
+        <small>笔记内容已保留，组件准备完成后会自动显示。</small>
+      </span>
+    </div>
   )
 }
 
@@ -1495,7 +1578,16 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
         />
       ) : null}
       {props.mobileScreen === "editor" ? (
-        props.activeNote ? (
+        props.activeNote ? props.activeNoteLoading || props.activeNoteLoadError ? (
+          <NoteDocumentState
+            backLabel={backLabel}
+            error={props.activeNoteLoadError}
+            loading={props.activeNoteLoading}
+            onBack={() => props.onMobileScreenChange("notes")}
+            onRetry={props.onRetryNoteLoad}
+            title={props.activeNote.title}
+          />
+        ) : (
           <NoteEditor
             backlinks={props.backlinks}
             cloudConnected={props.cloudConnected}
@@ -1538,7 +1630,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             saveState={props.saveState}
             syncing={props.isRefreshingVault}
           />
-        ) : <EmptyNoteEditor backLabel={backLabel} onBack={() => props.onMobileScreenChange("notes")} onOpenSettings={props.onOpenSettings} />
+        ) : <EmptyNoteEditor backLabel={backLabel} canCreateNote={props.canCreateNote} hasNotes={props.totalNoteCount > 0} isLoading={props.isRefreshingVault} onBack={() => props.onMobileScreenChange("notes")} onOpenSettings={props.onOpenSettings} />
       ) : null}
     </div>
   )
@@ -1882,7 +1974,7 @@ function MobileNoteList(props: MobileNoteListProps) {
               onSelectNote={selectNote}
               viewportRef={viewportRef}
             />
-          ) : viewportReady ? <EmptyNoteList canCreateNote={props.canCreateNote} onCreateNote={props.onCreateNote} onOpenSettings={props.onOpenSettings} selectedFolder={props.selectedFolder} /> : null}
+          ) : viewportReady ? <EmptyNoteList canCreateNote={props.canCreateNote} isLoading={props.isRefreshingVault} onCreateNote={props.onCreateNote} onOpenSettings={props.onOpenSettings} selectedFolder={props.selectedFolder} /> : null}
         </div>
       </ScrollArea>
       {props.canCreateNote ? <Button aria-label="新建笔记" className="mobile-fab" disabled={props.isCreatingNote} onClick={props.onCreateNote} size="icon-lg">{props.isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}</Button> : null}

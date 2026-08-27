@@ -8,10 +8,45 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Swell Note</title>
+    <style>
+      /* React 与样式包加载前先给出真实启动状态，避免刷新时出现无反馈的白屏。 */
+      .app-bootstrap {
+        box-sizing: border-box;
+        display: grid;
+        min-height: 100vh;
+        min-height: 100dvh;
+        place-content: center;
+        justify-items: center;
+        gap: 18px;
+        padding: 32px;
+        background: #fff;
+        color: #202431;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        text-align: center;
+      }
+      .app-bootstrap__brand { display: flex; align-items: center; gap: 12px; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
+      .app-bootstrap__brand img { width: 44px; height: 44px; }
+      .app-bootstrap__progress { width: 180px; height: 3px; overflow: hidden; border-radius: 999px; background: #edf0f5; }
+      .app-bootstrap__progress span { display: block; width: 42%; height: 100%; border-radius: inherit; background: #3150e8; animation: app-bootstrap-progress 1.15s ease-in-out infinite; }
+      .app-bootstrap p { margin: -6px 0 0; color: #747d8b; font-size: 13px; }
+      .app-bootstrap-noscript { margin: 24px; color: #b42318; font-family: sans-serif; text-align: center; }
+      @keyframes app-bootstrap-progress { from { transform: translateX(-115%); } to { transform: translateX(355%); } }
+      @media (prefers-reduced-motion: reduce) { .app-bootstrap__progress span { width: 100%; animation: none; opacity: .75; } }
+    </style>
   </head>
 
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main class="app-bootstrap" role="status" aria-live="polite" aria-label="Swell Note 正在启动">
+        <div class="app-bootstrap__brand">
+          <img alt="" src="/src/assets/brand/swell-note-logo-ribbon-s.svg" />
+          <span>Swell Note</span>
+        </div>
+        <div class="app-bootstrap__progress" aria-hidden="true"><span></span></div>
+        <p>正在启动并恢复本地笔记缓存…</p>
+      </main>
+    </div>
+    <noscript><p class="app-bootstrap-noscript">Swell Note 需要启用 JavaScript 才能读取笔记。</p></noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

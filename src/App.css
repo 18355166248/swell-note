@@ -108,6 +108,21 @@
 .app-crash-icon { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 14px; background: #fff7ed; color: #c2410c; }
 .app-crash-icon svg { width: 24px; height: 24px; }
 
+.app-initialization-state { display: grid; width: min(470px,calc(100% - 40px)); min-height: 100dvh; margin: 0 auto; place-content: center; justify-items: center; gap: 12px; text-align: center; }
+.app-initialization-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-size: 18px; letter-spacing: -.02em; }
+.app-initialization-brand img { width: 36px; height: 36px; }
+.app-initialization-icon { display: grid; width: 46px; height: 46px; place-items: center; border-radius: 14px; background: var(--blue-soft); color: var(--primary); }
+.app-initialization-state[data-status="error"] .app-initialization-icon { background: #fff7ed; color: #c2410c; }
+.app-initialization-icon svg { width: 23px; height: 23px; }
+.app-initialization-state h1 { margin: 4px 0 0; font-size: 20px; }
+.app-initialization-state p { max-width: 390px; min-height: 21px; margin: 0; color: var(--muted-foreground); font-size: 13px; line-height: 1.6; }
+.app-initialization-progress { width: 180px; height: 3px; margin-top: 8px; overflow: hidden; border-radius: 999px; background: var(--muted); }
+.app-initialization-progress span { display: block; width: 42%; height: 100%; border-radius: inherit; background: var(--primary); animation: app-loading-progress 1.15s ease-in-out infinite; }
+.app-initialization-actions { display: flex; gap: 8px; margin-top: 10px; }
+.app-loading-spinner { animation: app-loading-spin .8s linear infinite; }
+@keyframes app-loading-spin { to { transform: rotate(360deg); } }
+@keyframes app-loading-progress { from { transform: translateX(-115%); } to { transform: translateX(355%); } }
+
 /* 一级路由共用稳定的应用壳层；设置二级路由只替换右侧内容，避免整页导航跳动。 */
 .route-page-shell { display: grid; height: 100dvh; min-height: 0; grid-template-columns: 64px minmax(0,1fr); overflow: hidden; background: white; }
 .settings-route-shell { display: grid; height: 100dvh; min-height: 0; grid-template-columns: 64px 260px minmax(0,1fr); overflow: hidden; background: white; }
@@ -415,6 +430,7 @@
 .note-list-empty > svg { width: 25px; height: 25px; margin-bottom: 12px; color: var(--primary); }
 .note-list-empty strong { color: var(--foreground); font-size: 13px; }
 .note-list-empty p { max-width: 210px; margin: 7px 0 15px; font-size: 11.5px; line-height: 1.6; }
+.note-list-empty[data-status="loading"] { min-height: 220px; }
 .note-row-meta span:not(.unread-dot) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unread-dot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
 
@@ -612,7 +628,11 @@
 .markdown-attachment-media { display: block; width: min(100%, 720px); max-height: 520px; margin: 1em 0; border-radius: 10px; }
 .markdown-image-state { display: inline-flex; min-height: 34px; align-items: center; border-radius: 7px; background: var(--muted); padding: 6px 10px; color: var(--muted-foreground); font-size: 12px; }
 .markdown-image-state[data-status="error"] { color: var(--destructive); }
-.editor-loading { padding: 8px 0; color: var(--muted-foreground); font-size: 13px; }
+.editor-loading { display: flex; min-height: 180px; align-items: center; justify-content: center; gap: 11px; color: var(--muted-foreground); font-size: 13px; }
+.editor-loading > svg { width: 20px; height: 20px; flex: 0 0 auto; color: var(--primary); }
+.editor-loading strong, .editor-loading small { display: block; }
+.editor-loading strong { color: var(--foreground); font-size: 13px; font-weight: 620; }
+.editor-loading small { margin-top: 3px; font-size: 11px; }
 .backlinks-panel { margin-top: 44px; border-top: 1px solid var(--border); padding-top: 20px; }
 .backlinks-title { display: flex; align-items: center; gap: 7px; color: #384352; font-size: 12px; }
 .backlinks-title svg { width: 15px; height: 15px; color: var(--primary); }

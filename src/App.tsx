@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { Navigate, Route, Routes, useLocation, useMatch, useNavigate } from "react-router-dom"
 
 import { Workspace, type LibraryView, type MobileScreen } from "@/components/workspace/workspace"
+import { AppInitializationState } from "@/components/app-initialization-state"
 import {
   AboutSettingsPage,
   CacheSettingsPage,
@@ -160,6 +161,10 @@ function App() {
   const [vaultCaches, setVaultCaches] = useState<VaultCacheSummary[]>([])
   const [activeCacheMeta, setActiveCacheMeta] = useState<ActiveCacheMeta | null>(null)
   const [cacheReady, setCacheReady] = useState(false)
+  const [cacheInitializationError, setCacheInitializationError] = useState<string | null>(null)
+  const [cacheLoadAttempt, setCacheLoadAttempt] = useState(0)
+  const [loadingNoteIds, setLoadingNoteIds] = useState<Set<string>>(() => new Set())
+  const [noteLoadErrors, setNoteLoadErrors] = useState<Record<string, string>>({})
   const [cachePrivacyMode, setCachePrivacyMode] = useState<CachePrivacyMode>(loadCachePrivacyMode)
   const [saveStates, setSaveStates] = useState<Record<string, NoteSaveState>>({})
   const [indexProgress, setIndexProgress] = useState<{ indexed: number; total: number } | null>(null)
@@ -229,11 +234,14 @@ function App() {
     setQuery("")
     setIndexProgress(null)
     setSaveStates(Object.fromEntries(cachedNotes.map((note) => [note.id, getNoteSaveState(note)])))
+    setLoadingNoteIds(new Set())
+    setNoteLoadErrors({})
     setVaultError(null)
   }, [])
 
   useEffect(() => {
     let cancelled = false
+    setCacheInitializationError(null)
     // IndexedDB 是本机离线快照；这里只恢复笔记数据与最后位置，不存储 WebDAV 密码或连接实例。
     void Promise.all([loadLastVaultCache(), listVaultCaches()])
       .then(([snapshot, caches]) => {
@@ -242,13 +250,13 @@ function App() {
         if (snapshot) applyCachedSnapshot(snapshot)
       })
       .catch((error) => {
-        if (!cancelled) setVaultError(error instanceof Error ? error.message : "读取离线缓存失败")
+        if (!cancelled) setCacheInitializationError(error instanceof Error ? error.message : "读取离线缓存失败")
       })
       .finally(() => {
         if (!cancelled) setCacheReady(true)
       })
     return () => { cancelled = true }
-  }, [applyCachedSnapshot])
+  }, [applyCachedSnapshot, cacheLoadAttempt])
 
   useEffect(() => {
     if (!cacheReady || !activeCacheMeta) return
@@ -1496,6 +1504,13 @@ function App() {
 
     // 详情、路由恢复和嵌入预览共用同一读取入口，集合去重避免对坚果云产生重复 GET。
     loadingNoteIdsRef.current.add(note.id)
+    setLoadingNoteIds((current) => new Set(current).add(note.id))
+    setNoteLoadErrors((current) => {
+      if (!current[note.id]) return current
+      const next = { ...current }
+      delete next[note.id]
+      return next
+    })
 
     try {
       const document = await vaultSession.readTextFile(note.remotePath)
@@ -1521,15 +1536,15 @@ function App() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "读取笔记失败"
-      setNotes((current) =>
-        current.map((currentNote) =>
-          currentNote.id === note.id
-            ? { ...currentNote, content: `# 读取失败\n\n${message}`, contentLoaded: true }
-            : currentNote,
-        ),
-      )
+      // 读取失败是视图状态，不写入 Markdown 正文，也不伪装成已加载完成，重试仍可读取原文。
+      setNoteLoadErrors((current) => ({ ...current, [note.id]: message }))
     } finally {
       loadingNoteIdsRef.current.delete(note.id)
+      setLoadingNoteIds((current) => {
+        const next = new Set(current)
+        next.delete(note.id)
+        return next
+      })
     }
   }, [vaultSession])
 
@@ -2535,6 +2550,22 @@ function App() {
     }
   }, [activeNote?.contentLoaded, activeNote?.id])
 
+  if (!cacheReady) return <AppInitializationState />
+
+  if (cacheInitializationError) {
+    return (
+      <AppInitializationState
+        error={cacheInitializationError}
+        onContinue={() => setCacheInitializationError(null)}
+        onRetry={() => {
+          // 重试期间重新进入初始化态，避免把“无缓存”误显示成一个已经加载完成的空笔记库。
+          setCacheReady(false)
+          setCacheLoadAttempt((attempt) => attempt + 1)
+        }}
+      />
+    )
+  }
+
   return (
     <>
       <Routes>
@@ -2546,6 +2577,8 @@ function App() {
             activeCacheId={activeCacheMeta?.id ?? null}
             activeNote={activeNote}
             activeNoteId={activeNoteId}
+            activeNoteLoadError={activeNote ? noteLoadErrors[activeNote.id] ?? null : null}
+            activeNoteLoading={activeNote ? loadingNoteIds.has(activeNote.id) : false}
             availableTags={availableTags}
             backlinks={backlinks}
             cloudConnected={vaultSession?.kind === "webdav"}
@@ -2612,6 +2645,9 @@ function App() {
             onQueryChange={setQuery}
             onNoteSortChange={setNoteSort}
             onReloadNote={() => void reloadActiveNote()}
+            onRetryNoteLoad={() => {
+              if (activeNote) void loadNoteDocument(activeNote)
+            }}
             onRefreshVault={() => void refreshVault()}
             onResolveConflict={(strategy) => void resolveActiveConflict(strategy)}
             onResolveAsset={resolveActiveAsset}
