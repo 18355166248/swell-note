@@ -23,6 +23,7 @@ import {
 } from "@/services/vault/local-vault-adapter"
 import {
   VaultConflictError,
+  type VaultAsset,
   type VaultAdapter,
   type VaultFileEntry,
 } from "@/services/vault/vault-adapter"
@@ -32,6 +33,7 @@ import {
   writeVaultAttachments,
 } from "@/services/vault/attachment-writer"
 import { createWebDavVaultAdapter } from "@/services/vault/webdav-vault-adapter"
+import { WebDavAuthenticationError } from "@/services/webdav-client"
 import {
   cacheSyncedVaultAttachment,
   createVaultCacheId,
@@ -189,6 +191,7 @@ function App() {
   const activeSyncRunRef = useRef<SyncRun | null>(null)
   const pendingWikiAnchorRef = useRef("")
   const passiveWebDavReaderRef = useRef<Promise<VaultAdapter | null> | null>(null)
+  const restoredCredentialCacheIdRef = useRef<string | null>(null)
   const refreshVaultRef = useRef<(noteIds?: ReadonlySet<string>) => Promise<void>>(async () => undefined)
   notesRef.current = notes
 
@@ -264,6 +267,35 @@ function App() {
       })
     return () => { cancelled = true }
   }, [applyCachedSnapshot, cacheLoadAttempt])
+
+  useEffect(() => {
+    if (!activeCacheMeta) {
+      restoredCredentialCacheIdRef.current = null
+      return
+    }
+    if (!cacheReady || activeCacheMeta.sourceKind !== "webdav" || vaultSession || !isOnline || !webDavConfigured) return
+    if (restoredCredentialCacheIdRef.current === activeCacheMeta.id) return
+    restoredCredentialCacheIdRef.current = activeCacheMeta.id
+    let cancelled = false
+    const config = loadWebDavConfig()
+
+    // 原生安装版只恢复适配器，不在启动时写云端；用户点击同步后仍走版本校验与冲突合并链路。
+    void loadWebDavPassword(config)
+      .then(async (password) => {
+        if (!password || cancelled) return
+        const adapter = createWebDavVaultAdapter(config, password)
+        const cacheId = await createVaultCacheId(adapter.cacheIdentity)
+        if (!cancelled && cacheId === activeCacheMeta.id) {
+          setVaultSession(adapter)
+          setVaultError(null)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setVaultError("无法读取系统安全存储，本地缓存仍可使用；同步时可重新输入密码")
+      })
+
+    return () => { cancelled = true }
+  }, [activeCacheMeta, cacheReady, isOnline, vaultSession, webDavConfigured])
 
   useEffect(() => {
     if (!cacheReady || !activeCacheMeta) return
@@ -481,6 +513,17 @@ function App() {
         ? "缓存"
         : "未连接"
 
+  const handleWebDavAuthenticationFailure = useCallback(async (message: string) => {
+    const config = loadWebDavConfig()
+    // 只在服务端明确拒绝凭据时清除 Keychain 条目；网络错误不能误删仍然有效的密码。
+    await deleteWebDavPassword(config).catch(() => undefined)
+    restoredCredentialCacheIdRef.current = activeCacheMeta?.id ?? null
+    passiveWebDavReaderRef.current = null
+    setVaultSession(null)
+    setVaultError(message)
+    setQuickConnectOpen(true)
+  }, [activeCacheMeta?.id])
+
   const resolveActiveAsset = useCallback(async (source: string) => {
     const notePath = activeNote?.remotePath
     if (!notePath) return null
@@ -502,7 +545,15 @@ function App() {
       assetReader = await passiveWebDavReaderRef.current
     }
     if (!assetReader?.readBinaryFile) return null
-    const asset = await assetReader.readBinaryFile(assetPath)
+    let asset: VaultAsset
+    try {
+      asset = await assetReader.readBinaryFile(assetPath)
+    } catch (error) {
+      if (error instanceof WebDavAuthenticationError) {
+        await handleWebDavAuthenticationFailure("坚果云应用密码已失效，请输入新密码后重试加载附件")
+      }
+      throw error
+    }
     if (activeCacheMeta?.sourceKind === "webdav" && activeNote) {
       // 图片在线首次打开后落入附件缓存，之后刷新或离线启动仍可直接预览。
       await cacheSyncedVaultAttachment({
@@ -514,7 +565,7 @@ function App() {
       })
     }
     return asset
-  }, [activeCacheMeta, activeNote, isOnline, vaultSession])
+  }, [activeCacheMeta, activeNote, handleWebDavAuthenticationFailure, isOnline, vaultSession])
 
   const attachmentNoteId = activeNote?.id
   const attachmentNotePath = activeNote?.remotePath
@@ -1190,6 +1241,8 @@ function App() {
         revisionByPathRef.current.set(path, result.revision)
         setSaveStates((current) => ({ ...current, [pendingNote.id]: { status: "saved" } }))
       } catch (error) {
+        // 认证失败会影响整批请求，立即停止队列并交给统一入口清理失效凭据、提示重新输入。
+        if (error instanceof WebDavAuthenticationError) throw error
         const conflict = error instanceof VaultConflictError
         const message = error instanceof Error ? error.message : "同步笔记失败"
         errorMessage = message
@@ -1244,6 +1297,8 @@ function App() {
         await adapter.createBinaryFile(entry.path, new Uint8Array(entry.data), entry.mimeType)
         await updateVaultAttachmentStatus(entry, "synced")
       } catch (error) {
+        // 密码失效不是单个附件失败，保留当前队列状态并终止本轮同步，避免重复发出无效请求。
+        if (error instanceof WebDavAuthenticationError) throw error
         if (error instanceof VaultConflictError && adapter.readBinaryFile) {
           try {
             const remote = await adapter.readBinaryFile(entry.path)
@@ -1278,25 +1333,34 @@ function App() {
           return
         }
         const config = loadWebDavConfig()
-        if (config.rememberPassword) {
-          setIsRefreshingVault(true)
-          setVaultError(null)
+        setIsRefreshingVault(true)
+        setVaultError(null)
+        try {
+          let storedPassword: string | null
           try {
-            const storedPassword = await loadWebDavPassword(config)
-            if (storedPassword) {
-              // 用户仍需主动点击同步；这里只省略重复输密码，不会在应用启动时自动写云端。
-              await connectWebDav(config, storedPassword)
-              return
-            }
+            storedPassword = await loadWebDavPassword(config)
           } catch {
-            await deleteWebDavPassword(config).catch(() => undefined)
-            setVaultError("此设备保存的应用密码已失效，请重新输入")
-          } finally {
-            setIsRefreshingVault(false)
+            setVaultError("无法读取系统安全存储，请重新输入；本地修改仍安全保留")
+            setQuickConnectOpen(true)
+            return
           }
+          if (!storedPassword) {
+            setQuickConnectOpen(true)
+            return
+          }
+          // 用户仍需主动点击同步；这里只省略重复输密码，不会在应用启动时自动写云端。
+          await connectWebDav(config, storedPassword)
+          return
+        } catch (error) {
+          if (error instanceof WebDavAuthenticationError) {
+            await handleWebDavAuthenticationFailure("坚果云应用密码已失效，请输入新密码；本地修改仍安全保留")
+          } else {
+            // 网络、限流等错误不代表密码失效，保留系统凭据并等待用户重试。
+            setVaultError(error instanceof Error ? error.message : "连接坚果云失败，请稍后重试")
+          }
+        } finally {
+          setIsRefreshingVault(false)
         }
-        // Web 端或凭据不可用时，在原页面只补录密码，避免打断阅读和滚动位置。
-        setQuickConnectOpen(true)
         return
       }
       navigate("/settings/webdav")
@@ -1353,7 +1417,13 @@ function App() {
         }))
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "刷新笔记库失败"
+      const authenticationFailed = error instanceof WebDavAuthenticationError
+      const message = authenticationFailed
+        ? "坚果云应用密码已失效，请输入新密码；未同步修改仍保留在本机"
+        : error instanceof Error ? error.message : "刷新笔记库失败"
+      if (authenticationFailed) {
+        await handleWebDavAuthenticationFailure(message)
+      }
       setVaultError(message)
       setSyncLogs(appendSyncLog({ message: `同步失败：${message}`, status: "error" }))
     } finally {
@@ -1566,6 +1636,9 @@ function App() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "读取笔记失败"
+      if (error instanceof WebDavAuthenticationError) {
+        await handleWebDavAuthenticationFailure("坚果云应用密码已失效，请输入新密码后重新读取正文")
+      }
       // 读取失败是视图状态，不写入 Markdown 正文，也不伪装成已加载完成，重试仍可读取原文。
       setNoteLoadErrors((current) => ({ ...current, [note.id]: message }))
     } finally {
@@ -1576,7 +1649,7 @@ function App() {
         return next
       })
     }
-  }, [vaultSession])
+  }, [handleWebDavAuthenticationFailure, vaultSession])
 
   const selectNote = async (note: Note) => {
     setActiveNoteId(note.id)
@@ -2839,9 +2912,8 @@ function App() {
         onConnect={async (password) => {
           const config = loadWebDavConfig()
           await connectWebDav(config, password)
-          if (config.rememberPassword) {
-            await saveWebDavPassword(config, password).catch(() => undefined)
-          }
+          // 原生端默认写入系统凭据库，Web 端实现会安全地直接跳过。
+          await saveWebDavPassword(config, password).catch(() => undefined)
         }}
         onOpenChange={setQuickConnectOpen}
         open={quickConnectOpen}

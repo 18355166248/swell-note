@@ -26,12 +26,13 @@ export async function getCredentialStoreStatus(): Promise<CredentialStoreStatus>
 }
 
 export async function loadWebDavPassword(config: WebDavConfig) {
-  if (!isTauri() || !config.rememberPassword) return null
+  // 原生安装版默认使用系统凭据库，首次验证成功后即可跨重启复用；Web 端始终返回空值。
+  if (!isTauri()) return null
   return invoke<string | null>("load_webdav_password", { account: config.username })
 }
 
 export async function saveWebDavPassword(config: WebDavConfig, password: string) {
-  if (!isTauri() || !config.rememberPassword) return
+  if (!isTauri()) return
   await invoke("save_webdav_password", { account: config.username, password })
 }
 

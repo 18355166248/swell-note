@@ -88,6 +88,50 @@
 
 final result: passed
 
+## 侧栏同步区与坚果云凭据流程
+
+**Evidence**
+
+- Source visual truth: `/var/folders/7w/hsspqlq52mj2vrwmmpdjptsh0000gn/T/codex-clipboard-172b4f5a-c01e-401e-b22d-bb5d2cb7125d.png`（303 × 235 px，用户标注的桌面侧栏底部裁切状态）。
+- Browser-rendered implementation: `/private/tmp/swell-note-sync-layout-final.png`（1280 × 720 px）。
+- Implementation viewport: 1280 × 720 CSS px，devicePixelRatio 1；来源是局部裁切图，故按同一可见区域和控件边界判断，不做整体密度对齐。
+- State: desktop production preview、WebDAV cached library、offline/not connected、light theme。
+
+**Full-view and focused comparison**
+
+- Full-view evidence shows the original four-column desktop hierarchy is unchanged; the fix only reallocates the bottom sync row's two grid tracks.
+- The source already provides the focused region. In the implementation full screenshot, the complete `连接` label and refresh icon are readable at the sidebar bottom, so an extra implementation crop was not needed.
+- DOM geometry confirms the 58 px action button is entirely inside the 242 px sync shell (`button: x 246–304`, `shell: x 64–306`). The shell has `scrollWidth === clientWidth === 242`, so no hidden horizontal overflow remains.
+
+**Findings**
+
+- Fonts and typography: passed. The existing compact 10.5–11.5 px sidebar hierarchy and Geist/PingFang stack remain unchanged; `连接` is no longer truncated.
+- Spacing and layout rhythm: passed. The action track is 62 px, the button is 58 px, and the summary track keeps the remaining flexible width without overlapping the note list.
+- Colors and visual tokens: passed. Existing muted foreground, border, and hover tokens are reused; no new visual language was introduced.
+- Image quality and asset fidelity: not applicable. The visible refresh icon remains the project's Lucide icon and no raster asset was added.
+- Copy and content: passed. `连接` remains concise, while the accessible label continues to be `重新连接并更新`.
+- Accessibility and interaction: passed. The action is a semantic button with a complete accessible label; layout clipping no longer reduces its visible affordance.
+- Error and credential flow: native builds persist the verified application password in OS secure storage. Network/offline failures retain both the credential and local sync queue; only an explicit WebDAV 401 clears the rejected credential and opens the password prompt. Browser builds intentionally remain session-only.
+
+**Comparison history**
+
+- P2 found: the original 42 px action track was narrower than the rendered icon-plus-label button, pushing part of `连接` into the adjacent pane and clipping it.
+- Fix: increased the action track to 62 px, fixed the action button at 58 px with compact spacing, and constrained the shell overflow.
+- Post-fix evidence: `/private/tmp/swell-note-sync-layout-final.png`; browser geometry and visual comparison show no remaining P0/P1/P2 issue.
+
+**Primary interactions and runtime checks**
+
+- Opened the cached WebDAV note library and verified the bottom `连接` action is visible and remains clickable.
+- Opened `#/settings/webdav` and verified Web correctly communicates its session-only security boundary.
+- Verified the production preview console contains no warnings or errors.
+- Unit tests: 218 passed, 1 skipped. Production build: passed.
+
+**Follow-up polish**
+
+- P3: native Keychain / Credential Manager copy is covered by component state and native-store tests; a signed-package smoke test can additionally capture the platform-specific store name before release.
+
+final result: passed
+
 ## 阅读 / 编辑模式感知优化
 
 
@@ -143,5 +187,12 @@ final result: passed
 **Follow-up polish**
 
 - P3: a future dark theme pass should tune the edit edge and segmented-control shadow against dark surface tokens.
+
+final result: passed
+
+## 侧栏同步与凭据流程最终复核
+
+- 完整证据、五项视觉检查、异常兜底与比较记录见上文“侧栏同步区与坚果云凭据流程”。
+- 最终生产预览仍保持按钮完整、无横向溢出，控制台无 warning/error；218 项测试通过，生产构建通过。
 
 final result: passed

@@ -40,13 +40,16 @@ export function WebDavSettingsForm({
   useEffect(() => {
     let cancelled = false
     void getCredentialStoreStatus().then((status) => {
-      if (!cancelled) setCredentialStatus(status)
+      if (cancelled) return
+      setCredentialStatus(status)
+      // 原生端把安全保存作为默认能力，兼容升级前 rememberPassword=false 的旧配置。
+      if (status.available) setConfig((current) => ({ ...current, rememberPassword: true }))
     })
     return () => { cancelled = true }
   }, [])
 
   useEffect(() => {
-    if (!credentialStatus?.available || !config.rememberPassword || !config.username || passwordTouched) return
+    if (!credentialStatus?.available || !config.username || passwordTouched) return
     let cancelled = false
     // 仅原生安装版读取系统凭据；读取失败保留空密码，让用户仍可手动连接。
     void loadWebDavPassword(config)
@@ -66,7 +69,7 @@ export function WebDavSettingsForm({
   const persistConfig = () => {
     const normalized = normalizeConfig({
       ...config,
-      rememberPassword: config.rememberPassword === true && credentialStatus?.available === true,
+      rememberPassword: credentialStatus?.available === true,
     })
     saveWebDavConfig(normalized)
     setConfig(normalized)
@@ -133,14 +136,10 @@ export function WebDavSettingsForm({
             <Button aria-label={passwordVisible ? "隐藏密码" : "显示密码"} onClick={() => setPasswordVisible((visible) => !visible)} size="icon-sm" type="button" variant="ghost">{passwordVisible ? <EyeOff /> : <Eye />}</Button>
           </div>
           {credentialStatus?.native && credentialStatus.available ? (
-            <label className="settings-remember-password">
-              <input
-                checked={config.rememberPassword}
-                onChange={(event) => updateConfig({ rememberPassword: event.target.checked })}
-                type="checkbox"
-              />
-              <span><ShieldCheck />在此设备安全保存密码<small>连接验证成功后保存到 {credentialStatus.store}，不会写入笔记缓存。</small></span>
-            </label>
+            <div className="settings-secure-password-default">
+              <ShieldCheck />
+              <span><strong>首次连接后自动记住</strong><small>应用密码保存在 {credentialStatus.store}；只有密码失效或更换后才需要重新输入。</small></span>
+            </div>
           ) : (
             <p className="settings-security-note"><KeyRound />{credentialStatus?.native
               ? "系统安全存储暂不可用，密码仅用于当前会话。"
@@ -157,19 +156,7 @@ export function WebDavSettingsForm({
       {securityMessage ? <div className="settings-security-result"><ShieldCheck />{securityMessage}</div> : null}
       <div className="settings-form-actions">
         {saved ? <span><Check />配置已保存</span> : null}
-        <Button
-          disabled={!valid || connecting}
-          onClick={() => {
-            const normalized = persistConfig()
-            if (!normalized.rememberPassword) {
-              void deleteWebDavPassword(normalized).catch(() => {
-                setSecurityMessage("配置已保存，但系统凭据删除失败，可重新开启后再关闭")
-              })
-            }
-          }}
-          type="button"
-          variant="outline"
-        >保存配置</Button>
+        <Button disabled={!valid || connecting} onClick={persistConfig} type="button" variant="outline">保存配置</Button>
         <Button disabled={!valid || password.length === 0 || connecting} type="submit">
           {connecting ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : null}
           {connecting ? "正在同步…" : "连接并同步"}

@@ -233,20 +233,40 @@ async function webDavFetch(
 ) {
   // 原生包通过 Rust HTTP 客户端请求 WebDAV，规避各平台 WebView 的 CORS 差异；Web 预览仍走同源代理。
   const request = isTauri() ? nativeFetch : fetch
-  const response = await request(buildRequestUrl(config, path), {
-    ...init,
-    headers: {
-      ...init.headers,
-      Authorization: `Basic ${encodeBasicAuth(config.username, password)}`,
-    },
-  })
+  let response: Response
+  try {
+    response = await request(buildRequestUrl(config, path), {
+      ...init,
+      headers: {
+        ...init.headers,
+        Authorization: `Basic ${encodeBasicAuth(config.username, password)}`,
+      },
+    })
+  } catch {
+    // 不透传底层 fetch/native HTTP 错误，避免泄露请求信息并给出可执行的恢复提示。
+    throw new WebDavNetworkError()
+  }
 
   if (response.ok || response.status === 207 || acceptedStatuses.includes(response.status)) return response
-  if (response.status === 401) throw new Error("账号或第三方应用密码不正确")
+  if (response.status === 401) throw new WebDavAuthenticationError()
   if (response.status === 404) throw new Error(`远端目录不存在：${config.remotePath}`)
   if (response.status === 412) throw new WebDavRevisionConflictError(path)
   if (response.status === 429) throw new Error("坚果云请求过于频繁，请稍后再试")
   throw new Error(`坚果云请求失败（HTTP ${response.status}）`)
+}
+
+export class WebDavAuthenticationError extends Error {
+  constructor() {
+    super("账号或第三方应用密码不正确")
+    this.name = "WebDavAuthenticationError"
+  }
+}
+
+export class WebDavNetworkError extends Error {
+  constructor() {
+    super("无法连接坚果云，请检查网络后重试；本地修改不会丢失")
+    this.name = "WebDavNetworkError"
+  }
 }
 
 export class WebDavRevisionConflictError extends Error {

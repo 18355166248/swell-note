@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { getCredentialStoreStatus } from "@/services/security/credential-store"
 
 export function QuickWebDavConnectDialog({
   account,
@@ -28,6 +29,15 @@ export function QuickWebDavConnectDialog({
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [connectionError, setConnectionError] = useState("")
+  const [secureStoreName, setSecureStoreName] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void getCredentialStoreStatus().then((status) => {
+      if (!cancelled) setSecureStoreName(status.available ? status.store : null)
+    })
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     if (open) setConnectionError("")
@@ -60,7 +70,9 @@ export function QuickWebDavConnectDialog({
           <DialogHeader>
             <DialogTitle>快速连接坚果云</DialogTitle>
             <DialogDescription>
-              输入一次应用密码，连接成功后会留在当前页面并立即同步待上传笔记。
+              {secureStoreName
+                ? `输入一次应用密码；连接成功后会安全保存到 ${secureStoreName}，以后自动使用。`
+                : "输入应用密码后会留在当前页面，并立即同步待上传笔记。"}
             </DialogDescription>
           </DialogHeader>
 
@@ -95,7 +107,9 @@ export function QuickWebDavConnectDialog({
                   {passwordVisible ? <EyeOff /> : <Eye />}
                 </Button>
               </div>
-              <p className="settings-security-note"><KeyRound />密码不会写入 Swell Note 本地缓存。</p>
+              <p className="settings-security-note"><KeyRound />{secureStoreName
+                ? "密码只进入系统安全存储，不会写入笔记缓存。"
+                : "密码不会写入 Swell Note 本地缓存。"}</p>
             </div>
             {connectionError ? <div className="settings-form-error"><AlertCircle />{connectionError}</div> : null}
           </div>

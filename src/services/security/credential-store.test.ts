@@ -41,7 +41,7 @@ describe("credential store", () => {
     expect(tauriMocks.invoke).not.toHaveBeenCalled()
   })
 
-  it("原生端只在用户开启记住密码后读写系统凭据库", async () => {
+  it("原生端默认读写系统凭据库，首次连接后无需重复输入", async () => {
     tauriMocks.isTauri.mockReturnValue(true)
     tauriMocks.invoke.mockResolvedValueOnce("saved-secret").mockResolvedValueOnce(undefined)
 
@@ -52,5 +52,15 @@ describe("credential store", () => {
       account: config.username,
       password: "new-secret",
     })
+  })
+
+  it("兼容旧配置中未开启记住密码的原生用户", async () => {
+    tauriMocks.isTauri.mockReturnValue(true)
+    tauriMocks.invoke.mockResolvedValueOnce("legacy-secret").mockResolvedValueOnce(undefined)
+    const legacyConfig = { ...config, rememberPassword: false }
+
+    await expect(loadWebDavPassword(legacyConfig)).resolves.toBe("legacy-secret")
+    await saveWebDavPassword(legacyConfig, "new-secret")
+    expect(tauriMocks.invoke).toHaveBeenCalledTimes(2)
   })
 })

@@ -9,6 +9,8 @@ import {
   deleteMarkdownFile,
   ensureWebDavDirectory,
   moveMarkdownFile,
+  WebDavAuthenticationError,
+  WebDavNetworkError,
   WebDavRevisionConflictError,
   writeMarkdownFile,
 } from "@/services/webdav-client"
@@ -63,6 +65,20 @@ describe("WebDAV conditional create", () => {
 
     await expect(createMarkdownFile(config, "app-password", "/Swell/重复.md", "# 重复"))
       .rejects.toBeInstanceOf(WebDavRevisionConflictError)
+  })
+
+  it("密码失效时返回可识别的认证错误", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })))
+
+    await expect(createMarkdownFile(config, "expired-password", "/Swell/新笔记.md", "# 新笔记"))
+      .rejects.toBeInstanceOf(WebDavAuthenticationError)
+  })
+
+  it("网络异常时给出不丢本地修改的统一提示", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")))
+
+    await expect(createMarkdownFile(config, "app-password", "/Swell/新笔记.md", "# 新笔记"))
+      .rejects.toBeInstanceOf(WebDavNetworkError)
   })
 })
 

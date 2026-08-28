@@ -329,6 +329,11 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .settings-remember-password > span { display: grid; grid-template-columns: 15px auto; align-items: center; column-gap: 5px; font-weight: 600; }
 .settings-remember-password svg { width: 14px; height: 14px; color: var(--primary); }
 .settings-remember-password small { grid-column: 1 / -1; margin-top: 4px; color: var(--muted-foreground); font-size: 10.5px; font-weight: 400; line-height: 1.45; }
+.settings-secure-password-default { display: flex; align-items: flex-start; gap: 8px; border-radius: 8px; background: #effaf4; padding: 9px 10px; color: #148454; font-size: 11.5px; }
+.settings-secure-password-default > svg { width: 15px; height: 15px; flex: 0 0 auto; margin-top: 1px; }
+.settings-secure-password-default span, .settings-secure-password-default strong, .settings-secure-password-default small { display: block; }
+.settings-secure-password-default strong { font-weight: 650; }
+.settings-secure-password-default small { margin-top: 3px; color: var(--muted-foreground); font-size: 10.5px; font-weight: 400; line-height: 1.45; }
 .settings-security-result { display: flex; align-items: center; gap: 7px; margin-top: 14px; border-radius: 9px; background: #effaf4; padding: 10px 12px; color: #148454; font-size: 11px; }
 .settings-security-result svg { width: 15px; height: 15px; }
 .settings-form-error { display: flex; align-items: flex-start; gap: 7px; margin-top: 18px; border-radius: 9px; background: color-mix(in oklab,var(--destructive) 8%,white); padding: 10px 12px; color: var(--destructive); font-size: 12px; }
@@ -418,7 +423,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .folder-children { margin-left: 15px; padding-left: 7px; border-left: 1px solid var(--border); }
 .library-section-title { display: flex; height: 40px; align-items: end; padding: 0 6px 6px 8px; color: var(--muted-foreground); font-size: 11px; font-weight: 620; }
 .library-section-title > span { flex: 1; }
-.sync-summary-shell { display: grid; min-width: 0; grid-template-columns: minmax(0,1fr) 42px; align-items: center; border-top: 1px solid var(--border); }
+.sync-summary-shell { display: grid; min-width: 0; grid-template-columns: minmax(0,1fr) 62px; align-items: center; overflow: hidden; border-top: 1px solid var(--border); }
 .trash-page { display: grid; gap: 18px; }
 .trash-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
 .trash-toolbar h2, .trash-toolbar p { margin: 0; }
@@ -445,7 +450,8 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .sync-summary strong { font-size: 11.5px; font-weight: 620; }
 .sync-summary small { margin-top: 2px; color: var(--muted-foreground); font-size: 10.5px; }
 .sync-summary > svg { margin-left: auto; width: 14px; color: var(--muted-foreground); }
-.sync-refresh-button { margin: 0 auto; color: var(--muted-foreground); }
+.sync-refresh-button { width: 58px; min-width: 0; gap: 4px; margin: 0 auto; padding-inline: 6px; color: var(--muted-foreground); font-size: 10.5px; }
+.sync-refresh-button svg { width: 13px; height: 13px; flex: 0 0 auto; }
 
 .note-list-titlebar { min-height: 82px; border-bottom: 0; }
 .note-search-wrap { position: relative; min-width: 0; }
