@@ -1,12 +1,27 @@
 export type NoteViewMode = "edit" | "preview"
 
 export type UiPreferences = {
+  libraryPaneWidth: number
+  noteListPaneWidth: number
   noteViewMode: NoteViewMode
 }
 
 const UI_PREFERENCES_KEY = "swell-note:ui-preferences:v1"
 const DEFAULT_UI_PREFERENCES: UiPreferences = {
+  libraryPaneWidth: 230,
+  noteListPaneWidth: 320,
   noteViewMode: "preview",
+}
+
+const PANE_WIDTH_LIMITS = {
+  libraryPaneWidth: { max: 340, min: 205 },
+  noteListPaneWidth: { max: 440, min: 280 },
+} as const
+
+function paneWidth(value: unknown, key: "libraryPaneWidth" | "noteListPaneWidth") {
+  const limits = PANE_WIDTH_LIMITS[key]
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_UI_PREFERENCES[key]
+  return Math.min(limits.max, Math.max(limits.min, Math.round(value)))
 }
 
 function readStoredPreferences(): Record<string, unknown> {
@@ -25,6 +40,8 @@ function readStoredPreferences(): Record<string, unknown> {
 export function loadUiPreferences(): UiPreferences {
   const stored = readStoredPreferences()
   return {
+    libraryPaneWidth: paneWidth(stored.libraryPaneWidth, "libraryPaneWidth"),
+    noteListPaneWidth: paneWidth(stored.noteListPaneWidth, "noteListPaneWidth"),
     noteViewMode: stored.noteViewMode === "edit" ? "edit" : DEFAULT_UI_PREFERENCES.noteViewMode,
   }
 }

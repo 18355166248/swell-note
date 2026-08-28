@@ -74,7 +74,6 @@ export class TaskCheckboxWidget extends WidgetType {
   }
 }
 
-
 function collectCursorLines(state: EditorState) {
   const lines = new Set<number>()
   for (const range of state.selection.ranges) {
@@ -149,6 +148,8 @@ function decorateWikiLinks(
     if (frontmatter && start < frontmatter.to && end > frontmatter.from) continue
     if (isInsideCode(state, start + match[1].length + 2)) continue
 
+    // 后接 Markdown 目标的是历史混合图片语法，由图片装饰器统一接管。
+    if (match[1] && state.sliceDoc(end, end + 1) === "(") continue
     // 嵌入（![[...]]）在编辑器里没有等价的渲染形态，只上色不隐藏标记，避免与普通链接混淆。
     if (match[1]) {
       push(Decoration.mark({ class: "cm-md-wiki-embed" }).range(start, end))
@@ -283,6 +284,9 @@ const tableDecorationsField = StateField.define<DecorationSet>({
 function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   const isCursorActive = cursorLineChecker(view.state)
   const frontmatter = findFrontmatterRange(view.state)
+  // 编辑器自身不滚动，实际滚动发生在外层 ScrollArea；CodeMirror.visibleRanges 因此只覆盖初始视口。
+  // 装饰必须按整篇文档计算，否则下半篇的图片、链接和标题永远不会进入即时预览。
+  const decorationRanges = [{ from: 0, to: view.state.doc.length }]
 
   const decorations: Range<Decoration>[] = []
   const hide = (node: MdSyntaxNode) => {
@@ -304,7 +308,7 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   }
 
   // frontmatter 很短，只要与视口有交集就整段装饰，不必按可见范围切分。
-  if (frontmatter && view.visibleRanges.some((range) => range.from <= frontmatter.to && range.to >= frontmatter.from)) {
+  if (frontmatter) {
     const firstLine = view.state.doc.lineAt(frontmatter.from).number
     const lastLine = view.state.doc.lineAt(frontmatter.to).number
     for (let number = firstLine; number <= lastLine; number += 1) {
@@ -316,7 +320,7 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
     }
   }
 
-  for (const { from, to } of view.visibleRanges) {
+  for (const { from, to } of decorationRanges) {
     decorateWikiLinks(view.state, from, to, isCursorActive, frontmatter, (decoration) => decorations.push(decoration))
     decorateBareUrls(view.state, from, to, frontmatter, (decoration) => decorations.push(decoration))
 

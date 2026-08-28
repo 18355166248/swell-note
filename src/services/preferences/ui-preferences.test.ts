@@ -7,7 +7,11 @@ describe("UI preferences", () => {
   beforeEach(() => window.localStorage.clear())
 
   it("defaults to preview and restores the saved note view mode", () => {
-    expect(loadUiPreferences().noteViewMode).toBe("preview")
+    expect(loadUiPreferences()).toEqual({
+      libraryPaneWidth: 230,
+      noteListPaneWidth: 320,
+      noteViewMode: "preview",
+    })
 
     saveUiPreferences({ noteViewMode: "edit" })
 
@@ -31,5 +35,13 @@ describe("UI preferences", () => {
       colorMode: "dark",
       noteViewMode: "edit",
     })
+  })
+
+  it("restores desktop pane widths and clamps invalid values", () => {
+    saveUiPreferences({ libraryPaneWidth: 260, noteListPaneWidth: 390 })
+    expect(loadUiPreferences()).toMatchObject({ libraryPaneWidth: 260, noteListPaneWidth: 390 })
+
+    saveUiPreferences({ libraryPaneWidth: 999, noteListPaneWidth: 10 })
+    expect(loadUiPreferences()).toMatchObject({ libraryPaneWidth: 340, noteListPaneWidth: 280 })
   })
 })

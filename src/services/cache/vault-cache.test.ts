@@ -2,6 +2,7 @@ import "fake-indexeddb/auto"
 import { beforeEach, describe, expect, it } from "vitest"
 
 import {
+  cacheSyncedVaultAttachment,
   createVaultCacheId,
   deleteVaultCache,
   discardPendingVaultAttachments,
@@ -138,6 +139,29 @@ describe("vault cache", () => {
     await expect(listPendingVaultAttachments("cache")).resolves.toEqual([])
     await deleteVaultCache("cache")
     await expect(loadVaultAttachment("cache", entry.path)).resolves.toBeNull()
+  })
+
+  it("缓存远程已同步附件供离线预览，并可覆盖旧内容", async () => {
+    const path = "/Swell/attachments/remote.png"
+    await cacheSyncedVaultAttachment({
+      cacheId: "cache",
+      data: new Uint8Array([1]).buffer,
+      mimeType: "image/png",
+      noteId: "note",
+      path,
+    })
+    await cacheSyncedVaultAttachment({
+      cacheId: "cache",
+      data: new Uint8Array([2, 3]).buffer,
+      mimeType: "image/png",
+      noteId: "note",
+      path,
+    })
+
+    const cached = await loadVaultAttachment("cache", path)
+    expect(cached).toMatchObject({ status: "synced" })
+    expect(Array.from(new Uint8Array(cached!.data))).toEqual([2, 3])
+    await expect(listPendingVaultAttachments("cache")).resolves.toEqual([])
   })
 
   it("笔记移动时改绑附件，删除时清理未同步附件", async () => {

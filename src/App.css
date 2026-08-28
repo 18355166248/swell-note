@@ -97,8 +97,41 @@
   }
 }
 
+/* 桌面安装包使用无边框窗口：统一顶部拖动区与原生窗口操作，Web/移动端不会挂载这一层。 */
+.desktop-app-frame { display: grid; width: 100%; height: 100dvh; grid-template-rows: 38px minmax(0,1fr); overflow: hidden; background: var(--background); }
+.desktop-app-content { min-width: 0; min-height: 0; overflow: hidden; }
+.desktop-app-content .workspace-root,
+.desktop-app-content .route-page-shell,
+.desktop-app-content .settings-route-shell { height: 100%; }
+.desktop-app-content .app-initialization-state,
+.desktop-app-content .app-crash-state { min-height: 100%; }
+.desktop-titlebar { position: relative; z-index: 60; display: flex; min-width: 0; align-items: center; justify-content: center; border-bottom: 1px solid var(--border); background: color-mix(in oklab,var(--panel-soft) 92%,white); color: var(--muted-foreground); user-select: none; }
+.desktop-titlebar-brand { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 620; letter-spacing: -.01em; pointer-events: none; }
+.desktop-titlebar-brand img { width: 17px; height: 17px; }
+.desktop-window-controls { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; }
+.desktop-window-controls button { display: grid; height: 100%; place-items: center; border: 0; background: transparent; color: #667080; }
+.desktop-window-controls button:focus-visible { position: relative; z-index: 1; outline-offset: -3px; }
+.desktop-window-controls svg { width: 13px; height: 13px; }
+.desktop-window-controls-mac { left: 13px; gap: 8px; }
+.desktop-window-controls-mac button { width: 13px; height: 13px; overflow: hidden; border-radius: 50%; color: transparent; }
+.desktop-window-controls-mac button:hover svg, .desktop-window-controls-mac:focus-within button svg { width: 8px; height: 8px; color: color-mix(in oklab,#1d2530 72%,transparent); }
+.desktop-window-controls-mac .desktop-window-close { background: #ff5f57; }
+.desktop-window-controls-mac .desktop-window-minimize { background: #febc2e; }
+.desktop-window-controls-mac .desktop-window-maximize { background: #28c840; }
+.desktop-window-controls-windows { right: 0; }
+.desktop-window-controls-windows button { width: 46px; }
+.desktop-window-controls-windows button:hover { background: var(--muted); color: var(--foreground); }
+.desktop-window-controls-windows .desktop-window-close:hover { background: #e5484d; color: white; }
+
 .workspace-root { height: 100dvh; overflow: hidden; background: var(--background); }
-.desktop-workspace { display: grid; height: 100%; grid-template-columns: 64px minmax(205px,230px) minmax(280px,320px) minmax(0,1fr); }
+.desktop-workspace { position: relative; display: grid; height: 100%; grid-template-columns: 64px var(--library-pane-width,230px) var(--note-list-pane-width,320px) minmax(0,1fr); }
+.desktop-pane-resizer { position: absolute; top: 0; bottom: 0; z-index: 20; width: 7px; padding: 0; border: 0; background: transparent; cursor: col-resize; touch-action: none; }
+.desktop-pane-resizer::after { position: absolute; top: 0; bottom: 0; left: 0; width: 1px; background: transparent; content: ""; transition: background 120ms ease; }
+.desktop-pane-resizer:hover::after, .desktop-pane-resizer:focus-visible::after, html[data-resizing-pane="true"] .desktop-pane-resizer::after { background: color-mix(in oklab,var(--primary) 58%,var(--border)); }
+.desktop-pane-resizer:focus-visible { outline: none; }
+.library-pane-resizer { left: calc(64px + var(--library-pane-width,230px)); }
+.note-list-pane-resizer { left: calc(64px + var(--library-pane-width,230px) + var(--note-list-pane-width,320px)); }
+html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col-resize !important; user-select: none !important; }
 .mobile-workspace { display: none; }
 .mobile-bottom-nav { display: none; }
 
@@ -318,8 +351,8 @@
 .rail-indicator { position: absolute; right: 7px; top: 7px; width: 6px; height: 6px; border-radius: 50%; background: #23b26d; border: 1.5px solid white; }
 
 .library-panel, .note-list-panel, .note-editor { display: flex; min-width: 0; min-height: 0; flex-direction: column; }
-.library-panel { border-right: 1px solid var(--border); background: var(--panel-soft); }
-.note-list-panel { border-right: 1px solid var(--border); background: white; }
+.library-panel { border-right: 0; background: var(--panel-soft); }
+.note-list-panel { border-right: 0; background: white; }
 .note-editor { background: white; }
 .desktop-workspace[data-immersive-excalidraw="true"] { grid-template-columns: 64px minmax(250px,290px) minmax(0,1fr); }
 .note-editor[data-excalidraw="true"] { overflow: hidden; background: #fff; }
@@ -356,6 +389,15 @@
 .cache-switcher-item small { margin-top: 2px; color: var(--muted-foreground); font-size: 10.5px; }
 .vault-error { margin: 0; border-radius: 7px; background: color-mix(in oklab,var(--destructive) 9%,white); padding: 8px 9px; color: var(--destructive); font-size: 10.5px; line-height: 1.45; }
 .library-scroll, .note-list-scroll, .editor-scroll, .mobile-scroll-content { min-height: 0; flex: 1; }
+/* Radix 自绘滚动条已承担反馈；显式隐藏 WebKit 原生滚动条，避免部分桌面 WebView 同时画出两套。 */
+[data-slot="scroll-area-viewport"] { scrollbar-width: none !important; }
+[data-slot="scroll-area-viewport"]::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
+/* WKWebView 对隐藏原生滚动条的行为与浏览器不完全一致；桌面安装包只保留原生滚动条，避免与 Radix 自绘条叠成两条。 */
+.desktop-app-frame [data-slot="scroll-area-scrollbar"] { display: none; }
+.desktop-app-frame [data-slot="scroll-area-viewport"] { scrollbar-width: thin !important; scrollbar-color: color-mix(in oklab,var(--muted-foreground) 34%,transparent) transparent; }
+.desktop-app-frame [data-slot="scroll-area-viewport"]::-webkit-scrollbar { display: block !important; width: 8px !important; height: 8px !important; background: transparent; }
+.desktop-app-frame [data-slot="scroll-area-viewport"]::-webkit-scrollbar-track { background: transparent; }
+.desktop-app-frame [data-slot="scroll-area-viewport"]::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: color-mix(in oklab,var(--muted-foreground) 34%,transparent); background-clip: padding-box; }
 /* Radix ScrollArea 默认的 table 包裹层会被超长代码撑到最小内容宽度；编辑区必须以视口宽度排版。 */
 .editor-scroll [data-radix-scroll-area-viewport] > div { display: block !important; width: 100%; min-width: 0 !important; }
 .library-navigation { padding: 2px 10px 14px; }
@@ -409,6 +451,9 @@
 .note-search-wrap { position: relative; min-width: 0; }
 .note-search-wrap > svg { position: absolute; z-index: 1; left: 11px; top: 50%; width: 15px; height: 15px; transform: translateY(-50%); color: var(--muted-foreground); pointer-events: none; }
 .note-search-wrap input { height: 36px; padding-left: 34px; background: var(--muted); border-color: transparent; box-shadow: none; font-size: 12px; }
+.note-search-wrap > kbd { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); border: 1px solid var(--border); border-radius: 5px; background: color-mix(in oklab,white 68%,transparent); padding: 1px 5px; color: var(--muted-foreground); font-family: inherit; font-size: 9px; line-height: 16px; pointer-events: none; }
+.note-search-wrap:focus-within > kbd { display: none; }
+.note-search-wrap:has(> kbd) input { padding-right: 42px; }
 .note-search-wrap input:focus { background: white; border-color: var(--ring); }
 .note-list-panel > .note-search-wrap { margin: 0 14px 10px; }
 .note-groups { padding-bottom: 24px; }
@@ -651,6 +696,7 @@
 @media (max-width: 1099px) and (min-width: 768px) {
   .desktop-workspace { grid-template-columns: 64px minmax(260px,300px) minmax(0,1fr); }
   .desktop-workspace[data-immersive-excalidraw="true"] { grid-template-columns: 64px minmax(0,1fr); }
+  .desktop-pane-resizer { display: none; }
   .library-panel { display: none; }
   .document-canvas { padding-inline: 44px; }
 }
@@ -771,5 +817,5 @@
 }
 
 @media (min-width: 1280px) {
-  .desktop-workspace { grid-template-columns: 64px 230px 320px minmax(0,1fr); }
+  .desktop-workspace { grid-template-columns: 64px var(--library-pane-width,230px) var(--note-list-pane-width,320px) minmax(0,1fr); }
 }

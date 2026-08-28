@@ -33,6 +33,7 @@ import {
 } from "@/services/vault/attachment-writer"
 import { createWebDavVaultAdapter } from "@/services/vault/webdav-vault-adapter"
 import {
+  cacheSyncedVaultAttachment,
   createVaultCacheId,
   deleteVaultCache,
   deleteSyncedVaultAttachments,
@@ -187,8 +188,14 @@ function App() {
   const previousOnlineRef = useRef(isOnline)
   const activeSyncRunRef = useRef<SyncRun | null>(null)
   const pendingWikiAnchorRef = useRef("")
+  const passiveWebDavReaderRef = useRef<Promise<VaultAdapter | null> | null>(null)
   const refreshVaultRef = useRef<(noteIds?: ReadonlySet<string>) => Promise<void>>(async () => undefined)
   notesRef.current = notes
+
+  useEffect(() => {
+    // 切换缓存可能意味着切换 WebDAV 账号或根目录，旧读取器不能跨笔记库复用。
+    passiveWebDavReaderRef.current = null
+  }, [activeCacheMeta?.id])
 
   const applyCachedSnapshot = useCallback((snapshot: VaultCacheSnapshot) => {
     // 缓存恢复时主动断开运行时适配器，确保离线浏览不会误走本地文件或 WebDAV 写入链路。
@@ -483,8 +490,31 @@ function App() {
       const cachedAttachment = await loadVaultAttachment(activeCacheMeta.id, assetPath)
       if (cachedAttachment) return { data: new Uint8Array(cachedAttachment.data), mimeType: cachedAttachment.mimeType }
     }
-    return vaultSession?.readBinaryFile ? vaultSession.readBinaryFile(assetPath) : null
-  }, [activeCacheMeta, activeNote?.remotePath, vaultSession])
+    let assetReader = vaultSession
+    if (!assetReader?.readBinaryFile && activeCacheMeta?.sourceKind === "webdav" && isOnline) {
+      // 重启后正文可直接使用离线缓存；附件缺失时只恢复一个只读 WebDAV 读取器。
+      // 这里不调用 connectWebDav，避免“查看图片”隐式上传待同步笔记或修改任何云端数据。
+      passiveWebDavReaderRef.current ??= (async () => {
+        const config = loadWebDavConfig()
+        const storedPassword = await loadWebDavPassword(config)
+        return storedPassword ? createWebDavVaultAdapter(config, storedPassword) : null
+      })().catch(() => null)
+      assetReader = await passiveWebDavReaderRef.current
+    }
+    if (!assetReader?.readBinaryFile) return null
+    const asset = await assetReader.readBinaryFile(assetPath)
+    if (activeCacheMeta?.sourceKind === "webdav" && activeNote) {
+      // 图片在线首次打开后落入附件缓存，之后刷新或离线启动仍可直接预览。
+      await cacheSyncedVaultAttachment({
+        cacheId: activeCacheMeta.id,
+        data: new Uint8Array(asset.data).slice().buffer,
+        mimeType: asset.mimeType,
+        noteId: activeNote.id,
+        path: assetPath,
+      })
+    }
+    return asset
+  }, [activeCacheMeta, activeNote, isOnline, vaultSession])
 
   const attachmentNoteId = activeNote?.id
   const attachmentNotePath = activeNote?.remotePath

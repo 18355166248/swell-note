@@ -101,6 +101,26 @@ function markOf(marks: ReturnType<typeof collect>["marks"], className: string) {
 }
 
 describe("markdown live preview", () => {
+  it("keeps image Markdown visible while editing", async () => {
+    const content = [
+      "正文",
+      "",
+      "![标准图](../attachments/standard.png)",
+      "![[截图.png|300]](../attachments/legacy.png)",
+      "",
+      "```md",
+      "![代码图片](../attachments/code.png)",
+      "```",
+    ].join("\n")
+    const view = createView({ anchor: 0 }, content)
+    await settle()
+
+    expect(view.contentDOM.querySelector(".cm-md-inline-image")).toBeNull()
+    expect(view.contentDOM.textContent).toContain("![标准图](../attachments/standard.png)")
+    expect(view.contentDOM.textContent).toContain("![[截图.png|300]](../attachments/legacy.png)")
+    view.destroy()
+  })
+
   it("styles headings, quotes and hides inline marks away from the cursor", async () => {
     const view = createView({ anchor: 0 })
     const { checkboxes, classes, hidden } = collect(await settleInlineDecorations(view))

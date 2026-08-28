@@ -10,6 +10,7 @@
     "build:mac": "tauri build --bundles app,dmg",
     "build:mac:universal": "tauri build --target universal-apple-darwin --bundles app,dmg",
     "dev": "vite",
+    "dev:desktop": "tauri dev",
     "build": "tsc && vite build",
     "test": "vitest run",
     "test:webdav:live": "VITE_WEBDAV_E2E_DIRECT=1 SWELL_WEBDAV_E2E_CONFIRM=write-dedicated-test-file vitest run src/services/webdav-live.integration.test.ts",

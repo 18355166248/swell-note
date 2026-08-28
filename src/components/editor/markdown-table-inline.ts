@@ -38,7 +38,7 @@ export function renderTableInlineMarkdown(
     const lineBreak = match[12]
 
     if (imageSource !== undefined) {
-      appendImage(parent, imageAlt ?? "", imageSource, options, registerObjectUrl)
+      appendMarkdownImage(parent, imageAlt ?? "", imageSource, options, registerObjectUrl)
     } else if (linkHref !== undefined || bareHref !== undefined) {
       appendLink(parent, linkLabel ?? bareHref ?? "", linkHref ?? bareHref ?? "", options)
     } else if (strikeText !== undefined) {
@@ -82,7 +82,7 @@ function appendLink(parent: HTMLElement, label: string, href: string, options: T
   parent.appendChild(link)
 }
 
-function appendImage(
+export function appendMarkdownImage(
   parent: HTMLElement,
   alt: string,
   source: string,

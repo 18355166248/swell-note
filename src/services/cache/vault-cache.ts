@@ -63,6 +63,24 @@ export async function queueVaultAttachment(
   }
 }
 
+export async function cacheSyncedVaultAttachment(
+  entry: Omit<VaultAttachmentCacheEntry, "createdAt" | "key" | "status">,
+) {
+  const database = await openDatabase()
+  const value: VaultAttachmentCacheEntry = {
+    ...entry,
+    createdAt: Date.now(),
+    key: attachmentKey(entry.cacheId, entry.path),
+    status: "synced",
+  }
+  const transaction = database.transaction(ATTACHMENT_STORE, "readwrite")
+  // 远程附件按 cacheId + path 唯一；再次在线读取时覆盖旧副本，保证离线缓存与云端一致。
+  transaction.objectStore(ATTACHMENT_STORE).put(value)
+  await transactionDone(transaction)
+  database.close()
+  return value
+}
+
 export async function loadVaultAttachment(cacheId: string, path: string) {
   const database = await openDatabase()
   const entry = await requestResult<VaultAttachmentCacheEntry | undefined>(

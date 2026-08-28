@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import {
   ArrowLeft,
@@ -83,7 +83,7 @@ import {
 import { buildNotePreview } from "@/services/markdown/note-preview"
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
 import type { NoteSort } from "@/services/search/note-sort"
-import type { NoteViewMode } from "@/services/preferences/ui-preferences"
+import { loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
@@ -196,6 +196,33 @@ export function Workspace(props: WorkspaceProps) {
   }, [activeNoteUsesSpecialPreview, props.activeNote?.id, props.noteViewMode, props.onNoteViewModeChange])
 
   useEffect(() => {
+    const handleDesktopShortcut = (event: KeyboardEvent) => {
+      if (window.matchMedia("(max-width: 767px)").matches) return
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat) return
+      const key = event.key.toLocaleLowerCase()
+      if (key === "k") {
+        event.preventDefault()
+        const search = document.querySelector<HTMLInputElement>(".desktop-workspace .note-search-wrap input")
+        search?.focus()
+        search?.select()
+        return
+      }
+      if (key === "n" && !event.shiftKey && props.canCreateNote && !props.isCreatingNote) {
+        event.preventDefault()
+        props.onCreateNote()
+        return
+      }
+      if (key === "s" && event.shiftKey && !props.isRefreshingVault) {
+        event.preventDefault()
+        props.onRefreshVault()
+      }
+    }
+    // 桌面端高频动作统一由工作区分发，避免输入框和编辑器各自重复注册全局快捷键。
+    document.addEventListener("keydown", handleDesktopShortcut)
+    return () => document.removeEventListener("keydown", handleDesktopShortcut)
+  }, [props.canCreateNote, props.isCreatingNote, props.isRefreshingVault, props.onCreateNote, props.onRefreshVault])
+
+  useEffect(() => {
     const ancestors = getFolderAncestorPaths(props.selectedFolder)
     if (ancestors.length === 0) return
     // 地址直达深层目录时展开祖先保证选中项可见；之后仍允许用户主动折叠。
@@ -253,6 +280,27 @@ type FolderTreeProps = {
 }
 
 function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
+  const [paneWidths, setPaneWidths] = useState(() => {
+    const preferences = loadUiPreferences()
+    return {
+      library: preferences.libraryPaneWidth,
+      noteList: preferences.noteListPaneWidth,
+    }
+  })
+  useEffect(() => {
+    // 拖拽时宽度会高频变化，延迟落盘避免每个 pointermove 都同步写 localStorage。
+    const timer = window.setTimeout(() => {
+      saveUiPreferences({
+        libraryPaneWidth: paneWidths.library,
+        noteListPaneWidth: paneWidths.noteList,
+      })
+    }, 180)
+    return () => window.clearTimeout(timer)
+  }, [paneWidths])
+  const workspaceStyle = {
+    "--library-pane-width": `${paneWidths.library}px`,
+    "--note-list-pane-width": `${paneWidths.noteList}px`,
+  } as CSSProperties
   // 只有详情路由才进入沉浸画布；切到目录/列表路由时必须立即恢复笔记列表，即使 activeNote 仍保留上一条笔记。
   const immersiveExcalidraw = Boolean(
     props.isNoteDetailRoute
@@ -260,7 +308,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
     && isExcalidrawMarkdown(props.activeNote.content),
   )
   return (
-    <div className="desktop-workspace" data-immersive-excalidraw={immersiveExcalidraw}>
+    <div className="desktop-workspace" data-immersive-excalidraw={immersiveExcalidraw} style={workspaceStyle}>
       <AppNavigationRail
         activeSection="notes"
         connected={props.connected}
@@ -297,6 +345,16 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         vaultError={props.vaultError}
         vaultCaches={props.vaultCaches}
       />
+      {!immersiveExcalidraw ? (
+        <DesktopPaneResizeHandle
+          className="library-pane-resizer"
+          label="调整笔记库侧栏宽度"
+          max={340}
+          min={205}
+          onChange={(library) => setPaneWidths((current) => ({ ...current, library }))}
+          value={paneWidths.library}
+        />
+      ) : null}
       {!immersiveExcalidraw ? <NoteListPanel
         activeNoteId={props.activeNoteId}
         canCreateNote={props.canCreateNote}
@@ -323,6 +381,16 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         isManagingFolder={props.isManagingNote}
         isLoading={props.isRefreshingVault}
       /> : null}
+      {!immersiveExcalidraw ? (
+        <DesktopPaneResizeHandle
+          className="note-list-pane-resizer"
+          label="调整笔记列表宽度"
+          max={440}
+          min={280}
+          onChange={(noteList) => setPaneWidths((current) => ({ ...current, noteList }))}
+          value={paneWidths.noteList}
+        />
+      ) : null}
       {props.activeNote ? props.activeNoteLoading || props.activeNoteLoadError ? (
         <NoteDocumentState
           error={props.activeNoteLoadError}
@@ -372,6 +440,63 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         />
       ) : <EmptyNoteEditor canCreateNote={props.canCreateNote} hasNotes={props.totalNoteCount > 0} isLoading={props.isRefreshingVault} onOpenSettings={props.onOpenSettings} />}
     </div>
+  )
+}
+
+type DesktopPaneResizeHandleProps = {
+  className: string
+  label: string
+  max: number
+  min: number
+  onChange: (value: number) => void
+  value: number
+}
+
+function DesktopPaneResizeHandle({ className, label, max, min, onChange, value }: DesktopPaneResizeHandleProps) {
+  const cleanupRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => {
+    cleanupRef.current?.()
+  }, [])
+
+  const startResize = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    cleanupRef.current?.()
+    const startX = event.clientX
+    const startWidth = value
+    const move = (moveEvent: PointerEvent) => onChange(Math.min(max, Math.max(min, startWidth + moveEvent.clientX - startX)))
+    const finish = () => {
+      window.removeEventListener("pointermove", move)
+      window.removeEventListener("pointerup", finish)
+      window.removeEventListener("pointercancel", finish)
+      window.removeEventListener("blur", finish)
+      document.documentElement.removeAttribute("data-resizing-pane")
+      cleanupRef.current = null
+    }
+    document.documentElement.setAttribute("data-resizing-pane", "true")
+    window.addEventListener("pointermove", move)
+    window.addEventListener("pointerup", finish, { once: true })
+    window.addEventListener("pointercancel", finish, { once: true })
+    window.addEventListener("blur", finish, { once: true })
+    cleanupRef.current = finish
+  }
+
+  return (
+    <button
+      aria-label={label}
+      aria-orientation="vertical"
+      aria-valuemax={max}
+      aria-valuemin={min}
+      aria-valuenow={value}
+      className={`desktop-pane-resizer ${className}`}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+        event.preventDefault()
+        onChange(Math.min(max, Math.max(min, value + (event.key === "ArrowLeft" ? -12 : 12))))
+      }}
+      onPointerDown={startResize}
+      role="separator"
+      type="button"
+    />
   )
 }
 
@@ -758,6 +883,7 @@ function NoteListPanel({
           placeholder="搜索笔记、标签、内容"
           value={query}
         />
+        <kbd aria-hidden="true">⌘K</kbd>
       </div>
 
       <ScrollArea className="note-list-scroll" viewportRef={setViewportRef}>
