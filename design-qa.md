@@ -87,3 +87,61 @@
 - Comparison history: P1 missing toolbar was caused by `viewModeEnabled`; setting it to `false` restored the official editor controls. Post-fix evidence is `design-qa-assets/excalidraw-toolbar-final.png`.
 
 final result: passed
+
+## 阅读 / 编辑模式感知优化
+
+
+**Source visual truth**
+
+- Edit mode before improvement: `/private/tmp/swell-note-mode-audit/01-edit-mode.png`
+- Read mode before improvement: `/private/tmp/swell-note-mode-audit/02-read-mode.png`
+
+**Implementation evidence**
+
+- Desktop edit mode: `/private/tmp/swell-note-mode-qa-edit.png`
+- Desktop read mode: `/private/tmp/swell-note-mode-qa-preview.png`
+- Mobile edit mode after overflow fix: `/private/tmp/swell-note-mode-qa-mobile-edit-final.png`
+- Desktop viewport: 1910 × 1074 CSS px, device scale factor 0.67; source and implementation screenshots are both 2851 × 1603 px, so no density normalization was required.
+- State: the same cached WebDAV Markdown note, light theme, read and edit states.
+
+**Full-view comparison evidence**
+
+- The implementation preserves the existing three-pane hierarchy, typography, spacing, document width, and content wrapping.
+- Edit mode now adds a stable blue editor edge and an inline `编辑中 · 保存状态` pill without changing the document's usable width.
+- Read mode removes the format toolbar and edit-state decoration, keeping the original clean reading surface.
+- The persistent segmented control exposes both `阅读` and `编辑`; the active option is represented visually and with `aria-pressed`.
+
+**Focused region comparison evidence**
+
+- A separate crop was not needed because the title metadata, editor edge, toolbar, and mode-control state are legible in the full desktop capture.
+- DOM inspection additionally verified the named `笔记显示模式` group, mutually exclusive pressed states, hidden edit status in read mode, and visible formatting toolbar only in edit mode.
+
+**Findings**
+
+- Fonts and typography: passed. Existing Geist/PingFang typography, weights, line heights, and document hierarchy remain unchanged.
+- Spacing and layout rhythm: passed after the mobile overflow fix. The new indicators do not reflow the document body or change table/editor width.
+- Colors and visual tokens: passed. New states reuse `--primary`, `--blue-soft`, `--border`, and existing semantic error colors.
+- Image quality and asset fidelity: not applicable; this interaction contains no new raster or custom visual assets. Icons reuse the project's Lucide set.
+- Copy and content: passed. `阅读`, `编辑`, `编辑中`, and the existing save-state vocabulary are concise and consistent.
+- Accessibility and interaction: passed. Buttons have explicit labels, `aria-pressed`, a labeled group, keyboard access, and the existing Cmd/Ctrl+E shortcut remains functional.
+
+**Comparison history**
+
+- P2 found: a narrow viewport could allow long editor content to widen the mobile workspace and push title-bar actions outside the usable screen.
+- Fix: constrained `.mobile-workspace` and compact `.note-editor` to the viewport and clipped overflow at the page shell, leaving horizontal overflow to the body/editor region.
+- Post-fix evidence: `/private/tmp/swell-note-mode-qa-mobile-edit-final.png`; the compact editor is constrained to the mobile viewport and the mode group remains available.
+
+**Primary interactions tested**
+
+- Click `阅读模式` and `编辑模式`.
+- Verify only one option is pressed at a time.
+- Verify read mode hides the formatting toolbar and edit status.
+- Verify Cmd/Ctrl+E returns to edit mode.
+- Reload while in edit mode and verify the cached global mode remains edit.
+- Browser console checked: no warnings or errors.
+
+**Follow-up polish**
+
+- P3: a future dark theme pass should tune the edit edge and segmented-control shadow against dark surface tokens.
+
+final result: passed

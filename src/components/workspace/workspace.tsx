@@ -1311,8 +1311,15 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
     }
   }, [canInsertAttachment, handleFormat, note.id, onFormatNote, onInsertAttachments, readOnly])
 
+  const saveStateLabel = getSaveStateLabel(cloudConnected, note, saveState)
+
   return (
-    <article className="note-editor" data-compact={compact} data-excalidraw={isExcalidraw}>
+    <article
+      className="note-editor"
+      data-compact={compact}
+      data-excalidraw={isExcalidraw}
+      data-view-mode={previewing ? "preview" : "edit"}
+    >
       <header className="editor-titlebar">
         {onBack ? (
           <Button aria-label={`返回${backLabel}`} onClick={onBack} size="icon" variant="ghost"><ArrowLeft /></Button>
@@ -1358,22 +1365,9 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
               <TooltipContent>上传本地修改并拉取远端更新</TooltipContent>
             </Tooltip>
           ) : null}
-          {!isSpecialPreview ? <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label={previewing ? "切换到编辑" : "切换到预览"}
-                className="preview-toggle"
-                data-active={previewing}
-                onClick={() => onNoteViewModeChange(previewing ? "edit" : "preview")}
-                size="icon-sm"
-                variant="ghost"
-              >
-                {previewing ? <PencilLine /> : <Eye />}
-                <span>{previewing ? "编辑" : "阅读"}</span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{previewing ? "编辑 Markdown（⌘/Ctrl+E）" : "预览 Markdown（⌘/Ctrl+E）"}</TooltipContent>
-          </Tooltip> : null}
+          {!isSpecialPreview ? (
+            <NoteViewModeSwitch mode={noteViewMode} onChange={onNoteViewModeChange} />
+          ) : null}
           <Button
             aria-label={note.starred ? "取消收藏" : "收藏"}
             onClick={() => onUpdateNote({ starred: !note.starred })}
@@ -1494,6 +1488,13 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
             <span>{documentSize}</span>
             <span>·</span>
             <span>{deriveFolder(note)}</span>
+            {!previewing && !readOnly ? (
+              <span aria-live="polite" className="note-edit-mode-status" data-status={saveState.status} role="status">
+                <PencilLine />
+                <strong>编辑中</strong>
+                <span>· {saveStateLabel}</span>
+              </span>
+            ) : null}
           </div>
           {isCanvas ? (
             <Suspense fallback={<EditorLoadingState label="Canvas 画布" />}>
@@ -1786,8 +1787,43 @@ function BacklinksPanel({ backlinks, onSelectNote }: { backlinks: Note[]; onSele
   )
 }
 
-function SaveStateIndicator({ cloudConnected, note, state }: { cloudConnected: boolean; note: Note; state: NoteSaveState }) {
-  const label = state.status === "saving"
+function NoteViewModeSwitch({ mode, onChange }: { mode: NoteViewMode; onChange: (mode: NoteViewMode) => void }) {
+  const options: Array<{ icon: typeof Eye; label: string; mode: NoteViewMode }> = [
+    { icon: Eye, label: "阅读", mode: "preview" },
+    { icon: PencilLine, label: "编辑", mode: "edit" },
+  ]
+
+  return (
+    <div aria-label="笔记显示模式" className="note-view-mode-switch" role="group">
+      {options.map((option) => {
+        const Icon = option.icon
+        const active = mode === option.mode
+        return (
+          <Tooltip key={option.mode}>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label={`${option.label}模式`}
+                aria-pressed={active}
+                className="note-view-mode-button"
+                data-mode={option.mode}
+                onClick={() => onChange(option.mode)}
+                size="sm"
+                variant="ghost"
+              >
+                <Icon />
+                <span>{option.label}</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{active ? `当前为${option.label}模式` : `切换到${option.label}模式（⌘/Ctrl+E）`}</TooltipContent>
+          </Tooltip>
+        )
+      })}
+    </div>
+  )
+}
+
+function getSaveStateLabel(cloudConnected: boolean, note: Note, state: NoteSaveState) {
+  return state.status === "saving"
     ? note.source === "webdav" ? "正在同步" : "正在保存"
     : state.status === "pending"
       ? "待同步"
@@ -1801,6 +1837,10 @@ function SaveStateIndicator({ cloudConnected, note, state }: { cloudConnected: b
               ? "只读画布"
               : note.source === "webdav" && !note.contentLoaded ? "正文未缓存" : "只读"
             : note.source === "webdav" ? cloudConnected ? "已同步" : "仅本机缓存" : "已保存"
+}
+
+function SaveStateIndicator({ cloudConnected, note, state }: { cloudConnected: boolean; note: Note; state: NoteSaveState }) {
+  const label = getSaveStateLabel(cloudConnected, note, state)
   const Icon = state.status === "saving"
     ? LoaderCircle
     : state.status === "pending"
