@@ -24,7 +24,6 @@
       "allow": [{ "url": "https://dav.jianguoyun.com/**" }]
     },
     "opener:default",
-    "process:allow-restart",
-    "updater:default"
+    "process:allow-restart"
   ]
 }

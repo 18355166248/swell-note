@@ -93,6 +93,24 @@ pnpm build:android:debug
 pnpm build:ios:sim
 ```
 
+iOS 真机首次运行需要在 Xcode 登录 Apple ID、选择开发团队并连接已解锁且信任此 Mac 的设备。项目已让 Vite 读取 `TAURI_DEV_HOST`，因此真机可以访问本机开发服务：
+
+```bash
+# 检查 Xcode、Rust target、CocoaPods、签名身份和已连接设备
+pnpm check:ios:device
+
+# 首次打开 Xcode，在 Signing & Capabilities 选择 Team 后点击 Run
+pnpm dev:ios:open
+
+# 完成首次签名后，直接安装并启动到指定真机
+pnpm dev:ios -- "你的 iPhone 名称"
+
+# 生成可安装到已注册测试设备的签名 Debug IPA
+APPLE_DEVELOPMENT_TEAM=你的TeamID pnpm build:ios:device
+```
+
+真机安装必须经过 Apple 代码签名。免费 Apple ID 可用于本人设备调试，但描述文件有效期和能力有限；长期测试、TestFlight 或 App Store 发布需要 Apple Developer Program。Team ID 不写入仓库，统一通过 `APPLE_DEVELOPMENT_TEAM` 或 Xcode 自动签名提供。
+
 基础自测：
 
 ```bash

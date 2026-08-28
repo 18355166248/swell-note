@@ -13,6 +13,24 @@
 
 手动运行不会创建 GitHub Release，也不要求发布证书。
 
+## iOS 真机调试与安装
+
+仓库同时支持 iOS 真机调试。首次使用：
+
+1. 在 Xcode > Settings > Accounts 登录 Apple ID。
+2. 用数据线连接并解锁 iPhone / iPad，在设备上信任此 Mac，并开启开发者模式。
+3. 运行 `pnpm check:ios:device` 检查 Xcode、Rust target、CocoaPods、签名身份和设备状态。
+4. 运行 `pnpm dev:ios:open`，在 Xcode 的 Signing & Capabilities 中为 `com.xmly.swell-note` 选择 Team，然后选择真机并点击 Run。
+5. 首次签名完成后，可运行 `pnpm dev:ios -- "设备名称"` 直接安装调试版。
+
+需要生成调试 IPA 时，运行：
+
+```bash
+APPLE_DEVELOPMENT_TEAM=你的TeamID pnpm build:ios:device
+```
+
+该命令使用 `debugging` 导出方式，只能安装到开发团队描述文件包含的设备。Team ID 和证书属于个人/团队凭据，不提交到仓库。真机开发服务器使用 Tauri 提供的 `TAURI_DEV_HOST`；项目的 Vite 配置已支持该变量。
+
 ## 正式发布
 
 1. 同时更新 `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 的版本。
