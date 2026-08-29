@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Swell Note open book S logo</title>
+  <desc id="desc">An open blue notebook whose center gap forms the letter S.</desc>
+  <defs>
+    <linearGradient id="pageLeft" x1="126" y1="166" x2="536" y2="858" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#176CFF"/>
+      <stop offset="1" stop-color="#3150E8"/>
+    </linearGradient>
+    <linearGradient id="pageRight" x1="540" y1="854" x2="914" y2="168" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3150E8"/>
+      <stop offset="1" stop-color="#0879FF"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="168" y1="814" x2="856" y2="814" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#20D4DF"/>
+      <stop offset="1" stop-color="#35C7EB"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 左右页之间的留白刻意形成 S，缩小后仍能保持清晰轮廓。 -->
+  <path fill="url(#pageLeft)" d="M434 196C343 155 251 134 156 134c-32 0-58 26-58 58v542c0 31 23 56 54 59 112 9 211 29 302 73 19-54 58-101 83-145 27-47 37-96 17-141-18-42-60-72-98-103-50-40-94-83-98-142-4-52 22-100 76-139Z"/>
+  <path fill="url(#pageRight)" d="M570 250c-52 39-76 85-70 135 7 57 53 96 101 136 39 32 78 65 94 110 17 48 4 99-24 149-20 35-46 67-63 90 76-38 160-61 248-70 30-3 54-28 54-59V192c0-32-26-58-58-58-95 0-190 34-282 116Z"/>
+
+  <!-- 青色下页只保留两条短弧，强化“翻页”含义但不干扰主 S。 -->
+  <path fill="url(#accent)" d="M128 807c111 10 204 29 289 66-82-21-166-30-247-27-23 1-42-16-42-39Z"/>
+  <path fill="url(#accent)" d="M896 807c-111 10-204 29-289 66 82-21 166-30 247-27 23 1 42-16 42-39Z"/>
+</svg>

@@ -99,10 +99,20 @@ iOS 真机首次运行需要在 Xcode 登录 Apple ID、选择开发团队并连
 # 检查 Xcode、Rust target、CocoaPods、签名身份和已连接设备
 pnpm check:ios:device
 
+# 一键生成图标、构建 Release、覆盖安装并启动到默认真机 Swell5
+# Release 内置页面资源，安装后不依赖电脑或局域网开发服务
+pnpm ios
+
+# 临时切换到其他已连接设备
+pnpm ios -- --device "你的 iPhone 名称"
+
+# 需要热更新时再启动真机调试版（需要手机允许本地网络访问）
+pnpm ios:dev
+
 # 首次打开 Xcode，在 Signing & Capabilities 选择 Team 后点击 Run
 pnpm dev:ios:open
 
-# 完成首次签名后，直接安装并启动到指定真机
+# 需要手动选择 IP 时使用原始交互命令
 pnpm dev:ios -- "你的 iPhone 名称"
 
 # 生成可安装到已注册测试设备的签名 Debug IPA

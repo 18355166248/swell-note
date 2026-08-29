@@ -17,6 +17,7 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  FolderCog,
   FolderPlus,
   FolderTree,
   Image,
@@ -26,6 +27,7 @@ import {
   Link2,
   LoaderCircle,
   MoreHorizontal,
+  Menu,
   Eye,
   PencilLine,
   Plus,
@@ -38,6 +40,7 @@ import {
   Italic,
   Quote,
   Undo2,
+  X,
 } from "lucide-react"
 
 import swellNoteLogo from "@/assets/brand/swell-note-logo-ribbon-s.svg"
@@ -1027,7 +1030,7 @@ function CreateFolderButton({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>新建空文件夹</DialogTitle>
-          <DialogDescription>{parentFolder ? `将在“${parentFolder}”下创建子文件夹。` : "将在本地 Vault 根目录创建文件夹。"}</DialogDescription>
+          <DialogDescription>{parentFolder ? `将在“${parentFolder}”下创建子文件夹。` : "将在当前笔记库根目录创建文件夹；坚果云目录会先保存在本机，点击同步后上传。"}</DialogDescription>
         </DialogHeader>
         <Input autoFocus aria-label="文件夹名称" onChange={(event) => setName(event.target.value)} placeholder="例如：项目资料" value={name} />
         <DialogFooter>
@@ -1185,7 +1188,7 @@ function NoteListRow({ active, note, onSelect }: NoteListRowProps) {
       type="button"
     >
       <div className="note-row-heading">
-        <strong>{note.title}</strong>
+        <strong>{note.title || "未命名笔记"}</strong>
         {note.starred ? <Star className="starred-icon" /> : null}
       </div>
       <p>{note.preview}</p>
@@ -1340,7 +1343,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
             ))}
             <span className="editor-breadcrumb-segment">
               {folderSegments.length > 0 ? <ChevronRight /> : null}
-              <span className="editor-breadcrumb-current">{note.title}</span>
+              <span className="editor-breadcrumb-current">{note.title || "未命名笔记"}</span>
             </span>
           </div>
         )}
@@ -1480,6 +1483,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
               ;(event.target as HTMLInputElement).blur()
             }}
             readOnly={note.readOnly === true}
+            placeholder="输入标题"
             value={isVaultNote ? titleDraft : note.title}
           />
           <div className="document-meta">
@@ -1775,7 +1779,7 @@ function BacklinksPanel({ backlinks, onSelectNote }: { backlinks: Note[]; onSele
         <div className="backlinks-list">
           {backlinks.map((note) => (
             <button key={note.id} onClick={() => onSelectNote(note)} type="button">
-              <strong>{note.title}</strong>
+              <strong>{note.title || "未命名笔记"}</strong>
               <span>{note.preview}</span>
             </button>
           ))}
@@ -1873,6 +1877,9 @@ type MobileLibraryProps = WorkspaceProps & FolderTreeProps & {
 
 function MobileLibrary(props: MobileLibraryProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const [managingFolders, setManagingFolders] = useState(false)
+  const [showAllFolders, setShowAllFolders] = useState(false)
   const rootFolders = useMemo(
     () => getDirectChildVaultFolders(props.folders, null),
     [props.folders],
@@ -1900,81 +1907,134 @@ function MobileLibrary(props: MobileLibraryProps) {
     rememberPosition()
     props.onSelectFolder(folder)
   }
+  const displayedFolders = managingFolders || showAllFolders ? rootFolders : rootFolders.slice(0, 6)
+  const recentNotes = props.notes.slice(0, 5)
 
   return (
     <section className="mobile-screen mobile-library">
-      <MobileBrandHeader
-        connected={props.connected}
-        isRefreshingVault={props.isRefreshingVault}
-        mobileConnectionLabel={props.mobileConnectionLabel}
-        onRefreshVault={props.onRefreshVault}
-      />
+      <header className="mobile-library-header">
+        <MobileNavigationDrawer
+          activeSection="notes"
+          connected={props.connected}
+          connectionLabel={props.connectionLabel}
+          isRefreshingVault={props.isRefreshingVault}
+          mobileConnectionLabel={props.mobileConnectionLabel}
+          noteCount={props.totalNoteCount}
+          starredNoteCount={props.starredNoteCount}
+          onNavigate={props.onNavigate}
+          onRefreshVault={props.onRefreshVault}
+          onSelectLibraryView={(view) => {
+            rememberPosition()
+            props.onSelectLibraryView(view)
+          }}
+        />
+        <h1>笔记库</h1>
+        <div className="mobile-library-header-actions">
+          <Button
+            aria-label={props.connected ? "同步当前笔记库" : "重新连接并更新"}
+            disabled={props.isRefreshingVault}
+            onClick={props.onRefreshVault}
+            size="icon"
+            variant="ghost"
+          >
+            {props.isRefreshingVault ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
+          </Button>
+          <Button aria-label="搜索笔记" onClick={() => searchRef.current?.focus()} size="icon" variant="ghost"><Search /></Button>
+        </div>
+      </header>
       <ScrollArea className="mobile-scroll-content" viewportRef={viewportRef}>
         <div className="mobile-page-padding">
           <div className="mobile-search-row">
             <div className="note-search-wrap">
               <Search />
               <Input
+                ref={searchRef}
                 onChange={(event) => props.onQueryChange(event.target.value)}
                 placeholder="搜索笔记、标签、内容"
                 value={props.query}
               />
             </div>
           </div>
-          <Button className="mobile-new-note" disabled={!props.canCreateNote || props.isCreatingNote} onClick={() => { rememberPosition(); props.onCreateNote() }}>
-            {props.isCreatingNote ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
-            {props.isCreatingNote ? "正在创建…" : props.canCreateNote ? "新建笔记" : "本地 Vault 中可新建"}
-          </Button>
-          <Button
-            className="mobile-open-vault"
-            disabled={!props.localVaultSupported || props.isOpeningVault}
-            onClick={() => { rememberPosition(); props.onOpenLocalVault() }}
-            variant="outline"
-          >
-            <FolderOpen data-icon="inline-start" />
-            {props.isOpeningVault ? "正在读取…" : "打开本地笔记库"}
-          </Button>
-          <CacheSwitcher
-            activeCacheId={props.activeCacheId}
-            caches={props.vaultCaches}
-            mobile
-            onSelectCache={(cacheId) => {
-              rememberPosition()
-              props.onSelectVaultCache(cacheId)
-            }}
-          />
           {props.vaultError ? <p className="vault-error">{props.vaultError}</p> : null}
 
-          <div className="mobile-library-rows">
-            <MobileLibraryRow count={props.totalNoteCount} icon={FileText} label="全部笔记" onClick={() => { rememberPosition(); props.onSelectLibraryView("all") }} />
-            <MobileLibraryRow count={Math.min(props.totalNoteCount, 32)} icon={CheckCircle2} label="最近更新" onClick={() => { rememberPosition(); props.onSelectLibraryView("recent") }} />
-            <MobileLibraryRow count={props.starredNoteCount} icon={Star} label="收藏" onClick={() => { rememberPosition(); props.onSelectLibraryView("starred") }} />
-          </div>
-
           <div className="mobile-section-heading">
+            <Button
+              aria-label={managingFolders ? "完成文件夹管理" : "管理文件夹"}
+              aria-pressed={managingFolders}
+              className="mobile-folder-manage"
+              disabled={!props.folderManagementMode}
+              onClick={() => setManagingFolders((value) => !value)}
+              size="icon"
+              variant="ghost"
+            >
+              <FolderCog />
+            </Button>
             <span>文件夹</span>
-            {props.canCreateFolder ? (
-              <CreateFolderButton
-                disabled={props.isManagingNote}
-                onCreate={(name) => props.onCreateFolder(name, props.selectedFolder)}
-                parentFolder={props.selectedFolder}
-              />
-            ) : null}
+            <CreateFolderButton
+              disabled={!props.canCreateFolder || props.isManagingNote}
+              onCreate={(name) => props.onCreateFolder(name, null)}
+              parentFolder={null}
+            />
           </div>
           <div className="mobile-folder-list">
-            {rootFolders.map((folder) => (
+            {displayedFolders.map((folder) => (
               <MobileLibraryRow
                 count={folder.count}
                 icon={Folder}
                 key={folder.path}
                 label={folder.label}
                 onClick={() => selectFolder(folder.path)}
+                trailing={managingFolders && props.folderManagementMode ? (
+                  <FolderRenameButton
+                    disabled={props.isManagingNote}
+                    folderPath={folder.path}
+                    mode={props.folderManagementMode}
+                    onDelete={props.onDeleteFolder}
+                    onRename={props.onRenameFolder}
+                  />
+                ) : undefined}
               />
             ))}
+            {rootFolders.length > 6 && !managingFolders ? (
+              <button className="mobile-folder-expand" onClick={() => setShowAllFolders((value) => !value)} type="button">
+                <span>{showAllFolders ? "收起文件夹" : `查看全部 ${rootFolders.length} 个文件夹`}</span>
+                <ChevronDown data-expanded={showAllFolders} />
+              </button>
+            ) : null}
           </div>
+          {recentNotes.length > 0 ? (
+            <section className="mobile-library-recent" aria-labelledby="mobile-recent-title">
+              <header>
+                <h2 id="mobile-recent-title">最近笔记</h2>
+                <button onClick={() => props.onSelectLibraryView("recent")} type="button">查看全部</button>
+              </header>
+              {recentNotes.map((note) => (
+                <NoteListRow
+                  active={props.activeNoteId === note.id}
+                  key={note.id}
+                  note={note}
+                  onSelect={(selectedNote) => {
+                    rememberPosition()
+                    props.onSelectNote(selectedNote)
+                  }}
+                />
+              ))}
+            </section>
+          ) : null}
         </div>
       </ScrollArea>
-      <AppBottomNav activeSection="notes" onNavigate={props.onNavigate} />
+      {props.canCreateNote ? (
+        <Button
+          aria-label="在根目录新建笔记"
+          className="mobile-fab"
+          disabled={props.isCreatingNote}
+          onClick={() => { rememberPosition(); props.onCreateNote() }}
+          size="icon-lg"
+          title="新建到：根目录"
+        >
+          {props.isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}
+        </Button>
+      ) : null}
     </section>
   )
 }
@@ -1999,9 +2059,10 @@ type MobileLibraryRowProps = {
   label: string
   onClick?: () => void
   onToggle?: () => void
+  trailing?: ReactNode
 }
 
-function MobileLibraryRow({ count, depth = 0, expanded, folderTree = false, icon: Icon, label, onClick, onToggle }: MobileLibraryRowProps) {
+function MobileLibraryRow({ count, depth = 0, expanded, folderTree = false, icon: Icon, label, onClick, onToggle, trailing }: MobileLibraryRowProps) {
   return (
     <div className="mobile-library-row" data-depth={Math.min(depth, 3)}>
       {folderTree ? (
@@ -2021,8 +2082,9 @@ function MobileLibraryRow({ count, depth = 0, expanded, folderTree = false, icon
         <Icon />
         <span>{label}</span>
         {typeof count === "number" ? <small>{count}</small> : null}
-        {folderTree ? null : <ChevronRight className="mobile-row-navigation" />}
+        {folderTree || trailing ? null : <ChevronRight className="mobile-row-navigation" />}
       </button>
+      {trailing ? <span className="mobile-library-row-action">{trailing}</span> : null}
     </div>
   )
 }
@@ -2094,6 +2156,18 @@ function MobileNoteList(props: MobileNoteListProps) {
   return (
     <section className="mobile-screen">
       <header className="mobile-titlebar">
+        <MobileNavigationDrawer
+          activeSection="notes"
+          connected={props.connected}
+          connectionLabel={props.connectionLabel}
+          isRefreshingVault={props.isRefreshingVault}
+          mobileConnectionLabel={props.mobileConnectionLabel}
+          noteCount={props.totalNoteCount}
+          onNavigate={props.onNavigate}
+          onRefreshVault={props.onRefreshVault}
+          onSelectLibraryView={props.onSelectLibraryView}
+          starredNoteCount={props.starredNoteCount}
+        />
         <Button aria-label={parentFolder ? `返回${parentFolder}` : "返回笔记库"} onClick={goBack} size="icon" variant="ghost"><ArrowLeft /></Button>
         <h1>{title}</h1>
         <div>
@@ -2143,51 +2217,95 @@ function MobileNoteList(props: MobileNoteListProps) {
           ) : viewportReady ? <EmptyNoteList canCreateNote={props.canCreateNote} isLoading={props.isRefreshingVault} onCreateNote={props.onCreateNote} onOpenSettings={props.onOpenSettings} selectedFolder={props.selectedFolder} /> : null}
         </div>
       </ScrollArea>
-      {props.canCreateNote ? <Button aria-label="新建笔记" className="mobile-fab" disabled={props.isCreatingNote} onClick={props.onCreateNote} size="icon-lg">{props.isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}</Button> : null}
-      <AppBottomNav activeSection="notes" onNavigate={props.onNavigate} />
+      {props.canCreateNote ? <Button aria-label={props.selectedFolder ? `在${props.selectedFolder}中新建笔记` : "在根目录新建笔记"} className="mobile-fab" disabled={props.isCreatingNote} onClick={props.onCreateNote} size="icon-lg" title={props.selectedFolder ? `新建到：${props.selectedFolder}` : "新建到：根目录"}>{props.isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}</Button> : null}
     </section>
   )
 }
 
-function MobileBrandHeader({
-  connected,
-  isRefreshingVault,
-  mobileConnectionLabel,
-  onRefreshVault,
-}: Pick<WorkspaceProps, "connected" | "isRefreshingVault" | "mobileConnectionLabel" | "onRefreshVault">) {
-  return (
-    <header className="mobile-brand-header">
-      <img alt="Swell Note" src={swellNoteLogo} />
-      <strong>Swell Note</strong>
-      <button
-        aria-label={connected ? "同步当前笔记库" : "重新连接并更新"}
-        className="mobile-sync-state"
-        disabled={isRefreshingVault}
-        onClick={onRefreshVault}
-        type="button"
-      >
-        {isRefreshingVault
-          ? <LoaderCircle className="animate-spin" />
-          : connected ? <CheckCircle2 data-connected /> : <RefreshCw />}
-        <span>{mobileConnectionLabel}</span>
-      </button>
-    </header>
-  )
-}
-
-export function AppBottomNav({
+export function MobileNavigationDrawer({
   activeSection,
+  connected = false,
+  connectionLabel = "笔记库",
+  isRefreshingVault = false,
+  mobileConnectionLabel = connected ? "已连接" : "离线缓存",
+  noteCount,
   onNavigate,
+  onRefreshVault,
+  onSelectLibraryView,
+  starredNoteCount,
 }: {
   activeSection: AppSection
+  connected?: boolean
+  connectionLabel?: string
+  isRefreshingVault?: boolean
+  mobileConnectionLabel?: string
+  noteCount?: number
   onNavigate: (path: string) => void
+  onRefreshVault?: () => void
+  onSelectLibraryView?: (view: LibraryView) => void
+  starredNoteCount?: number
 }) {
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false)
+    }
+    document.addEventListener("keydown", closeOnEscape)
+    return () => document.removeEventListener("keydown", closeOnEscape)
+  }, [open])
+
+  const navigate = (path: string) => {
+    setOpen(false)
+    onNavigate(path)
+  }
+  const selectView = (view: LibraryView, path: string) => {
+    setOpen(false)
+    if (onSelectLibraryView) onSelectLibraryView(view)
+    else onNavigate(path)
+  }
+
   return (
-    <nav className="mobile-bottom-nav" aria-label="手机主导航">
-      <button className="mobile-tab" data-active={activeSection === "notes"} onClick={() => onNavigate("/notes")} type="button"><FileText /><span>笔记</span></button>
-      <button className="mobile-tab" data-active={activeSection === "todos"} onClick={() => onNavigate("/todos")} type="button"><CheckCircle2 /><span>待办</span></button>
-      <button className="mobile-tab" data-active={activeSection === "settings"} onClick={() => onNavigate("/settings")} type="button"><Settings /><span>设置</span></button>
-    </nav>
+    <>
+      <Button aria-expanded={open} aria-label="打开主导航" className="mobile-drawer-trigger" onClick={() => setOpen(true)} size="icon" variant="ghost"><Menu /></Button>
+      {open ? (
+        <div className="mobile-drawer-layer">
+          <button aria-label="关闭主导航" className="mobile-drawer-backdrop" onClick={() => setOpen(false)} type="button" />
+          <aside aria-label="主导航" aria-modal="true" className="mobile-navigation-drawer" role="dialog">
+            <header className="mobile-drawer-brand">
+              <img alt="" src={swellNoteLogo} />
+              <strong>Swell Note</strong>
+              <Button aria-label="关闭主导航" onClick={() => setOpen(false)} size="icon" variant="ghost"><X /></Button>
+            </header>
+            <button className="mobile-drawer-source" onClick={() => navigate("/settings/cache")} type="button">
+              <span className="sync-summary-dot" data-connected={connected} />
+              <span><strong>{connectionLabel}</strong><small>{mobileConnectionLabel}</small></span>
+              <ChevronRight />
+            </button>
+            <nav className="mobile-drawer-nav" aria-label="笔记快捷入口">
+              <button onClick={() => selectView("all", "/notes")} type="button"><FileText /><span>全部笔记</span>{typeof noteCount === "number" ? <small>{noteCount}</small> : null}<ChevronRight /></button>
+              <button onClick={() => selectView("recent", "/notes/view/recent")} type="button"><CheckCircle2 /><span>最近更新</span>{typeof noteCount === "number" ? <small>{Math.min(noteCount, 32)}</small> : null}<ChevronRight /></button>
+              <button onClick={() => selectView("starred", "/notes/view/starred")} type="button"><Star /><span>收藏</span>{typeof starredNoteCount === "number" ? <small>{starredNoteCount}</small> : null}<ChevronRight /></button>
+            </nav>
+            <div className="mobile-drawer-divider" />
+            <nav className="mobile-drawer-nav mobile-drawer-sections" aria-label="应用导航">
+              <button data-active={activeSection === "notes"} onClick={() => navigate("/notes")} type="button"><FileText /><span>笔记</span></button>
+              <button data-active={activeSection === "todos"} onClick={() => navigate("/todos")} type="button"><CheckCircle2 /><span>待办</span></button>
+              <button data-active={activeSection === "settings"} onClick={() => navigate("/settings")} type="button"><Settings /><span>设置</span></button>
+            </nav>
+            <div className="mobile-drawer-footer">
+              <span>{connected ? "云端已连接" : "正在使用本机缓存"}</span>
+              {onRefreshVault ? (
+                <Button aria-label="同步笔记库" disabled={isRefreshingVault} onClick={onRefreshVault} size="icon" variant="ghost">
+                  {isRefreshingVault ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
+                </Button>
+              ) : null}
+            </div>
+          </aside>
+        </div>
+      ) : null}
+    </>
   )
 }
 

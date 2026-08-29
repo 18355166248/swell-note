@@ -22,8 +22,8 @@ import {
 import { Outlet, useLocation } from "react-router-dom"
 
 import {
-  AppBottomNav,
   AppNavigationRail,
+  MobileNavigationDrawer,
 } from "@/components/workspace/workspace"
 import { Button } from "@/components/ui/button"
 import {
@@ -91,6 +91,7 @@ export function TodoPage({
       <AppNavigationRail activeSection="todos" connected={connected} onNavigate={onNavigate} onOpenSync={onOpenSync} />
       <section className="route-main-panel">
         <header className="route-page-header">
+          <MobileNavigationDrawer activeSection="todos" connected={connected} onNavigate={onNavigate} />
           <div>
             <span className="eyebrow">Markdown 任务</span>
             <h1>待办</h1>
@@ -183,7 +184,6 @@ export function TodoPage({
           </div>
         </ScrollArea>
       </section>
-      <AppBottomNav activeSection="todos" onNavigate={onNavigate} />
     </main>
   )
 }
@@ -229,6 +229,7 @@ export function SettingsLayout({ connected, onNavigate, onOpenSync }: Navigation
       </aside>
       <section className="settings-detail-panel">
         <header className="settings-detail-header">
+          {!activeEntry ? <MobileNavigationDrawer activeSection="settings" connected={connected} onNavigate={onNavigate} /> : null}
           {activeEntry ? (
             <Button aria-label="返回设置" className="settings-mobile-back" onClick={() => onNavigate("/settings")} size="icon" variant="ghost">
               <ArrowLeft />
@@ -243,7 +244,6 @@ export function SettingsLayout({ connected, onNavigate, onOpenSync }: Navigation
           <Outlet />
         </ScrollArea>
       </section>
-      <AppBottomNav activeSection="settings" onNavigate={onNavigate} />
     </main>
   )
 }

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- 真机调试时 WebView 需要访问 Mac 上的 Vite 服务，系统会使用此说明请求局域网权限。 -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>用于连接同一局域网中的 Swell Note 开发服务并加载调试内容。</string>
+</dict>
+</plist>

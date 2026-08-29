@@ -88,6 +88,57 @@
 
 final result: passed
 
+## 移动端侧边栏与快捷操作重构
+
+**Source visual truth**
+
+- `/Users/xmly/.codex/generated_images/01a017f9-55e8-7f02-b3c4-1a56bc7cfb80/exec-0affb281-3176-4c27-9428-244e6f0ad479.png`
+- Source pixels: 852 × 1846（按 2× 密度解释为 426 × 923 CSS px）。
+
+**Implementation evidence**
+
+- Main page: `/Users/xmly/Swell/code/swell-note/design-qa-mobile.png`
+- Drawer state: `/Users/xmly/Swell/code/swell-note/design-qa-mobile-drawer.png`
+- Normalized comparison: `/Users/xmly/Swell/code/swell-note/design-qa-comparison.png`
+- Browser viewport and implementation pixels: 441 × 606 CSS px / 441 × 606 px，device density 1。
+- Normalization: source was interpreted at 426 × 923 CSS px and cropped to its top 606 px; implementation retained its native 441 × 606 capture. The 15 px width difference is recorded and was not treated as design drift.
+- State: mobile light theme, cached WebDAV library, offline/not connected, 81 notes, 12 root folders.
+
+**Full-view and focused comparison evidence**
+
+- Full-view: the comparison image verifies the compact header, search, split folder actions, folder rows, collapsed folder affordance, recent-note section, and bottom-right note FAB in one combined input.
+- Focused region: a separate crop was unnecessary because the complete header and folder-action region remain readable at native capture size. The drawer is verified in its dedicated full-height screenshot and semantic DOM snapshot.
+
+**Findings**
+
+- Fonts and typography: passed. Geist with the existing Chinese system fallback preserves the compact hierarchy; headings, row labels, counts, and secondary metadata do not wrap unexpectedly.
+- Spacing and layout rhythm: passed after iteration. The implementation intentionally uses a denser 51 px folder row than the concept image so more real Vault content remains visible. All primary icon actions retain 44 px touch targets.
+- Colors and visual tokens: passed. The implementation reuses the existing white/cool-gray/primary-blue token system. Management and creation locations receive a light primary tint without adding a new visual language.
+- Image quality and asset fidelity: passed. The drawer uses the existing Swell Note SVG logo; action and navigation glyphs use the project's Lucide set. No bitmap placeholder, text glyph, CSS drawing, or approximate logo was introduced.
+- Copy and content: passed. Drawer labels, source state, folder count, recent notes, and app-section names use current product vocabulary and real cached data.
+- Navigation and accessibility: passed. Drawer has a dialog label, modal state, backdrop and Escape close path; icon buttons expose aria labels; Notes, Todos and Settings remain reachable after removing the bottom tab bar.
+- State variance: the source concept shows an enabled create-folder action, while this browser capture is an offline WebDAV cache where empty-folder creation is intentionally unavailable. The implementation keeps the shortcut visible and disabled rather than hiding its location.
+
+**Comparison history**
+
+- Pass 1 P2: rendering every root folder pushed the recent-note section entirely below the 606 px viewport, reducing the information-density improvement promised by the selected concept.
+- Fix: show the first six root folders, add an explicit `查看全部 12 个文件夹` expansion control, and render five recent notes below them. Management mode automatically expands all folders.
+- Post-fix evidence: `design-qa-mobile.png` and `design-qa-comparison.png`; the recent-note heading is now visible above the fold while all remote folders remain one tap away. No P0/P1/P2 issue remains.
+
+**Primary interactions and runtime checks**
+
+- Open/close drawer; switch Notes → Todos → Notes; select note-library shortcuts.
+- Enter and exit folder-management mode; verified rename buttons appear without replacing folder navigation.
+- Verified create-folder shortcut remains at the far right and new-note FAB remains at the bottom right.
+- Browser console: earlier Fast Refresh errors were transient while the old export was being removed. After a full reload the current page produced only Vite debug and React DevTools info messages, with no new runtime error.
+- TypeScript: passed. Unit tests: 218 passed, 1 skipped. Production build: passed.
+
+**Follow-up polish**
+
+- P3: after WebDAV empty-directory queueing is implemented, the visible create-folder shortcut can become enabled for offline cached libraries without changing this layout.
+
+final result: passed
+
 ## 侧栏同步区与坚果云凭据流程
 
 **Evidence**

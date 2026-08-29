@@ -21,7 +21,9 @@
 2. 用数据线连接并解锁 iPhone / iPad，在设备上信任此 Mac，并开启开发者模式。
 3. 运行 `pnpm check:ios:device` 检查 Xcode、Rust target、CocoaPods、签名身份和设备状态。
 4. 运行 `pnpm dev:ios:open`，在 Xcode 的 Signing & Capabilities 中为 `com.xmly.swell-note` 选择 Team，然后选择真机并点击 Run。
-5. 首次签名完成后，可运行 `pnpm dev:ios -- "设备名称"` 直接安装调试版。
+5. 首次签名完成后，运行 `pnpm ios` 一键生成图标、构建 Release、覆盖安装并启动到默认真机 `Swell5`。Release 内置前端资源，安装后不依赖电脑开发服务。
+6. 也可以在 Finder 双击 `安装到Swell5.command` 执行相同流程；覆盖安装会保留 App 本地数据。
+7. 若需切换设备，运行 `pnpm ios -- --device "设备名称"`；只有需要热更新时才运行 `pnpm ios:dev`，调试版需要允许本地网络访问。
 
 需要生成调试 IPA 时，运行：
 

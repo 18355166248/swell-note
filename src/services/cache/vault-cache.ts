@@ -12,6 +12,7 @@ const LAST_CACHE_KEY = "last-cache"
 export type VaultCacheSnapshot = {
   activeNoteId: string
   directories?: string[]
+  pendingDirectories?: string[]
   id: string
   label: string
   lastSyncedAt?: number
