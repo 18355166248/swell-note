@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { MarkdownEditorHandle } from "./markdown-editor"
-import MarkdownEditor, { formatToolbarText } from "./markdown-editor"
+import MarkdownEditor, { findPlainTextMatches, formatToolbarText } from "./markdown-editor"
 
 // React 19 在测试里要求显式打开 act 环境标记。
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -27,6 +27,29 @@ afterEach(() => {
 })
 
 describe("MarkdownEditor", () => {
+  it("finds plain text without case sensitivity and keeps offsets", () => {
+    expect(findPlainTextMatches("Swell note SWELL", "swell")).toEqual([
+      { from: 0, to: 5 },
+      { from: 11, to: 16 },
+    ])
+    expect(findPlainTextMatches("aaaa", "aa")).toEqual([
+      { from: 0, to: 2 },
+      { from: 2, to: 4 },
+    ])
+    expect(findPlainTextMatches("正文", "")).toEqual([])
+  })
+
+  it("finds and replaces through the editor handle", () => {
+    const handle = createRef<MarkdownEditorHandle>()
+    const onChange = vi.fn()
+    mount(<MarkdownEditor onChange={onChange} ref={handle} value="第一处 TODO，第二处 todo" />)
+
+    expect(handle.current!.findText("todo", "next", true)).toEqual({ current: 1, total: 2 })
+    expect(handle.current!.replaceCurrent("todo", "完成")).toEqual({ current: 1, total: 1 })
+    expect(handle.current!.replaceAll("todo", "完成")).toBe(1)
+    expect(onChange).toHaveBeenLastCalledWith("第一处 完成，第二处 完成", expect.anything())
+  })
+
   it("formats the current selection instead of discarding it", () => {
     expect(formatToolbarText("**加粗文字**", "重点").text).toBe("**重点**")
     expect(formatToolbarText("\n> ", "第一行\n第二行").text).toBe("> 第一行\n> 第二行")

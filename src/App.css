@@ -525,6 +525,29 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .formatting-toolbar button { display: grid; min-width: 30px; height: 30px; place-items: center; border-radius: 6px; color: #596271; font-size: 11px; font-weight: 650; }
 .formatting-toolbar button:hover { background: var(--muted); color: var(--foreground); }
 .formatting-toolbar button svg { width: 15px; height: 15px; }
+.editor-find-bar { display: flex; min-height: 42px; align-items: center; justify-content: flex-end; gap: 4px; border-bottom: 1px solid var(--border); background: color-mix(in oklab,var(--panel-soft) 76%,white); padding: 5px 12px; }
+.editor-find-bar > button { height: 30px; min-width: 30px; border-radius: 6px; padding: 0 8px; color: var(--muted-foreground); font-size: 11px; }
+.editor-find-bar > button:hover:not(:disabled) { background: var(--muted); color: var(--foreground); }
+.editor-find-bar > button:disabled { opacity: .38; }
+.editor-find-bar > button svg { width: 14px; height: 14px; }
+.editor-find-field { position: relative; display: flex; min-width: 180px; max-width: 280px; flex: 1; align-items: center; }
+.editor-find-field > svg { position: absolute; left: 9px; width: 14px; height: 14px; color: var(--muted-foreground); pointer-events: none; }
+.editor-find-field input, .editor-replace-input { min-width: 0; height: 30px; border: 1px solid var(--border); border-radius: 6px; background: white; padding: 0 9px; outline: none; font-size: 12px; }
+.editor-find-field input { width: 100%; padding: 0 48px 0 29px; }
+.editor-find-field > span { position: absolute; right: 8px; color: var(--muted-foreground); font-size: 10px; pointer-events: none; }
+.editor-replace-input { width: min(22vw,180px); }
+.editor-find-field input:focus, .editor-replace-input:focus { border-color: color-mix(in oklab,var(--primary) 55%,var(--border)); box-shadow: 0 0 0 2px color-mix(in oklab,var(--primary) 12%,transparent); }
+.note-outline-menu { width: min(300px,calc(100vw - 24px)); max-height: min(440px,70dvh); overflow-y: auto; }
+.note-outline-item { display: flex; min-width: 0; gap: 8px; }
+.note-outline-item > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-outline-item > small { color: var(--muted-foreground); font-size: 9px; }
+@media (max-width: 700px) {
+  .editor-find-bar { flex-wrap: wrap; justify-content: flex-start; padding-inline: 8px; }
+  .editor-find-field { min-width: calc(100% - 108px); }
+  .editor-find-field input, .editor-replace-input { font-size: 16px; }
+  .editor-replace-input { order: 5; width: calc(100% - 116px); }
+  .editor-find-bar > button:nth-last-child(3), .editor-find-bar > button:nth-last-child(2) { order: 6; }
+}
 .toolbar-divider { width: 1px; height: 17px; margin: 0 4px; background: var(--border); }
 .attachment-file-input { display: none; }
 .attachment-error { margin: 0; border-bottom: 1px solid var(--border); background: color-mix(in oklab,var(--destructive) 9%,white); padding: 8px 16px; color: var(--destructive); font-size: 10.5px; line-height: 1.45; }
@@ -549,6 +572,13 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-editor-shell .cm-content ::selection { background: color-mix(in oklab,var(--primary) 18%,transparent) !important; }
 .markdown-editor-shell .cm-cursor { border-left-color: var(--primary); }
 .markdown-editor-shell .cm-placeholder { color: var(--muted-foreground); font-style: normal; }
+.markdown-editor-shell .cm-wiki-completion { position: absolute; z-index: 40; width: min(320px,calc(100vw - 32px)); max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: 9px; background: white; box-shadow: 0 12px 30px color-mix(in oklab,#1d2530 16%,transparent); padding: 4px; }
+.markdown-editor-shell .cm-wiki-completion[hidden] { display: none; }
+.markdown-editor-shell .cm-wiki-completion button { display: flex; width: 100%; min-width: 0; flex-direction: column; gap: 2px; border-radius: 6px; padding: 7px 9px; text-align: left; }
+.markdown-editor-shell .cm-wiki-completion button[aria-selected="true"] { background: var(--blue-soft); color: var(--primary); }
+.markdown-editor-shell .cm-wiki-completion strong, .markdown-editor-shell .cm-wiki-completion small { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.markdown-editor-shell .cm-wiki-completion strong { font-size: 12px; font-weight: 650; }
+.markdown-editor-shell .cm-wiki-completion small { color: var(--muted-foreground); font-size: 10px; }
 /* 编辑器即时渲染：非光标行隐藏语法标记并直接呈现最终样式，与阅读预览保持同一套观感。 */
 .markdown-editor-shell .cm-md-heading { font-weight: 700; letter-spacing: -.01em; color: #1d2530; line-height: 1.45; }
 .markdown-editor-shell .cm-md-h1 { font-size: 1.55em; }

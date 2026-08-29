@@ -41,6 +41,7 @@ describe("cache privacy", () => {
     ], "metadata")
 
     expect(synced.content).toBe("")
+    expect(synced.contentCached).toBe(false)
     expect(synced.contentLoaded).toBe(false)
     expect(pending.content).toBe("# private body")
   })

@@ -26,6 +26,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   CircleHelp,
   Cloud,
   CloudOff,
@@ -40,6 +41,7 @@ import {
   GripVertical,
   Image,
   List,
+  ListTree,
   ListFilter,
   Link,
   Link2,
@@ -104,6 +106,7 @@ import {
   type VaultFolder,
 } from "@/services/search/vault-folders"
 import { buildNotePreview } from "@/services/markdown/note-preview"
+import { extractNoteOutline } from "@/services/markdown/note-outline"
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
 import type { NoteSort } from "@/services/search/note-sort"
 import { loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
@@ -438,6 +441,13 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           isManagingNote={props.isManagingNote}
           moveTargets={props.folders}
           note={props.activeNote}
+          wikiLinkSuggestions={props.notes
+            .filter((candidate) => candidate.pendingOperation !== "delete")
+            .map((candidate) => ({
+              detail: candidate.remotePath ?? deriveFolder(candidate),
+              target: candidate.remotePath?.replace(/\.md$/i, "") ?? candidate.title,
+              title: candidate.title || "未命名笔记",
+            }))}
           noteViewMode={props.noteViewMode}
           onDeleteNote={props.onDeleteNote}
           onFormat={props.onFormat}
@@ -1262,21 +1272,28 @@ type NoteEditorProps = {
   onUpdateNote: (patch: Partial<Note>) => void
   saveState: NoteSaveState
   syncing: boolean
+  wikiLinkSuggestions: Array<{ detail?: string; target: string; title: string }>
 }
 
-function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing }: NoteEditorProps) {
+function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkSuggestions }: NoteEditorProps) {
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
   const isCanvas = note.format === "canvas"
   const isExcalidraw = isExcalidrawMarkdown(note.content)
   const isSpecialPreview = isCanvas || isExcalidraw
   const readOnly = isCanvas || (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
   const editorRef = useRef<MarkdownEditorHandle>(null)
+  const editorArticleRef = useRef<HTMLElement>(null)
   // 特殊画布始终使用专属预览；普通 Markdown 读取 App 级偏好，切换笔记或路由不会重置。
   const previewing = isSpecialPreview || noteViewMode === "preview"
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [renameTitle, setRenameTitle] = useState(note.title)
   const [cursorPosition, setCursorPosition] = useState({ column: 1, line: 1 })
+  const [findOpen, setFindOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState("")
+  const [findReplacement, setFindReplacement] = useState("")
+  const [findResult, setFindResult] = useState({ current: 0, total: 0 })
+  const findInputRef = useRef<HTMLInputElement>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [insertingAttachment, setInsertingAttachment] = useState(false)
   const attachmentBusyRef = useRef(false)
@@ -1294,6 +1311,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
       return "无法解析的画布"
     }
   }, [isCanvas, note.content])
+  const noteOutline = useMemo(() => isSpecialPreview ? [] : extractNoteOutline(note.content), [isSpecialPreview, note.content])
 
   // Vault 笔记的标题对应文件名：编辑时先落草稿，失焦或回车再走统一的重命名链路，避免每次按键触发文件操作。
   const isVaultNote = note.source === "local" || note.source === "webdav"
@@ -1343,12 +1361,43 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
 
   const saveStateLabel = getSaveStateLabel(cloudConnected, note, saveState)
 
+  const runFind = useCallback((direction: "next" | "previous" = "next", fromStart = false) => {
+    setFindResult(editorRef.current?.findText(findQuery, direction, fromStart) ?? { current: 0, total: 0 })
+  }, [findQuery])
+
+  useEffect(() => {
+    setFindOpen(false)
+    setFindQuery("")
+    setFindReplacement("")
+    setFindResult({ current: 0, total: 0 })
+  }, [note.id])
+
+  useEffect(() => {
+    if (!findOpen) return
+    const frame = window.requestAnimationFrame(() => findInputRef.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [findOpen, previewing])
+
+  useEffect(() => {
+    if (isSpecialPreview) return
+    const handleFindShortcut = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLocaleLowerCase() !== "f") return
+      event.preventDefault()
+      // 阅读状态下先切到编辑器再打开查找，确保选中结果可以滚动到可见区域。
+      if (previewing) onNoteViewModeChange("edit")
+      setFindOpen(true)
+    }
+    window.addEventListener("keydown", handleFindShortcut)
+    return () => window.removeEventListener("keydown", handleFindShortcut)
+  }, [isSpecialPreview, onNoteViewModeChange, previewing])
+
   return (
     <article
       className="note-editor"
       data-compact={compact}
       data-excalidraw={isExcalidraw}
       data-view-mode={previewing ? "preview" : "edit"}
+      ref={editorArticleRef}
     >
       <header className="editor-titlebar">
         {onBack ? (
@@ -1397,6 +1446,35 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
           ) : null}
           {!isSpecialPreview ? (
             <NoteViewModeSwitch mode={noteViewMode} onChange={onNoteViewModeChange} />
+          ) : null}
+          {!isSpecialPreview ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button aria-label="文档大纲" size="icon-sm" variant="ghost"><ListTree /></Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="note-outline-menu">
+                {noteOutline.length > 0 ? noteOutline.map((heading, index) => (
+                  <DropdownMenuItem
+                    className="note-outline-item"
+                    key={`${heading.line}-${index}`}
+                    onClick={() => {
+                      if (!previewing) {
+                        editorRef.current?.revealLine(heading.line)
+                        return
+                      }
+                      const sameAnchorIndex = noteOutline.slice(0, index).filter((item) => item.anchor === heading.anchor).length
+                      const target = Array.from(editorArticleRef.current?.querySelectorAll<HTMLElement>(".markdown-preview [id]") ?? [])
+                        .filter((element) => element.id === heading.anchor)[sameAnchorIndex]
+                      target?.scrollIntoView({ behavior: "smooth", block: "start" })
+                    }}
+                    style={{ paddingLeft: `${8 + Math.max(0, heading.level - 1) * 12}px` }}
+                  >
+                    <span>{heading.text}</span>
+                    <small>H{heading.level}</small>
+                  </DropdownMenuItem>
+                )) : <DropdownMenuItem disabled>当前笔记没有标题</DropdownMenuItem>}
+              </DropdownMenuContent>
+            </DropdownMenu>
           ) : null}
           <Button
             aria-label={note.starred ? "取消收藏" : "收藏"}
@@ -1465,6 +1543,65 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
           onFormat={handleFormat}
           onInsertFiles={handleInsertFiles}
         />
+      ) : null}
+
+      {findOpen && !previewing && !isSpecialPreview ? (
+        <div className="editor-find-bar" role="search">
+          <div className="editor-find-field">
+            <Search />
+            <input
+              aria-label="查找当前笔记"
+              onChange={(event) => {
+                const query = event.target.value
+                setFindQuery(query)
+                window.requestAnimationFrame(() => {
+                  setFindResult(editorRef.current?.findText(query, "next", true) ?? { current: 0, total: 0 })
+                })
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setFindOpen(false)
+                  return
+                }
+                if (event.key !== "Enter" || event.nativeEvent.isComposing) return
+                event.preventDefault()
+                runFind(event.shiftKey ? "previous" : "next")
+              }}
+              placeholder="查找"
+              ref={findInputRef}
+              value={findQuery}
+            />
+            <span aria-live="polite">{findQuery ? `${findResult.current}/${findResult.total}` : "0/0"}</span>
+          </div>
+          <button aria-label="上一个匹配项" disabled={!findResult.total} onClick={() => runFind("previous")} type="button"><ChevronUp /></button>
+          <button aria-label="下一个匹配项" disabled={!findResult.total} onClick={() => runFind("next")} type="button"><ChevronDown /></button>
+          {!readOnly ? (
+            <>
+              <input
+                aria-label="替换为"
+                className="editor-replace-input"
+                onChange={(event) => setFindReplacement(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.nativeEvent.isComposing) return
+                  event.preventDefault()
+                  setFindResult(editorRef.current?.replaceCurrent(findQuery, findReplacement) ?? { current: 0, total: 0 })
+                }}
+                placeholder="替换为"
+                value={findReplacement}
+              />
+              <button disabled={!findResult.total} onClick={() => setFindResult(editorRef.current?.replaceCurrent(findQuery, findReplacement) ?? { current: 0, total: 0 })} type="button">替换</button>
+              <button
+                disabled={!findResult.total}
+                onClick={() => {
+                  editorRef.current?.replaceAll(findQuery, findReplacement)
+                  setFindResult({ current: 0, total: 0 })
+                }}
+                type="button"
+              >全部</button>
+            </>
+          ) : null}
+          <button aria-label="关闭查找" onClick={() => setFindOpen(false)} type="button"><X /></button>
+        </div>
       ) : null}
 
       {attachmentError ? (
@@ -1561,6 +1698,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
                   ref={editorRef}
                   storageKey={note.id}
                   value={note.content}
+                  wikiLinkSuggestions={wikiLinkSuggestions}
                 />
               </Suspense>
             </div>
@@ -1782,6 +1920,13 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             compact
             moveTargets={props.folders}
             note={props.activeNote}
+            wikiLinkSuggestions={props.notes
+              .filter((candidate) => candidate.pendingOperation !== "delete")
+              .map((candidate) => ({
+                detail: candidate.remotePath ?? deriveFolder(candidate),
+                target: candidate.remotePath?.replace(/\.md$/i, "") ?? candidate.title,
+                title: candidate.title || "未命名笔记",
+              }))}
             noteViewMode={props.noteViewMode}
             backLabel={backLabel}
             onSelectFolder={props.onSelectFolder}

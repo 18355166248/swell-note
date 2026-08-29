@@ -6,12 +6,22 @@ import { EditorView } from "@codemirror/view"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 import { markdownLivePreview } from "./live-preview"
+import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import "./markdown-table.css"
 
 export type MarkdownEditorHandle = {
+  findText: (query: string, direction?: "next" | "previous", fromStart?: boolean) => MarkdownFindResult
   insertText: (text: string) => void
   redo: () => void
+  replaceAll: (query: string, replacement: string) => number
+  replaceCurrent: (query: string, replacement: string) => MarkdownFindResult
+  revealLine: (line: number) => void
   undo: () => void
+}
+
+export type MarkdownFindResult = {
+  current: number
+  total: number
 }
 
 type MarkdownEditorProps = {
@@ -23,17 +33,18 @@ type MarkdownEditorProps = {
   readOnly?: boolean
   storageKey?: string
   value: string
+  wikiLinkSuggestions?: WikiLinkSuggestion[]
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, readOnly = false, storageKey, value }, ref) {
+  function MarkdownEditor({ onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, readOnly = false, storageKey, value, wikiLinkSuggestions = [] }, ref) {
     const editorRef = useRef<ReactCodeMirrorRef>(null)
 
     // CodeMirror 的扩展数组一旦换引用就会整体重配置（语言也会重新解析）；
     // 调用方传入的回调多为内联函数，用 ref 中转后扩展只在只读状态切换时重建。
-    const handlers = useRef({ onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset })
+    const handlers = useRef({ onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, wikiLinkSuggestions })
     useEffect(() => {
-      handlers.current = { onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset }
+      handlers.current = { onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, wikiLinkSuggestions }
     })
 
     const extensions = useMemo(() => [
@@ -44,6 +55,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         onResolveAsset: (source) => handlers.current.onResolveAsset?.(source) ?? Promise.resolve(null),
         tableStorageKey: storageKey,
       }),
+      wikiLinkCompletion(() => handlers.current.wikiLinkSuggestions),
       EditorView.lineWrapping,
       EditorView.updateListener.of((update) => {
         if (!update.selectionSet && !update.docChanged) return
@@ -94,6 +106,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     ], [readOnly, storageKey])
 
     useImperativeHandle(ref, () => ({
+      findText(query, direction = "next", fromStart = false) {
+        return findTextInView(editorRef.current?.view, query, direction, fromStart)
+      },
       insertText(text) {
         const view = editorRef.current?.view
         if (!view || readOnly || !text) return
@@ -113,6 +128,39 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       },
       redo() {
         dispatchHistoryShortcut(editorRef.current?.view, true)
+      },
+      replaceAll(query, replacement) {
+        const view = editorRef.current?.view
+        if (!view || readOnly || !query) return 0
+        const matches = findPlainTextMatches(view.state.doc.toString(), query)
+        if (matches.length === 0) return 0
+        // CodeMirror 以同一个 transaction 应用全部变更，整次替换可被一次撤销恢复。
+        view.dispatch({
+          changes: matches.map((match) => ({ from: match.from, insert: replacement, to: match.to })),
+        })
+        view.focus()
+        return matches.length
+      },
+      replaceCurrent(query, replacement) {
+        const view = editorRef.current?.view
+        if (!view || readOnly || !query) return { current: 0, total: 0 }
+        const selection = view.state.selection.main
+        const selected = view.state.sliceDoc(selection.from, selection.to)
+        if (selected.toLocaleLowerCase() !== query.toLocaleLowerCase()) {
+          return findTextInView(view, query, "next", false)
+        }
+        view.dispatch({
+          changes: { from: selection.from, insert: replacement, to: selection.to },
+          selection: { anchor: selection.from + replacement.length },
+        })
+        return findTextInView(view, query, "next", false)
+      },
+      revealLine(line) {
+        const view = editorRef.current?.view
+        if (!view) return
+        const target = view.state.doc.line(Math.max(1, Math.min(line, view.state.doc.lines)))
+        view.dispatch({ selection: { anchor: target.from }, scrollIntoView: true })
+        view.focus()
       },
       undo() {
         dispatchHistoryShortcut(editorRef.current?.view, false)
@@ -145,6 +193,43 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
 function collectTransferFiles(transfer: DataTransfer | null) {
   return Array.from(transfer?.files ?? [])
+}
+
+export function findPlainTextMatches(text: string, query: string) {
+  if (!query) return []
+  const matches: Array<{ from: number; to: number }> = []
+  const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu")
+  for (const match of text.matchAll(pattern)) {
+    const from = match.index
+    matches.push({ from, to: from + match[0].length })
+  }
+  return matches
+}
+
+function findTextInView(
+  view: EditorView | undefined,
+  query: string,
+  direction: "next" | "previous",
+  fromStart: boolean,
+): MarkdownFindResult {
+  if (!view || !query) return { current: 0, total: 0 }
+  const matches = findPlainTextMatches(view.state.doc.toString(), query)
+  if (matches.length === 0) return { current: 0, total: 0 }
+
+  const selection = view.state.selection.main
+  let index = 0
+  if (!fromStart && direction === "next") {
+    index = matches.findIndex((match) => match.from >= selection.to)
+    if (index < 0) index = 0
+  } else if (!fromStart) {
+    index = matches.length - 1
+    while (index >= 0 && matches[index].to > selection.from) index -= 1
+    if (index < 0) index = matches.length - 1
+  }
+  const match = matches[index]
+  // 查找栏需要持续接收键盘输入；这里只移动编辑器选区，不抢回输入框焦点。
+  view.dispatch({ selection: { anchor: match.from, head: match.to }, scrollIntoView: true })
+  return { current: index + 1, total: matches.length }
 }
 
 export function formatToolbarText(template: string, selected: string) {

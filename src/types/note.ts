@@ -18,6 +18,7 @@ export type Note = {
   searchText?: string
   outgoingLinks?: string[]
   contentLoaded?: boolean
+  contentCached?: boolean
   draft?: boolean
   pendingOperation?: "create" | "delete" | "move"
   writeContentAfterMove?: boolean

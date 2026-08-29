@@ -36,18 +36,23 @@ import { createWebDavVaultAdapter } from "@/services/vault/webdav-vault-adapter"
 import { WebDavAuthenticationError } from "@/services/webdav-client"
 import {
   cacheSyncedVaultAttachment,
+  cacheVaultNoteDocuments,
   createVaultCacheId,
   deleteVaultCache,
   deleteSyncedVaultAttachments,
   discardPendingVaultAttachments,
   listPendingVaultAttachments,
+  listCachedNoteDocuments,
   listVaultCaches,
   loadVaultAttachment,
+  loadCachedNoteDocument,
   loadLastVaultCache,
   loadVaultCache,
   queueVaultAttachment,
   remapVaultAttachmentNoteId,
   saveVaultCache,
+  searchCachedNoteDocuments,
+  hydrateNoteFromCachedDocument,
   updateVaultAttachmentStatus,
   type VaultCacheSnapshot,
   type VaultCacheSummary,
@@ -256,7 +261,7 @@ function App() {
     let cancelled = false
     setCacheInitializationError(null)
     // IndexedDB 是本机离线快照；这里只恢复笔记数据与最后位置，不存储 WebDAV 密码或连接实例。
-    void Promise.all([loadLastVaultCache(), listVaultCaches()])
+    void Promise.all([loadLastVaultCache({ hydrate: "active" }), listVaultCaches()])
       .then(([snapshot, caches]) => {
         if (cancelled) return
         setVaultCaches(caches)
@@ -394,6 +399,27 @@ function App() {
     }
   }, [cacheReady, folderRouteMatch?.params.folderPath, isNotesLibraryRoute, noteRouteMatch?.params.noteId, viewRouteMatch?.params.view])
 
+  useEffect(() => {
+    if (location.pathname !== "/todos" || !activeCacheMeta) return
+    let cancelled = false
+    // 待办需要跨笔记解析 Markdown；只在进入待办页时批量恢复正文，普通目录浏览仍保持元数据常驻。
+    void listCachedNoteDocuments(activeCacheMeta.id).then((documents) => {
+      if (cancelled) return
+      const byNoteId = new Map(documents.map((document) => [document.noteId, document]))
+      setNotes((current) => current.map((note) => {
+        if (note.contentLoaded || note.syncStatus === "modified" || note.syncStatus === "conflict") return note
+        const document = byNoteId.get(note.id)
+        return document
+          ? {
+              ...hydrateNoteFromCachedDocument(note, document),
+              readOnly: note.source === "webdav" ? false : note.readOnly,
+            }
+          : note
+      }))
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [activeCacheMeta, location.pathname])
+
   const deferredQuery = useDeferredValue(query)
   const normalizedQuery = deferredQuery.trim().toLocaleLowerCase()
   const availableNotes = useMemo(
@@ -425,12 +451,14 @@ function App() {
     ? nativeSearchResult.paths
     : null
   const filteredNotes = normalizedQuery
-    ? libraryNotes.filter((note) => nativeSearchPaths
-      ? Boolean(note.remotePath && nativeSearchPaths.has(note.remotePath))
-      : `${note.title} ${note.preview} ${note.searchText ?? ""}`
-        .toLocaleLowerCase()
-        .includes(normalizedQuery),
-    )
+    ? libraryNotes.filter((note) => {
+        const metadataMatches = `${note.title} ${note.preview}`.toLocaleLowerCase().includes(normalizedQuery)
+        return nativeSearchPaths
+          ? metadataMatches || Boolean(note.remotePath && nativeSearchPaths.has(note.remotePath))
+          : `${note.title} ${note.preview} ${note.searchText ?? ""}`
+            .toLocaleLowerCase()
+            .includes(normalizedQuery)
+      })
     : libraryNotes
   const visibleNotes = sortNotes(filteredNotes, noteSort)
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? null
@@ -465,13 +493,16 @@ function App() {
   }, [activeCacheMeta, activeNote?.content, activeNote?.contentLoaded, activeNote?.remotePath, activeNote?.tags, activeNote?.title])
 
   useEffect(() => {
-    if (!normalizedQuery || !activeCacheMeta || !supportsNativeSearchIndex()) {
+    if (!normalizedQuery || !activeCacheMeta) {
       setNativeSearchResult(null)
       return
     }
     let cancelled = false
     const timer = window.setTimeout(() => {
-      void searchNativeNoteIndex(activeCacheMeta.id, normalizedQuery)
+      const search = supportsNativeSearchIndex()
+        ? searchNativeNoteIndex(activeCacheMeta.id, normalizedQuery)
+        : searchCachedNoteDocuments(activeCacheMeta.id, normalizedQuery)
+      void search
         .then((paths) => {
           if (!cancelled && paths) setNativeSearchResult({ paths: new Set(paths), query: normalizedQuery })
         })
@@ -922,6 +953,17 @@ function App() {
           adapter,
           files,
           async (batch, indexed, total) => {
+        // 正文直接写入独立 Store，React 列表只保留元数据；打开笔记时再按 noteId 读取。
+        await cacheVaultNoteDocuments(cacheId, batch.map((item) => ({
+          baseContent: item.content,
+          content: item.content,
+          frontmatter: item.frontmatter,
+          id: `${adapter.kind}:${item.path}`,
+          outgoingLinks: item.outgoingLinks,
+          remotePath: item.path,
+          tags: item.tags,
+          title: item.path.split("/").pop()?.replace(/\.(?:canvas|md)$/i, "") ?? item.path,
+        })))
         const indexedByPath = new Map(batch.map((item) => [item.path, item]))
         setNotes((current) => current.map((note) => {
           const indexedNote = note.remotePath ? indexedByPath.get(note.remotePath) : undefined
@@ -930,18 +972,15 @@ function App() {
             && !hasLocalChanges
             ? {
                 ...note,
-                baseContent: indexedNote.content,
-                content: indexedNote.content,
-                contentLoaded: true,
+                contentCached: true,
                 outgoingLinks: indexedNote.outgoingLinks,
                 frontmatter: indexedNote.frontmatter,
                 // 建索引前列表只有文件路径可显示；读到正文后同步补上真正的摘要。
                 preview: buildNotePreview(indexedNote.content, note.format),
-                readOnly: note.format === "canvas" || (note.source === "webdav" ? false : note.readOnly),
+                readOnly: note.format === "canvas" || (note.source === "webdav" ? !note.contentLoaded : note.readOnly),
                 revision: indexedNote.revision ?? note.revision,
-                searchText: indexedNote.searchText,
                 tags: indexedNote.tags,
-                syncStatus: note.source === "webdav" ? "synced" : note.syncStatus,
+                syncStatus: note.source === "webdav" ? note.syncStatus ?? "synced" : note.syncStatus,
               }
             : note
         }))
@@ -1044,6 +1083,12 @@ function App() {
       const workingCopy = previousNote && isWebDavWorkingCopy(previousNote) ? previousNote : undefined
       const preserveWorkingCopy = Boolean(workingCopy)
       const reuseCachedContent = canReuseCachedContent(previousNote, file.revision)
+      const cachedContentMatchesRemote = Boolean(
+        previousNote?.contentCached
+        && previousNote.revision
+        && file.revision
+        && previousNote.revision === file.revision,
+      )
       // 本地工作副本必须基于同一远端版本才能继续上传；版本变化时只标记冲突，不覆盖正文。
       const remoteChangedWhileEditing = Boolean(
         previousNote && remoteChangedFromBase(previousNote, file.revision),
@@ -1090,6 +1135,7 @@ function App() {
         frontmatter: reuseCachedContent ? previousNote!.frontmatter ?? contentIndex?.frontmatter : contentIndex?.frontmatter,
         tags: reuseCachedContent ? previousNote!.tags ?? contentIndex?.tags : contentIndex?.tags,
         contentLoaded,
+        contentCached: preserveWorkingCopy || Boolean(loadedDocument) || reuseCachedContent || cachedContentMatchesRemote,
         pendingOperation: workingCopy?.pendingOperation,
         writeContentAfterMove: workingCopy?.writeContentAfterMove,
         previousRemotePath: workingCopy?.previousRemotePath,
@@ -1125,7 +1171,7 @@ function App() {
     }
 
     const cacheId = await createVaultCacheId(adapter.cacheIdentity)
-    const persistedCache = activeCacheMeta?.id === cacheId ? null : await loadVaultCache(cacheId)
+    const persistedCache = activeCacheMeta?.id === cacheId ? null : await loadVaultCache(cacheId, { hydrate: "active" })
     const nextTrashEntries = activeCacheMeta?.id === cacheId
       ? trashEntries
       : persistedCache?.trash ?? []
@@ -1465,14 +1511,15 @@ function App() {
   const rebuildSearchIndex = async () => {
     if (!activeCacheMeta || !supportsNativeSearchIndex()) return
     await rebuildNativeSearchIndex()
-    const entries = notes
-      .filter((note) => note.contentLoaded && note.remotePath)
-      .map((note) => ({
-        content: note.content,
-        noteId: note.remotePath!,
-        path: note.remotePath!,
-        tags: note.tags?.join(" ") ?? "",
-        title: note.title,
+    const documents = await listCachedNoteDocuments(activeCacheMeta.id)
+    const entries = documents
+      .filter((document) => document.path)
+      .map((document) => ({
+        content: document.content,
+        noteId: document.path!,
+        path: document.path!,
+        tags: document.tags?.join(" ") ?? "",
+        title: document.title,
       }))
     // 清空后立刻从当前离线快照回填，用户不需要重新连接坚果云才能恢复搜索。
     await upsertNativeSearchIndex(activeCacheMeta.id, entries)
@@ -1505,7 +1552,7 @@ function App() {
 
   const selectVaultCache = async (cacheId: string) => {
     try {
-      const snapshot = await loadVaultCache(cacheId)
+      const snapshot = await loadVaultCache(cacheId, { hydrate: "active" })
       if (!snapshot) throw new Error("缓存不存在，可能已被浏览器清理")
       // 重新保存一次只用于记录“最后使用的缓存”，快照内容不会发生改变。
       await saveVaultCache(snapshot)
@@ -1585,7 +1632,7 @@ function App() {
   }
 
   const loadNoteDocument = useCallback(async (note: Note) => {
-    if (note.contentLoaded || !note.remotePath || !vaultSession || loadingNoteIdsRef.current.has(note.id)) return
+    if (note.contentLoaded || !note.remotePath || loadingNoteIdsRef.current.has(note.id)) return
 
     // 详情、路由恢复和嵌入预览共用同一读取入口，集合去重避免对坚果云产生重复 GET。
     loadingNoteIdsRef.current.add(note.id)
@@ -1598,17 +1645,31 @@ function App() {
     })
 
     try {
-      const document = await vaultSession.readTextFile(note.remotePath)
-      revisionByPathRef.current.set(note.remotePath, document.revision)
+      const cachedDocument = !vaultSession && activeCacheMeta
+        ? await loadCachedNoteDocument(activeCacheMeta.id, note.id)
+        : null
+      if (!vaultSession && !cachedDocument) throw new Error("正文尚未缓存，请重新连接原笔记库")
+      const remoteDocument = cachedDocument ? null : await vaultSession!.readTextFile(note.remotePath)
+      const document = cachedDocument ?? remoteDocument!
+      const contentIndex = cachedDocument
+        ? {
+            frontmatter: cachedDocument.frontmatter,
+            outgoingLinks: cachedDocument.outgoingLinks,
+            searchText: `${cachedDocument.content} ${(cachedDocument.tags ?? []).join(" ")}`.toLocaleLowerCase(),
+            tags: cachedDocument.tags,
+          }
+        : indexNoteContent(document.content)
+      if (remoteDocument) revisionByPathRef.current.set(note.remotePath, remoteDocument.revision)
       setNotes((current) =>
         current.map((currentNote) =>
           currentNote.id === note.id
             ? {
                 ...currentNote,
-                baseContent: document.content,
+                baseContent: cachedDocument?.baseContent ?? document.content,
                 content: document.content,
-                ...indexNoteContent(document.content),
-                revision: document.revision,
+                ...contentIndex,
+                contentCached: Boolean(cachedDocument || currentNote.contentCached),
+                revision: remoteDocument?.revision ?? currentNote.revision,
                 contentLoaded: true,
                 readOnly: currentNote.format === "canvas" || (currentNote.source === "webdav" ? false : currentNote.readOnly),
                 syncStatus: currentNote.source === "webdav" ? "synced" : currentNote.syncStatus,
@@ -1634,7 +1695,7 @@ function App() {
         return next
       })
     }
-  }, [handleWebDavAuthenticationFailure, vaultSession])
+  }, [activeCacheMeta, handleWebDavAuthenticationFailure, vaultSession])
 
   const selectNote = async (note: Note) => {
     setActiveNoteId(note.id)
@@ -1658,10 +1719,10 @@ function App() {
     const routeNote = notes.find((note) => note.id === decodedNoteId)
     if (!routeNote) return
     setMobileScreen("editor")
-    if (routeNote.id !== activeNoteId || (!routeNote.contentLoaded && vaultSession)) {
+    if (routeNote.id !== activeNoteId || !routeNote.contentLoaded) {
       void selectNote(routeNote)
     }
-  }, [activeNoteId, noteRouteMatch?.params.noteId, notes, vaultSession])
+  }, [activeNoteId, noteRouteMatch?.params.noteId, notes])
 
   const reloadActiveNote = async () => {
     if (!activeNote) return

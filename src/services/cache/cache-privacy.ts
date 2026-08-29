@@ -23,6 +23,7 @@ export function prepareNotesForCache(notes: Note[], mode: CachePrivacyMode) {
       ...note,
       baseContent: undefined,
       content: "",
+      contentCached: false,
       contentLoaded: false,
       frontmatter: undefined,
       outgoingLinks: undefined,
