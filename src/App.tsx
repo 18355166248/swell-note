@@ -97,6 +97,7 @@ import {
   remoteChangedFromBase,
   shouldReadVaultDocument,
 } from "@/services/sync/webdav-working-copy"
+import { syncWebDavNoteQueue } from "@/services/sync/webdav-note-queue"
 import { summarizeWebDavSync } from "@/services/sync/sync-summary"
 import { mergeMarkdownVersions } from "@/services/sync/three-way-merge"
 import { appendSyncLog, clearSyncLog, loadSyncLog, type SyncLogEntry } from "@/services/sync/sync-log"
@@ -1198,105 +1199,46 @@ function App() {
     noteIds?: ReadonlySet<string>,
     run?: SyncRun,
   ) => {
-    if (adapter.kind !== "webdav" || !adapter.writeTextFile) {
-      return { errorMessage: null, notes: currentNotes }
-    }
-
-    let nextNotes = currentNotes
-    let errorMessage: string | null = null
-    const ensuredDirectories = new Set<string>()
-    const pendingNotes = currentNotes.filter((note) =>
-      note.source === "webdav"
-      && note.syncStatus === "modified"
-      && note.remotePath
-      && (!noteIds || noteIds.has(note.id)),
-    )
-
-    // 坚果云对请求频率敏感，按文件串行同步；单篇失败不会阻断其他本地稿的尝试。
-    for (const pendingNote of pendingNotes) {
-      if (run?.cancelled) break
-      const path = pendingNote.remotePath!
-      setSyncProgress((current) => current ? { ...current, currentLabel: pendingNote.title, phase: "notes" } : current)
-      setSaveStates((current) => ({ ...current, [pendingNote.id]: { status: "saving" } }))
-      try {
-        if (pendingNote.pendingOperation === "delete") {
-          if (!adapter.deleteTextFile) throw new Error("当前 WebDAV 会话不支持删除")
-          await adapter.deleteTextFile(pendingNote.previousRemotePath ?? path, pendingNote.revision)
-          if (activeCacheMeta?.sourceKind === "webdav") {
-            // 远端删除成功后附件引用已不可恢复，此时再清理队列，避免撤销删除时丢失待传附件。
-            await discardPendingVaultAttachments(activeCacheMeta.id, new Set([pendingNote.id]))
-            setPendingAttachmentCount((await listPendingVaultAttachments(activeCacheMeta.id)).length)
-          }
-          nextNotes = nextNotes.filter((note) => note.id !== pendingNote.id)
+    const result = await syncWebDavNoteQueue({
+      adapter,
+      isCancelled: () => Boolean(run?.cancelled),
+      isFatalError: (error) => error instanceof WebDavAuthenticationError,
+      noteIds,
+      notes: currentNotes,
+      onDeleteCommitted: async (pendingNote) => {
+        if (activeCacheMeta?.sourceKind !== "webdav") return
+        await discardPendingVaultAttachments(activeCacheMeta.id, new Set([pendingNote.id]))
+        setPendingAttachmentCount((await listPendingVaultAttachments(activeCacheMeta.id)).length)
+      },
+      onEvent: (event) => {
+        if (event.type === "start") {
+          setSyncProgress((current) => current ? { ...current, currentLabel: event.note.title, phase: "notes" } : current)
+          setSaveStates((current) => ({ ...current, [event.note.id]: { status: "saving" } }))
+        } else if (event.type === "synced") {
+          revisionByPathRef.current.set(event.note.remotePath!, event.revision)
+          setSaveStates((current) => ({ ...current, [event.note.id]: { status: "saved" } }))
+        } else if (event.type === "deleted") {
           setSaveStates((current) => {
             const next = { ...current }
-            delete next[pendingNote.id]
+            delete next[event.note.id]
             return next
           })
-          continue
+        } else if (event.type === "failed") {
+          setSaveStates((current) => ({
+            ...current,
+            [event.note.id]: { message: event.message, status: event.conflict ? "conflict" : "error" },
+          }))
+          setVaultError(event.message)
+        } else if (event.type === "complete") {
+          setSyncProgress((current) => current ? { ...current, completed: Math.min(current.total, current.completed + 1) } : current)
         }
+      },
+    })
 
-        let result
-        if (pendingNote.pendingOperation === "create") {
-          result = await adapter.createTextFile?.(path, pendingNote.content)
-        } else if (pendingNote.pendingOperation === "move") {
-          if (!adapter.moveTextFile) throw new Error("当前 WebDAV 会话不支持移动")
-          const targetDirectory = path.split("/").slice(0, -1).join("/")
-          if (targetDirectory && !ensuredDirectories.has(targetDirectory)) {
-            await adapter.ensureDirectory?.(targetDirectory)
-            ensuredDirectories.add(targetDirectory)
-          }
-          // MOVE 成功后再条件写入本地正文，兼容“离线移动后继续编辑”的组合操作。
-          const moved = await adapter.moveTextFile(
-            pendingNote.previousRemotePath ?? path,
-            path,
-            pendingNote.revision,
-          )
-          // 纯目录重命名只需要 MOVE；旧缓存未记录该标记时仍沿用写正文行为，避免遗漏历史草稿。
-          result = pendingNote.writeContentAfterMove === false
-            ? moved
-            : await adapter.writeTextFile(path, pendingNote.content, moved.revision)
-        } else {
-          result = await adapter.writeTextFile(path, pendingNote.content, pendingNote.revision)
-        }
-        if (!result) throw new Error("当前 WebDAV 会话不支持此同步操作")
-        nextNotes = nextNotes.map((note) => note.id === pendingNote.id
-          ? {
-              ...note,
-              baseContent: pendingNote.content,
-              mergeConflictCount: undefined,
-              pendingOperation: undefined,
-              writeContentAfterMove: undefined,
-              previousRemotePath: undefined,
-              revision: result.revision,
-              syncError: undefined,
-              syncStatus: "synced",
-              updatedAt: "刚刚同步",
-            }
-          : note)
-        revisionByPathRef.current.set(path, result.revision)
-        setSaveStates((current) => ({ ...current, [pendingNote.id]: { status: "saved" } }))
-      } catch (error) {
-        // 认证失败会影响整批请求，立即停止队列并交给统一入口清理失效凭据、提示重新输入。
-        if (error instanceof WebDavAuthenticationError) throw error
-        const conflict = error instanceof VaultConflictError
-        const message = error instanceof Error ? error.message : "同步笔记失败"
-        errorMessage = message
-        nextNotes = nextNotes.map((note) => note.id === pendingNote.id
-          ? { ...note, syncError: conflict ? undefined : message, syncStatus: conflict ? "conflict" : "modified" }
-          : note)
-        setSaveStates((current) => ({
-          ...current,
-          [pendingNote.id]: { message, status: conflict ? "conflict" : "error" },
-        }))
-        setVaultError(message)
-      } finally {
-        setSyncProgress((current) => current ? { ...current, completed: Math.min(current.total, current.completed + 1) } : current)
-      }
-    }
-
-    setNotes(nextNotes)
-    return { cancelled: Boolean(run?.cancelled), errorMessage, notes: nextNotes }
+    // 认证失败前可能已有文件成功上传，先保存这部分状态，再由统一入口清理失效凭据。
+    setNotes(result.notes)
+    if (result.fatalError) throw result.fatalError
+    return result
   }
 
   const pushPendingWebDavAttachments = async (

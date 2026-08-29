@@ -16,6 +16,11 @@ describe("shouldCompleteEdgeSwipe", () => {
     expect(shouldCompleteEdgeSwipe({ elapsedMs: 1100, endX: 100, endY: 100, startX: 8, startY: 100 })).toBe(false)
   })
 
+  it("拒绝位移刚好不足阈值的轻触和向左滑动", () => {
+    expect(shouldCompleteEdgeSwipe({ elapsedMs: 200, endX: 55, endY: 100, startX: 8, startY: 100 })).toBe(false)
+    expect(shouldCompleteEdgeSwipe({ elapsedMs: 200, endX: 2, endY: 100, startX: 8, startY: 100 })).toBe(false)
+  })
+
   it("斜向滑动只有横向意图明显时才触发", () => {
     expect(shouldCompleteEdgeSwipe({ elapsedMs: 280, endX: 64, endY: 142, startX: 8, startY: 100 })).toBe(false)
     expect(shouldCompleteEdgeSwipe({ elapsedMs: 280, endX: 70, endY: 126, startX: 8, startY: 100 })).toBe(true)

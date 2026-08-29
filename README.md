@@ -99,9 +99,12 @@ iOS 真机首次运行需要在 Xcode 登录 Apple ID、选择开发团队并连
 # 检查 Xcode、Rust target、CocoaPods、签名身份和已连接设备
 pnpm check:ios:device
 
-# 一键生成图标、构建 Release、覆盖安装并启动到默认真机 Swell5
+# 使用现有图标构建 Release、覆盖安装并启动到默认真机 Swell5
 # Release 内置页面资源，安装后不依赖电脑或局域网开发服务
 pnpm ios
+
+# 只有品牌图标源文件变化时才重新生成全平台图标并安装
+pnpm ios:refresh-icons
 
 # 临时切换到其他已连接设备
 pnpm ios -- --device "你的 iPhone 名称"
@@ -126,6 +129,7 @@ APPLE_DEVELOPMENT_TEAM=你的TeamID pnpm build:ios:device
 ```bash
 pnpm test
 pnpm build
+pnpm bench:notes
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
 

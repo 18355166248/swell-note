@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type TouchEvent as ReactTouchEvent } from "react"
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import {
   closestCenter,
   DndContext,
@@ -111,16 +111,15 @@ import { applyFolderOrder, loadFolderOrder, saveFolderOrder } from "@/services/p
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
-import { shouldCompleteEdgeSwipe } from "@/services/navigation/edge-swipe"
+import { MobileNoteSearch } from "@/components/workspace/mobile-note-search"
+import { useLongPress } from "@/components/workspace/use-long-press"
+import { useEdgeSwipeAction } from "@/components/workspace/use-edge-swipe-action"
+import { mobileLibraryScrollMemory, mobileNoteListScrollMemory } from "@/services/navigation/mobile-scroll-memory"
 
 // CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
 const MarkdownEditor = lazyWithRetry(() => import("@/components/editor/markdown-editor"))
 const MarkdownPreview = lazyWithRetry(() => import("@/components/editor/markdown-preview"))
 const CanvasPreview = lazyWithRetry(() => import("@/components/editor/canvas-preview"))
-
-// 路由切换可能重建 Workspace，位置缓存放在模块会话中，保证逐级进入和返回时不会因组件重挂载而清空。
-const mobileNoteListPositions = new Map<string, number>()
-const mobileLibraryPositions = new Map<string, number>()
 
 export type MobileScreen = "library" | "notes" | "editor"
 export type AppSection = "notes" | "settings" | "todos"
@@ -1205,63 +1204,6 @@ type NoteListRowProps = {
   onSelect: (note: Note) => void
 }
 
-function useLongPress(onLongPress?: () => void, delay = 500) {
-  const timerRef = useRef<number | null>(null)
-  const originRef = useRef<{ x: number; y: number } | null>(null)
-  const suppressClickRef = useRef(false)
-
-  const clearTimer = () => {
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current)
-    timerRef.current = null
-    originRef.current = null
-  }
-
-  useEffect(() => clearTimer, [])
-
-  const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
-    if (!onLongPress || (event.pointerType === "mouse" && event.button !== 0)) return
-    suppressClickRef.current = false
-    originRef.current = { x: event.clientX, y: event.clientY }
-    timerRef.current = window.setTimeout(() => {
-      timerRef.current = null
-      suppressClickRef.current = true
-      onLongPress()
-    }, delay)
-  }
-
-  const onPointerMove = (event: ReactPointerEvent<HTMLElement>) => {
-    const origin = originRef.current
-    if (!origin) return
-    // 手指滚动列表时立即取消长按，避免滑动过程中误弹操作菜单。
-    if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 10) clearTimer()
-  }
-
-  const onClickCapture = (event: ReactMouseEvent<HTMLElement>) => {
-    if (!suppressClickRef.current) return
-    suppressClickRef.current = false
-    event.preventDefault()
-    event.stopPropagation()
-  }
-
-  const onContextMenu = (event: ReactMouseEvent<HTMLElement>) => {
-    if (!onLongPress) return
-    event.preventDefault()
-    clearTimer()
-    suppressClickRef.current = true
-    onLongPress()
-  }
-
-  return {
-    onClickCapture,
-    onContextMenu,
-    onPointerCancel: clearTimer,
-    onPointerDown,
-    onPointerLeave: clearTimer,
-    onPointerMove,
-    onPointerUp: clearTimer,
-  }
-}
-
 function NoteListRow({ active, note, onLongPress, onSelect }: NoteListRowProps) {
   const longPressProps = useLongPress(onLongPress)
   return (
@@ -1800,21 +1742,21 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
       {props.mobileScreen === "library" ? (
         <MobileLibrary
           {...props}
-          initialScrollTop={mobileLibraryPositions.get(libraryStateKey) ?? 0}
+          initialScrollTop={mobileLibraryScrollMemory.get(libraryStateKey)}
           navigationOpen={navigationOpen}
           onNavigationOpenChange={setNavigationOpen}
-          onScrollPositionChange={(scrollTop) => mobileLibraryPositions.set(libraryStateKey, scrollTop)}
+          onScrollPositionChange={(scrollTop) => mobileLibraryScrollMemory.set(libraryStateKey, scrollTop)}
         />
       ) : null}
       {props.mobileScreen === "notes" ? (
         <MobileNoteList
           {...props}
-          initialScrollTop={mobileNoteListPositions.get(listStateKey) ?? 0}
+          initialScrollTop={mobileNoteListScrollMemory.get(listStateKey)}
           // 搜索词不能进入 React key，否则每输入或删除一个字符都会重建页面并让真机键盘失焦。
           key={listRouteKey}
           navigationOpen={navigationOpen}
           onNavigationOpenChange={setNavigationOpen}
-          onScrollPositionChange={(scrollTop) => mobileNoteListPositions.set(listStateKey, scrollTop)}
+          onScrollPositionChange={(scrollTop) => mobileNoteListScrollMemory.set(listStateKey, scrollTop)}
         />
       ) : null}
       {props.mobileScreen === "editor" ? (
@@ -1874,97 +1816,6 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
       ) : null}
     </div>
   )
-}
-
-function useEdgeSwipeAction(onComplete: () => void, enabled: boolean) {
-  type Gesture = {
-    pointerId: number
-    startedAt: number
-    startX: number
-    startY: number
-  }
-  const pointerGestureRef = useRef<Gesture | null>(null)
-  const touchGestureRef = useRef<Omit<Gesture, "pointerId"> | null>(null)
-
-  const isVerticalIntent = (startX: number, startY: number, currentX: number, currentY: number) => {
-    const deltaX = Math.max(0, currentX - startX)
-    const deltaY = Math.abs(currentY - startY)
-    return deltaY >= 12 && deltaY > deltaX * 1.1
-  }
-  const completeIfReady = (gesture: Omit<Gesture, "pointerId">, endX: number, endY: number) => {
-    if (!shouldCompleteEdgeSwipe({
-      elapsedMs: Date.now() - gesture.startedAt,
-      endX,
-      endY,
-      startX: gesture.startX,
-      startY: gesture.startY,
-    })) return false
-    onComplete()
-    return true
-  }
-  const clearPointerGesture = () => { pointerGestureRef.current = null }
-  const clearTouchGesture = () => { touchGestureRef.current = null }
-  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!enabled || !event.isPrimary || event.clientX > 32) return
-    pointerGestureRef.current = {
-      pointerId: event.pointerId,
-      startedAt: Date.now(),
-      startX: event.clientX,
-      startY: event.clientY,
-    }
-  }
-  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (touchGestureRef.current) return
-    const gesture = pointerGestureRef.current
-    if (!gesture || gesture.pointerId !== event.pointerId) return
-    if (event.clientX < gesture.startX - 8 || isVerticalIntent(gesture.startX, gesture.startY, event.clientX, event.clientY)) {
-      clearPointerGesture()
-      return
-    }
-    // 横向达到阈值立即完成，不等待抬手，避免 iOS 在滚动接管后发送 pointercancel。
-    if (completeIfReady(gesture, event.clientX, event.clientY)) clearPointerGesture()
-  }
-  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (touchGestureRef.current) return
-    const gesture = pointerGestureRef.current
-    clearPointerGesture()
-    if (!gesture || gesture.pointerId !== event.pointerId) return
-    completeIfReady(gesture, event.clientX, event.clientY)
-  }
-  const onTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
-    const touch = event.touches[0]
-    if (!enabled || event.touches.length !== 1 || !touch || touch.clientX > 32) return
-    // 真机滚动时 touchmove 比 pointerup 更稳定；触摸开始后由 touch 分支独占本次手势。
-    clearPointerGesture()
-    touchGestureRef.current = { startedAt: Date.now(), startX: touch.clientX, startY: touch.clientY }
-  }
-  const onTouchMove = (event: ReactTouchEvent<HTMLDivElement>) => {
-    const gesture = touchGestureRef.current
-    const touch = event.touches[0]
-    if (!gesture || !touch) return
-    if (touch.clientX < gesture.startX - 8 || isVerticalIntent(gesture.startX, gesture.startY, touch.clientX, touch.clientY)) {
-      clearTouchGesture()
-      return
-    }
-    if (completeIfReady(gesture, touch.clientX, touch.clientY)) clearTouchGesture()
-  }
-  const onTouchEnd = (event: ReactTouchEvent<HTMLDivElement>) => {
-    const gesture = touchGestureRef.current
-    const touch = event.changedTouches[0]
-    clearTouchGesture()
-    if (gesture && touch) completeIfReady(gesture, touch.clientX, touch.clientY)
-  }
-
-  return {
-    onPointerCancel: clearPointerGesture,
-    onPointerDown,
-    onPointerMove,
-    onPointerUp,
-    onTouchCancel: clearTouchGesture,
-    onTouchEnd,
-    onTouchMove,
-    onTouchStart,
-  }
 }
 
 function BacklinksPanel({ backlinks, onSelectNote }: { backlinks: Note[]; onSelectNote: (note: Note) => void }) {
@@ -2681,72 +2532,6 @@ function MobileNoteList(props: MobileNoteListProps) {
       />
       {props.canCreateNote ? <Button aria-label={props.selectedFolder ? `在${props.selectedFolder}中新建笔记` : "在根目录新建笔记"} className="mobile-fab" disabled={props.isCreatingNote} onClick={props.onCreateNote} size="icon-lg" title={props.selectedFolder ? `新建到：${props.selectedFolder}` : "新建到：根目录"}>{props.isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}</Button> : null}
     </section>
-  )
-}
-
-function MobileNoteSearch({
-  inputRef,
-  onClear,
-  onSearch,
-  placeholder,
-  value,
-}: {
-  inputRef?: RefObject<HTMLInputElement | null>
-  onClear?: () => void
-  onSearch: (query: string) => void
-  placeholder: string
-  value: string
-}) {
-  const [draft, setDraft] = useState(value)
-  const composingRef = useRef(false)
-  const searchInputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    setDraft(value)
-  }, [value])
-
-  const confirmSearch = (input: HTMLInputElement) => {
-    const query = draft.trim()
-    setDraft(query)
-    onSearch(query)
-    input.blur()
-  }
-  const clearSearch = () => {
-    setDraft("")
-    if (onClear) onClear()
-    else onSearch("")
-    searchInputRef.current?.blur()
-  }
-
-  return (
-    <div className="note-search-wrap">
-      <Search />
-      <Input
-        aria-label="搜索笔记"
-        enterKeyHint="search"
-        onChange={(event) => setDraft(event.target.value)}
-        onCompositionEnd={() => { composingRef.current = false }}
-        onCompositionStart={() => { composingRef.current = true }}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter" || composingRef.current || event.nativeEvent.isComposing) return
-          // 中文输入法第一次回车只负责上屏候选词；真正的“搜索”键才提交并收起键盘。
-          event.preventDefault()
-          confirmSearch(event.currentTarget)
-        }}
-        placeholder={placeholder}
-        ref={(input) => {
-          searchInputRef.current = input
-          if (inputRef) inputRef.current = input
-        }}
-        type="text"
-        value={draft}
-      />
-      {draft ? (
-        <button aria-label="清空搜索" className="note-search-clear" onClick={clearSearch} type="button">
-          <X />
-        </button>
-      ) : null}
-    </div>
   )
 }
 

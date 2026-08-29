@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { networkInterfaces } from "node:os"
 import { resolve } from "node:path"
 import { spawn, spawnSync } from "node:child_process"
@@ -6,6 +6,10 @@ import { spawn, spawnSync } from "node:child_process"
 const projectRoot = resolve(import.meta.dirname, "..")
 const defaultPorts = [1420, 1421]
 const bundleIdentifier = "com.xmly.swell-note"
+const generatedIosInfoPlist = resolve(
+  projectRoot,
+  "src-tauri/gen/apple/swell-note_iOS/Info.plist",
+)
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, { cwd: projectRoot, encoding: "utf8", ...options })
@@ -17,8 +21,7 @@ function readOption(name) {
 }
 
 function fail(message) {
-  console.error(`\n✗ ${message}`)
-  process.exit(1)
+  throw new Error(message)
 }
 
 function readPhysicalDevices() {
@@ -70,6 +73,12 @@ function buildNumber() {
   return String(Math.floor(Date.now() / 1000))
 }
 
+function preserveFile(path) {
+  if (!existsSync(path)) return () => {}
+  const original = readFileSync(path)
+  return () => writeFileSync(path, original)
+}
+
 function findBuiltApp() {
   const candidates = [
     resolve(projectRoot, "src-tauri/gen/apple/build/swell-note_iOS.xcarchive/Products/Applications/Swell Note.app"),
@@ -87,28 +96,38 @@ function installRelease(device) {
     return
   }
 
-  console.log("\n[1/4] 生成最新全平台图标…")
-  runVisible("pnpm", ["icons"], "图标生成失败。")
+  const refreshIcons = process.argv.includes("--refresh-icons")
+  if (refreshIcons) {
+    console.log("\n[准备] 重新生成全平台图标…")
+    runVisible("pnpm", ["icons"], "图标生成失败。")
+  } else {
+    console.log("\n[准备] 使用现有应用图标（如需更新请传入 --refresh-icons）")
+  }
 
-  console.log("\n[2/4] 构建 iOS Release 安装包…")
-  // 每次真机安装使用递增构建号，让 iOS 明确识别为新版本并刷新图标资源。
-  runVisible(
-    "pnpm",
-    ["tauri", "ios", "build", "--target", "aarch64", "--export-method", "debugging", "--build-number", buildNumber()],
-    "iOS Release 构建失败，请检查上方 Xcode 签名日志。",
-  )
+  console.log("\n[1/3] 构建 iOS Release 安装包…")
+  const restoreInfoPlist = preserveFile(generatedIosInfoPlist)
+  try {
+    // 构建号只服务于本次产物；构建结束恢复生成文件，避免一次真机安装污染 Git 工作区。
+    runVisible(
+      "pnpm",
+      ["tauri", "ios", "build", "--target", "aarch64", "--export-method", "debugging", "--build-number", buildNumber()],
+      "iOS Release 构建失败，请检查上方 Xcode 签名日志。",
+    )
+  } finally {
+    restoreInfoPlist()
+  }
 
   const appPath = findBuiltApp()
   if (!appPath) fail("构建完成但没有找到 Swell Note.app。")
 
-  console.log("\n[3/4] 覆盖安装到真机（保留本地数据）…")
+  console.log("\n[2/3] 覆盖安装到真机（保留本地数据）…")
   runVisible(
     "xcrun",
     ["devicectl", "device", "install", "app", "--device", device.identifier, appPath],
     "App 安装失败，请保持手机解锁并确认开发者模式已开启。",
   )
 
-  console.log("\n[4/4] 启动 Swell Note…")
+  console.log("\n[3/3] 启动 Swell Note…")
   const launch = run("xcrun", [
     "devicectl", "device", "process", "launch",
     "--device", device.identifier,
@@ -208,4 +227,9 @@ async function main() {
   else installRelease(device)
 }
 
-await main()
+try {
+  await main()
+} catch (error) {
+  console.error(`\n✗ ${error instanceof Error ? error.message : String(error)}`)
+  process.exitCode = 1
+}
