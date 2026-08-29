@@ -33,6 +33,7 @@ import {
   Code2,
   Database,
   FileText,
+  FileUp,
   Folder,
   FolderOpen,
   FolderCog,
@@ -165,6 +166,7 @@ type WorkspaceProps = {
   onFormatNote: (noteId: string, syntax: string) => void
   onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
   onIncludeNestedFolderNotesChange: (include: boolean) => void
+  onImportNotes: (files: File[]) => void
   onMobileScreenChange: (screen: MobileScreen) => void
   onNoteViewModeChange: (mode: NoteViewMode) => void
   onDeleteNote: () => void
@@ -360,6 +362,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         starredNoteCount={props.starredNoteCount}
         onCreateNote={props.onCreateNote}
         onCreateFolder={props.onCreateFolder}
+        onImportNotes={props.onImportNotes}
         onOpenLocalVault={props.onOpenLocalVault}
         onOpenSettings={props.onOpenSettings}
         onRefreshVault={props.onRefreshVault}
@@ -612,6 +615,7 @@ type LibraryPanelProps = {
   starredNoteCount: number
   onCreateNote: () => void
   onCreateFolder: (name: string, parentFolder: string | null) => void
+  onImportNotes: (files: File[]) => void
   onOpenLocalVault: () => void
   onOpenSettings: () => void
   onRefreshVault: () => void
@@ -643,6 +647,7 @@ function LibraryPanel({
   starredNoteCount,
   onCreateNote,
   onCreateFolder,
+  onImportNotes,
   onOpenLocalVault,
   onOpenSettings,
   onRefreshVault,
@@ -662,6 +667,7 @@ function LibraryPanel({
           <span className="eyebrow">工作区</span>
           <h1>笔记库</h1>
         </div>
+        <ImportMarkdownButton disabled={!canCreateNote || isCreatingNote} onImport={onImportNotes} />
       </div>
 
       <div className="library-actions">
@@ -1835,6 +1841,35 @@ function FormattingToolbar({
   )
 }
 
+function ImportMarkdownButton({ disabled, onImport }: { disabled: boolean; onImport: (files: File[]) => void }) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  return (
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button aria-label="导入 Markdown" disabled={disabled} onClick={() => inputRef.current?.click()} size="icon" variant="ghost">
+            <FileUp />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>导入 Markdown 到当前目录</TooltipContent>
+      </Tooltip>
+      <input
+        accept=".md,text/markdown"
+        className="attachment-file-input"
+        multiple
+        onChange={(event) => {
+          const files = Array.from(event.target.files ?? [])
+          event.target.value = ""
+          if (files.length > 0) onImport(files)
+        }}
+        ref={inputRef}
+        tabIndex={-1}
+        type="file"
+      />
+    </>
+  )
+}
+
 type FormatButtonProps = {
   busy?: boolean
   children?: ReactNode
@@ -2163,6 +2198,7 @@ function MobileLibrary(props: MobileLibraryProps) {
         />
         <h1>笔记库</h1>
         <div className="mobile-library-header-actions">
+          <ImportMarkdownButton disabled={!props.canCreateNote || props.isCreatingNote} onImport={props.onImportNotes} />
           <Button
             aria-label={props.connected ? "同步当前笔记库" : "重新连接并更新"}
             disabled={props.isRefreshingVault}

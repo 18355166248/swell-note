@@ -92,6 +92,7 @@ import {
 import { obsidianAnchorId, parseMarkdownNoteHref, splitWikiTarget } from "@/services/markdown/markdown-preview-utils"
 import { buildNotePreview } from "@/services/markdown/note-preview"
 import { exportMarkdownDocument } from "@/services/export/markdown-export"
+import { MAX_MARKDOWN_IMPORT_BYTES, sanitizeImportedMarkdownName, uniqueMarkdownPath } from "@/services/import/markdown-import"
 import {
   deleteWebDavPassword,
   loadWebDavPassword,
@@ -898,6 +899,111 @@ function App() {
       navigate(`/notes/${encodeURIComponent(id)}`)
     } catch (error) {
       setVaultError(error instanceof Error ? error.message : "新建笔记失败")
+    } finally {
+      setIsCreatingNote(false)
+    }
+  }
+
+  const importMarkdownFiles = async (files: File[]) => {
+    const adapter = vaultSession
+    const canCreateOfflineWebDav = !adapter && activeCacheMeta?.sourceKind === "webdav" && webDavConfigured
+    if ((!adapter && !canCreateOfflineWebDav)
+      || (adapter && adapter.kind !== "webdav" && (!adapter.createTextFile || adapter.readOnly))) {
+      setVaultError("请先打开一个可写的笔记库再导入 Markdown")
+      return
+    }
+    if (files.length === 0) return
+
+    setIsCreatingNote(true)
+    setVaultError(null)
+    const imported: Note[] = []
+    const errors: string[] = []
+    try {
+      const directory = selectedFolder?.split(/\s*\/\s*/).filter(Boolean).join("/") ?? ""
+      const config = loadWebDavConfig()
+      const isWebDav = adapter?.kind === "webdav" || canCreateOfflineWebDav
+      const resolveStoragePath = (displayPath: string) => adapter?.getStoragePath?.(displayPath)
+        ?? (isWebDav
+          ? `${config.remotePath.replace(/\/+$/g, "")}/${displayPath.replace(/^\/+/, "")}`.replace(/\/{2,}/g, "/")
+          : displayPath)
+      const reserved = new Set(notes
+        .map((note) => note.remotePath?.replace(/\\/g, "/").toLocaleLowerCase())
+        .filter((path): path is string => Boolean(path)))
+
+      for (const file of files.slice(0, 100)) {
+        try {
+          const filename = sanitizeImportedMarkdownName(file.name)
+          if (!filename) throw new Error("仅支持 .md 文件")
+          if (file.size > MAX_MARKDOWN_IMPORT_BYTES) throw new Error("文件超过 5 MB")
+          const content = await file.text()
+          const { displayPath, storagePath } = uniqueMarkdownPath(directory, filename, resolveStoragePath, reserved)
+          const indexed = indexNoteContent(content)
+          const now = file.lastModified || Date.now()
+
+          if (isWebDav) {
+            imported.push({
+              ...indexed,
+              content,
+              contentCached: true,
+              contentLoaded: true,
+              draft: false,
+              folder: deriveRemoteFolder(displayPath),
+              id: `webdav:${storagePath}`,
+              modifiedAt: now,
+              pendingOperation: "create",
+              preview: buildNotePreview(content, "markdown"),
+              readOnly: false,
+              remotePath: storagePath,
+              source: "webdav",
+              starred: false,
+              syncStatus: "modified",
+              title: filename.replace(/\.md$/i, ""),
+              updatedAt: "刚刚导入 · 待同步",
+            })
+            continue
+          }
+
+          const result = await adapter!.createTextFile!(storagePath, content)
+          revisionByPathRef.current.set(result.path, result.revision)
+          imported.push({
+            ...indexed,
+            content,
+            contentCached: true,
+            contentLoaded: true,
+            draft: false,
+            folder: deriveRemoteFolder(result.path),
+            id: `${adapter!.kind}:${result.path}`,
+            modifiedAt: now,
+            preview: buildNotePreview(content, "markdown"),
+            readOnly: false,
+            remotePath: result.path,
+            revision: result.revision,
+            source: "local",
+            starred: false,
+            title: filename.replace(/\.md$/i, ""),
+            updatedAt: "刚刚导入",
+          })
+        } catch (error) {
+          errors.push(`${file.name}：${error instanceof Error ? error.message : "导入失败"}`)
+        }
+      }
+
+      if (files.length > 100) errors.push(`单次最多导入 100 个文件，已忽略其余 ${files.length - 100} 个`)
+      if (imported.length > 0) {
+        setLibraryView("all")
+        setNotes((current) => [...imported, ...current])
+        setSaveStates((current) => ({
+          ...current,
+          ...Object.fromEntries(imported.map((note) => [note.id, { status: note.source === "webdav" ? "pending" as const : "saved" as const }])),
+        }))
+        setVaultNoteCount((count) => count + imported.length)
+        setActiveNoteId(imported[0].id)
+        setMobileScreen("editor")
+        navigate(`/notes/${encodeURIComponent(imported[0].id)}`)
+      }
+      if (errors.length > 0) setVaultError(`${imported.length > 0 ? `已导入 ${imported.length} 篇；` : ""}${errors.slice(0, 3).join("；")}${errors.length > 3 ? `；另有 ${errors.length - 3} 项失败` : ""}`)
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "导入 Markdown 失败")
     } finally {
       setIsCreatingNote(false)
     }
@@ -2856,6 +2962,7 @@ function App() {
               // 聚合偏好绑定到当前路径，切换目录时无需等待 effect 即可恢复“仅当前层”，避免旧内容闪现。
               setNestedFolderNotesPath(include ? selectedFolder : null)
             }}
+            onImportNotes={(files) => void importMarkdownFiles(files)}
             onMobileScreenChange={(screen) => {
               if (screen === "notes"
                 && noteRouteMatch

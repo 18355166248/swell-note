@@ -38,6 +38,7 @@
 - Hash 路由导航：笔记、Markdown 待办、设置，以及 WebDAV / 缓存 / 关于二级设置页
 - 笔记详情、文件夹、最近更新和收藏二级路由，支持刷新恢复
 - 本地 Markdown 待办勾选写回、文件移动与二次确认永久删除
+- 当前目录支持批量导入标准 `.md` 文件并自动处理重名；单篇笔记可在 Web 或原生端导出 Markdown
 - Tauri 原生 HTTP 接入，WebDAV 在 macOS、Windows、Android、iOS 中不依赖 WebView CORS
 - Android Studio 与 Xcode 工程；已通过 arm64 Android 调试 APK 和 iOS arm64 模拟器包构建
 - GitHub Actions 自动构建 macOS DMG、Windows MSI/NSIS、Android APK/AAB 与 iOS 包，并在版本标签发布 Release
