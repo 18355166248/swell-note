@@ -780,14 +780,19 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .mobile-section-heading button[aria-pressed="true"] { background: color-mix(in oklab,var(--primary) 15%,white); color: var(--primary); }
   .mobile-library-row-action { display: grid; width: 44px; flex: 0 0 44px; place-items: center; }
   .mobile-library-row-action button { width: 40px; height: 40px; }
-  .mobile-folder-expand { display: flex; width: 100%; min-height: 46px; align-items: center; justify-content: center; gap: 6px; border-bottom: 1px solid var(--border); color: var(--primary); font-size: 12px; font-weight: 620; }
-  .mobile-folder-expand svg { width: 15px; height: 15px; transition: transform 160ms ease; }
-  .mobile-folder-expand svg[data-expanded="true"] { transform: rotate(180deg); }
-  .mobile-library-recent { margin-top: 22px; }
-  .mobile-library-recent > header { display: flex; min-height: 40px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
-  .mobile-library-recent h2 { margin: 0; color: var(--foreground); font-size: 14px; font-weight: 680; }
-  .mobile-library-recent > header button { min-height: 40px; color: var(--primary); font-size: 12px; }
-  .mobile-library-recent .note-list-row { min-height: 94px; padding: 13px 2px; }
+  .mobile-folder-sortable { position: relative; z-index: 0; background: white; }
+  .mobile-folder-sortable[data-dragging="true"] { z-index: 4; border-radius: 10px; box-shadow: 0 10px 28px rgb(15 23 42 / .16); opacity: .96; }
+  .mobile-folder-sortable .mobile-library-row { background: white; }
+  .mobile-folder-sortable .mobile-library-row-action { display: flex; width: 88px; flex: 0 0 88px; align-items: center; }
+  .mobile-folder-edit-actions { display: flex; width: 88px; align-items: center; }
+  .mobile-folder-edit-actions > button, .mobile-folder-edit-actions > [data-slot="dropdown-menu-trigger"] { width: 44px; height: 44px; }
+  .mobile-folder-drag-handle { display: grid; width: 44px; height: 44px; cursor: grab; place-items: center; color: #9aa3af; touch-action: none; }
+  .mobile-folder-drag-handle:active { cursor: grabbing; color: var(--primary); }
+  .mobile-folder-drag-handle svg { width: 20px; height: 20px; }
+  .mobile-system-folder { display: grid; width: 44px; height: 44px; place-items: center; color: #a2a9b3; }
+  .mobile-system-folder svg { width: 16px; height: 16px; }
+  .mobile-folder-delete-action { color: var(--destructive); }
+  .mobile-folder-delete-action:focus { background: color-mix(in oklab,var(--destructive) 9%,white); color: var(--destructive); }
   .trash-toolbar { flex-direction: column; }
   .trash-toolbar label { width: 100%; }
   .trash-retention { width: 100%; }

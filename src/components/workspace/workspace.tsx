@@ -1,4 +1,21 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core"
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable"
+import { CSS as DndCss } from "@dnd-kit/utilities"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import {
   ArrowLeft,
@@ -20,11 +37,13 @@ import {
   FolderCog,
   FolderPlus,
   FolderTree,
+  GripVertical,
   Image,
   List,
   ListFilter,
   Link,
   Link2,
+  LockKeyhole,
   LoaderCircle,
   MoreHorizontal,
   Menu,
@@ -37,6 +56,7 @@ import {
   Star,
   Tag,
   Redo2,
+  Trash2,
   Italic,
   Quote,
   Undo2,
@@ -87,6 +107,7 @@ import { buildNotePreview } from "@/services/markdown/note-preview"
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
 import type { NoteSort } from "@/services/search/note-sort"
 import { loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
+import { applyFolderOrder, loadFolderOrder, saveFolderOrder } from "@/services/preferences/folder-order-preferences"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
@@ -1879,11 +1900,31 @@ function MobileLibrary(props: MobileLibraryProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const [managingFolders, setManagingFolders] = useState(false)
-  const [showAllFolders, setShowAllFolders] = useState(false)
+  const folderOrderKey = props.activeCacheId ?? `library:${props.connectionLabel}`
+  const [folderOrder, setFolderOrder] = useState<string[]>(() => loadFolderOrder(folderOrderKey))
   const rootFolders = useMemo(
     () => getDirectChildVaultFolders(props.folders, null),
     [props.folders],
   )
+  const orderedRootFolders = useMemo(
+    () => {
+      const systemRoot = rootFolders.find((folder) => folder.path === "根目录")
+      const regularFolders = applyFolderOrder(
+        rootFolders.filter((folder) => folder.path !== "根目录"),
+        folderOrder,
+      )
+      return systemRoot ? [systemRoot, ...regularFolders] : regularFolders
+    },
+    [folderOrder, rootFolders],
+  )
+  const folderSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+
+  useEffect(() => {
+    setFolderOrder(loadFolderOrder(folderOrderKey))
+  }, [folderOrderKey])
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current
@@ -1907,8 +1948,18 @@ function MobileLibrary(props: MobileLibraryProps) {
     rememberPosition()
     props.onSelectFolder(folder)
   }
-  const displayedFolders = managingFolders || showAllFolders ? rootFolders : rootFolders.slice(0, 6)
-  const recentNotes = props.notes.slice(0, 5)
+  const handleFolderDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return
+    const paths = orderedRootFolders
+      .filter((folder) => folder.path !== "根目录")
+      .map((folder) => folder.path)
+    const previousIndex = paths.indexOf(String(active.id))
+    const nextIndex = paths.indexOf(String(over.id))
+    if (previousIndex < 0 || nextIndex < 0) return
+    const nextOrder = arrayMove(paths, previousIndex, nextIndex)
+    setFolderOrder(nextOrder)
+    saveFolderOrder(folderOrderKey, nextOrder)
+  }
 
   return (
     <section className="mobile-screen mobile-library">
@@ -1967,9 +2018,9 @@ function MobileLibrary(props: MobileLibraryProps) {
               size="icon"
               variant="ghost"
             >
-              <FolderCog />
+              {managingFolders ? <Check /> : <FolderCog />}
             </Button>
-            <span>文件夹</span>
+            <span>{managingFolders ? "拖动排序" : "文件夹"}</span>
             <CreateFolderButton
               disabled={!props.canCreateFolder || props.isManagingNote}
               onCreate={(name) => props.onCreateFolder(name, null)}
@@ -1977,53 +2028,40 @@ function MobileLibrary(props: MobileLibraryProps) {
             />
           </div>
           <div className="mobile-folder-list">
-            {displayedFolders.map((folder) => (
-              <MobileLibraryRow
-                count={folder.count}
-                icon={Folder}
-                key={folder.path}
-                label={folder.label}
-                onClick={() => selectFolder(folder.path)}
-                trailing={managingFolders && props.folderManagementMode ? (
-                  <FolderRenameButton
+            <DndContext collisionDetection={closestCenter} onDragEnd={handleFolderDragEnd} sensors={folderSensors}>
+              <SortableContext items={orderedRootFolders.filter((folder) => folder.path !== "根目录").map((folder) => folder.path)} strategy={verticalListSortingStrategy}>
+                {orderedRootFolders.map((folder) => managingFolders && folder.path === "根目录" ? (
+                  <MobileLibraryRow
+                    count={folder.count}
+                    icon={Folder}
+                    key={folder.path}
+                    label={folder.label}
+                    trailing={<span aria-label="系统目录，不可编辑" className="mobile-system-folder"><LockKeyhole /></span>}
+                  />
+                ) : managingFolders && props.folderManagementMode ? (
+                  <SortableMobileFolderRow
                     disabled={props.isManagingNote}
-                    folderPath={folder.path}
+                    folder={folder}
+                    key={folder.path}
                     mode={props.folderManagementMode}
                     onDelete={props.onDeleteFolder}
                     onRename={props.onRenameFolder}
                   />
-                ) : undefined}
-              />
-            ))}
-            {rootFolders.length > 6 && !managingFolders ? (
-              <button className="mobile-folder-expand" onClick={() => setShowAllFolders((value) => !value)} type="button">
-                <span>{showAllFolders ? "收起文件夹" : `查看全部 ${rootFolders.length} 个文件夹`}</span>
-                <ChevronDown data-expanded={showAllFolders} />
-              </button>
-            ) : null}
+                ) : (
+                  <MobileLibraryRow
+                    count={folder.count}
+                    icon={Folder}
+                    key={folder.path}
+                    label={folder.label}
+                    onClick={() => selectFolder(folder.path)}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
           </div>
-          {recentNotes.length > 0 ? (
-            <section className="mobile-library-recent" aria-labelledby="mobile-recent-title">
-              <header>
-                <h2 id="mobile-recent-title">最近笔记</h2>
-                <button onClick={() => props.onSelectLibraryView("recent")} type="button">查看全部</button>
-              </header>
-              {recentNotes.map((note) => (
-                <NoteListRow
-                  active={props.activeNoteId === note.id}
-                  key={note.id}
-                  note={note}
-                  onSelect={(selectedNote) => {
-                    rememberPosition()
-                    props.onSelectNote(selectedNote)
-                  }}
-                />
-              ))}
-            </section>
-          ) : null}
         </div>
       </ScrollArea>
-      {props.canCreateNote ? (
+      {props.canCreateNote && !managingFolders ? (
         <Button
           aria-label="在根目录新建笔记"
           className="mobile-fab"
@@ -2084,8 +2122,143 @@ function MobileLibraryRow({ count, depth = 0, expanded, folderTree = false, icon
         {typeof count === "number" ? <small>{count}</small> : null}
         {folderTree || trailing ? null : <ChevronRight className="mobile-row-navigation" />}
       </button>
-      {trailing ? <span className="mobile-library-row-action">{trailing}</span> : null}
+      {trailing ? <div className="mobile-library-row-action">{trailing}</div> : null}
     </div>
+  )
+}
+
+function SortableMobileFolderRow({
+  disabled,
+  folder,
+  mode,
+  onDelete,
+  onRename,
+}: {
+  disabled: boolean
+  folder: VaultFolder
+  mode: "local" | "webdav"
+  onDelete: (folderPath: string) => void
+  onRename: (folderPath: string, nextName: string) => void
+}) {
+  const {
+    attributes,
+    isDragging,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({ disabled, id: folder.path })
+  const style: CSSProperties = {
+    transform: DndCss.Transform.toString(transform),
+    transition,
+  }
+
+  return (
+    <div
+      className="mobile-folder-sortable"
+      data-dragging={isDragging}
+      ref={setNodeRef}
+      style={style}
+    >
+      <MobileLibraryRow
+        count={folder.count}
+        icon={Folder}
+        label={folder.label}
+        trailing={(
+          <div className="mobile-folder-edit-actions">
+            <MobileFolderActions
+              disabled={disabled}
+              folderPath={folder.path}
+              mode={mode}
+              onDelete={onDelete}
+              onRename={onRename}
+            />
+            <button
+              aria-label={`拖动排序 ${folder.label}`}
+              className="mobile-folder-drag-handle"
+              disabled={disabled}
+              type="button"
+              {...attributes}
+              {...listeners}
+            >
+              <GripVertical />
+            </button>
+          </div>
+        )}
+      />
+    </div>
+  )
+}
+
+function MobileFolderActions({
+  disabled,
+  folderPath,
+  mode,
+  onDelete,
+  onRename,
+}: {
+  disabled: boolean
+  folderPath: string
+  mode: "local" | "webdav"
+  onDelete: (folderPath: string) => void
+  onRename: (folderPath: string, nextName: string) => void
+}) {
+  const folderSegments = folderPath.split(/\s*\/\s*/).filter(Boolean)
+  const currentName = folderSegments[folderSegments.length - 1] ?? folderPath
+  const [dialogMode, setDialogMode] = useState<"delete" | "rename" | null>(null)
+  const [name, setName] = useState(currentName)
+
+  const openRename = () => {
+    setName(currentName)
+    setDialogMode("rename")
+  }
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button aria-label={`更多文件夹操作 ${currentName}`} disabled={disabled} size="icon-sm" variant="ghost">
+            <MoreHorizontal />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="mobile-folder-actions-menu">
+          <DropdownMenuItem onSelect={openRename}><PencilLine />重命名</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="mobile-folder-delete-action" onSelect={() => setDialogMode("delete")}><Trash2 />删除</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Dialog onOpenChange={(open) => { if (!open) setDialogMode(null) }} open={dialogMode !== null}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{dialogMode === "delete" ? `删除“${currentName}”` : "重命名文件夹"}</DialogTitle>
+            <DialogDescription>
+              {dialogMode === "delete"
+                ? mode === "local"
+                  ? "文件夹及其中的全部文件会移动到 Swell Note 回收站，可在保留期内恢复。"
+                  : "该目录中的笔记将进入待同步删除；同步前仍可从回收站恢复。"
+                : mode === "local"
+                  ? "将重命名本地 Vault 目录，并同步更新当前笔记索引。"
+                  : "目录和子目录中的笔记会先在本机排队，点击同步后才移动坚果云文件。"}
+            </DialogDescription>
+          </DialogHeader>
+          {dialogMode === "rename" ? (
+            <Input autoFocus aria-label="新文件夹名称" onChange={(event) => setName(event.target.value)} value={name} />
+          ) : null}
+          <DialogFooter>
+            <Button onClick={() => setDialogMode(null)} variant="ghost">取消</Button>
+            {dialogMode === "delete" ? (
+              <Button onClick={() => { setDialogMode(null); onDelete(folderPath) }} variant="destructive">
+                {mode === "local" ? "移入回收站" : "确认移入待删除"}
+              </Button>
+            ) : (
+              <Button disabled={!name.trim() || name.trim() === currentName} onClick={() => { setDialogMode(null); onRename(folderPath, name) }}>
+                保存
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

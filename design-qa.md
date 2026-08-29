@@ -88,6 +88,105 @@
 
 final result: passed
 
+## 移动端文件夹完整展示
+
+**Source visual truth**
+
+- iOS 文件夹管理参考：`/Users/xmly/Downloads/IMG_8708.PNG`
+- Source pixels: 1284 × 2778，参考图包含系统状态栏与底部工具栏；本轮只复用其连续文件夹列表和清晰行分隔逻辑。
+
+**Implementation evidence**
+
+- Browser capture: `/private/tmp/design-qa-folder-list-flat.png`
+- Implementation pixels / CSS viewport: 324 × 606，device scale factor 1，无密度归一化。
+- Route / state: `http://127.0.0.1:4173/#/notes`，移动端浅色模式，文件夹普通浏览态。
+
+**Full-view comparison evidence**
+
+- 首页文件夹区域现在直接连续展示全部 12 个根文件夹，不再限制前 6 个，也不再出现“查看全部 / 收起文件夹”控制。
+- 底部“最近笔记”区已移除，文件夹列表成为页面唯一主要内容；新建笔记悬浮按钮仍固定在可触达位置。
+- Browser DOM 快照确认从“根目录”到“Excalidraw”的全部文件夹均存在，且页面中不再出现“最近笔记”。
+
+**Focused region comparison evidence**
+
+- 顶部搜索、文件夹标题、管理入口、新建文件夹入口以及连续列表在 324 px 宽截图中均清晰可辨；本轮没有图片资产或精细装饰差异，因此不需要额外局部裁切。
+
+**Findings**
+
+- Fonts and typography: passed. 沿用现有移动端字号、字重与截断规则，长名称不会挤压数量和导航箭头。
+- Spacing and layout rhythm: passed. 文件夹行保持统一高度和分隔线，移除折叠控制与最近笔记后没有留下空白区块。
+- Colors and visual tokens: passed. 管理、新建、普通文件夹与计数继续复用现有语义色。
+- Image quality and asset fidelity: not applicable. 本轮无新增图片；图标继续使用项目现有图标库。
+- Copy and content: passed. 删除了“查看全部 / 收起文件夹”和“最近笔记 / 查看全部”文案，其余标题与操作名保持一致。
+- Accessibility and interaction: passed. 所有文件夹仍是独立按钮；管理模式的排序、重命名、删除与根目录保护逻辑未改变。
+
+**Comparison history**
+
+- P2 found: 默认仅展示 6 个文件夹，需要额外展开，且最近笔记占用首页纵向空间，不符合本轮“全部展示、不要最近笔记”的目标。
+- Fix: 移除 `showAllFolders` 分支、展开按钮及最近笔记区，排序上下文直接使用完整的 `orderedRootFolders`。
+- Post-fix evidence: `/private/tmp/design-qa-folder-list-flat.png` 与浏览器 DOM 快照；没有剩余 P0/P1/P2 问题。
+
+**Primary interactions tested**
+
+- 刷新首页后确认文件夹完整渲染。
+- 确认列表中包含全部 12 个根文件夹。
+- 确认“最近笔记”与文件夹展开/收起按钮均不存在。
+- TypeScript、221 项单元测试和生产构建均通过。
+
+**Follow-up polish**
+
+- P3: 文件夹数量继续增长后，可在不恢复折叠的前提下增加首字母索引或快速搜索定位。
+
+final result: passed
+
+## 移动端文件夹排序与删除
+
+**Source visual truth**
+
+- `/Users/xmly/Downloads/IMG_8708.PNG`
+- Source pixels: 1284 × 2778 px；参考状态为 iOS 备忘录文件夹编辑页，包含每行更多菜单与拖拽把手。
+
+**Implementation evidence**
+
+- Browser-rendered screenshot: `/private/tmp/design-qa-folder-management-final.png`
+- Implementation viewport and pixels: 441 × 606 CSS px / 441 × 606 px，device density 1。
+- State: mobile light theme、WebDAV 缓存笔记库、文件夹管理模式、12 个根目录。
+- Comparison normalization: 来源截图包含系统状态栏和底部系统导航，且采用更高设备密度；本次以同一输入中的文件夹编辑区域、行操作位置和交互层级进行对照，不把系统栏与产品既有品牌色视为偏差。
+
+**Full-view and focused comparison evidence**
+
+- Full-view: 来源图和最终实现截图已在同一次视觉检查中并列打开，确认编辑态都采用“目录名 + 更多操作 + 右侧拖拽把手”的扫描结构。
+- Focused region: 最终实现的首屏完整展示 8 个以上目录行，更多按钮与拖拽把手均保持独立 44 px 触摸区域，因此无需额外裁切。
+
+**Findings**
+
+- Fonts and typography: passed. 沿用 Swell Note 的 Geist/系统中文字体和紧凑字号；“拖动排序”、目录名及数量层级清晰，无异常换行。
+- Spacing and layout rhythm: passed. 每行 51 px，操作区固定 88 px；进入管理态不会压缩目录名到不可读，也不会出现横向溢出。拖动项以阴影抬升但不改变行高。
+- Colors and visual tokens: passed. 参考图的黄色操作色替换为产品既有主蓝色，删除仍使用语义红色；这是品牌约束下的预期差异。
+- Image quality and asset fidelity: passed. 文件夹、更多、拖拽、重命名和删除均使用项目图标库，没有手绘 SVG、文本符号或占位资源。
+- Copy and content: passed. “拖动排序”“重命名”“删除”“移入回收站/待删除”与现有本地优先同步语义一致。
+- Accessibility and interaction: passed. 拖拽支持触摸/鼠标和键盘；把手、更多菜单、取消与确认均有可读名称。管理态隐藏新建笔记 FAB，避免覆盖目录和误触；虚拟“根目录”固定在顶部并带锁标识，不提供危险的重命名或删除入口。
+
+**Comparison history**
+
+- Pass 1 P2: 新建笔记 FAB 覆盖管理态底部目录行，降低拖拽把手可用区域。
+- Fix: 文件夹管理期间隐藏新建笔记 FAB，完成管理后恢复。
+- Safety fix: 将系统生成的“根目录”从可排序集合及操作菜单中排除，防止把根目录笔记误当作普通文件夹批量删除。
+- Post-fix evidence: `/private/tmp/design-qa-folder-management-final.png`；目录行和两组操作区完整，无 P0/P1/P2 遗留。
+
+**Primary interactions and runtime checks**
+
+- 进入/退出文件夹管理模式。
+- 使用键盘抓取 `XIMA广告`，向下移动到 `code` 后放置；刷新页面确认顺序仍保留，再恢复原始顺序。
+- 打开更多菜单，验证重命名和删除入口；进入删除确认后取消，未改动远端数据。
+- 单元测试：221 passed，1 skipped。TypeScript 与生产构建通过。
+
+**Follow-up polish**
+
+- P3: 二级目录未来可复用同一 Sortable 行组件，在具体目录页提供同级子目录排序；当前首版覆盖主页根目录管理。
+
+final result: passed
+
 ## 移动端侧边栏与快捷操作重构
 
 **Source visual truth**
