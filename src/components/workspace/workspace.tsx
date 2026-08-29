@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject, type TouchEvent as ReactTouchEvent } from "react"
 import {
   closestCenter,
   DndContext,
@@ -1770,12 +1770,19 @@ function FormatButton({ busy = false, children, icon: Icon, label, onClick }: Fo
 }
 
 function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
+  const [navigationOpen, setNavigationOpen] = useState(false)
   // 使用与实际可见结果一致的延迟搜索键，避免输入态先更新时覆盖原列表滚动位置。
   const listStateKey = `${props.libraryView}\u0000${props.selectedFolder ?? "__all__"}\u0000${props.mobileListStateKey}`
   const libraryStateKey = `${props.totalNoteCount}\u0000${props.folders.map((folder) => folder.path).join("\u0000")}`
   // 返回按钮会回到来源列表，文案必须跟着来源变化，否则从目录进入时会谎称回到「全部笔记」。
   const backLabel = getMobileBackLabel(props.libraryView, props.selectedFolder)
-  const handleEdgeSwipeBack = useCallback(() => {
+  const handleEdgeSwipe = useCallback(() => {
+    const isRootNoteList = props.mobileScreen === "notes"
+      && (!props.selectedFolder || props.selectedFolder === "根目录")
+    if (props.mobileScreen === "library" || isRootNoteList) {
+      setNavigationOpen(true)
+      return
+    }
     if (props.mobileScreen === "editor") {
       props.onMobileScreenChange("notes")
       return
@@ -1785,7 +1792,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
     if (parentFolder) props.onSelectFolder(parentFolder)
     else props.onMobileScreenChange("library")
   }, [props.mobileScreen, props.onMobileScreenChange, props.onSelectFolder, props.selectedFolder])
-  const edgeSwipeProps = useEdgeSwipeBack(handleEdgeSwipeBack, props.mobileScreen !== "library")
+  const edgeSwipeProps = useEdgeSwipeAction(handleEdgeSwipe, !navigationOpen)
 
   return (
     <div className="mobile-workspace" data-screen={props.mobileScreen} {...edgeSwipeProps}>
@@ -1793,6 +1800,8 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
         <MobileLibrary
           {...props}
           initialScrollTop={mobileLibraryPositions.get(libraryStateKey) ?? 0}
+          navigationOpen={navigationOpen}
+          onNavigationOpenChange={setNavigationOpen}
           onScrollPositionChange={(scrollTop) => mobileLibraryPositions.set(libraryStateKey, scrollTop)}
         />
       ) : null}
@@ -1801,6 +1810,8 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
           {...props}
           initialScrollTop={mobileNoteListPositions.get(listStateKey) ?? 0}
           key={listStateKey}
+          navigationOpen={navigationOpen}
+          onNavigationOpenChange={setNavigationOpen}
           onScrollPositionChange={(scrollTop) => mobileNoteListPositions.set(listStateKey, scrollTop)}
         />
       ) : null}
@@ -1863,42 +1874,94 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
   )
 }
 
-function useEdgeSwipeBack(onBack: () => void, enabled: boolean) {
-  const gestureRef = useRef<{
+function useEdgeSwipeAction(onComplete: () => void, enabled: boolean) {
+  type Gesture = {
     pointerId: number
     startedAt: number
     startX: number
     startY: number
-  } | null>(null)
+  }
+  const pointerGestureRef = useRef<Gesture | null>(null)
+  const touchGestureRef = useRef<Omit<Gesture, "pointerId"> | null>(null)
 
-  const clearGesture = () => { gestureRef.current = null }
+  const isVerticalIntent = (startX: number, startY: number, currentX: number, currentY: number) => {
+    const deltaX = Math.max(0, currentX - startX)
+    const deltaY = Math.abs(currentY - startY)
+    return deltaY >= 12 && deltaY > deltaX * 1.1
+  }
+  const completeIfReady = (gesture: Omit<Gesture, "pointerId">, endX: number, endY: number) => {
+    if (!shouldCompleteEdgeSwipe({
+      elapsedMs: Date.now() - gesture.startedAt,
+      endX,
+      endY,
+      startX: gesture.startX,
+      startY: gesture.startY,
+    })) return false
+    onComplete()
+    return true
+  }
+  const clearPointerGesture = () => { pointerGestureRef.current = null }
+  const clearTouchGesture = () => { touchGestureRef.current = null }
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!enabled || !event.isPrimary || event.clientX > 24) return
-    gestureRef.current = {
+    if (!enabled || !event.isPrimary || event.clientX > 32) return
+    pointerGestureRef.current = {
       pointerId: event.pointerId,
       startedAt: Date.now(),
       startX: event.clientX,
       startY: event.clientY,
     }
   }
-  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const gesture = gestureRef.current
-    clearGesture()
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (touchGestureRef.current) return
+    const gesture = pointerGestureRef.current
     if (!gesture || gesture.pointerId !== event.pointerId) return
-    // 仅接受从屏幕左缘开始的快速水平右滑；纵向滚动、编辑选区和页面内部滑动均不触发返回。
-    if (shouldCompleteEdgeSwipe({
-      elapsedMs: Date.now() - gesture.startedAt,
-      endX: event.clientX,
-      endY: event.clientY,
-      startX: gesture.startX,
-      startY: gesture.startY,
-    })) onBack()
+    if (event.clientX < gesture.startX - 8 || isVerticalIntent(gesture.startX, gesture.startY, event.clientX, event.clientY)) {
+      clearPointerGesture()
+      return
+    }
+    // 横向达到阈值立即完成，不等待抬手，避免 iOS 在滚动接管后发送 pointercancel。
+    if (completeIfReady(gesture, event.clientX, event.clientY)) clearPointerGesture()
+  }
+  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (touchGestureRef.current) return
+    const gesture = pointerGestureRef.current
+    clearPointerGesture()
+    if (!gesture || gesture.pointerId !== event.pointerId) return
+    completeIfReady(gesture, event.clientX, event.clientY)
+  }
+  const onTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0]
+    if (!enabled || event.touches.length !== 1 || !touch || touch.clientX > 32) return
+    // 真机滚动时 touchmove 比 pointerup 更稳定；触摸开始后由 touch 分支独占本次手势。
+    clearPointerGesture()
+    touchGestureRef.current = { startedAt: Date.now(), startX: touch.clientX, startY: touch.clientY }
+  }
+  const onTouchMove = (event: ReactTouchEvent<HTMLDivElement>) => {
+    const gesture = touchGestureRef.current
+    const touch = event.touches[0]
+    if (!gesture || !touch) return
+    if (touch.clientX < gesture.startX - 8 || isVerticalIntent(gesture.startX, gesture.startY, touch.clientX, touch.clientY)) {
+      clearTouchGesture()
+      return
+    }
+    if (completeIfReady(gesture, touch.clientX, touch.clientY)) clearTouchGesture()
+  }
+  const onTouchEnd = (event: ReactTouchEvent<HTMLDivElement>) => {
+    const gesture = touchGestureRef.current
+    const touch = event.changedTouches[0]
+    clearTouchGesture()
+    if (gesture && touch) completeIfReady(gesture, touch.clientX, touch.clientY)
   }
 
   return {
-    onPointerCancel: clearGesture,
+    onPointerCancel: clearPointerGesture,
     onPointerDown,
+    onPointerMove,
     onPointerUp,
+    onTouchCancel: clearTouchGesture,
+    onTouchEnd,
+    onTouchMove,
+    onTouchStart,
   }
 }
 
@@ -2007,6 +2070,8 @@ function SaveStateIndicator({ cloudConnected, note, state }: { cloudConnected: b
 
 type MobileLibraryProps = WorkspaceProps & FolderTreeProps & {
   initialScrollTop: number
+  navigationOpen: boolean
+  onNavigationOpenChange: (open: boolean) => void
   onScrollPositionChange: (scrollTop: number) => void
 }
 
@@ -2085,9 +2150,11 @@ function MobileLibrary(props: MobileLibraryProps) {
           connectionLabel={props.connectionLabel}
           isRefreshingVault={props.isRefreshingVault}
           mobileConnectionLabel={props.mobileConnectionLabel}
+          open={props.navigationOpen}
           noteCount={props.totalNoteCount}
           starredNoteCount={props.starredNoteCount}
           onNavigate={props.onNavigate}
+          onOpenChange={props.onNavigationOpenChange}
           onRefreshVault={props.onRefreshVault}
           onSelectLibraryView={(view) => {
             rememberPosition()
@@ -2418,7 +2485,7 @@ function MobileFolderActionSheet({
 
   return (
     <Dialog onOpenChange={(open) => { if (!open) onClose() }} open>
-      <DialogContent className="mobile-action-sheet">
+      <DialogContent className="mobile-action-sheet" placement="bottom">
         <DialogHeader>
           <DialogTitle>{view === "menu" ? folder.label : view === "rename" ? "重命名文件夹" : `删除“${folder.label}”`}</DialogTitle>
           <DialogDescription>
@@ -2455,6 +2522,8 @@ function MobileFolderActionSheet({
 
 type MobileNoteListProps = WorkspaceProps & {
   initialScrollTop: number
+  navigationOpen: boolean
+  onNavigationOpenChange: (open: boolean) => void
   onScrollPositionChange: (scrollTop: number) => void
 }
 
@@ -2536,8 +2605,10 @@ function MobileNoteList(props: MobileNoteListProps) {
           connectionLabel={props.connectionLabel}
           isRefreshingVault={props.isRefreshingVault}
           mobileConnectionLabel={props.mobileConnectionLabel}
+          open={props.navigationOpen}
           noteCount={props.totalNoteCount}
           onNavigate={props.onNavigate}
+          onOpenChange={props.onNavigationOpenChange}
           onRefreshVault={props.onRefreshVault}
           onSelectLibraryView={props.onSelectLibraryView}
           starredNoteCount={props.starredNoteCount}
@@ -2643,7 +2714,7 @@ function MobileNoteActionSheet({
 
   return (
     <Dialog onOpenChange={(open) => { if (!open) onClose() }} open>
-      <DialogContent className="mobile-action-sheet">
+      <DialogContent className="mobile-action-sheet" placement="bottom">
         <DialogHeader>
           <DialogTitle>{view === "menu" ? note.title || "未命名笔记" : view === "rename" ? "重命名笔记" : view === "move" ? "移动到文件夹" : "删除笔记"}</DialogTitle>
           <DialogDescription>
@@ -2696,8 +2767,10 @@ export function MobileNavigationDrawer({
   mobileConnectionLabel = connected ? "已连接" : "离线缓存",
   noteCount,
   onNavigate,
+  onOpenChange,
   onRefreshVault,
   onSelectLibraryView,
+  open: controlledOpen,
   starredNoteCount,
 }: {
   activeSection: AppSection
@@ -2707,11 +2780,18 @@ export function MobileNavigationDrawer({
   mobileConnectionLabel?: string
   noteCount?: number
   onNavigate: (path: string) => void
+  onOpenChange?: (open: boolean) => void
   onRefreshVault?: () => void
   onSelectLibraryView?: (view: LibraryView) => void
+  open?: boolean
   starredNoteCount?: number
 }) {
-  const [open, setOpen] = useState(false)
+  const [internalOpen, setInternalOpen] = useState(false)
+  const open = controlledOpen ?? internalOpen
+  const setOpen = useCallback((nextOpen: boolean) => {
+    if (controlledOpen === undefined) setInternalOpen(nextOpen)
+    onOpenChange?.(nextOpen)
+  }, [controlledOpen, onOpenChange])
 
   useEffect(() => {
     if (!open) return

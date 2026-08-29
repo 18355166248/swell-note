@@ -50,9 +50,11 @@ function DialogOverlay({
 function DialogContent({
   className,
   children,
+  placement = "center",
   showCloseButton = true,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  placement?: "bottom" | "center"
   showCloseButton?: boolean
 }) {
   return (
@@ -61,7 +63,11 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed z-50 grid gap-4 bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+          placement === "bottom"
+            // 底部面板不能继承居中弹窗的 50% 定位和缩放，否则 iOS WebView 会出现半宽裁切。
+            ? "inset-x-0 bottom-0 w-screen max-w-none rounded-t-xl data-open:slide-in-from-bottom-4 data-closed:slide-out-to-bottom-4"
+            : "top-1/2 left-1/2 w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-xl sm:max-w-sm data-open:zoom-in-95 data-closed:zoom-out-95",
           className
         )}
         {...props}

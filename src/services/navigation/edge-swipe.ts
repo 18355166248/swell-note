@@ -13,6 +13,8 @@ export function shouldCompleteEdgeSwipe({
   startX,
   startY,
 }: EdgeSwipeGesture) {
-  if (startX > 24 || elapsedMs > 800) return false
-  return endX - startX >= 72 && Math.abs(endY - startY) <= 48
+  const deltaX = endX - startX
+  const deltaY = Math.abs(endY - startY)
+  if (startX > 32 || elapsedMs > 1000 || deltaX < 48) return false
+  return deltaX >= deltaY * 1.35
 }
