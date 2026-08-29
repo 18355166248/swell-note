@@ -73,6 +73,33 @@
   --panel-soft: oklch(0.986 0.004 255);
 }
 
+.dark {
+  --background: oklch(0.18 0.018 260);
+  --foreground: oklch(0.93 0.012 255);
+  --card: oklch(0.22 0.018 260);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.235 0.018 260);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.69 0.17 257);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.28 0.018 258);
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.255 0.015 258);
+  --muted-foreground: oklch(0.69 0.02 258);
+  --accent: oklch(0.3 0.04 257);
+  --accent-foreground: oklch(0.82 0.12 257);
+  --destructive: oklch(0.67 0.2 28);
+  --border: oklch(0.33 0.015 258);
+  --input: oklch(0.34 0.015 258);
+  --ring: oklch(0.69 0.16 257);
+  --sidebar: oklch(0.205 0.017 260);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --blue-soft: oklch(0.28 0.055 257);
+  --blue-line: oklch(0.7 0.16 257);
+  --panel-soft: oklch(0.215 0.015 260);
+}
+
 @layer base {
   * { @apply border-border outline-ring/50; }
   html { @apply font-sans; }
@@ -236,6 +263,16 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .settings-content-heading > svg { width: 22px; height: 22px; margin-top: 2px; color: var(--primary); }
 .settings-content-heading h2 { margin: 0; font-size: 17px; }
 .settings-content-heading p { margin: 5px 0 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.5; }
+.appearance-options { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
+.appearance-options > button { display: grid; min-width: 0; min-height: 112px; grid-template-columns: 38px minmax(0,1fr) 18px; align-items: start; gap: 11px; border: 1px solid var(--border); border-radius: 12px; padding: 15px; background: var(--background); text-align: left; }
+.appearance-options > button:hover { background: var(--panel-soft); }
+.appearance-options > button[data-active="true"] { border-color: color-mix(in oklab,var(--primary) 58%,var(--border)); background: var(--blue-soft); box-shadow: 0 0 0 1px color-mix(in oklab,var(--primary) 12%,transparent); }
+.appearance-options > button > svg { width: 17px; color: var(--primary); }
+.appearance-option-icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 10px; background: var(--muted); color: var(--foreground); }
+.appearance-option-icon svg { width: 18px; height: 18px; }
+.appearance-options strong, .appearance-options small { display: block; }
+.appearance-options strong { color: var(--foreground); font-size: 13px; }
+.appearance-options small { margin-top: 5px; color: var(--muted-foreground); font-size: 11px; line-height: 1.5; }
 .settings-active-badge { border-radius: 999px; background: var(--blue-soft); padding: 4px 8px; color: var(--primary); font-size: 10.5px; font-weight: 650; }
 .settings-empty-copy { border-radius: 10px; background: var(--panel-soft); padding: 18px; color: var(--muted-foreground); font-size: 12px; }
 .cache-danger-zone { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-top: 18px; border-top: 1px solid var(--border); padding-top: 16px; }
@@ -348,6 +385,46 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .settings-form-actions > span svg { width: 14px; height: 14px; }
 .quick-connect-fields { display: grid; gap: 18px; margin-block: 20px; }
 [data-slot="dialog-content"] > form { display: grid; gap: 0; }
+
+/* 旧页面仍有少量历史硬编码色；深色模式集中兜底，避免列表、编辑器和移动抽屉出现白色断层。 */
+.dark .route-page-shell,
+.dark .settings-route-shell,
+.dark .navigation-rail,
+.dark .note-list-panel,
+.dark .note-editor,
+.dark .open-vault-button,
+.dark .cache-switcher,
+.dark .trash-row,
+.dark .note-search-wrap input:focus,
+.dark .editor-find-field input,
+.dark .editor-replace-input,
+.dark .markdown-editor-shell .cm-wiki-completion,
+.dark .markdown-attachment-frame { background: var(--background); }
+.dark .desktop-titlebar,
+.dark .editor-find-bar,
+.dark .markdown-properties,
+.dark .wiki-embed { background: var(--panel-soft); }
+.dark .settings-sidebar nav button,
+.dark .open-vault-button,
+.dark .cache-switcher,
+.dark .formatting-toolbar button { color: var(--muted-foreground); }
+.dark .library-row,
+.dark .folder-list-row strong { color: var(--foreground); }
+.dark .document-title,
+.dark .markdown-editor-shell,
+.dark .markdown-editor-shell .cm-md-heading,
+.dark .markdown-preview,
+.dark .markdown-preview h1,
+.dark .markdown-preview h2,
+.dark .markdown-preview h3,
+.dark .markdown-preview h4,
+.dark .markdown-property-row dd,
+.dark .markdown-empty-state strong,
+.dark .backlinks-title { color: var(--foreground); }
+.dark .markdown-editor-shell .cm-md-codeblock,
+.dark .excalidraw-plugin-source pre,
+.dark .markdown-preview pre { background: var(--muted); }
+.dark .note-view-mode-button[aria-pressed="true"] { background: var(--card); }
 
 /* 桌面端使用稳定的多栏信息架构，避免不同宽度下跳动和丢失当前上下文。 */
 .navigation-rail { display: flex; flex-direction: column; align-items: center; border-right: 1px solid var(--border); background: #fff; padding: 18px 0 14px; }
@@ -923,9 +1000,25 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .settings-detail-header { justify-content: flex-start; gap: 4px; }
   .settings-mobile-back { display: inline-flex; margin-left: -8px; }
   .settings-card-list button { min-height: 76px; }
+  .appearance-options { grid-template-columns: 1fr; }
+  .appearance-options > button { min-height: 82px; align-items: center; }
   .settings-form-actions { align-items: stretch; flex-wrap: wrap; }
   .settings-form-actions > span { width: 100%; }
   .settings-form-actions button { flex: 1; }
+}
+
+@media (max-width: 767px) {
+  .dark .mobile-workspace,
+  .dark .mobile-screen,
+  .dark .mobile-workspace > .note-editor,
+  .dark .mobile-navigation-drawer,
+  .dark .mobile-folder-sortable,
+  .dark .mobile-folder-sortable .mobile-library-row,
+  .dark .formatting-toolbar[data-mobile="true"],
+  .dark .note-editor[data-compact="true"][data-excalidraw="true"] .editor-titlebar { background: var(--background); }
+  .dark .mobile-library-row,
+  .dark .mobile-library-row-main > span { color: var(--foreground); }
+  .dark .mobile-library-row-main > svg:first-child { color: var(--muted-foreground); }
 }
 
 @media (min-width: 1280px) {

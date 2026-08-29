@@ -14,8 +14,11 @@ import {
   HardDrive,
   Info,
   ListTodo,
+  Monitor,
+  Moon,
   RefreshCw,
   Settings,
+  Sun,
   Trash2,
   Undo2,
 } from "lucide-react"
@@ -47,6 +50,7 @@ import type { SyncLogEntry } from "@/services/sync/sync-log"
 import type { Note } from "@/types/note"
 import type { CachePrivacyMode } from "@/services/cache/cache-privacy"
 import type { TrashEntry, TrashRetentionDays } from "@/services/trash/trash-entry"
+import type { ColorMode } from "@/services/preferences/ui-preferences"
 import {
   checkForAppUpdate,
   installAppUpdate,
@@ -189,6 +193,7 @@ export function TodoPage({
 }
 
 const settingsEntries = [
+  { description: "跟随系统或选择浅色、深色界面", icon: Sun, label: "外观", path: "/settings/appearance" },
   { description: "查看待同步、冲突和失败项，并手动发起同步", icon: RefreshCw, label: "同步状态", path: "/settings/sync" },
   { description: "坚果云地址、账号、应用密码与远端目录", icon: Cloud, label: "WebDAV 连接", path: "/settings/webdav" },
   { description: "查看并切换保存在本机的 Vault 快照", icon: Database, label: "离线缓存", path: "/settings/cache" },
@@ -245,6 +250,45 @@ export function SettingsLayout({ connected, onNavigate, onOpenSync }: Navigation
         </ScrollArea>
       </section>
     </main>
+  )
+}
+
+const colorModeOptions = [
+  { description: "自动使用设备当前的浅色或深色外观", icon: Monitor, label: "跟随系统", value: "system" },
+  { description: "始终使用明亮、清晰的浅色界面", icon: Sun, label: "浅色", value: "light" },
+  { description: "始终使用适合弱光环境的深色界面", icon: Moon, label: "深色", value: "dark" },
+] as const
+
+export function AppearanceSettingsPage({
+  colorMode,
+  onColorModeChange,
+}: {
+  colorMode: ColorMode
+  onColorModeChange: (mode: ColorMode) => void
+}) {
+  return (
+    <div className="settings-content-card">
+      <div className="settings-content-heading">
+        <Sun />
+        <div><h2>界面外观</h2><p>选择会保存在当前设备，刷新页面和重新打开应用后继续生效。</p></div>
+      </div>
+      <div aria-label="界面颜色模式" className="appearance-options" role="radiogroup">
+        {colorModeOptions.map((option) => (
+          <button
+            aria-checked={colorMode === option.value}
+            data-active={colorMode === option.value}
+            key={option.value}
+            onClick={() => onColorModeChange(option.value)}
+            role="radio"
+            type="button"
+          >
+            <span className="appearance-option-icon"><option.icon /></span>
+            <span><strong>{option.label}</strong><small>{option.description}</small></span>
+            {colorMode === option.value ? <Check /> : null}
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
 

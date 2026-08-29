@@ -1,6 +1,8 @@
 export type NoteViewMode = "edit" | "preview"
+export type ColorMode = "dark" | "light" | "system"
 
 export type UiPreferences = {
+  colorMode: ColorMode
   libraryPaneWidth: number
   noteListPaneWidth: number
   noteViewMode: NoteViewMode
@@ -8,6 +10,7 @@ export type UiPreferences = {
 
 const UI_PREFERENCES_KEY = "swell-note:ui-preferences:v1"
 const DEFAULT_UI_PREFERENCES: UiPreferences = {
+  colorMode: "system",
   libraryPaneWidth: 230,
   noteListPaneWidth: 320,
   noteViewMode: "preview",
@@ -40,10 +43,24 @@ function readStoredPreferences(): Record<string, unknown> {
 export function loadUiPreferences(): UiPreferences {
   const stored = readStoredPreferences()
   return {
+    colorMode: stored.colorMode === "dark" || stored.colorMode === "light" ? stored.colorMode : "system",
     libraryPaneWidth: paneWidth(stored.libraryPaneWidth, "libraryPaneWidth"),
     noteListPaneWidth: paneWidth(stored.noteListPaneWidth, "noteListPaneWidth"),
     noteViewMode: stored.noteViewMode === "edit" ? "edit" : DEFAULT_UI_PREFERENCES.noteViewMode,
   }
+}
+
+export function applyColorMode(
+  colorMode: ColorMode,
+  systemDark = typeof window !== "undefined"
+    && Boolean(window.matchMedia?.("(prefers-color-scheme: dark)").matches),
+) {
+  const dark = colorMode === "dark" || (colorMode === "system" && systemDark)
+  document.documentElement.classList.toggle("dark", dark)
+  document.documentElement.dataset.colorMode = colorMode
+  document.documentElement.style.colorScheme = dark ? "dark" : "light"
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+    ?.setAttribute("content", dark ? "#151821" : "#3150e8")
 }
 
 export function saveUiPreferences(preferences: Partial<UiPreferences>) {

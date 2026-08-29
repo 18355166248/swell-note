@@ -5,6 +5,20 @@
     <link rel="icon" type="image/svg+xml" href="/src/assets/brand/swell-note-logo-ribbon-s.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#3150e8" />
+    <script>
+      (() => {
+        try {
+          // React 挂载前恢复主题，避免深色模式刷新时短暂闪出白色首屏。
+          const stored = JSON.parse(localStorage.getItem("swell-note:ui-preferences:v1") || "{}")
+          const mode = stored.colorMode === "dark" || stored.colorMode === "light" ? stored.colorMode : "system"
+          const dark = mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
+          document.documentElement.classList.toggle("dark", dark)
+          document.documentElement.dataset.colorMode = mode
+          document.documentElement.style.colorScheme = dark ? "dark" : "light"
+          document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#151821" : "#3150e8")
+        } catch {}
+      })()
+    </script>
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <!-- 笔记应用自身管理画布缩放；锁定页面比例，避免 iOS 聚焦输入框或双击后放大整个界面。 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
@@ -31,6 +45,9 @@
       .app-bootstrap__progress span { display: block; width: 42%; height: 100%; border-radius: inherit; background: #3150e8; animation: app-bootstrap-progress 1.15s ease-in-out infinite; }
       .app-bootstrap p { margin: -6px 0 0; color: #747d8b; font-size: 13px; }
       .app-bootstrap-noscript { margin: 24px; color: #b42318; font-family: sans-serif; text-align: center; }
+      .dark .app-bootstrap { background: #151821; color: #f2f4f8; }
+      .dark .app-bootstrap__progress { background: #2a3040; }
+      .dark .app-bootstrap p { color: #9ca6b7; }
       @keyframes app-bootstrap-progress { from { transform: translateX(-115%); } to { transform: translateX(355%); } }
       @media (prefers-reduced-motion: reduce) { .app-bootstrap__progress span { width: 100%; animation: none; opacity: .75; } }
     </style>

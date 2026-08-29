@@ -5,6 +5,7 @@ import { Workspace, type LibraryView, type MobileScreen } from "@/components/wor
 import { AppInitializationState } from "@/components/app-initialization-state"
 import {
   AboutSettingsPage,
+  AppearanceSettingsPage,
   CacheSettingsPage,
   SettingsLayout,
   SettingsOverview,
@@ -121,7 +122,13 @@ import {
   type TrashRetentionDays,
 } from "@/services/trash/trash-entry"
 import { loadTrashRetention, saveTrashRetention } from "@/services/trash/trash-preferences"
-import { loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
+import {
+  applyColorMode,
+  loadUiPreferences,
+  saveUiPreferences,
+  type ColorMode,
+  type NoteViewMode,
+} from "@/services/preferences/ui-preferences"
 import type { Note, NoteSaveState } from "@/types/note"
 import "./App.css"
 
@@ -157,9 +164,14 @@ function App() {
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
   const [mobileScreen, setMobileScreen] = useState<MobileScreen>("library")
   const [noteViewMode, setNoteViewMode] = useState<NoteViewMode>(() => loadUiPreferences().noteViewMode)
+  const [colorMode, setColorMode] = useState<ColorMode>(() => loadUiPreferences().colorMode)
   const changeNoteViewMode = useCallback((mode: NoteViewMode) => {
     setNoteViewMode(mode)
     saveUiPreferences({ noteViewMode: mode })
+  }, [])
+  const changeColorMode = useCallback((mode: ColorMode) => {
+    setColorMode(mode)
+    saveUiPreferences({ colorMode: mode })
   }, [])
   const [isCreatingNote, setIsCreatingNote] = useState(false)
   const [isManagingNote, setIsManagingNote] = useState(false)
@@ -203,6 +215,17 @@ function App() {
   const restoredCredentialCacheIdRef = useRef<string | null>(null)
   const refreshVaultRef = useRef<(noteIds?: ReadonlySet<string>) => Promise<void>>(async () => undefined)
   notesRef.current = notes
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)")
+    const applyCurrentMode = () => applyColorMode(colorMode, media.matches)
+    applyCurrentMode()
+    if (colorMode !== "system") return
+
+    // 跟随系统时持续监听外观变化；手动选色后立即解绑，避免系统主题覆盖用户选择。
+    media.addEventListener("change", applyCurrentMode)
+    return () => media.removeEventListener("change", applyCurrentMode)
+  }, [colorMode])
 
   useEffect(() => {
     // 切换缓存可能意味着切换 WebDAV 账号或根目录，旧读取器不能跨笔记库复用。
@@ -3070,6 +3093,10 @@ function App() {
         element={<SettingsLayout connected={connected} onNavigate={navigate} onOpenSync={() => navigate("/settings/sync")} />}
       >
         <Route index element={<SettingsOverview onNavigate={navigate} />} />
+        <Route
+          path="appearance"
+          element={<AppearanceSettingsPage colorMode={colorMode} onColorModeChange={changeColorMode} />}
+        />
         <Route
           path="sync"
           element={(
