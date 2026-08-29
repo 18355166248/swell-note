@@ -2849,6 +2849,7 @@ function App() {
               }
               setMobileScreen(screen)
               if (screen === "library") {
+                setQuery("")
                 navigate("/notes")
                 return
               }
@@ -2890,12 +2891,14 @@ function App() {
               text: "",
             }, checked)}
             onSelectFolder={(folder) => {
+              setQuery("")
               setLibraryView("all")
               setSelectedFolder(folder)
               setMobileScreen("notes")
               navigate(folder ? getNotesListRoute("all", folder) : getNotesListRoute("all", null))
             }}
             onSelectLibraryView={(view) => {
+              setQuery("")
               setLibraryView(view)
               setSelectedFolder(null)
               setMobileScreen("notes")

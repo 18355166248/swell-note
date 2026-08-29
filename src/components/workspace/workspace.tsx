@@ -2180,15 +2180,17 @@ function MobileLibrary(props: MobileLibraryProps) {
       <ScrollArea className="mobile-scroll-content" viewportRef={viewportRef}>
         <div className="mobile-page-padding">
           <div className="mobile-search-row">
-            <div className="note-search-wrap">
-              <Search />
-              <Input
-                ref={searchRef}
-                onChange={(event) => props.onQueryChange(event.target.value)}
-                placeholder="搜索笔记、标签、内容"
-                value={props.query}
-              />
-            </div>
+            <MobileNoteSearch
+              inputRef={searchRef}
+              onClear={() => props.onQueryChange("")}
+              onSearch={(query) => {
+                props.onSelectLibraryView("all")
+                // 菜单切换默认会清理旧搜索；根目录主动搜索要在导航后写入本次新关键词。
+                props.onQueryChange(query)
+              }}
+              placeholder="搜索笔记、标签、内容"
+              value={props.query}
+            />
           </div>
           {props.vaultError ? <p className="vault-error">{props.vaultError}</p> : null}
 
@@ -2635,7 +2637,7 @@ function MobileNoteList(props: MobileNoteListProps) {
         </nav>
       ) : null}
       <div className="mobile-list-search">
-        <div className="note-search-wrap"><Search /><Input onChange={(event) => props.onQueryChange(event.target.value)} placeholder="搜索笔记" value={props.query} /></div>
+        <MobileNoteSearch onSearch={props.onQueryChange} placeholder="搜索笔记" value={props.query} />
       </div>
       <ScrollArea
         className="mobile-scroll-content"
@@ -2679,6 +2681,72 @@ function MobileNoteList(props: MobileNoteListProps) {
       />
       {props.canCreateNote ? <Button aria-label={props.selectedFolder ? `在${props.selectedFolder}中新建笔记` : "在根目录新建笔记"} className="mobile-fab" disabled={props.isCreatingNote} onClick={props.onCreateNote} size="icon-lg" title={props.selectedFolder ? `新建到：${props.selectedFolder}` : "新建到：根目录"}>{props.isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}</Button> : null}
     </section>
+  )
+}
+
+function MobileNoteSearch({
+  inputRef,
+  onClear,
+  onSearch,
+  placeholder,
+  value,
+}: {
+  inputRef?: RefObject<HTMLInputElement | null>
+  onClear?: () => void
+  onSearch: (query: string) => void
+  placeholder: string
+  value: string
+}) {
+  const [draft, setDraft] = useState(value)
+  const composingRef = useRef(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    setDraft(value)
+  }, [value])
+
+  const confirmSearch = (input: HTMLInputElement) => {
+    const query = draft.trim()
+    setDraft(query)
+    onSearch(query)
+    input.blur()
+  }
+  const clearSearch = () => {
+    setDraft("")
+    if (onClear) onClear()
+    else onSearch("")
+    searchInputRef.current?.blur()
+  }
+
+  return (
+    <div className="note-search-wrap">
+      <Search />
+      <Input
+        aria-label="搜索笔记"
+        enterKeyHint="search"
+        onChange={(event) => setDraft(event.target.value)}
+        onCompositionEnd={() => { composingRef.current = false }}
+        onCompositionStart={() => { composingRef.current = true }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" || composingRef.current || event.nativeEvent.isComposing) return
+          // 中文输入法第一次回车只负责上屏候选词；真正的“搜索”键才提交并收起键盘。
+          event.preventDefault()
+          confirmSearch(event.currentTarget)
+        }}
+        placeholder={placeholder}
+        ref={(input) => {
+          searchInputRef.current = input
+          if (inputRef) inputRef.current = input
+        }}
+        type="text"
+        value={draft}
+      />
+      {draft ? (
+        <button aria-label="清空搜索" className="note-search-clear" onClick={clearSearch} type="button">
+          <X />
+        </button>
+      ) : null}
+    </div>
   )
 }
 

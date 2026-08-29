@@ -465,6 +465,10 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .note-search-wrap > kbd { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); border: 1px solid var(--border); border-radius: 5px; background: color-mix(in oklab,white 68%,transparent); padding: 1px 5px; color: var(--muted-foreground); font-family: inherit; font-size: 9px; line-height: 16px; pointer-events: none; }
 .note-search-wrap:focus-within > kbd { display: none; }
 .note-search-wrap:has(> kbd) input { padding-right: 42px; }
+.note-search-wrap:has(> .note-search-clear) input { padding-right: 42px; }
+.note-search-clear { position: absolute; z-index: 2; top: 50%; right: 4px; display: grid; width: 32px; height: 32px; transform: translateY(-50%); place-items: center; border-radius: 8px; color: var(--muted-foreground); -webkit-tap-highlight-color: transparent; }
+.note-search-clear:hover, .note-search-clear:active { background: color-mix(in oklab,var(--muted-foreground) 10%,transparent); color: var(--foreground); }
+.note-search-clear svg { width: 16px; height: 16px; }
 .note-search-wrap input:focus { background: white; border-color: var(--ring); }
 .note-list-panel > .note-search-wrap { margin: 0 14px 10px; }
 .note-groups { padding-bottom: 24px; }
