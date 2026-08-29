@@ -1772,7 +1772,8 @@ function FormatButton({ busy = false, children, icon: Icon, label, onClick }: Fo
 function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
   const [navigationOpen, setNavigationOpen] = useState(false)
   // 使用与实际可见结果一致的延迟搜索键，避免输入态先更新时覆盖原列表滚动位置。
-  const listStateKey = `${props.libraryView}\u0000${props.selectedFolder ?? "__all__"}\u0000${props.mobileListStateKey}`
+  const listRouteKey = `${props.libraryView}\u0000${props.selectedFolder ?? "__all__"}`
+  const listStateKey = `${listRouteKey}\u0000${props.mobileListStateKey}`
   const libraryStateKey = `${props.totalNoteCount}\u0000${props.folders.map((folder) => folder.path).join("\u0000")}`
   // 返回按钮会回到来源列表，文案必须跟着来源变化，否则从目录进入时会谎称回到「全部笔记」。
   const backLabel = getMobileBackLabel(props.libraryView, props.selectedFolder)
@@ -1809,7 +1810,8 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
         <MobileNoteList
           {...props}
           initialScrollTop={mobileNoteListPositions.get(listStateKey) ?? 0}
-          key={listStateKey}
+          // 搜索词不能进入 React key，否则每输入或删除一个字符都会重建页面并让真机键盘失焦。
+          key={listRouteKey}
           navigationOpen={navigationOpen}
           onNavigationOpenChange={setNavigationOpen}
           onScrollPositionChange={(scrollTop) => mobileNoteListPositions.set(listStateKey, scrollTop)}

@@ -6,7 +6,8 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#3150e8" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 笔记应用自身管理画布缩放；锁定页面比例，避免 iOS 聚焦输入框或双击后放大整个界面。 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Swell Note</title>
     <style>
       /* React 与样式包加载前先给出真实启动状态，避免刷新时出现无反馈的白屏。 */
