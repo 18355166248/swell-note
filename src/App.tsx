@@ -91,6 +91,7 @@ import {
 } from "@/services/tasks/markdown-tasks"
 import { obsidianAnchorId, parseMarkdownNoteHref, splitWikiTarget } from "@/services/markdown/markdown-preview-utils"
 import { buildNotePreview } from "@/services/markdown/note-preview"
+import { exportMarkdownDocument } from "@/services/export/markdown-export"
 import {
   deleteWebDavPassword,
   loadWebDavPassword,
@@ -2738,6 +2739,19 @@ function App() {
     }
   }
 
+  const exportActiveNote = async () => {
+    if (!activeNote?.contentLoaded) {
+      setVaultError("正文尚未加载，暂时不能导出")
+      return
+    }
+    try {
+      setVaultError(null)
+      await exportMarkdownDocument(activeNote.content, activeNote.remotePath?.split("/").pop() ?? activeNote.title)
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "导出 Markdown 失败")
+    }
+  }
+
   useEffect(() => {
     const anchor = pendingWikiAnchorRef.current
     if (!anchor || !activeNote?.contentLoaded) return
@@ -2871,6 +2885,7 @@ function App() {
               void moveNote(noteId, note?.folder === "根目录" ? null : note?.folder ?? null, title, false)
             }}
             onOpenLocalVault={() => void openLocalVault()}
+            onExportNote={() => void exportActiveNote()}
             onOpenSourceFile={() => void openActiveSourceFile()}
             onOpenWikiLink={openWikiLink}
             onOpenSettings={() => navigate(webDavConfigured ? "/settings/sync" : "/settings/webdav")}

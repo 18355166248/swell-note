@@ -107,6 +107,7 @@ import {
 } from "@/services/search/vault-folders"
 import { buildNotePreview } from "@/services/markdown/note-preview"
 import { extractNoteOutline } from "@/services/markdown/note-outline"
+import { buildMarkdownNoteLink, buildRelativeMarkdownHref } from "@/services/markdown/markdown-link"
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
 import type { NoteSort } from "@/services/search/note-sort"
 import { loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
@@ -169,6 +170,7 @@ type WorkspaceProps = {
   onDeleteNote: () => void
   onDeleteNoteById: (noteId: string) => void
   onDeleteFolder: (folderPath: string) => void
+  onExportNote: () => void
   onOpenLocalVault: () => void
   onLoadWikiNote: (target: string) => void
   onOpenWikiLink: (target: string) => void
@@ -441,15 +443,10 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           isManagingNote={props.isManagingNote}
           moveTargets={props.folders}
           note={props.activeNote}
-          wikiLinkSuggestions={props.notes
-            .filter((candidate) => candidate.pendingOperation !== "delete")
-            .map((candidate) => ({
-              detail: candidate.remotePath ?? deriveFolder(candidate),
-              target: candidate.remotePath?.replace(/\.md$/i, "") ?? candidate.title,
-              title: candidate.title || "未命名笔记",
-            }))}
+          wikiLinkNotes={props.notes}
           noteViewMode={props.noteViewMode}
           onDeleteNote={props.onDeleteNote}
+          onExportNote={props.onExportNote}
           onFormat={props.onFormat}
           onFormatNote={props.onFormatNote}
           onInsertAttachments={props.onInsertAttachments}
@@ -1253,6 +1250,7 @@ type NoteEditorProps = {
   noteViewMode: NoteViewMode
   onBack?: () => void
   onDeleteNote: () => void
+  onExportNote: () => void
   onFormat: (syntax: string) => void
   onFormatNote: (noteId: string, syntax: string) => void
   onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
@@ -1272,10 +1270,10 @@ type NoteEditorProps = {
   onUpdateNote: (patch: Partial<Note>) => void
   saveState: NoteSaveState
   syncing: boolean
-  wikiLinkSuggestions: Array<{ detail?: string; target: string; title: string }>
+  wikiLinkNotes: Note[]
 }
 
-function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkSuggestions }: NoteEditorProps) {
+function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
   const isCanvas = note.format === "canvas"
   const isExcalidraw = isExcalidrawMarkdown(note.content)
@@ -1360,6 +1358,14 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
   }, [canInsertAttachment, handleFormat, note.id, onFormatNote, onInsertAttachments, readOnly])
 
   const saveStateLabel = getSaveStateLabel(cloudConnected, note, saveState)
+  const getWikiLinkSuggestions = useCallback(() => wikiLinkNotes
+    .filter((candidate) => candidate.pendingOperation !== "delete" && Boolean(candidate.remotePath))
+    .map((candidate) => {
+      const title = candidate.title || "未命名笔记"
+      const target = candidate.remotePath!
+      const href = noteRelativeHref(note, target)
+      return { detail: target, markdown: buildMarkdownNoteLink(title, href), target, title }
+    }), [note.remotePath, wikiLinkNotes])
 
   const runFind = useCallback((direction: "next" | "previous" = "next", fromStart = false) => {
     setFindResult(editorRef.current?.findText(findQuery, direction, fromStart) ?? { current: 0, total: 0 })
@@ -1500,6 +1506,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
               {note.remotePath && isExcalidrawMarkdown(note.content) ? (
                 <DropdownMenuItem onClick={onOpenSourceFile}>打开 / 下载 Excalidraw 原始文件</DropdownMenuItem>
               ) : null}
+              <DropdownMenuItem onClick={onExportNote}>导出 Markdown 文件</DropdownMenuItem>
               {canManageNote ? (
                 <>
                   <DropdownMenuItem onClick={() => { setRenameTitle(note.title); setRenameDialogOpen(true) }}>重命名</DropdownMenuItem>
@@ -1685,6 +1692,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
               <Suspense fallback={<EditorLoadingState label="Markdown 编辑器" />}>
                 {/* CodeMirror 会在提交后同步受控 value；按笔记重建实例，避免切换瞬间残留上一份正文。 */}
                 <MarkdownEditor
+                  getWikiLinkSuggestions={getWikiLinkSuggestions}
                   key={note.id}
                   onChange={(content) => onUpdateNote({
                     content,
@@ -1698,7 +1706,6 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
                   ref={editorRef}
                   storageKey={note.id}
                   value={note.content}
-                  wikiLinkSuggestions={wikiLinkSuggestions}
                 />
               </Suspense>
             </div>
@@ -1920,18 +1927,13 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             compact
             moveTargets={props.folders}
             note={props.activeNote}
-            wikiLinkSuggestions={props.notes
-              .filter((candidate) => candidate.pendingOperation !== "delete")
-              .map((candidate) => ({
-                detail: candidate.remotePath ?? deriveFolder(candidate),
-                target: candidate.remotePath?.replace(/\.md$/i, "") ?? candidate.title,
-                title: candidate.title || "未命名笔记",
-              }))}
+            wikiLinkNotes={props.notes}
             noteViewMode={props.noteViewMode}
             backLabel={backLabel}
             onSelectFolder={props.onSelectFolder}
             onBack={() => props.onMobileScreenChange("notes")}
             onDeleteNote={props.onDeleteNote}
+            onExportNote={props.onExportNote}
             onFormat={props.onFormat}
             onFormatNote={props.onFormatNote}
             onInsertAttachments={props.onInsertAttachments}
@@ -2981,4 +2983,12 @@ function deriveFolder(note: Note) {
   if (!note.remotePath) return "产品规划 / 跨端产品"
   const segments = note.remotePath.split("/").filter(Boolean)
   return segments.slice(0, -1).join(" / ") || "坚果云"
+}
+
+function noteRelativeHref(activeNote: Note, targetPath: string) {
+  if (activeNote.remotePath) {
+    const relative = buildRelativeMarkdownHref(activeNote.remotePath, targetPath)
+    if (relative) return relative
+  }
+  return targetPath.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/")
 }

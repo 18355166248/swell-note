@@ -3,6 +3,7 @@ import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view"
 
 export type WikiLinkSuggestion = {
   detail?: string
+  markdown: string
   target: string
   title: string
 }
@@ -17,7 +18,7 @@ export function getWikiLinkQuery(lineText: string, lineFrom: number, cursor: num
   const beforeCursor = lineText.slice(0, cursor - lineFrom)
   const match = beforeCursor.match(/\[\[([^\]|#]*)$/)
   if (!match) return null
-  return { from: cursor - match[1].length, query: match[1], to: cursor }
+  return { from: cursor - match[1].length - 2, query: match[1], to: cursor }
 }
 
 export function filterWikiLinkSuggestions(items: WikiLinkSuggestion[], query: string, limit = 8) {
@@ -67,7 +68,8 @@ export function wikiLinkCompletion(getSuggestions: () => WikiLinkSuggestion[]): 
       const suggestion = this.matches[this.selected]
       const query = this.activeQuery
       if (!suggestion || !query || this.dom.hidden) return false
-      const insert = `${suggestion.target}]]`
+      // `[[` 只作为快速唤出手势，确认后落盘为跨应用可读的标准 Markdown 链接。
+      const insert = suggestion.markdown
       this.view.dispatch({
         changes: { from: query.from, insert, to: query.to },
         selection: { anchor: query.from + insert.length },

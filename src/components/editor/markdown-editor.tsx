@@ -30,21 +30,21 @@ type MarkdownEditorProps = {
   onInsertFiles?: (files: File[]) => void
   onOpenWikiLink?: (target: string) => void
   onResolveAsset?: (source: string) => Promise<VaultAsset | null>
+  getWikiLinkSuggestions?: () => WikiLinkSuggestion[]
   readOnly?: boolean
   storageKey?: string
   value: string
-  wikiLinkSuggestions?: WikiLinkSuggestion[]
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, readOnly = false, storageKey, value, wikiLinkSuggestions = [] }, ref) {
+  function MarkdownEditor({ getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, readOnly = false, storageKey, value }, ref) {
     const editorRef = useRef<ReactCodeMirrorRef>(null)
 
     // CodeMirror 的扩展数组一旦换引用就会整体重配置（语言也会重新解析）；
     // 调用方传入的回调多为内联函数，用 ref 中转后扩展只在只读状态切换时重建。
-    const handlers = useRef({ onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, wikiLinkSuggestions })
+    const handlers = useRef({ getWikiLinkSuggestions, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset })
     useEffect(() => {
-      handlers.current = { onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, wikiLinkSuggestions }
+      handlers.current = { getWikiLinkSuggestions, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset }
     })
 
     const extensions = useMemo(() => [
@@ -55,7 +55,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         onResolveAsset: (source) => handlers.current.onResolveAsset?.(source) ?? Promise.resolve(null),
         tableStorageKey: storageKey,
       }),
-      wikiLinkCompletion(() => handlers.current.wikiLinkSuggestions),
+      wikiLinkCompletion(() => handlers.current.getWikiLinkSuggestions?.() ?? []),
       EditorView.lineWrapping,
       EditorView.updateListener.of((update) => {
         if (!update.selectionSet && !update.docChanged) return
