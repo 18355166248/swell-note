@@ -1858,8 +1858,13 @@ function App() {
     }
   }
 
-  const moveActiveNote = async (folderPath: string | null, requestedTitle?: string) => {
-    const note = activeNote
+  const moveNote = async (
+    noteId: string,
+    folderPath: string | null,
+    requestedTitle?: string,
+    navigateAfter = true,
+  ) => {
+    const note = notes.find((candidate) => candidate.id === noteId)
     const adapter = vaultSession
     const isWebDavNote = note?.source === "webdav"
     if (!note?.remotePath || note.readOnly || (!adapter && !isWebDavNote)) {
@@ -1903,11 +1908,11 @@ function App() {
         next[nextId] = { status: "pending" }
         return next
       })
-      setActiveNoteId(nextId)
+      if (navigateAfter || activeNoteId === note.id) setActiveNoteId(nextId)
       if (activeCacheMeta?.sourceKind === "webdav") {
         void remapVaultAttachmentNoteId(activeCacheMeta.id, note.id, nextId)
       }
-      navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
+      if (navigateAfter) navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
       return
     }
 
@@ -1936,11 +1941,11 @@ function App() {
         next[nextId] = { status: "pending" }
         return next
       })
-      setActiveNoteId(nextId)
+      if (navigateAfter || activeNoteId === note.id) setActiveNoteId(nextId)
       if (activeCacheMeta?.sourceKind === "webdav") {
         void remapVaultAttachmentNoteId(activeCacheMeta.id, note.id, nextId)
       }
-      navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
+      if (navigateAfter) navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
       return
     }
 
@@ -1976,14 +1981,17 @@ function App() {
         next[nextId] = { status: "saved" }
         return next
       })
-      setActiveNoteId(nextId)
-      navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
+      if (navigateAfter || activeNoteId === note.id) setActiveNoteId(nextId)
+      if (navigateAfter) navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
     } catch (error) {
       setVaultError(error instanceof Error ? error.message : "移动笔记失败")
     } finally {
       setIsManagingNote(false)
     }
   }
+
+  const moveActiveNote = (folderPath: string | null, requestedTitle?: string) =>
+    moveNote(activeNoteId, folderPath, requestedTitle)
 
   const createLocalFolder = async (requestedName: string, parentFolder: string | null) => {
     const adapter = vaultSession
@@ -2364,8 +2372,8 @@ function App() {
     }
   }
 
-  const deleteActiveNote = async () => {
-    const note = activeNote
+  const deleteNote = async (noteId: string, navigateAfter = true) => {
+    const note = notes.find((candidate) => candidate.id === noteId)
     const adapter = vaultSession
     const isWebDavNote = note?.source === "webdav"
     if (!note?.remotePath || note.readOnly || (!adapter && !isWebDavNote)) {
@@ -2402,9 +2410,11 @@ function App() {
         originalPath: notePath,
         source: "webdav",
       }, ...current])
-      setActiveNoteId(nextNote?.id ?? "")
-      setMobileScreen(nextNote ? "editor" : "notes")
-      navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
+      if (activeNoteId === note.id) setActiveNoteId(nextNote?.id ?? "")
+      if (navigateAfter) {
+        setMobileScreen(nextNote ? "editor" : "notes")
+        navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
+      }
       return
     }
 
@@ -2434,9 +2444,11 @@ function App() {
         originalPath: notePath,
         source: "webdav",
       }, ...current])
-      setActiveNoteId(nextNote?.id ?? "")
-      setMobileScreen(nextNote ? "editor" : "notes")
-      navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
+      if (activeNoteId === note.id) setActiveNoteId(nextNote?.id ?? "")
+      if (navigateAfter) {
+        setMobileScreen(nextNote ? "editor" : "notes")
+        navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
+      }
       return
     }
 
@@ -2473,15 +2485,19 @@ function App() {
         source: "local",
         trashedPath,
       }, ...current])
-      setActiveNoteId(nextNote?.id ?? "")
-      setMobileScreen(nextNote ? "editor" : "notes")
-      navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
+      if (activeNoteId === note.id) setActiveNoteId(nextNote?.id ?? "")
+      if (navigateAfter) {
+        setMobileScreen(nextNote ? "editor" : "notes")
+        navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
+      }
     } catch (error) {
       setVaultError(error instanceof Error ? error.message : "删除笔记失败")
     } finally {
       setIsManagingNote(false)
     }
   }
+
+  const deleteActiveNote = () => deleteNote(activeNoteId)
 
   const restoreTrashEntries = async (entryIds: ReadonlySet<string>) => {
     const entries = trashEntries.filter((entry) => entryIds.has(entry.id))
@@ -2814,6 +2830,7 @@ function App() {
             onCreateNote={() => void createNote()}
             onCreateFolder={(name, parentFolder) => void createLocalFolder(name, parentFolder)}
             onDeleteNote={() => void deleteActiveNote()}
+            onDeleteNoteById={(noteId) => void deleteNote(noteId, false)}
             onDeleteFolder={deleteFolder}
             onFormat={formatActiveNote}
             onFormatNote={formatNoteById}
@@ -2841,9 +2858,14 @@ function App() {
             }}
             onNavigate={navigate}
             onMoveNote={(folderPath) => void moveActiveNote(folderPath)}
+            onMoveNoteById={(noteId, folderPath) => void moveNote(noteId, folderPath, undefined, false)}
             onNoteViewModeChange={changeNoteViewMode}
             onRenameFolder={renameFolder}
             onRenameNote={(title) => void moveActiveNote(activeNote?.folder === "根目录" ? null : activeNote?.folder ?? null, title)}
+            onRenameNoteById={(noteId, title) => {
+              const note = notes.find((candidate) => candidate.id === noteId)
+              void moveNote(noteId, note?.folder === "根目录" ? null : note?.folder ?? null, title, false)
+            }}
             onOpenLocalVault={() => void openLocalVault()}
             onOpenSourceFile={() => void openActiveSourceFile()}
             onOpenWikiLink={openWikiLink}

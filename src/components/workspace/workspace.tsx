@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import {
   closestCenter,
   DndContext,
@@ -111,6 +111,7 @@ import { applyFolderOrder, loadFolderOrder, saveFolderOrder } from "@/services/p
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
+import { shouldCompleteEdgeSwipe } from "@/services/navigation/edge-swipe"
 
 // CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
 const MarkdownEditor = lazyWithRetry(() => import("@/components/editor/markdown-editor"))
@@ -164,14 +165,17 @@ type WorkspaceProps = {
   onMobileScreenChange: (screen: MobileScreen) => void
   onNoteViewModeChange: (mode: NoteViewMode) => void
   onDeleteNote: () => void
+  onDeleteNoteById: (noteId: string) => void
   onDeleteFolder: (folderPath: string) => void
   onOpenLocalVault: () => void
   onLoadWikiNote: (target: string) => void
   onOpenWikiLink: (target: string) => void
   onOpenSourceFile: () => void
   onMoveNote: (folderPath: string | null) => void
+  onMoveNoteById: (noteId: string, folderPath: string | null) => void
   onRenameFolder: (folderPath: string, nextName: string) => void
   onRenameNote: (title: string) => void
+  onRenameNoteById: (noteId: string, title: string) => void
   onOpenSettings: () => void
   onNavigate: (path: string) => void
   onQueryChange: (query: string) => void
@@ -1197,16 +1201,76 @@ function EmptyNoteEditor({
 type NoteListRowProps = {
   active: boolean
   note: Note
+  onLongPress?: () => void
   onSelect: (note: Note) => void
 }
 
-function NoteListRow({ active, note, onSelect }: NoteListRowProps) {
+function useLongPress(onLongPress?: () => void, delay = 500) {
+  const timerRef = useRef<number | null>(null)
+  const originRef = useRef<{ x: number; y: number } | null>(null)
+  const suppressClickRef = useRef(false)
+
+  const clearTimer = () => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+    timerRef.current = null
+    originRef.current = null
+  }
+
+  useEffect(() => clearTimer, [])
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
+    if (!onLongPress || (event.pointerType === "mouse" && event.button !== 0)) return
+    suppressClickRef.current = false
+    originRef.current = { x: event.clientX, y: event.clientY }
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null
+      suppressClickRef.current = true
+      onLongPress()
+    }, delay)
+  }
+
+  const onPointerMove = (event: ReactPointerEvent<HTMLElement>) => {
+    const origin = originRef.current
+    if (!origin) return
+    // 手指滚动列表时立即取消长按，避免滑动过程中误弹操作菜单。
+    if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 10) clearTimer()
+  }
+
+  const onClickCapture = (event: ReactMouseEvent<HTMLElement>) => {
+    if (!suppressClickRef.current) return
+    suppressClickRef.current = false
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  const onContextMenu = (event: ReactMouseEvent<HTMLElement>) => {
+    if (!onLongPress) return
+    event.preventDefault()
+    clearTimer()
+    suppressClickRef.current = true
+    onLongPress()
+  }
+
+  return {
+    onClickCapture,
+    onContextMenu,
+    onPointerCancel: clearTimer,
+    onPointerDown,
+    onPointerLeave: clearTimer,
+    onPointerMove,
+    onPointerUp: clearTimer,
+  }
+}
+
+function NoteListRow({ active, note, onLongPress, onSelect }: NoteListRowProps) {
+  const longPressProps = useLongPress(onLongPress)
   return (
     <button
       className="note-list-row"
       data-active={active}
       onClick={() => onSelect(note)}
       type="button"
+      {...longPressProps}
     >
       <div className="note-row-heading">
         <strong>{note.title || "未命名笔记"}</strong>
@@ -1711,9 +1775,20 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
   const libraryStateKey = `${props.totalNoteCount}\u0000${props.folders.map((folder) => folder.path).join("\u0000")}`
   // 返回按钮会回到来源列表，文案必须跟着来源变化，否则从目录进入时会谎称回到「全部笔记」。
   const backLabel = getMobileBackLabel(props.libraryView, props.selectedFolder)
+  const handleEdgeSwipeBack = useCallback(() => {
+    if (props.mobileScreen === "editor") {
+      props.onMobileScreenChange("notes")
+      return
+    }
+    if (props.mobileScreen !== "notes") return
+    const parentFolder = props.selectedFolder ? getParentFolderPath(props.selectedFolder) : null
+    if (parentFolder) props.onSelectFolder(parentFolder)
+    else props.onMobileScreenChange("library")
+  }, [props.mobileScreen, props.onMobileScreenChange, props.onSelectFolder, props.selectedFolder])
+  const edgeSwipeProps = useEdgeSwipeBack(handleEdgeSwipeBack, props.mobileScreen !== "library")
 
   return (
-    <div className="mobile-workspace" data-screen={props.mobileScreen}>
+    <div className="mobile-workspace" data-screen={props.mobileScreen} {...edgeSwipeProps}>
       {props.mobileScreen === "library" ? (
         <MobileLibrary
           {...props}
@@ -1786,6 +1861,45 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
       ) : null}
     </div>
   )
+}
+
+function useEdgeSwipeBack(onBack: () => void, enabled: boolean) {
+  const gestureRef = useRef<{
+    pointerId: number
+    startedAt: number
+    startX: number
+    startY: number
+  } | null>(null)
+
+  const clearGesture = () => { gestureRef.current = null }
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!enabled || !event.isPrimary || event.clientX > 24) return
+    gestureRef.current = {
+      pointerId: event.pointerId,
+      startedAt: Date.now(),
+      startX: event.clientX,
+      startY: event.clientY,
+    }
+  }
+  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = gestureRef.current
+    clearGesture()
+    if (!gesture || gesture.pointerId !== event.pointerId) return
+    // 仅接受从屏幕左缘开始的快速水平右滑；纵向滚动、编辑选区和页面内部滑动均不触发返回。
+    if (shouldCompleteEdgeSwipe({
+      elapsedMs: Date.now() - gesture.startedAt,
+      endX: event.clientX,
+      endY: event.clientY,
+      startX: gesture.startX,
+      startY: gesture.startY,
+    })) onBack()
+  }
+
+  return {
+    onPointerCancel: clearGesture,
+    onPointerDown,
+    onPointerUp,
+  }
 }
 
 function BacklinksPanel({ backlinks, onSelectNote }: { backlinks: Note[]; onSelectNote: (note: Note) => void }) {
@@ -1900,6 +2014,7 @@ function MobileLibrary(props: MobileLibraryProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const [managingFolders, setManagingFolders] = useState(false)
+  const [actionFolder, setActionFolder] = useState<VaultFolder | null>(null)
   const folderOrderKey = props.activeCacheId ?? `library:${props.connectionLabel}`
   const [folderOrder, setFolderOrder] = useState<string[]>(() => loadFolderOrder(folderOrderKey))
   const rootFolders = useMemo(
@@ -2053,6 +2168,7 @@ function MobileLibrary(props: MobileLibraryProps) {
                     icon={Folder}
                     key={folder.path}
                     label={folder.label}
+                    onLongPress={folder.path === "根目录" || !props.folderManagementMode ? undefined : () => setActionFolder(folder)}
                     onClick={() => selectFolder(folder.path)}
                   />
                 ))}
@@ -2061,6 +2177,15 @@ function MobileLibrary(props: MobileLibraryProps) {
           </div>
         </div>
       </ScrollArea>
+      <MobileFolderActionSheet
+        disabled={props.isManagingNote}
+        folder={actionFolder}
+        mode={props.folderManagementMode}
+        onClose={() => setActionFolder(null)}
+        onDelete={props.onDeleteFolder}
+        onOpen={(folderPath) => { setActionFolder(null); selectFolder(folderPath) }}
+        onRename={props.onRenameFolder}
+      />
       {props.canCreateNote && !managingFolders ? (
         <Button
           aria-label="在根目录新建笔记"
@@ -2096,11 +2221,13 @@ type MobileLibraryRowProps = {
   icon: typeof FileText
   label: string
   onClick?: () => void
+  onLongPress?: () => void
   onToggle?: () => void
   trailing?: ReactNode
 }
 
-function MobileLibraryRow({ count, depth = 0, expanded, folderTree = false, icon: Icon, label, onClick, onToggle, trailing }: MobileLibraryRowProps) {
+function MobileLibraryRow({ count, depth = 0, expanded, folderTree = false, icon: Icon, label, onClick, onLongPress, onToggle, trailing }: MobileLibraryRowProps) {
+  const longPressProps = useLongPress(onLongPress)
   return (
     <div className="mobile-library-row" data-depth={Math.min(depth, 3)}>
       {folderTree ? (
@@ -2116,7 +2243,7 @@ function MobileLibraryRow({ count, depth = 0, expanded, folderTree = false, icon
           </button>
         ) : <span className="mobile-folder-toggle-placeholder" />
       ) : null}
-      <button className="mobile-library-row-main" onClick={onClick} type="button">
+      <button className="mobile-library-row-main" onClick={onClick} type="button" {...longPressProps}>
         <Icon />
         <span>{label}</span>
         {typeof count === "number" ? <small>{count}</small> : null}
@@ -2262,6 +2389,70 @@ function MobileFolderActions({
   )
 }
 
+function MobileFolderActionSheet({
+  disabled,
+  folder,
+  mode,
+  onClose,
+  onDelete,
+  onOpen,
+  onRename,
+}: {
+  disabled: boolean
+  folder: VaultFolder | null
+  mode: "local" | "webdav" | null
+  onClose: () => void
+  onDelete: (folderPath: string) => void
+  onOpen: (folderPath: string) => void
+  onRename: (folderPath: string, nextName: string) => void
+}) {
+  const [view, setView] = useState<"delete" | "menu" | "rename">("menu")
+  const [name, setName] = useState("")
+
+  useEffect(() => {
+    setView("menu")
+    setName(folder?.label ?? "")
+  }, [folder])
+
+  if (!folder || !mode) return null
+
+  return (
+    <Dialog onOpenChange={(open) => { if (!open) onClose() }} open>
+      <DialogContent className="mobile-action-sheet">
+        <DialogHeader>
+          <DialogTitle>{view === "menu" ? folder.label : view === "rename" ? "重命名文件夹" : `删除“${folder.label}”`}</DialogTitle>
+          <DialogDescription>
+            {view === "menu"
+              ? `${folder.count} 篇笔记 · 长按快捷操作`
+              : view === "rename"
+                ? mode === "local" ? "将重命名本地 Vault 目录。" : "重命名会先保存在本机，点击同步后更新坚果云。"
+                : mode === "local" ? "文件夹及其中内容会移入回收站。" : "目录中的笔记会进入待同步删除。"}
+          </DialogDescription>
+        </DialogHeader>
+        {view === "menu" ? (
+          <div className="mobile-action-list">
+            <button onClick={() => onOpen(folder.path)} type="button"><FolderOpen /><span>打开文件夹</span><ChevronRight /></button>
+            <button disabled={disabled} onClick={() => setView("rename")} type="button"><PencilLine /><span>重命名</span><ChevronRight /></button>
+            <button className="mobile-action-destructive" disabled={disabled} onClick={() => setView("delete")} type="button"><Trash2 /><span>删除文件夹</span><ChevronRight /></button>
+          </div>
+        ) : view === "rename" ? (
+          <Input autoFocus aria-label="新文件夹名称" onChange={(event) => setName(event.target.value)} value={name} />
+        ) : null}
+        {view !== "menu" ? (
+          <DialogFooter>
+            <Button onClick={() => setView("menu")} variant="ghost">返回</Button>
+            {view === "rename" ? (
+              <Button disabled={!name.trim() || name.trim() === folder.label} onClick={() => { onClose(); onRename(folder.path, name) }}>保存</Button>
+            ) : (
+              <Button disabled={disabled} onClick={() => { onClose(); onDelete(folder.path) }} variant="destructive">确认删除</Button>
+            )}
+          </DialogFooter>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 type MobileNoteListProps = WorkspaceProps & {
   initialScrollTop: number
   onScrollPositionChange: (scrollTop: number) => void
@@ -2270,6 +2461,8 @@ type MobileNoteListProps = WorkspaceProps & {
 function MobileNoteList(props: MobileNoteListProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const [viewportReady, setViewportReady] = useState(false)
+  const [actionFolder, setActionFolder] = useState<VaultFolder | null>(null)
+  const [actionNote, setActionNote] = useState<Note | null>(null)
   const setViewportRef = useCallback((viewport: HTMLDivElement | null) => {
     viewportRef.current = viewport
     // 直达二级目录时，缓存和列表会在同一轮恢复。等滚动容器挂载后再创建 virtualizer，
@@ -2329,6 +2522,14 @@ function MobileNoteList(props: MobileNoteListProps) {
   return (
     <section className="mobile-screen">
       <header className="mobile-titlebar">
+        <Button aria-label={parentFolder ? `返回${parentFolder}` : "返回笔记库"} onClick={goBack} size="icon" variant="ghost"><ArrowLeft /></Button>
+        <h1>{title}</h1>
+        <div className="mobile-titlebar-actions">
+          {props.selectedFolder && props.folderManagementMode ? <FolderRenameButton disabled={props.isManagingNote} folderPath={props.selectedFolder} mode={props.folderManagementMode} onDelete={props.onDeleteFolder} onRename={props.onRenameFolder} /> : null}
+          {childFolders.length > 0 ? <NestedNotesToggle includeNested={props.includeNestedFolderNotes} onChange={props.onIncludeNestedFolderNotesChange} /> : null}
+          <TagFilterMenu availableTags={props.availableTags} onChange={props.onSelectTag} selectedTag={props.selectedTag} />
+          <NoteSortMenu mobile onChange={props.onNoteSortChange} sort={props.noteSort} />
+        </div>
         <MobileNavigationDrawer
           activeSection="notes"
           connected={props.connected}
@@ -2341,14 +2542,6 @@ function MobileNoteList(props: MobileNoteListProps) {
           onSelectLibraryView={props.onSelectLibraryView}
           starredNoteCount={props.starredNoteCount}
         />
-        <Button aria-label={parentFolder ? `返回${parentFolder}` : "返回笔记库"} onClick={goBack} size="icon" variant="ghost"><ArrowLeft /></Button>
-        <h1>{title}</h1>
-        <div>
-          {props.selectedFolder && props.folderManagementMode ? <FolderRenameButton disabled={props.isManagingNote} folderPath={props.selectedFolder} mode={props.folderManagementMode} onDelete={props.onDeleteFolder} onRename={props.onRenameFolder} /> : null}
-          {childFolders.length > 0 ? <NestedNotesToggle includeNested={props.includeNestedFolderNotes} onChange={props.onIncludeNestedFolderNotesChange} /> : null}
-          <TagFilterMenu availableTags={props.availableTags} onChange={props.onSelectTag} selectedTag={props.selectedTag} />
-          <NoteSortMenu mobile onChange={props.onNoteSortChange} sort={props.noteSort} />
-        </div>
       </header>
       {props.selectedFolder ? (
         <nav aria-label="目录路径" className="mobile-folder-breadcrumbs">
@@ -2383,6 +2576,8 @@ function MobileNoteList(props: MobileNoteListProps) {
               mobile
               noteSort={props.noteSort}
               notes={props.notes}
+              onFolderLongPress={props.folderManagementMode ? setActionFolder : undefined}
+              onNoteLongPress={setActionNote}
               onSelectFolder={selectFolder}
               onSelectNote={selectNote}
               viewportRef={viewportRef}
@@ -2390,8 +2585,106 @@ function MobileNoteList(props: MobileNoteListProps) {
           ) : viewportReady ? <EmptyNoteList canCreateNote={props.canCreateNote} isLoading={props.isRefreshingVault} onCreateNote={props.onCreateNote} onOpenSettings={props.onOpenSettings} selectedFolder={props.selectedFolder} /> : null}
         </div>
       </ScrollArea>
+      <MobileFolderActionSheet
+        disabled={props.isManagingNote}
+        folder={actionFolder}
+        mode={props.folderManagementMode}
+        onClose={() => setActionFolder(null)}
+        onDelete={props.onDeleteFolder}
+        onOpen={(folderPath) => { setActionFolder(null); selectFolder(folderPath) }}
+        onRename={props.onRenameFolder}
+      />
+      <MobileNoteActionSheet
+        disabled={props.isManagingNote}
+        folders={props.folders}
+        note={actionNote}
+        onClose={() => setActionNote(null)}
+        onDelete={props.onDeleteNoteById}
+        onMove={props.onMoveNoteById}
+        onOpen={(note) => { setActionNote(null); selectNote(note) }}
+        onRename={props.onRenameNoteById}
+      />
       {props.canCreateNote ? <Button aria-label={props.selectedFolder ? `在${props.selectedFolder}中新建笔记` : "在根目录新建笔记"} className="mobile-fab" disabled={props.isCreatingNote} onClick={props.onCreateNote} size="icon-lg" title={props.selectedFolder ? `新建到：${props.selectedFolder}` : "新建到：根目录"}>{props.isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}</Button> : null}
     </section>
+  )
+}
+
+function MobileNoteActionSheet({
+  disabled,
+  folders,
+  note,
+  onClose,
+  onDelete,
+  onMove,
+  onOpen,
+  onRename,
+}: {
+  disabled: boolean
+  folders: VaultFolder[]
+  note: Note | null
+  onClose: () => void
+  onDelete: (noteId: string) => void
+  onMove: (noteId: string, folderPath: string | null) => void
+  onOpen: (note: Note) => void
+  onRename: (noteId: string, title: string) => void
+}) {
+  const [view, setView] = useState<"delete" | "menu" | "move" | "rename">("menu")
+  const [title, setTitle] = useState("")
+
+  useEffect(() => {
+    setView("menu")
+    setTitle(note?.title ?? "")
+  }, [note])
+
+  if (!note) return null
+  const canManage = Boolean(note.remotePath && !note.readOnly && !disabled)
+  const currentFolder = note.folder === "根目录" ? null : note.folder ?? null
+  const moveTargets = folders.filter((folder) => folder.path !== "根目录")
+
+  return (
+    <Dialog onOpenChange={(open) => { if (!open) onClose() }} open>
+      <DialogContent className="mobile-action-sheet">
+        <DialogHeader>
+          <DialogTitle>{view === "menu" ? note.title || "未命名笔记" : view === "rename" ? "重命名笔记" : view === "move" ? "移动到文件夹" : "删除笔记"}</DialogTitle>
+          <DialogDescription>
+            {view === "menu"
+              ? `${note.updatedAt} · ${note.folder ?? "根目录"}`
+              : view === "rename" ? "文件名会随标题一起更新。"
+                : view === "move" ? "选择目标目录，修改会先保存在本机。"
+                  : note.source === "webdav" ? "笔记将进入待同步删除，可从回收站恢复。" : "笔记将移入回收站。"}
+          </DialogDescription>
+        </DialogHeader>
+        {view === "menu" ? (
+          <div className="mobile-action-list">
+            <button onClick={() => onOpen(note)} type="button"><FileText /><span>打开笔记</span><ChevronRight /></button>
+            <button disabled={!canManage} onClick={() => setView("rename")} type="button"><PencilLine /><span>重命名</span><ChevronRight /></button>
+            <button disabled={!canManage} onClick={() => setView("move")} type="button"><FolderOpen /><span>移动到文件夹</span><ChevronRight /></button>
+            <button className="mobile-action-destructive" disabled={!canManage} onClick={() => setView("delete")} type="button"><Trash2 /><span>删除笔记</span><ChevronRight /></button>
+          </div>
+        ) : view === "rename" ? (
+          <Input autoFocus aria-label="新笔记标题" onChange={(event) => setTitle(event.target.value)} value={title} />
+        ) : view === "move" ? (
+          <div className="mobile-move-targets">
+            <button disabled={currentFolder === null} onClick={() => { onClose(); onMove(note.id, null) }} type="button"><Folder /><span>根目录</span>{currentFolder === null ? <Check /> : <ChevronRight />}</button>
+            {moveTargets.map((folder) => (
+              <button disabled={currentFolder === folder.path} key={folder.path} onClick={() => { onClose(); onMove(note.id, folder.path) }} type="button">
+                <Folder /><span>{folder.path}</span>{currentFolder === folder.path ? <Check /> : <ChevronRight />}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {view === "rename" || view === "delete" ? (
+          <DialogFooter>
+            <Button onClick={() => setView("menu")} variant="ghost">返回</Button>
+            {view === "rename" ? (
+              <Button disabled={!title.trim() || title.trim() === note.title} onClick={() => { onClose(); onRename(note.id, title) }}>保存</Button>
+            ) : (
+              <Button disabled={!canManage} onClick={() => { onClose(); onDelete(note.id) }} variant="destructive">确认删除</Button>
+            )}
+          </DialogFooter>
+        ) : view === "move" ? <DialogFooter><Button onClick={() => setView("menu")} variant="ghost">返回</Button></DialogFooter> : null}
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -2493,6 +2786,8 @@ function VirtualNoteRows({
   mobile = false,
   noteSort,
   notes,
+  onFolderLongPress,
+  onNoteLongPress,
   onSelectFolder,
   onSelectNote,
   viewportRef,
@@ -2502,6 +2797,8 @@ function VirtualNoteRows({
   mobile?: boolean
   noteSort: NoteSort
   notes: Note[]
+  onFolderLongPress?: (folder: VaultFolder) => void
+  onNoteLongPress?: (note: Note) => void
   onSelectFolder?: (folder: string) => void
   onSelectNote: (note: Note) => void
   viewportRef: RefObject<HTMLDivElement | null>
@@ -2550,9 +2847,9 @@ function VirtualNoteRows({
             {item.kind === "heading" ? (
               <div className="note-group-label"><span>{item.label}</span>{mobile ? null : <small>{item.noteCount}</small>}</div>
             ) : item.kind === "folder" ? (
-              <FolderListRow folder={item.folder} mobile={mobile} onSelect={onSelectFolder} />
+              <FolderListRow folder={item.folder} mobile={mobile} onLongPress={onFolderLongPress ? () => onFolderLongPress(item.folder) : undefined} onSelect={onSelectFolder} />
             ) : (
-              <NoteListRow active={item.note.id === activeNoteId} note={item.note} onSelect={onSelectNote} />
+              <NoteListRow active={item.note.id === activeNoteId} note={item.note} onLongPress={onNoteLongPress ? () => onNoteLongPress(item.note) : undefined} onSelect={onSelectNote} />
             )}
           </div>
         )
@@ -2564,18 +2861,22 @@ function VirtualNoteRows({
 function FolderListRow({
   folder,
   mobile,
+  onLongPress,
   onSelect,
 }: {
   folder: VaultFolder
   mobile: boolean
+  onLongPress?: () => void
   onSelect?: (folder: string) => void
 }) {
+  const longPressProps = useLongPress(onLongPress)
   return (
     <button
       className="folder-list-row"
       data-mobile={mobile}
       onClick={() => onSelect?.(folder.path)}
       type="button"
+      {...longPressProps}
     >
       <span className="folder-list-icon"><Folder /></span>
       <span>
