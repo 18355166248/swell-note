@@ -127,6 +127,41 @@ describe("syncWebDavNoteQueue", () => {
     expect(result.notes[0]).toMatchObject({ revision: '"written"', syncStatus: "synced" })
   })
 
+  it("移动成功但正文写入中断时保存新路径检查点，重试不会再次 MOVE", async () => {
+    const firstMove = vi.fn().mockResolvedValue({ path: "/Swell/new/a.md", revision: '"moved"' })
+    const first = await syncWebDavNoteQueue({
+      adapter: adapter({
+        ensureDirectory: vi.fn(),
+        moveTextFile: firstMove,
+        writeTextFile: vi.fn().mockRejectedValue(new Error("PUT 中断")),
+      }),
+      notes: [note("a", {
+        pendingOperation: "move",
+        previousRemotePath: "/Swell/old/a.md",
+        remotePath: "/Swell/new/a.md",
+      })],
+    })
+
+    expect(first.notes[0]).toMatchObject({
+      pendingOperation: undefined,
+      previousRemotePath: undefined,
+      remotePath: "/Swell/new/a.md",
+      revision: '"moved"',
+      syncError: "PUT 中断",
+      syncStatus: "modified",
+    })
+    const retryMove = vi.fn()
+    const retryWrite = vi.fn().mockResolvedValue({ revision: '"written"' })
+    const retried = await syncWebDavNoteQueue({
+      adapter: adapter({ moveTextFile: retryMove, writeTextFile: retryWrite }),
+      notes: first.notes,
+    })
+
+    expect(retryMove).not.toHaveBeenCalled()
+    expect(retryWrite).toHaveBeenCalledWith("/Swell/new/a.md", "正文 a", '"moved"')
+    expect(retried.notes[0]).toMatchObject({ revision: '"written"', syncStatus: "synced" })
+  })
+
   it("删除成功后才清理本地条目和关联附件", async () => {
     const deleteTextFile = vi.fn()
     const onDeleteCommitted = vi.fn()
@@ -139,5 +174,18 @@ describe("syncWebDavNoteQueue", () => {
     expect(deleteTextFile).toHaveBeenCalledWith("/Swell/a.md", '"v1"')
     expect(onDeleteCommitted).toHaveBeenCalledOnce()
     expect(result.notes).toEqual([])
+  })
+
+  it("远端删除已成功时，本机附件清理失败也不会重新排队删除", async () => {
+    const deleteTextFile = vi.fn()
+    const result = await syncWebDavNoteQueue({
+      adapter: adapter({ deleteTextFile }),
+      notes: [note("a", { pendingOperation: "delete" })],
+      onDeleteCommitted: vi.fn().mockRejectedValue(new Error("IndexedDB 暂不可用")),
+    })
+
+    expect(deleteTextFile).toHaveBeenCalledOnce()
+    expect(result.notes).toEqual([])
+    expect(result.errorMessage).toBeNull()
   })
 })

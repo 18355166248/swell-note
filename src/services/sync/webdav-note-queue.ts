@@ -4,6 +4,7 @@ import { VaultConflictError, type VaultAdapter } from "@/services/vault/vault-ad
 export type WebDavNoteQueueEvent =
   | { note: Note; type: "start" }
   | { note: Note; type: "deleted" }
+  | { note: Note; revision?: string; type: "moved" }
   | { note: Note; revision?: string; type: "synced" }
   | { conflict: boolean; message: string; note: Note; type: "failed" }
   | { note: Note; type: "complete" }
@@ -51,10 +52,11 @@ export async function syncWebDavNoteQueue({
       if (pendingNote.pendingOperation === "delete") {
         if (!adapter.deleteTextFile) throw new Error("当前 WebDAV 会话不支持删除")
         await adapter.deleteTextFile(pendingNote.previousRemotePath ?? path, pendingNote.revision)
-        // 远端删除成功后才能清理附件队列，失败或取消时仍保留本地可恢复数据。
-        await onDeleteCommitted?.(pendingNote)
         nextNotes = nextNotes.filter((note) => note.id !== pendingNote.id)
         onEvent?.({ note: pendingNote, type: "deleted" })
+        // 远端删除成功后才能清理附件队列，失败或取消时仍保留本地可恢复数据。
+        // 清理本机附件失败不能把已经提交的远端 DELETE 重新放回队列，否则重试会变成 404。
+        try { await onDeleteCommitted?.(pendingNote) } catch { /* 后续存储巡检仍可清理孤立缓存 */ }
         continue
       }
 
@@ -73,9 +75,21 @@ export async function syncWebDavNoteQueue({
           path,
           pendingNote.revision,
         )
-        result = pendingNote.writeContentAfterMove === false
-          ? moved
-          : await adapter.writeTextFile(path, pendingNote.content, moved.revision)
+        if (pendingNote.writeContentAfterMove === false) {
+          result = moved
+        } else {
+          // MOVE 已在远端生效后立刻推进本地检查点；即使后续 PUT 中断，重试也只写新路径，不会再次移动旧路径。
+          const movedCheckpoint: Note = {
+            ...pendingNote,
+            pendingOperation: undefined,
+            previousRemotePath: undefined,
+            revision: moved.revision,
+            writeContentAfterMove: undefined,
+          }
+          nextNotes = nextNotes.map((note) => note.id === pendingNote.id ? movedCheckpoint : note)
+          onEvent?.({ note: movedCheckpoint, revision: moved.revision, type: "moved" })
+          result = await adapter.writeTextFile(path, pendingNote.content, moved.revision)
+        }
       } else {
         result = await adapter.writeTextFile(path, pendingNote.content, pendingNote.revision)
       }

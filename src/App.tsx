@@ -1431,6 +1431,10 @@ function App() {
         } else if (event.type === "synced") {
           revisionByPathRef.current.set(event.note.remotePath!, event.revision)
           setSaveStates((current) => ({ ...current, [event.note.id]: { status: "saved" } }))
+        } else if (event.type === "moved") {
+          revisionByPathRef.current.set(event.note.remotePath!, event.revision)
+          // MOVE 是不可重复的远端动作；先把新路径检查点写进 React 状态，后续 PUT 失败时可从新 revision 续传。
+          setNotes((current) => current.map((note) => note.id === event.note.id ? event.note : note))
         } else if (event.type === "deleted") {
           setSaveStates((current) => {
             const next = { ...current }
