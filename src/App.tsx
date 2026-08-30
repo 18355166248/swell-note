@@ -91,6 +91,11 @@ import {
   type MarkdownTask,
 } from "@/services/tasks/markdown-tasks"
 import { obsidianAnchorId, parseMarkdownNoteHref, splitWikiTarget } from "@/services/markdown/markdown-preview-utils"
+import {
+  resolveMarkdownMovedPath,
+  rewriteMarkdownLinksForMoves,
+  type MarkdownPathMove,
+} from "@/services/markdown/markdown-link-rewrite"
 import { buildNotePreview } from "@/services/markdown/note-preview"
 import { exportMarkdownDocument } from "@/services/export/markdown-export"
 import { MAX_MARKDOWN_IMPORT_BYTES, sanitizeImportedMarkdownName, uniqueMarkdownPath } from "@/services/import/markdown-import"
@@ -140,6 +145,13 @@ type SyncProgress = {
   total: number
 }
 type SyncRun = { cancelled: boolean }
+type MarkdownLinkRepair = {
+  changedCount: number
+  content: string
+  newPath: string
+  noteId: string
+  oldPath: string
+}
 
 function App() {
   const navigate = useNavigate()
@@ -1991,6 +2003,78 @@ function App() {
     }
   }
 
+  const prepareMarkdownLinkRepairs = async (moves: MarkdownPathMove[]) => {
+    const currentNotes = notesRef.current.filter((note) =>
+      note.pendingOperation !== "delete" && note.remotePath && /\.md$/i.test(note.remotePath),
+    )
+    const cachedById = new Map<string, Awaited<ReturnType<typeof listCachedNoteDocuments>>[number]>()
+    const cachedByPath = new Map<string, Awaited<ReturnType<typeof listCachedNoteDocuments>>[number]>()
+    if (activeCacheMeta) {
+      try {
+        for (const document of await listCachedNoteDocuments(activeCacheMeta.id)) {
+          cachedById.set(document.noteId, document)
+          if (document.path) cachedByPath.set(document.path, document)
+        }
+      } catch {
+        // IndexedDB 不可用时继续尝试从已加载正文或当前 Vault 读取，移动操作本身不应被缓存故障阻断。
+      }
+    }
+
+    const repairs: MarkdownLinkRepair[] = []
+    let unavailableCount = 0
+    for (const note of currentNotes) {
+      const oldPath = note.remotePath!
+      let content = note.contentLoaded ? note.content : undefined
+      if (content === undefined) content = cachedById.get(note.id)?.content ?? cachedByPath.get(oldPath)?.content
+      if (content === undefined && vaultSession?.readTextFile) {
+        try {
+          content = (await vaultSession.readTextFile(oldPath)).content
+        } catch {
+          unavailableCount += 1
+          continue
+        }
+      }
+      if (content === undefined) {
+        unavailableCount += 1
+        continue
+      }
+
+      const result = rewriteMarkdownLinksForMoves(content, oldPath, moves)
+      if (result.changedCount > 0) {
+        repairs.push({
+          changedCount: result.changedCount,
+          content: result.content,
+          newPath: resolveMarkdownMovedPath(oldPath, moves),
+          noteId: note.id,
+          oldPath,
+        })
+      }
+    }
+    return { repairs, unavailableCount }
+  }
+
+  const applyWebDavLinkRepairs = (
+    candidate: Note,
+    repairs: ReadonlyMap<string, MarkdownLinkRepair>,
+  ): Note => {
+    const repair = repairs.get(candidate.id)
+    if (!repair) return candidate
+    return {
+      ...candidate,
+      content: repair.content,
+      contentCached: true,
+      contentLoaded: true,
+      ...indexNoteContent(repair.content),
+      modifiedAt: Date.now(),
+      preview: buildNotePreview(repair.content, candidate.format),
+      readOnly: false,
+      syncError: undefined,
+      syncStatus: candidate.syncStatus === "conflict" ? "conflict" : "modified",
+      updatedAt: `已修复 ${repair.changedCount} 个相对链接 · 待同步`,
+      writeContentAfterMove: candidate.pendingOperation === "move" ? true : candidate.writeContentAfterMove,
+    }
+  }
+
   const moveNote = async (
     noteId: string,
     folderPath: string | null,
@@ -2020,31 +2104,47 @@ function App() {
     const storageTargetPath = adapter?.getStoragePath?.(targetPath)
       ?? (isWebDavNote ? offlineWebDavTarget : targetPath)
     if (storageTargetPath === note.remotePath) return
+    const { repairs: detectedRepairs, unavailableCount } = await prepareMarkdownLinkRepairs([
+      { fromPath: note.remotePath, toPath: storageTargetPath },
+    ])
+    const affectedLinkCount = detectedRepairs.reduce((total, repair) => total + repair.changedCount, 0)
+    // 相对链接修复可能涉及其他笔记正文，必须在用户看到影响范围并确认后才写入工作副本。
+    const linkRepairs = detectedRepairs.length > 0 && window.confirm(
+      `移动后检测到 ${detectedRepairs.length} 篇笔记中的 ${affectedLinkCount} 个相对链接需要更新，是否一并修复？`,
+    ) ? detectedRepairs : []
+    const repairsByNoteId = new Map(linkRepairs.map((repair) => [repair.noteId, repair]))
 
     if (note.pendingOperation === "create") {
       const nextId = `webdav:${storageTargetPath}`
       // 尚未上传的新笔记移动时只改本地目标路径，不会产生任何远端 MOVE 请求。
-      setNotes((current) => current.map((candidate) => candidate.id === note.id
-        ? {
-            ...candidate,
+      setNotes((current) => current.map((candidate) => {
+        const repaired = applyWebDavLinkRepairs(candidate, repairsByNoteId)
+        return candidate.id === note.id
+          ? {
+            ...repaired,
             folder: deriveRemoteFolder(targetPath),
             id: nextId,
             remotePath: storageTargetPath,
-            title: normalizedTitle || candidate.title,
-            draft: normalizedTitle ? false : candidate.draft,
+            title: normalizedTitle || repaired.title,
+            draft: normalizedTitle ? false : repaired.draft,
             updatedAt: "刚刚移动 · 待同步",
           }
-        : candidate))
+          : repaired
+      }))
       setSaveStates((current) => {
         const next = { ...current }
         delete next[note.id]
         next[nextId] = { status: "pending" }
+        for (const repair of linkRepairs) {
+          if (repair.noteId !== note.id) next[repair.noteId] = { status: "pending" }
+        }
         return next
       })
       if (navigateAfter || activeNoteId === note.id) setActiveNoteId(nextId)
       if (activeCacheMeta?.sourceKind === "webdav") {
         void remapVaultAttachmentNoteId(activeCacheMeta.id, note.id, nextId)
       }
+      if (unavailableCount > 0) setVaultError(`已移动；另有 ${unavailableCount} 篇未缓存正文，暂无法检查其中的相对链接`)
       if (navigateAfter) navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
       return
     }
@@ -2052,32 +2152,39 @@ function App() {
     if (isWebDavNote) {
       const nextId = `webdav:${storageTargetPath}`
       // 已存在的云端笔记先记录原路径；真正 MOVE 仅由显式同步触发并携带 ETag 条件。
-      setNotes((current) => current.map((candidate) => candidate.id === note.id
-        ? {
-            ...candidate,
+      setNotes((current) => current.map((candidate) => {
+        const repaired = applyWebDavLinkRepairs(candidate, repairsByNoteId)
+        return candidate.id === note.id
+          ? {
+            ...repaired,
             folder: deriveRemoteFolder(targetPath),
             id: nextId,
             pendingOperation: "move",
-            previousRemotePath: candidate.previousRemotePath ?? candidate.remotePath,
+            previousRemotePath: repaired.previousRemotePath ?? repaired.remotePath,
             remotePath: storageTargetPath,
             syncError: undefined,
             syncStatus: "modified",
             writeContentAfterMove: true,
-            title: normalizedTitle || candidate.title,
-            draft: normalizedTitle ? false : candidate.draft,
+            title: normalizedTitle || repaired.title,
+            draft: normalizedTitle ? false : repaired.draft,
             updatedAt: "刚刚移动 · 待同步",
           }
-        : candidate))
+          : repaired
+      }))
       setSaveStates((current) => {
         const next = { ...current }
         delete next[note.id]
         next[nextId] = { status: "pending" }
+        for (const repair of linkRepairs) {
+          if (repair.noteId !== note.id) next[repair.noteId] = { status: "pending" }
+        }
         return next
       })
       if (navigateAfter || activeNoteId === note.id) setActiveNoteId(nextId)
       if (activeCacheMeta?.sourceKind === "webdav") {
         void remapVaultAttachmentNoteId(activeCacheMeta.id, note.id, nextId)
       }
+      if (unavailableCount > 0) setVaultError(`已移动；另有 ${unavailableCount} 篇未缓存正文，暂无法检查其中的相对链接`)
       if (navigateAfter) navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
       return
     }
@@ -2095,19 +2202,50 @@ function App() {
       revisionByPathRef.current.delete(note.remotePath)
       revisionByPathRef.current.set(result.path, result.revision)
       saveQueuesRef.current.delete(note.remotePath)
-      setNotes((current) => current.map((candidate) => candidate.id === note.id
-        ? {
-            ...candidate,
+      const writtenRepairs = new Map<string, { content: string; revision?: string }>()
+      for (const repair of linkRepairs) {
+        try {
+          const expectedRevision = repair.noteId === note.id
+            ? result.revision
+            : revisionByPathRef.current.get(repair.oldPath)
+          const writeResult = await adapter.writeTextFile?.(repair.newPath, repair.content, expectedRevision)
+          if (!writeResult) continue
+          revisionByPathRef.current.delete(repair.oldPath)
+          revisionByPathRef.current.set(repair.newPath, writeResult.revision)
+          writtenRepairs.set(repair.noteId, { content: repair.content, revision: writeResult.revision })
+        } catch (error) {
+          setVaultError(error instanceof Error
+            ? `笔记已移动，但修复相对链接时失败：${error.message}`
+            : "笔记已移动，但部分相对链接修复失败")
+        }
+      }
+      setNotes((current) => current.map((candidate) => {
+        const written = writtenRepairs.get(candidate.id)
+        const repaired = written
+          ? {
+              ...candidate,
+              content: written.content,
+              contentCached: true,
+              contentLoaded: true,
+              ...indexNoteContent(written.content),
+              preview: buildNotePreview(written.content, candidate.format),
+              revision: written.revision,
+            }
+          : candidate
+        return candidate.id === note.id
+          ? {
+            ...repaired,
             folder: deriveRemoteFolder(result.path),
             id: nextId,
             remotePath: result.path,
-            revision: result.revision,
-            title: normalizedTitle || candidate.title,
-            draft: normalizedTitle ? false : candidate.draft,
+            revision: written?.revision ?? result.revision,
+            title: normalizedTitle || repaired.title,
+            draft: normalizedTitle ? false : repaired.draft,
             updatedAt: "刚刚移动",
             modifiedAt: Date.now(),
           }
-        : candidate))
+          : repaired
+      }))
       setSaveStates((current) => {
         const next = { ...current }
         delete next[note.id]
@@ -2115,6 +2253,7 @@ function App() {
         return next
       })
       if (navigateAfter || activeNoteId === note.id) setActiveNoteId(nextId)
+      if (unavailableCount > 0) setVaultError(`已移动；另有 ${unavailableCount} 篇正文不可读取，暂无法检查其中的相对链接`)
       if (navigateAfter) navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
     } catch (error) {
       setVaultError(error instanceof Error ? error.message : "移动笔记失败")
@@ -2192,12 +2331,24 @@ function App() {
       return
     }
 
+    const sourceStorageDirectory = toStorageDirectoryPath(folderPath)
+    const targetStorageDirectory = toStorageDirectoryPath(targetFolder)
+    const { repairs: detectedRepairs, unavailableCount } = await prepareMarkdownLinkRepairs([{
+      fromPath: sourceStorageDirectory,
+      kind: "directory",
+      toPath: targetStorageDirectory,
+    }])
+    const affectedLinkCount = detectedRepairs.reduce((total, repair) => total + repair.changedCount, 0)
+    const linkRepairs = detectedRepairs.length > 0 && window.confirm(
+      `重命名文件夹后检测到 ${detectedRepairs.length} 篇笔记中的 ${affectedLinkCount} 个相对链接需要更新，是否一并修复？`,
+    ) ? detectedRepairs : []
+
     setIsManagingNote(true)
     setVaultError(null)
     try {
       await adapter.moveDirectory(
-        toStorageDirectoryPath(folderPath),
-        toStorageDirectoryPath(targetFolder),
+        sourceStorageDirectory,
+        targetStorageDirectory,
       )
       const plans = new Map(candidates.flatMap((note) => {
         const filename = note.remotePath?.split("/").pop()
@@ -2210,10 +2361,40 @@ function App() {
           remotePath: target.relativePath,
         }] as const] : []
       }))
-      // 目录级移动已经由适配器原子完成，内存索引只需同步换路径，不再逐篇重复写盘。
+      const writtenRepairs = new Map<string, { content: string; revision?: string }>()
+      for (const repair of linkRepairs) {
+        try {
+          const writeResult = await adapter.writeTextFile?.(
+            repair.newPath,
+            repair.content,
+            revisionByPathRef.current.get(repair.oldPath),
+          )
+          if (!writeResult) continue
+          revisionByPathRef.current.delete(repair.oldPath)
+          revisionByPathRef.current.set(repair.newPath, writeResult.revision)
+          writtenRepairs.set(repair.noteId, { content: repair.content, revision: writeResult.revision })
+        } catch (error) {
+          setVaultError(error instanceof Error
+            ? `文件夹已重命名，但修复相对链接时失败：${error.message}`
+            : "文件夹已重命名，但部分相对链接修复失败")
+        }
+      }
+      // 目录级移动已经由适配器原子完成；用户确认后，再把受影响正文写入它们的新路径。
       setNotes((current) => current.map((note) => {
         const plan = plans.get(note.id)
-        return plan ? { ...note, ...plan, modifiedAt: Date.now(), updatedAt: "刚刚移动" } : note
+        const written = writtenRepairs.get(note.id)
+        const repaired = written
+          ? {
+              ...note,
+              content: written.content,
+              contentCached: true,
+              contentLoaded: true,
+              ...indexNoteContent(written.content),
+              preview: buildNotePreview(written.content, note.format),
+              revision: written.revision,
+            }
+          : note
+        return plan ? { ...repaired, ...plan, modifiedAt: Date.now(), updatedAt: "刚刚移动" } : repaired
       }))
       setSaveStates((current) => {
         const next = { ...current }
@@ -2228,7 +2409,7 @@ function App() {
         const plan = plans.get(note.id)
         if (!plan || !note.remotePath) continue
         revisionByPathRef.current.delete(note.remotePath)
-        revisionByPathRef.current.set(plan.remotePath, note.revision)
+        revisionByPathRef.current.set(plan.remotePath, writtenRepairs.get(note.id)?.revision ?? note.revision)
       }
       setVaultDirectories((current) => current.map((path) =>
         replaceFolderPrefix(path, folderPath, targetFolder),
@@ -2239,6 +2420,7 @@ function App() {
       setLibraryView("all")
       setMobileScreen("notes")
       navigate(getNotesListRoute("all", targetFolder), { replace: true })
+      if (unavailableCount > 0) setVaultError(`已重命名；另有 ${unavailableCount} 篇正文不可读取，暂无法检查其中的相对链接`)
     } catch (error) {
       setVaultError(error instanceof Error ? error.message : "重命名文件夹失败")
     } finally {
@@ -2299,7 +2481,7 @@ function App() {
     }
   }
 
-  const renameWebDavFolder = (folderPath: string, requestedName: string) => {
+  const renameWebDavFolder = async (folderPath: string, requestedName: string) => {
     if (isRefreshingVault || isManagingNote) {
       setVaultError("正在处理笔记库，请稍后再重命名文件夹")
       return
@@ -2345,14 +2527,29 @@ function App() {
       plans.set(note.id, { folder: target.folder, id: `webdav:${remotePath}`, remotePath })
     }
 
+    const { repairs: detectedRepairs, unavailableCount } = await prepareMarkdownLinkRepairs(
+      candidates.flatMap((note) => {
+        const plan = plans.get(note.id)
+        return note.remotePath && plan
+          ? [{ fromPath: note.remotePath, toPath: plan.remotePath }]
+          : []
+      }),
+    )
+    const affectedLinkCount = detectedRepairs.reduce((total, repair) => total + repair.changedCount, 0)
+    const linkRepairs = detectedRepairs.length > 0 && window.confirm(
+      `重命名文件夹后检测到 ${detectedRepairs.length} 篇笔记中的 ${affectedLinkCount} 个相对链接需要更新，是否一并修复？`,
+    ) ? detectedRepairs : []
+    const repairsByNoteId = new Map(linkRepairs.map((repair) => [repair.noteId, repair]))
+
     setIsManagingNote(true)
     setVaultError(null)
     // 批量重命名只改 IndexedDB 工作副本；每篇 MOVE 仍在统一同步链路中串行执行并校验 ETag。
     setNotes((current) => current.map((note) => {
       const plan = plans.get(note.id)
-      if (!plan) return note
+      const repaired = applyWebDavLinkRepairs(note, repairsByNoteId)
+      if (!plan) return repaired
       return {
-        ...note,
+        ...repaired,
         ...plan,
         pendingOperation: note.pendingOperation === "create" ? "create" : "move",
         previousRemotePath: note.pendingOperation === "create"
@@ -2361,7 +2558,9 @@ function App() {
         syncError: undefined,
         syncStatus: "modified",
         updatedAt: "文件夹已在本机重命名 · 待同步",
-        writeContentAfterMove: note.pendingOperation === "create"
+        writeContentAfterMove: repairsByNoteId.has(note.id)
+          ? true
+          : note.pendingOperation === "create"
           ? undefined
           : note.pendingOperation === "move" ? note.writeContentAfterMove : false,
       }
@@ -2371,6 +2570,9 @@ function App() {
       for (const [oldId, plan] of plans) {
         delete next[oldId]
         next[plan.id] = { status: "pending" }
+      }
+      for (const repair of linkRepairs) {
+        if (!plans.has(repair.noteId)) next[repair.noteId] = { status: "pending" }
       }
       return next
     })
@@ -2389,6 +2591,7 @@ function App() {
       navigate(getNotesListRoute("all", firstPlan.folder.split(/\s*\/\s*/).slice(0, folderPath.split(/\s*\/\s*/).length).join(" / ")), { replace: true })
     }
     setIsManagingNote(false)
+    if (unavailableCount > 0) setVaultError(`已重命名；另有 ${unavailableCount} 篇未缓存正文，暂无法检查其中的相对链接`)
   }
 
   const deleteWebDavFolder = (folderPath: string) => {
@@ -2455,7 +2658,7 @@ function App() {
       void renameLocalFolder(folderPath, requestedName)
       return
     }
-    renameWebDavFolder(folderPath, requestedName)
+    void renameWebDavFolder(folderPath, requestedName)
   }
 
   const deleteFolder = (folderPath: string) => {
