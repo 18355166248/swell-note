@@ -21,7 +21,6 @@ import {
   ArrowLeft,
   AlertCircle,
   AlertTriangle,
-  Bold,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -31,7 +30,6 @@ import {
   Cloud,
   CloudOff,
   History,
-  Code2,
   Database,
   FileText,
   FileUp,
@@ -41,11 +39,8 @@ import {
   FolderPlus,
   FolderTree,
   GripVertical,
-  Image,
-  List,
   ListTree,
   ListFilter,
-  Link,
   Link2,
   LockKeyhole,
   LoaderCircle,
@@ -59,11 +54,7 @@ import {
   Settings,
   Star,
   Tag,
-  Redo2,
   Trash2,
-  Italic,
-  Quote,
-  Undo2,
   X,
 } from "lucide-react"
 
@@ -108,7 +99,6 @@ import {
   type VaultFolder,
 } from "@/services/search/vault-folders"
 import { buildNotePreview } from "@/services/markdown/note-preview"
-import { listNoteVersions, summarizeLineChanges, type NoteVersion } from "@/services/history/note-history"
 import { extractNoteOutline } from "@/services/markdown/note-outline"
 import { buildMarkdownNoteLink, buildRelativeMarkdownHref } from "@/services/markdown/markdown-link"
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
@@ -116,9 +106,12 @@ import type { NoteSort } from "@/services/search/note-sort"
 import { loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
 import { applyFolderOrder, loadFolderOrder, saveFolderOrder } from "@/services/preferences/folder-order-preferences"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import { FormattingToolbar } from "@/components/workspace/formatting-toolbar"
+import { NoteVersionHistoryDialog } from "@/components/workspace/note-version-history-dialog"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
 import { MobileNoteSearch } from "@/components/workspace/mobile-note-search"
+import { MobileFolderActionSheet, MobileNoteActionSheet } from "@/components/workspace/mobile-action-sheets"
 import { useLongPress } from "@/components/workspace/use-long-press"
 import { useEdgeSwipeAction } from "@/components/workspace/use-edge-swipe-action"
 import { mobileLibraryScrollMemory, mobileNoteListScrollMemory } from "@/services/navigation/mobile-scroll-memory"
@@ -1787,99 +1780,6 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
   )
 }
 
-function NoteVersionHistoryDialog({
-  cacheId,
-  currentContent,
-  noteId,
-  onOpenChange,
-  onRestore,
-  open,
-}: {
-  cacheId: string | null
-  currentContent: string
-  noteId: string
-  onOpenChange: (open: boolean) => void
-  onRestore: (content: string) => void
-  open: boolean
-}) {
-  const [versions, setVersions] = useState<NoteVersion[]>([])
-  const [selectedId, setSelectedId] = useState("")
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    if (!open || !cacheId) return
-    let cancelled = false
-    setLoading(true)
-    void listNoteVersions(cacheId, noteId)
-      .then((items) => {
-        if (cancelled) return
-        setVersions(items)
-        setSelectedId(items[0]?.id ?? "")
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => { cancelled = true }
-  }, [cacheId, noteId, open])
-
-  const selected = versions.find((version) => version.id === selectedId) ?? versions[0]
-  const changes = selected ? summarizeLineChanges(selected.content, currentContent) : null
-
-  return (
-    <Dialog onOpenChange={onOpenChange} open={open}>
-      <DialogContent className="note-history-dialog">
-        <DialogHeader>
-          <DialogTitle>本地版本历史</DialogTitle>
-          <DialogDescription>版本仅保存在当前设备，最多保留 30 个；恢复后会作为新的本地修改保存。</DialogDescription>
-        </DialogHeader>
-        {loading ? (
-          <div className="note-history-empty"><LoaderCircle className="animate-spin" /> 正在读取历史版本…</div>
-        ) : versions.length === 0 ? (
-          <div className="note-history-empty"><History /> 编辑并保存后，这里会出现修改前的版本。</div>
-        ) : (
-          <div className="note-history-layout">
-            <ScrollArea className="note-history-list">
-              {versions.map((version) => (
-                <button
-                  className="note-history-item"
-                  data-active={version.id === selected?.id}
-                  key={version.id}
-                  onClick={() => setSelectedId(version.id)}
-                  type="button"
-                >
-                  <strong>{new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(version.createdAt)}</strong>
-                  <span>{version.reason} · {version.content.length} 字符</span>
-                </button>
-              ))}
-            </ScrollArea>
-            <div className="note-history-preview">
-              <div className="note-history-summary">
-                <span>相对当前版本</span>
-                <span className="note-history-added">+{changes?.added ?? 0} 行</span>
-                <span className="note-history-removed">−{changes?.removed ?? 0} 行</span>
-              </div>
-              <pre>{selected?.content}</pre>
-            </div>
-          </div>
-        )}
-        <DialogFooter>
-          <Button onClick={() => onOpenChange(false)} variant="outline">关闭</Button>
-          <Button
-            disabled={!selected || selected.content === currentContent}
-            onClick={() => {
-              if (!selected || !window.confirm("恢复后，当前正文会先保存为一个历史版本。确认继续？")) return
-              onRestore(selected.content)
-              onOpenChange(false)
-            }}
-          >
-            恢复此版本
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function EditorLoadingState({ label }: { label: string }) {
   return (
     <div className="editor-loading" role="status" aria-live="polite">
@@ -1888,67 +1788,6 @@ function EditorLoadingState({ label }: { label: string }) {
         <strong>正在加载{label}</strong>
         <small>笔记内容已保留，组件准备完成后会自动显示。</small>
       </span>
-    </div>
-  )
-}
-
-type FormattingToolbarProps = {
-  attachmentBusy: boolean
-  canInsertAttachment: boolean
-  editorRef: RefObject<MarkdownEditorHandle | null>
-  mobile?: boolean
-  onFormat: (syntax: string) => void
-  onInsertFiles: (files: File[]) => Promise<void>
-}
-
-function FormattingToolbar({
-  attachmentBusy,
-  canInsertAttachment,
-  editorRef,
-  mobile = false,
-  onFormat,
-  onInsertFiles,
-}: FormattingToolbarProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null)
-
-  return (
-    <div className="formatting-toolbar" data-mobile={mobile}>
-      <FormatButton icon={Undo2} label="撤销（⌘/Ctrl+Z）" onClick={() => editorRef.current?.undo()} />
-      <FormatButton icon={Redo2} label="重做（⌘/Ctrl+Shift+Z）" onClick={() => editorRef.current?.redo()} />
-      <span className="toolbar-divider" />
-      <FormatButton label="二级标题" onClick={() => onFormat("\n## ")}>H2</FormatButton>
-      <FormatButton label="三级标题" onClick={() => onFormat("\n### ")}>H3</FormatButton>
-      <span className="toolbar-divider" />
-      <FormatButton icon={Bold} label="加粗" onClick={() => onFormat("**加粗文字**")} />
-      <FormatButton icon={Italic} label="斜体" onClick={() => onFormat("*斜体文字*")} />
-      <FormatButton icon={Quote} label="引用" onClick={() => onFormat("\n> ")} />
-      <FormatButton icon={List} label="无序列表" onClick={() => onFormat("\n- ")} />
-      <FormatButton icon={CheckCircle2} label="任务列表" onClick={() => onFormat("\n- [ ] ")} />
-      <FormatButton icon={Code2} label="代码" onClick={() => onFormat("\n```\n\n```\n")} />
-      <FormatButton icon={Link} label="链接" onClick={() => onFormat("[链接](https://)")} />
-      {canInsertAttachment ? (
-        <>
-          <FormatButton
-            busy={attachmentBusy}
-            icon={Image}
-            label="插入图片或附件"
-            onClick={() => fileInputRef.current?.click()}
-          />
-          <input
-            className="attachment-file-input"
-            multiple
-            onChange={(event) => {
-              const files = Array.from(event.target.files ?? [])
-              // 清空 value 才能连续两次选择同一个文件。
-              event.target.value = ""
-              if (files.length > 0) void onInsertFiles(files)
-            }}
-            ref={fileInputRef}
-            tabIndex={-1}
-            type="file"
-          />
-        </>
-      ) : null}
     </div>
   )
 }
@@ -1979,27 +1818,6 @@ function ImportMarkdownButton({ disabled, onImport }: { disabled: boolean; onImp
         type="file"
       />
     </>
-  )
-}
-
-type FormatButtonProps = {
-  busy?: boolean
-  children?: ReactNode
-  icon?: typeof List
-  label: string
-  onClick: () => void
-}
-
-function FormatButton({ busy = false, children, icon: Icon, label, onClick }: FormatButtonProps) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button aria-label={label} disabled={busy} onClick={onClick} type="button">
-          {busy ? <LoaderCircle className="animate-spin" /> : Icon ? <Icon /> : children}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
   )
 }
 
@@ -2608,70 +2426,6 @@ function MobileFolderActions({
   )
 }
 
-function MobileFolderActionSheet({
-  disabled,
-  folder,
-  mode,
-  onClose,
-  onDelete,
-  onOpen,
-  onRename,
-}: {
-  disabled: boolean
-  folder: VaultFolder | null
-  mode: "local" | "webdav" | null
-  onClose: () => void
-  onDelete: (folderPath: string) => void
-  onOpen: (folderPath: string) => void
-  onRename: (folderPath: string, nextName: string) => void
-}) {
-  const [view, setView] = useState<"delete" | "menu" | "rename">("menu")
-  const [name, setName] = useState("")
-
-  useEffect(() => {
-    setView("menu")
-    setName(folder?.label ?? "")
-  }, [folder])
-
-  if (!folder || !mode) return null
-
-  return (
-    <Dialog onOpenChange={(open) => { if (!open) onClose() }} open>
-      <DialogContent className="mobile-action-sheet" placement="bottom">
-        <DialogHeader>
-          <DialogTitle>{view === "menu" ? folder.label : view === "rename" ? "重命名文件夹" : `删除“${folder.label}”`}</DialogTitle>
-          <DialogDescription>
-            {view === "menu"
-              ? `${folder.count} 篇笔记 · 长按快捷操作`
-              : view === "rename"
-                ? mode === "local" ? "将重命名本地 Vault 目录。" : "重命名会先保存在本机，点击同步后更新坚果云。"
-                : mode === "local" ? "文件夹及其中内容会移入回收站。" : "目录中的笔记会进入待同步删除。"}
-          </DialogDescription>
-        </DialogHeader>
-        {view === "menu" ? (
-          <div className="mobile-action-list">
-            <button onClick={() => onOpen(folder.path)} type="button"><FolderOpen /><span>打开文件夹</span><ChevronRight /></button>
-            <button disabled={disabled} onClick={() => setView("rename")} type="button"><PencilLine /><span>重命名</span><ChevronRight /></button>
-            <button className="mobile-action-destructive" disabled={disabled} onClick={() => setView("delete")} type="button"><Trash2 /><span>删除文件夹</span><ChevronRight /></button>
-          </div>
-        ) : view === "rename" ? (
-          <Input autoFocus aria-label="新文件夹名称" onChange={(event) => setName(event.target.value)} value={name} />
-        ) : null}
-        {view !== "menu" ? (
-          <DialogFooter>
-            <Button onClick={() => setView("menu")} variant="ghost">返回</Button>
-            {view === "rename" ? (
-              <Button disabled={!name.trim() || name.trim() === folder.label} onClick={() => { onClose(); onRename(folder.path, name) }}>保存</Button>
-            ) : (
-              <Button disabled={disabled} onClick={() => { onClose(); onDelete(folder.path) }} variant="destructive">确认删除</Button>
-            )}
-          </DialogFooter>
-        ) : null}
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 type MobileNoteListProps = WorkspaceProps & {
   initialScrollTop: number
   navigationOpen: boolean
@@ -2829,85 +2583,6 @@ function MobileNoteList(props: MobileNoteListProps) {
       />
       {props.canCreateNote ? <Button aria-label={props.selectedFolder ? `在${props.selectedFolder}中新建笔记` : "在根目录新建笔记"} className="mobile-fab" disabled={props.isCreatingNote} onClick={props.onCreateNote} size="icon-lg" title={props.selectedFolder ? `新建到：${props.selectedFolder}` : "新建到：根目录"}>{props.isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}</Button> : null}
     </section>
-  )
-}
-
-function MobileNoteActionSheet({
-  disabled,
-  folders,
-  note,
-  onClose,
-  onDelete,
-  onMove,
-  onOpen,
-  onRename,
-}: {
-  disabled: boolean
-  folders: VaultFolder[]
-  note: Note | null
-  onClose: () => void
-  onDelete: (noteId: string) => void
-  onMove: (noteId: string, folderPath: string | null) => void
-  onOpen: (note: Note) => void
-  onRename: (noteId: string, title: string) => void
-}) {
-  const [view, setView] = useState<"delete" | "menu" | "move" | "rename">("menu")
-  const [title, setTitle] = useState("")
-
-  useEffect(() => {
-    setView("menu")
-    setTitle(note?.title ?? "")
-  }, [note])
-
-  if (!note) return null
-  const canManage = Boolean(note.remotePath && !note.readOnly && !disabled)
-  const currentFolder = note.folder === "根目录" ? null : note.folder ?? null
-  const moveTargets = folders.filter((folder) => folder.path !== "根目录")
-
-  return (
-    <Dialog onOpenChange={(open) => { if (!open) onClose() }} open>
-      <DialogContent className="mobile-action-sheet" placement="bottom">
-        <DialogHeader>
-          <DialogTitle>{view === "menu" ? note.title || "未命名笔记" : view === "rename" ? "重命名笔记" : view === "move" ? "移动到文件夹" : "删除笔记"}</DialogTitle>
-          <DialogDescription>
-            {view === "menu"
-              ? `${note.updatedAt} · ${note.folder ?? "根目录"}`
-              : view === "rename" ? "文件名会随标题一起更新。"
-                : view === "move" ? "选择目标目录，修改会先保存在本机。"
-                  : note.source === "webdav" ? "笔记将进入待同步删除，可从回收站恢复。" : "笔记将移入回收站。"}
-          </DialogDescription>
-        </DialogHeader>
-        {view === "menu" ? (
-          <div className="mobile-action-list">
-            <button onClick={() => onOpen(note)} type="button"><FileText /><span>打开笔记</span><ChevronRight /></button>
-            <button disabled={!canManage} onClick={() => setView("rename")} type="button"><PencilLine /><span>重命名</span><ChevronRight /></button>
-            <button disabled={!canManage} onClick={() => setView("move")} type="button"><FolderOpen /><span>移动到文件夹</span><ChevronRight /></button>
-            <button className="mobile-action-destructive" disabled={!canManage} onClick={() => setView("delete")} type="button"><Trash2 /><span>删除笔记</span><ChevronRight /></button>
-          </div>
-        ) : view === "rename" ? (
-          <Input autoFocus aria-label="新笔记标题" onChange={(event) => setTitle(event.target.value)} value={title} />
-        ) : view === "move" ? (
-          <div className="mobile-move-targets">
-            <button disabled={currentFolder === null} onClick={() => { onClose(); onMove(note.id, null) }} type="button"><Folder /><span>根目录</span>{currentFolder === null ? <Check /> : <ChevronRight />}</button>
-            {moveTargets.map((folder) => (
-              <button disabled={currentFolder === folder.path} key={folder.path} onClick={() => { onClose(); onMove(note.id, folder.path) }} type="button">
-                <Folder /><span>{folder.path}</span>{currentFolder === folder.path ? <Check /> : <ChevronRight />}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        {view === "rename" || view === "delete" ? (
-          <DialogFooter>
-            <Button onClick={() => setView("menu")} variant="ghost">返回</Button>
-            {view === "rename" ? (
-              <Button disabled={!title.trim() || title.trim() === note.title} onClick={() => { onClose(); onRename(note.id, title) }}>保存</Button>
-            ) : (
-              <Button disabled={!canManage} onClick={() => { onClose(); onDelete(note.id) }} variant="destructive">确认删除</Button>
-            )}
-          </DialogFooter>
-        ) : view === "move" ? <DialogFooter><Button onClick={() => setView("menu")} variant="ghost">返回</Button></DialogFooter> : null}
-      </DialogContent>
-    </Dialog>
   )
 }
 
