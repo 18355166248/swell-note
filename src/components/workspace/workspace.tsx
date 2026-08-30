@@ -30,6 +30,7 @@ import {
   CircleHelp,
   Cloud,
   CloudOff,
+  History,
   Code2,
   Database,
   FileText,
@@ -107,6 +108,7 @@ import {
   type VaultFolder,
 } from "@/services/search/vault-folders"
 import { buildNotePreview } from "@/services/markdown/note-preview"
+import { listNoteVersions, summarizeLineChanges, type NoteVersion } from "@/services/history/note-history"
 import { extractNoteOutline } from "@/services/markdown/note-outline"
 import { buildMarkdownNoteLink, buildRelativeMarkdownHref } from "@/services/markdown/markdown-link"
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
@@ -192,6 +194,7 @@ type WorkspaceProps = {
   onResolveConflict: (strategy: "local" | "merge" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
+  onRestoreNoteVersion: (content: string) => void
   onToggleNoteTask?: (noteId: string, line: number, checked: boolean) => void
   onSelectFolder: (folder: string | null) => void
   onSelectLibraryView: (view: LibraryView) => void
@@ -435,6 +438,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         />
       ) : (
         <NoteEditor
+          activeCacheId={props.activeCacheId}
           backlinks={props.backlinks}
           onSelectFolder={props.onSelectFolder}
           canInsertAttachment={props.canInsertAttachment}
@@ -465,6 +469,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           onResolveConflict={props.onResolveConflict}
           onResolveAsset={props.onResolveAsset}
           onResolveWikiNote={props.onResolveWikiNote}
+          onRestoreNoteVersion={props.onRestoreNoteVersion}
           onSync={props.onRefreshVault}
           onToggleTask={props.onToggleNoteTask
             ? (line, checked) => {
@@ -1243,6 +1248,7 @@ function NoteListRow({ active, note, onLongPress, onSelect }: NoteListRowProps) 
 }
 
 type NoteEditorProps = {
+  activeCacheId: string | null
   backLabel?: string
   onSelectFolder?: (folder: string) => void
   backlinks: Note[]
@@ -1270,6 +1276,7 @@ type NoteEditorProps = {
   onResolveConflict: (strategy: "local" | "merge" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
+  onRestoreNoteVersion: (content: string) => void
   onSelectNote: (note: Note) => void
   onSync: () => void
   onToggleTask?: (line: number, checked: boolean) => void
@@ -1279,7 +1286,7 @@ type NoteEditorProps = {
   wikiLinkNotes: Note[]
 }
 
-function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
+function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
   const isCanvas = note.format === "canvas"
   const isExcalidraw = isExcalidrawMarkdown(note.content)
@@ -1291,6 +1298,7 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
   const previewing = isSpecialPreview || noteViewMode === "preview"
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false)
   const [renameTitle, setRenameTitle] = useState(note.title)
   const [cursorPosition, setCursorPosition] = useState({ column: 1, line: 1 })
   const [findOpen, setFindOpen] = useState(false)
@@ -1513,6 +1521,9 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
                 <DropdownMenuItem onClick={onOpenSourceFile}>打开 / 下载 Excalidraw 原始文件</DropdownMenuItem>
               ) : null}
               <DropdownMenuItem onClick={onExportNote}>导出 Markdown 文件</DropdownMenuItem>
+              <DropdownMenuItem disabled={!activeCacheId} onClick={() => setHistoryDialogOpen(true)}>
+                <History /> 本地版本历史
+              </DropdownMenuItem>
               {canManageNote ? (
                 <>
                   <DropdownMenuItem onClick={() => { setRenameTitle(note.title); setRenameDialogOpen(true) }}>重命名</DropdownMenuItem>
@@ -1739,6 +1750,14 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
           ) : null}
         </footer>
       ) : null}
+      <NoteVersionHistoryDialog
+        cacheId={activeCacheId}
+        currentContent={note.content}
+        noteId={note.id}
+        onOpenChange={setHistoryDialogOpen}
+        onRestore={onRestoreNoteVersion}
+        open={historyDialogOpen}
+      />
       <Dialog onOpenChange={setDeleteDialogOpen} open={deleteDialogOpen}>
         <DialogContent>
           <DialogHeader>
@@ -1765,6 +1784,99 @@ function NoteEditor({ backLabel = "全部笔记", backlinks, canInsertAttachment
         </DialogContent>
       </Dialog>
     </article>
+  )
+}
+
+function NoteVersionHistoryDialog({
+  cacheId,
+  currentContent,
+  noteId,
+  onOpenChange,
+  onRestore,
+  open,
+}: {
+  cacheId: string | null
+  currentContent: string
+  noteId: string
+  onOpenChange: (open: boolean) => void
+  onRestore: (content: string) => void
+  open: boolean
+}) {
+  const [versions, setVersions] = useState<NoteVersion[]>([])
+  const [selectedId, setSelectedId] = useState("")
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!open || !cacheId) return
+    let cancelled = false
+    setLoading(true)
+    void listNoteVersions(cacheId, noteId)
+      .then((items) => {
+        if (cancelled) return
+        setVersions(items)
+        setSelectedId(items[0]?.id ?? "")
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [cacheId, noteId, open])
+
+  const selected = versions.find((version) => version.id === selectedId) ?? versions[0]
+  const changes = selected ? summarizeLineChanges(selected.content, currentContent) : null
+
+  return (
+    <Dialog onOpenChange={onOpenChange} open={open}>
+      <DialogContent className="note-history-dialog">
+        <DialogHeader>
+          <DialogTitle>本地版本历史</DialogTitle>
+          <DialogDescription>版本仅保存在当前设备，最多保留 30 个；恢复后会作为新的本地修改保存。</DialogDescription>
+        </DialogHeader>
+        {loading ? (
+          <div className="note-history-empty"><LoaderCircle className="animate-spin" /> 正在读取历史版本…</div>
+        ) : versions.length === 0 ? (
+          <div className="note-history-empty"><History /> 编辑并保存后，这里会出现修改前的版本。</div>
+        ) : (
+          <div className="note-history-layout">
+            <ScrollArea className="note-history-list">
+              {versions.map((version) => (
+                <button
+                  className="note-history-item"
+                  data-active={version.id === selected?.id}
+                  key={version.id}
+                  onClick={() => setSelectedId(version.id)}
+                  type="button"
+                >
+                  <strong>{new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(version.createdAt)}</strong>
+                  <span>{version.reason} · {version.content.length} 字符</span>
+                </button>
+              ))}
+            </ScrollArea>
+            <div className="note-history-preview">
+              <div className="note-history-summary">
+                <span>相对当前版本</span>
+                <span className="note-history-added">+{changes?.added ?? 0} 行</span>
+                <span className="note-history-removed">−{changes?.removed ?? 0} 行</span>
+              </div>
+              <pre>{selected?.content}</pre>
+            </div>
+          </div>
+        )}
+        <DialogFooter>
+          <Button onClick={() => onOpenChange(false)} variant="outline">关闭</Button>
+          <Button
+            disabled={!selected || selected.content === currentContent}
+            onClick={() => {
+              if (!selected || !window.confirm("恢复后，当前正文会先保存为一个历史版本。确认继续？")) return
+              onRestore(selected.content)
+              onOpenChange(false)
+            }}
+          >
+            恢复此版本
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1951,6 +2063,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
           />
         ) : (
           <NoteEditor
+            activeCacheId={props.activeCacheId}
             backlinks={props.backlinks}
             cloudConnected={props.cloudConnected}
             canManageNote={Boolean(
@@ -1982,6 +2095,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             onResolveAsset={props.onResolveAsset}
             onResolveConflict={props.onResolveConflict}
             onResolveWikiNote={props.onResolveWikiNote}
+            onRestoreNoteVersion={props.onRestoreNoteVersion}
             onSelectNote={props.onSelectNote}
             onSync={props.onRefreshVault}
             onToggleTask={props.onToggleNoteTask

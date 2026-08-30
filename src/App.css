@@ -1024,3 +1024,103 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 @media (min-width: 1280px) {
   .desktop-workspace { grid-template-columns: 64px var(--library-pane-width,230px) var(--note-list-pane-width,320px) minmax(0,1fr); }
 }
+.note-history-dialog {
+  width: min(920px, calc(100vw - 32px));
+  max-width: 920px;
+}
+
+.note-history-layout {
+  display: grid;
+  grid-template-columns: minmax(190px, 240px) minmax(0, 1fr);
+  min-height: 420px;
+  max-height: min(68vh, 680px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+}
+
+.note-history-list {
+  border-right: 1px solid var(--border);
+}
+
+.note-history-item {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--foreground);
+  text-align: left;
+}
+
+.note-history-item:hover,
+.note-history-item[data-active="true"] {
+  background: var(--accent);
+}
+
+.note-history-item span,
+.note-history-summary {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.note-history-preview {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.note-history-summary {
+  display: flex;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.note-history-added { color: #16a34a; }
+.note-history-removed { color: #dc2626; }
+
+.note-history-preview pre {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  padding: 16px;
+  background: var(--muted);
+  color: var(--foreground);
+  font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.note-history-empty {
+  display: flex;
+  min-height: 240px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--muted-foreground);
+}
+
+@media (max-width: 640px) {
+  .note-history-dialog {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 32px);
+  }
+
+  .note-history-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 150px minmax(280px, 1fr);
+    max-height: calc(100dvh - 220px);
+  }
+
+  .note-history-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}

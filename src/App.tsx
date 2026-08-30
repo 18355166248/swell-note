@@ -97,6 +97,7 @@ import {
   type MarkdownPathMove,
 } from "@/services/markdown/markdown-link-rewrite"
 import { buildNotePreview } from "@/services/markdown/note-preview"
+import { remapNoteVersions, saveNoteVersion } from "@/services/history/note-history"
 import { exportMarkdownDocument } from "@/services/export/markdown-export"
 import { MAX_MARKDOWN_IMPORT_BYTES, sanitizeImportedMarkdownName, uniqueMarkdownPath } from "@/services/import/markdown-import"
 import {
@@ -685,6 +686,16 @@ function App() {
       setVaultError("正在同步当前笔记库，请等待完成后继续编辑")
       return
     }
+    if (typeof patch.content === "string" && patch.content !== activeNote.content && activeCacheMeta) {
+      // 自动历史保存的是“本次修改前”的版本；服务层会按五分钟窗口合并连续输入，避免逐键生成快照。
+      void saveNoteVersion({
+        cacheId: activeCacheMeta.id,
+        content: activeNote.content,
+        noteId: activeNote.id,
+        reason: "编辑前",
+        title: activeNote.title,
+      }).catch(() => undefined)
+    }
     const indexedPatch: Partial<Note> = typeof patch.content === "string"
       ? (() => {
           const frontmatter = extractFrontmatter(patch.content)
@@ -789,6 +800,10 @@ function App() {
     }
     try {
       const content = setMarkdownTaskChecked(note.content, task.line, checked)
+      if (activeCacheMeta && content !== note.content) {
+        void saveNoteVersion({ cacheId: activeCacheMeta.id, content: note.content, noteId: note.id, reason: "编辑前", title: note.title })
+          .catch(() => undefined)
+      }
       setNotes((current) => current.map((candidate) => candidate.id === note.id
         ? {
             ...candidate,
@@ -827,6 +842,10 @@ function App() {
     }
     const separator = target.content.endsWith("\n") ? "" : "\n"
     const content = `${target.content}${separator}\n- [ ] ${text}\n`
+    if (activeCacheMeta) {
+      void saveNoteVersion({ cacheId: activeCacheMeta.id, content: target.content, noteId: target.id, reason: "编辑前", title: target.title })
+        .catch(() => undefined)
+    }
     // 快速待办仍写回 Markdown 源文件，保证其他客户端无需理解专有数据库也能读取。
     setNotes((current) => current.map((candidate) => candidate.id === target.id
       ? {
@@ -1057,6 +1076,10 @@ function App() {
     const note = notesRef.current.find((candidate) => candidate.id === noteId)
     if (!note || !syntax || note.readOnly) return
     const content = `${note.content}${syntax}`
+    if (activeCacheMeta) {
+      void saveNoteVersion({ cacheId: activeCacheMeta.id, content: note.content, noteId, reason: "编辑前", title: note.title })
+        .catch(() => undefined)
+    }
     setNotes((current) => current.map((candidate) => candidate.id === noteId
       ? {
           ...candidate,
@@ -2144,6 +2167,7 @@ function App() {
       if (activeCacheMeta?.sourceKind === "webdav") {
         void remapVaultAttachmentNoteId(activeCacheMeta.id, note.id, nextId)
       }
+      if (activeCacheMeta) void remapNoteVersions(activeCacheMeta.id, note.id, nextId)
       if (unavailableCount > 0) setVaultError(`已移动；另有 ${unavailableCount} 篇未缓存正文，暂无法检查其中的相对链接`)
       if (navigateAfter) navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
       return
@@ -2184,6 +2208,7 @@ function App() {
       if (activeCacheMeta?.sourceKind === "webdav") {
         void remapVaultAttachmentNoteId(activeCacheMeta.id, note.id, nextId)
       }
+      if (activeCacheMeta) void remapNoteVersions(activeCacheMeta.id, note.id, nextId)
       if (unavailableCount > 0) setVaultError(`已移动；另有 ${unavailableCount} 篇未缓存正文，暂无法检查其中的相对链接`)
       if (navigateAfter) navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
       return
@@ -2253,6 +2278,7 @@ function App() {
         return next
       })
       if (navigateAfter || activeNoteId === note.id) setActiveNoteId(nextId)
+      if (activeCacheMeta) void remapNoteVersions(activeCacheMeta.id, note.id, nextId)
       if (unavailableCount > 0) setVaultError(`已移动；另有 ${unavailableCount} 篇正文不可读取，暂无法检查其中的相对链接`)
       if (navigateAfter) navigate(`/notes/${encodeURIComponent(nextId)}`, { replace: true })
     } catch (error) {
@@ -2264,6 +2290,20 @@ function App() {
 
   const moveActiveNote = (folderPath: string | null, requestedTitle?: string) =>
     moveNote(activeNoteId, folderPath, requestedTitle)
+
+  const restoreActiveNoteVersion = (content: string) => {
+    if (!activeNote || content === activeNote.content) return
+    if (activeCacheMeta) {
+      void saveNoteVersion({
+        cacheId: activeCacheMeta.id,
+        content: activeNote.content,
+        noteId: activeNote.id,
+        reason: "恢复前",
+        title: activeNote.title,
+      }).catch(() => undefined)
+    }
+    updateActiveNote({ content, preview: buildNotePreview(content, activeNote.format) })
+  }
 
   const createLocalFolder = async (requestedName: string, parentFolder: string | null) => {
     const adapter = vaultSession
@@ -2410,6 +2450,7 @@ function App() {
         if (!plan || !note.remotePath) continue
         revisionByPathRef.current.delete(note.remotePath)
         revisionByPathRef.current.set(plan.remotePath, writtenRepairs.get(note.id)?.revision ?? note.revision)
+        if (activeCacheMeta) void remapNoteVersions(activeCacheMeta.id, note.id, plan.id)
       }
       setVaultDirectories((current) => current.map((path) =>
         replaceFolderPrefix(path, folderPath, targetFolder),
@@ -2581,6 +2622,11 @@ function App() {
     if (activeCacheMeta?.sourceKind === "webdav") {
       for (const [previousNoteId, plan] of plans) {
         void remapVaultAttachmentNoteId(activeCacheMeta.id, previousNoteId, plan.id)
+      }
+    }
+    if (activeCacheMeta) {
+      for (const [previousNoteId, plan] of plans) {
+        void remapNoteVersions(activeCacheMeta.id, previousNoteId, plan.id)
       }
     }
     const firstPlan = plans.values().next().value as { folder: string } | undefined
@@ -3233,6 +3279,7 @@ function App() {
             onResolveAsset={resolveActiveAsset}
             onLoadWikiNote={loadWikiNote}
             onResolveWikiNote={resolveWikiNote}
+            onRestoreNoteVersion={restoreActiveNoteVersion}
             onToggleNoteTask={(noteId, line, checked) => toggleTask({
               checked,
               id: `${noteId}:${line}`,
