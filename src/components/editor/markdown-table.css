@@ -1,6 +1,6 @@
 /* 表格 Widget 的视觉规则跟随实现就近维护，避免编辑器全局样式继续承担组件细节。 */
 .markdown-editor-shell .cm-content.cm-lineWrapping { width: 100%; min-width: 0; }
-.markdown-editor-shell .cm-md-table-wrap { box-sizing: border-box; max-width: 100%; min-width: 0; margin: 8px 0; cursor: text; border: 1px solid var(--border); border-radius: 9px; background: white; }
+.markdown-editor-shell .cm-md-table-wrap { box-sizing: border-box; max-width: 100%; min-width: 0; margin: 8px 0; cursor: text; border: 1px solid var(--border); border-radius: 9px; background: var(--background); }
 .markdown-editor-shell .cm-md-table-wrap[data-width-mode="content"] { width: fit-content; max-width: 100%; }
 .markdown-editor-shell .cm-md-table-wrap[data-width-mode="full"],
 .markdown-editor-shell .cm-md-table-wrap[data-width-mode="equal"],
@@ -21,7 +21,7 @@
 .markdown-editor-shell .cm-md-table-menu > summary { min-height: 26px; border-radius: 5px; padding: 5px 7px; color: var(--muted-foreground); font-size: 11px; cursor: pointer; user-select: none; }
 .markdown-editor-shell .cm-md-table-menu[open] > summary,
 .markdown-editor-shell .cm-md-table-menu > summary:hover { background: var(--blue-soft); color: var(--primary); }
-.markdown-editor-shell .cm-md-table-menu-panel { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; display: grid; min-width: 112px; gap: 2px; border: 1px solid var(--border); border-radius: 8px; background: white; padding: 5px; box-shadow: 0 10px 30px rgb(15 23 42 / 14%); }
+.markdown-editor-shell .cm-md-table-menu-panel { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; display: grid; min-width: 112px; gap: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--popover); color: var(--popover-foreground); padding: 5px; box-shadow: 0 10px 30px rgb(15 23 42 / 14%); }
 .markdown-editor-shell .cm-md-table-menu-panel button { min-height: 30px; text-align: left; white-space: nowrap; }
 .markdown-editor-shell .cm-md-table-selection-status { min-width: 0; overflow: hidden; color: var(--muted-foreground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .markdown-editor-shell .cm-md-table { border-collapse: collapse; font-size: .95em; line-height: 1.6; }

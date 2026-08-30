@@ -14,7 +14,22 @@ const LazyExcalidraw = lazy(async () => {
 
 const DEFAULT_ZOOM = { value: 1 as NormalizedZoomValue } as const
 
+function useDocumentColorTheme() {
+  const getTheme = () => document.documentElement.classList.contains("dark") ? "dark" : "light"
+  const [theme, setTheme] = useState<"dark" | "light">(getTheme)
+
+  useEffect(() => {
+    // 外观模式由应用根节点统一维护；监听 class 可同时覆盖手动切换和系统主题实时变化。
+    const observer = new MutationObserver(() => setTheme(getTheme()))
+    observer.observe(document.documentElement, { attributeFilter: ["class"], attributes: true })
+    return () => observer.disconnect()
+  }, [])
+
+  return theme
+}
+
 export default function ExcalidrawPreview({ content, editable = false, immersive = false, onContentChange }: NoteRendererPluginProps) {
+  const theme = useDocumentColorTheme()
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
   const contentRef = useRef(content)
   const onContentChangeRef = useRef(onContentChange)
@@ -93,6 +108,7 @@ export default function ExcalidrawPreview({ content, editable = false, immersive
               saveTimerRef.current = window.setTimeout(flushPendingScene, 450)
             }}
             onPointerDown={() => { userInteractedRef.current = true }}
+            theme={theme}
             viewModeEnabled={!editable}
           />
         </Suspense>

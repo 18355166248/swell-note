@@ -427,7 +427,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .dark .note-view-mode-button[aria-pressed="true"] { background: var(--card); }
 
 /* 桌面端使用稳定的多栏信息架构，避免不同宽度下跳动和丢失当前上下文。 */
-.navigation-rail { display: flex; flex-direction: column; align-items: center; border-right: 1px solid var(--border); background: #fff; padding: 18px 0 14px; }
+.navigation-rail { display: flex; flex-direction: column; align-items: center; border-right: 1px solid var(--border); background: var(--background); padding: 18px 0 14px; }
 .rail-logo { width: 34px; height: 34px; object-fit: contain; margin-bottom: 32px; }
 .rail-navigation, .rail-footer { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .rail-footer { margin-top: auto; }
@@ -439,10 +439,10 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 
 .library-panel, .note-list-panel, .note-editor { display: flex; min-width: 0; min-height: 0; flex-direction: column; }
 .library-panel { border-right: 0; background: var(--panel-soft); }
-.note-list-panel { border-right: 0; background: white; }
-.note-editor { background: white; }
+.note-list-panel { border-right: 0; background: var(--background); }
+.note-editor { background: var(--background); }
 .desktop-workspace[data-immersive-excalidraw="true"] { grid-template-columns: 64px minmax(250px,290px) minmax(0,1fr); }
-.note-editor[data-excalidraw="true"] { overflow: hidden; background: #fff; }
+.note-editor[data-excalidraw="true"] { overflow: hidden; background: var(--background); }
 .note-editor[data-excalidraw="true"] .editor-titlebar { min-height: 46px; border-color: #343438; background: #242426; color: #d8d8dc; }
 .note-editor[data-excalidraw="true"] .editor-titlebar button { color: #d8d8dc; }
 .note-editor[data-excalidraw="true"] .editor-titlebar button:hover { background: rgb(255 255 255 / 10%); color: #fff; }
@@ -746,7 +746,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .note-renderer-loading { display: grid; min-height: 420px; place-items: center; color: var(--muted-foreground); }
 .note-renderer-error { border: 1px solid color-mix(in oklab,var(--destructive) 25%,var(--border)); border-radius: 10px; background: color-mix(in oklab,var(--destructive) 7%,white); padding: 20px; color: var(--destructive); }
 .excalidraw-plugin { width: 100%; min-width: 0; }
-.excalidraw-plugin-canvas { width: 100%; height: clamp(440px, 68dvh, 760px); min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
+.excalidraw-plugin-canvas { width: 100%; height: clamp(440px, 68dvh, 760px); min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--background); }
 .excalidraw-plugin-canvas .excalidraw { width: 100%; height: 100%; }
 .excalidraw-plugin-source { width: 100%; min-width: 0; max-width: 100%; margin-top: 16px; overflow: hidden; }
 .excalidraw-plugin-source summary { cursor: pointer; color: var(--muted-foreground); }
