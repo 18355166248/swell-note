@@ -20,13 +20,23 @@ const secretGroups = {
   Android: ["ANDROID_KEY_BASE64", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD"],
   iOS: ["IOS_CERTIFICATE", "IOS_CERTIFICATE_PASSWORD", "IOS_MOBILE_PROVISION", "KEYCHAIN_PASSWORD", "APPLE_TEAM_ID"],
   macOS: ["APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "KEYCHAIN_PASSWORD"],
-  updater: ["TAURI_SIGNING_PRIVATE_KEY", "TAURI_UPDATER_PUBLIC_KEY"],
+  updater: ["TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD", "TAURI_UPDATER_PUBLIC_KEY"],
   Windows: ["WINDOWS_CERTIFICATE", "WINDOWS_CERTIFICATE_PASSWORD", "WINDOWS_CERTIFICATE_THUMBPRINT"],
 }
 
+const onlyArgument = process.argv.find((argument) => argument.startsWith("--only="))
+const selectedGroup = onlyArgument?.slice("--only=".length)
+if (selectedGroup && !Object.hasOwn(secretGroups, selectedGroup)) {
+  throw new Error(`未知发布平台：${selectedGroup}；可选值为 ${Object.keys(secretGroups).join(", ")}`)
+}
+const groups = selectedGroup
+  ? { [selectedGroup]: secretGroups[selectedGroup] }
+  : secretGroups
+const strict = process.argv.includes("--strict")
+
 console.log(`版本一致：${expected}`)
-for (const [platform, names] of Object.entries(secretGroups)) {
+for (const [platform, names] of Object.entries(groups)) {
   const missing = names.filter((name) => !process.env[name]?.trim())
   console.log(`${platform}：${missing.length === 0 ? "凭据齐全" : `缺少 ${missing.join(", ")}`}`)
-  if (process.argv.includes("--strict") && missing.length > 0) process.exitCode = 1
+  if (strict && missing.length > 0) process.exitCode = 1
 }

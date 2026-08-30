@@ -65,11 +65,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Require updater signing secrets
         if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
-        run: test -n "$TAURI_SIGNING_PRIVATE_KEY" && test -n "$TAURI_UPDATER_PUBLIC_KEY"
+        run: pnpm release:check -- --strict --only=updater
       - name: Require macOS signing and notarization secrets
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'macos-latest'
         env:
@@ -79,7 +79,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: test -n "$APPLE_CERTIFICATE" && test -n "$APPLE_CERTIFICATE_PASSWORD" && test -n "$APPLE_ID" && test -n "$APPLE_PASSWORD" && test -n "$APPLE_TEAM_ID" && test -n "$KEYCHAIN_PASSWORD"
+        run: pnpm release:check -- --strict --only=macOS
       - name: Import macOS Developer ID certificate
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'macos-latest'
         env:
@@ -99,12 +99,11 @@ jobs:
           echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> "$GITHUB_ENV"
       - name: Require Windows signing secrets
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
-        shell: bash
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
-        run: test -n "$WINDOWS_CERTIFICATE" && test -n "$WINDOWS_CERTIFICATE_PASSWORD" && test -n "$WINDOWS_CERTIFICATE_THUMBPRINT"
+        run: pnpm release:check -- --strict --only=Windows
       - name: Import Windows signing certificate
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
         shell: pwsh
@@ -183,7 +182,7 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: test -n "$ANDROID_KEY_ALIAS" && test -n "$ANDROID_KEY_BASE64" && test -n "$ANDROID_KEY_PASSWORD"
+        run: pnpm release:check -- --strict --only=Android
       - name: Configure Android signing
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -243,7 +242,7 @@ jobs:
           IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: test -n "$IOS_CERTIFICATE" && test -n "$IOS_CERTIFICATE_PASSWORD" && test -n "$IOS_MOBILE_PROVISION" && test -n "$KEYCHAIN_PASSWORD" && test -n "$APPLE_TEAM_ID"
+        run: pnpm release:check -- --strict --only=iOS
       - name: Import iOS distribution certificate and profile
         if: startsWith(github.ref, 'refs/tags/')
         env:

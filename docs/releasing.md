@@ -63,4 +63,29 @@ Android 和 iOS 在标签发布时会强制检查并导入发布证书，缺失�
 
 标签工作流会生成只在 CI 使用的 `tauri.release.conf.json` 和更新签名产物；普通本地构建不需要私钥，也不会伪装成可自动更新的正式安装包。更新元数据由 GitHub Release 的 `latest.json` 提供。
 
-发布前可运行 `pnpm release:check` 检查四处版本号和各平台凭据名称；在 CI 或安全的本机环境中追加 `-- --strict` 可让缺少任一正式凭据时返回失败。脚本只判断凭据是否存在，不会输出凭据内容。
+## 发布前凭据检查
+
+发布脚本只判断环境变量是否存在，不会输出凭据内容，也不会把凭据写入仓库。建议先执行：
+
+```bash
+# 日常检查：版本不一致会失败，缺少凭据只提示
+pnpm release:check
+
+# 正式发布机 / CI：任何平台缺少凭据都会失败
+pnpm release:check -- --strict
+
+# 只检查一个构建任务；名称区分大小写
+pnpm release:check -- --strict --only=macOS
+pnpm release:check -- --strict --only=Windows
+pnpm release:check -- --strict --only=Android
+pnpm release:check -- --strict --only=iOS
+pnpm release:check -- --strict --only=updater
+```
+
+GitHub Actions 的标签发布会在导入证书之前调用同一检查脚本，各任务只读取自己所需的 Secrets。重点确认：
+
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 与生成更新私钥时使用的密码一致；错误或遗漏会导致安装包已经构建但更新签名失败。
+- `APPLE_CERTIFICATE` 用于 macOS Developer ID，`IOS_CERTIFICATE` 用于 iOS Distribution，两者不要混用。
+- `APPLE_PASSWORD` 应使用 Apple ID 的 App 专用密码，不是登录密码。
+- Android、Apple、Windows 的 Base64 证书内容应保持单行；原始证书和私钥另行离线备份。
+- 发布前用 `v<package.json version>` 创建标签，例如当前 `0.1.0` 对应 `v0.1.0`。
