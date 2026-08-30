@@ -14,6 +14,7 @@
 .markdown-editor-shell .cm-md-table-toolbar button:disabled:hover { background: transparent; color: var(--muted-foreground); }
 .markdown-editor-shell .cm-md-table-toolbar [data-table-action="delete-row"] { margin-left: 4px; }
 .markdown-editor-shell .cm-md-table-toolbar [data-table-action^="delete"]:not(:disabled):hover { background: #fff0f0; color: #c93636; }
+.dark .markdown-editor-shell .cm-md-table-toolbar [data-table-action^="delete"]:not(:disabled):hover { background: color-mix(in oklab,var(--destructive) 16%,var(--background)); color: var(--destructive); }
 .markdown-editor-shell .cm-md-table-toolbar [data-table-align="left"] { margin-left: 4px; }
 .markdown-editor-shell .cm-md-table-toolbar [data-table-vertical="top"] { margin-left: 4px; }
 .markdown-editor-shell .cm-md-table-toolbar [data-table-vertical][data-active="true"] { background: var(--blue-soft); color: var(--primary); }

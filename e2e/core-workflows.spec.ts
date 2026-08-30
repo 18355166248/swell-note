@@ -126,4 +126,23 @@ test.describe("核心笔记流程", () => {
     await expect(workspace.getByText("第一篇", { exact: true }).first()).toBeVisible()
     await expect(search).not.toBeFocused()
   })
+
+  test("深色模式刷新后保持且主要工作区没有浅色断层", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedCachedVault(page)
+    await page.evaluate(() => {
+      localStorage.setItem("swell-note:ui-preferences:v1", JSON.stringify({ colorMode: "dark", noteViewMode: "read" }))
+    })
+    await page.reload()
+
+    await expect(page.locator("html")).toHaveClass(/dark/)
+    await expect(page.locator("html")).toHaveCSS("color-scheme", "dark")
+    for (const selector of [".navigation-rail", ".note-list-panel", ".note-editor"]) {
+      await expect(page.locator(selector)).not.toHaveCSS("background-color", "rgb(255, 255, 255)")
+    }
+
+    await page.goto("/#/settings/storage")
+    await expect(page.locator(".settings-route-shell")).not.toHaveCSS("background-color", "rgb(255, 255, 255)")
+    await expect(page.getByRole("heading", { name: "本机数据状态" })).toBeVisible()
+  })
 })

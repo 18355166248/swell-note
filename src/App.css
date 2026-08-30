@@ -353,6 +353,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .maintenance-card-list section { display: flex; min-height: 72px; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
 .maintenance-card-list strong, .maintenance-card-list small { display: block; }
 .maintenance-card-list small { margin-top: 5px; color: var(--muted-foreground); font-size: 11px; line-height: 1.5; }
+.maintenance-card-list progress { width: min(320px,100%); height: 6px; overflow: hidden; border: 0; border-radius: 999px; background: var(--muted); accent-color: var(--primary); }
 .maintenance-message { margin: 14px 0 0; color: var(--muted-foreground); font-size: 12px; }
 .settings-form-grid { display: grid; gap: 20px; }
 .settings-field { display: grid; gap: 8px; }
@@ -425,6 +426,53 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .dark .excalidraw-plugin-source pre,
 .dark .markdown-preview pre { background: var(--muted); }
 .dark .note-view-mode-button[aria-pressed="true"] { background: var(--card); }
+.dark .app-crash-icon,
+.dark .app-initialization-state[data-status="error"] .app-initialization-icon,
+.dark .sync-problem-icon { background: color-mix(in oklab,var(--destructive) 16%,var(--background)); color: oklch(0.78 0.14 45); }
+.dark .settings-secure-password-default,
+.dark .settings-security-result { background: color-mix(in oklab,#22c981 14%,var(--background)); color: #6ee7ad; }
+.dark .settings-form-error,
+.dark .note-renderer-error { background: color-mix(in oklab,var(--destructive) 13%,var(--background)); }
+.dark .sync-conflict-banner { border-bottom-color: color-mix(in oklab,#f5a623 32%,var(--border)); background: color-mix(in oklab,#f5a623 14%,var(--background)); color: #f4ca78; }
+.dark .obsidian-callout { background: color-mix(in oklab,var(--callout-color) 13%,var(--background)); }
+.dark .canvas-preview-viewport { background-color: #161b22; background-image: radial-gradient(#3a424d 1px,transparent 1px); }
+.dark .canvas-edges line { stroke: #6e7a89; }
+.dark .canvas-edges text { fill: #b3bdc8; stroke: #161b22; }
+.dark .canvas-node { border-color: #697586; background: rgb(33 38 45 / 96%); box-shadow: 0 3px 14px rgb(0 0 0 / 30%); }
+.dark .canvas-node[data-type="group"] { background: rgb(43 50 59 / 72%); }
+/* GitHub Dark 风格令牌与深色编辑器保持同一对比度，避免代码块仍残留浅色主题。 */
+.dark .markdown-preview pre code.hljs { color: #e6edf3; }
+.dark .markdown-preview .hljs-comment,
+.dark .markdown-preview .hljs-quote { color: #8b949e; }
+.dark .markdown-preview .hljs-keyword,
+.dark .markdown-preview .hljs-selector-tag,
+.dark .markdown-preview .hljs-literal,
+.dark .markdown-preview .hljs-doctag,
+.dark .markdown-preview .hljs-name { color: #ff7b72; }
+.dark .markdown-preview .hljs-string,
+.dark .markdown-preview .hljs-regexp,
+.dark .markdown-preview .hljs-meta .hljs-string { color: #a5d6ff; }
+.dark .markdown-preview .hljs-number,
+.dark .markdown-preview .hljs-symbol,
+.dark .markdown-preview .hljs-bullet,
+.dark .markdown-preview .hljs-variable,
+.dark .markdown-preview .hljs-template-variable,
+.dark .markdown-preview .hljs-link,
+.dark .markdown-preview .hljs-selector-attr,
+.dark .markdown-preview .hljs-selector-pseudo,
+.dark .markdown-preview .hljs-meta,
+.dark .markdown-preview .hljs-selector-id,
+.dark .markdown-preview .hljs-selector-class { color: #79c0ff; }
+.dark .markdown-preview .hljs-title,
+.dark .markdown-preview .hljs-title.function_,
+.dark .markdown-preview .hljs-section { color: #d2a8ff; }
+.dark .markdown-preview .hljs-title.class_,
+.dark .markdown-preview .hljs-type,
+.dark .markdown-preview .hljs-attr,
+.dark .markdown-preview .hljs-attribute,
+.dark .markdown-preview .hljs-built_in { color: #ffa657; }
+.dark .markdown-preview .hljs-addition { color: #aff5b4; background: #033a16; }
+.dark .markdown-preview .hljs-deletion { color: #ffdcd7; background: #67060c; }
 
 /* 桌面端使用稳定的多栏信息架构，避免不同宽度下跳动和丢失当前上下文。 */
 .navigation-rail { display: flex; flex-direction: column; align-items: center; border-right: 1px solid var(--border); background: var(--background); padding: 18px 0 14px; }
