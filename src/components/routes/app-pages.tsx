@@ -11,6 +11,7 @@ import {
   Database,
   Download,
   FileCheck2,
+  FileUp,
   HardDrive,
   Info,
   ListTodo,
@@ -295,16 +296,21 @@ export function AppearanceSettingsPage({
 export function StorageMaintenancePage({
   activeCacheId,
   notes,
+  onExportBackup,
   onRebuildSearchIndex,
+  onRestoreBackup,
 }: {
   activeCacheId: string | null
   notes: Note[]
+  onExportBackup: () => Promise<boolean>
   onRebuildSearchIndex: () => Promise<void>
+  onRestoreBackup: (file: File) => Promise<boolean>
 }) {
   const [attachments, setAttachments] = useState<AttachmentMaintenanceReport | null>(null)
   const [indexStatus, setIndexStatus] = useState<NativeSearchIndexStatus | null>(null)
-  const [busyAction, setBusyAction] = useState<"attachments" | "index" | null>(null)
+  const [busyAction, setBusyAction] = useState<"attachments" | "backup" | "index" | "restore" | null>(null)
   const [message, setMessage] = useState("")
+  const restoreInputRef = useRef<HTMLInputElement>(null)
 
   const refresh = async () => {
     const [entries, nativeStatus] = await Promise.all([
@@ -361,6 +367,29 @@ export function StorageMaintenancePage({
     }
   }
 
+  const exportBackup = async () => {
+    setBusyAction("backup")
+    setMessage("")
+    try {
+      const completed = await onExportBackup()
+      setMessage(completed ? "整库备份已生成，请妥善保管下载的 ZIP 文件" : "整库备份未完成，请查看错误提示后重试")
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  const restoreBackup = async (file: File) => {
+    setBusyAction("restore")
+    setMessage("")
+    try {
+      const completed = await onRestoreBackup(file)
+      setMessage(completed ? "备份恢复流程已完成；同名文件会保留原文件并跳过" : "恢复已取消或失败，现有同名文件未被覆盖")
+    } finally {
+      setBusyAction(null)
+      if (restoreInputRef.current) restoreInputRef.current.value = ""
+    }
+  }
+
   return (
     <div className="settings-content-card storage-maintenance-page">
       <div className="settings-content-heading">
@@ -387,6 +416,27 @@ export function StorageMaintenancePage({
           <Button disabled={!attachments?.scanComplete || !attachments.orphaned.length || busyAction !== null} onClick={() => void cleanupAttachments()} variant="outline">
             {busyAction === "attachments" ? <RefreshCw className="spin" /> : null}清理未使用缓存
           </Button>
+        </section>
+        <section>
+          <div><strong>整库备份与恢复</strong><small>ZIP 保留 Markdown 目录结构和已缓存/可读取附件；恢复遇到同名文件会跳过，不覆盖。</small></div>
+          <div className="storage-backup-actions">
+            <Button disabled={!activeCacheId || busyAction !== null} onClick={() => void exportBackup()} variant="outline">
+              {busyAction === "backup" ? <RefreshCw className="spin" /> : <Download />}备份 ZIP
+            </Button>
+            <Button disabled={!activeCacheId || busyAction !== null} onClick={() => restoreInputRef.current?.click()} variant="outline">
+              {busyAction === "restore" ? <RefreshCw className="spin" /> : <FileUp />}恢复 ZIP
+            </Button>
+            <input
+              accept=".zip,.swell.zip,application/zip"
+              className="sr-only"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                if (file) void restoreBackup(file)
+              }}
+              ref={restoreInputRef}
+              type="file"
+            />
+          </div>
         </section>
       </div>
       {message ? <p aria-live="polite" className="maintenance-message">{message}</p> : null}

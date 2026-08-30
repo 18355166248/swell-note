@@ -43,6 +43,7 @@ import {
   deleteSyncedVaultAttachments,
   discardPendingVaultAttachments,
   listPendingVaultAttachments,
+  listVaultAttachments,
   listCachedNoteDocuments,
   listVaultCaches,
   loadVaultAttachment,
@@ -98,6 +99,8 @@ import {
 } from "@/services/markdown/markdown-link-rewrite"
 import { buildNotePreview } from "@/services/markdown/note-preview"
 import { remapNoteVersions, saveNoteVersion } from "@/services/history/note-history"
+import { backupFilename, createVaultBackup, parseVaultBackup } from "@/services/backup/vault-backup"
+import { extractAttachmentSources } from "@/services/vault/attachment-maintenance"
 import { exportMarkdownDocument } from "@/services/export/markdown-export"
 import { MAX_MARKDOWN_IMPORT_BYTES, sanitizeImportedMarkdownName, uniqueMarkdownPath } from "@/services/import/markdown-import"
 import {
@@ -3130,6 +3133,239 @@ function App() {
     }
   }
 
+  const toBackupDisplayPath = (storagePath: string) => {
+    if (vaultSession?.getDisplayPath) return vaultSession.getDisplayPath(storagePath).replace(/^\/+/, "")
+    if (activeCacheMeta?.sourceKind === "webdav") {
+      const root = loadWebDavConfig().remotePath.replace(/^\/+|\/+$/g, "")
+      const normalized = storagePath.replace(/^\/+/, "")
+      return root && normalized.startsWith(`${root}/`) ? normalized.slice(root.length + 1) : normalized
+    }
+    return storagePath.replace(/^\/+/, "")
+  }
+
+  const exportVaultBackup = async () => {
+    if (!activeCacheMeta) {
+      setVaultError("请先打开一个笔记库")
+      return false
+    }
+    setIsManagingNote(true)
+    setVaultError(null)
+    try {
+      const cachedDocuments = await listCachedNoteDocuments(activeCacheMeta.id)
+      const cachedById = new Map(cachedDocuments.map((document) => [document.noteId, document.content]))
+      const backupNotes: Array<{ content: string; path: string; storagePath: string }> = []
+      let missingNotes = 0
+      for (const note of notesRef.current) {
+        if (!note.remotePath || note.pendingOperation === "delete") continue
+        let content = note.contentLoaded ? note.content : cachedById.get(note.id)
+        if (content === undefined && vaultSession?.readTextFile) {
+          try { content = (await vaultSession.readTextFile(note.remotePath)).content } catch { missingNotes += 1 }
+        }
+        if (content === undefined) continue
+        backupNotes.push({ content, path: toBackupDisplayPath(note.remotePath), storagePath: note.remotePath })
+      }
+
+      const attachmentsByPath = new Map<string, { data: Uint8Array; mimeType?: string; path: string }>()
+      for (const entry of await listVaultAttachments(activeCacheMeta.id)) {
+        attachmentsByPath.set(entry.path, {
+          data: new Uint8Array(entry.data),
+          mimeType: entry.mimeType,
+          path: toBackupDisplayPath(entry.path),
+        })
+      }
+      if (vaultSession?.readBinaryFile) {
+        for (const note of backupNotes) {
+          for (const source of extractAttachmentSources(note.content)) {
+            const storagePath = resolveVaultAssetPath(note.storagePath, source)
+            if (!storagePath || /\.(?:canvas|md)$/i.test(storagePath) || attachmentsByPath.has(storagePath)) continue
+            try {
+              const asset = await vaultSession.readBinaryFile(storagePath)
+              attachmentsByPath.set(storagePath, { ...asset, path: toBackupDisplayPath(storagePath) })
+            } catch {
+              // 单个附件不可读时继续生成其余备份，最终用明确数量提示用户这不是完整副本。
+            }
+          }
+        }
+      }
+
+      const data = createVaultBackup({
+        attachments: [...attachmentsByPath.values()],
+        label: activeCacheMeta.label,
+        notes: backupNotes.map(({ content, path }) => ({ content, path })),
+      })
+      const url = URL.createObjectURL(new Blob([data.slice().buffer], { type: "application/zip" }))
+      const anchor = document.createElement("a")
+      anchor.download = backupFilename(activeCacheMeta.label)
+      anchor.href = url
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+      if (missingNotes > 0) setVaultError(`备份已生成，但有 ${missingNotes} 篇正文不可读取，未包含在本次备份中`)
+      return true
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "整库备份失败")
+      return false
+    } finally {
+      setIsManagingNote(false)
+    }
+  }
+
+  const restoreVaultBackup = async (file: File) => {
+    const adapter = vaultSession
+    const canRestoreOfflineWebDav = !adapter && activeCacheMeta?.sourceKind === "webdav" && webDavConfigured
+    if ((!adapter && !canRestoreOfflineWebDav)
+      || (adapter && adapter.kind !== "webdav" && (!adapter.createTextFile || !adapter.createBinaryFile || adapter.readOnly))) {
+      setVaultError("请先打开一个可写的笔记库再恢复备份")
+      return false
+    }
+    setIsManagingNote(true)
+    setVaultError(null)
+    try {
+      const backup = parseVaultBackup(new Uint8Array(await file.arrayBuffer()))
+      if (!window.confirm(
+        `备份包含 ${backup.notes.length} 篇笔记和 ${backup.attachments.length} 个附件。恢复会保留原目录，遇到同名文件会跳过，不会覆盖。是否继续？`,
+      )) return false
+
+      const config = loadWebDavConfig()
+      const isWebDav = adapter?.kind === "webdav" || canRestoreOfflineWebDav
+      const resolveStoragePath = (displayPath: string) => adapter?.getStoragePath?.(displayPath)
+        ?? (isWebDav
+          ? `${config.remotePath.replace(/\/+$/g, "")}/${displayPath.replace(/^\/+/, "")}`.replace(/\/{2,}/g, "/")
+          : displayPath)
+      const reserved = new Set(notesRef.current
+        .map((note) => note.remotePath?.replace(/\\/g, "/").toLocaleLowerCase())
+        .filter((path): path is string => Boolean(path)))
+      const imported: Note[] = []
+      const errors: string[] = []
+      let restoredAttachmentCount = 0
+
+      const directoryPaths = [...new Set([...backup.notes, ...backup.attachments]
+        .flatMap((entry) => {
+          const segments = entry.path.split("/").slice(0, -1)
+          return segments.map((_, index) => segments.slice(0, index + 1).join("/"))
+        }))].sort((left, right) => left.split("/").length - right.split("/").length)
+      if (isWebDav) {
+        setPendingWebDavDirectories((current) => [...new Set([
+          ...current,
+          ...directoryPaths.map((path) => deriveDirectoryPath(path)),
+        ])])
+      } else if (adapter?.createDirectory) {
+        const knownDirectories = new Set(vaultDirectories.map(toStorageDirectoryPath))
+        for (const directory of directoryPaths) {
+          if (knownDirectories.has(directory)) continue
+          try {
+            await adapter.createDirectory(directory)
+            knownDirectories.add(directory)
+          } catch {
+            // 目录可能已存在但未进入当前索引；真正写文件时仍会再次验证，避免把恢复整体中止。
+          }
+        }
+      }
+
+      for (const entry of backup.notes) {
+        const storagePath = resolveStoragePath(entry.path)
+        if (reserved.has(storagePath.toLocaleLowerCase())) {
+          errors.push(`${entry.path}：已存在，已跳过`)
+          continue
+        }
+        try {
+          const indexed = indexNoteContent(entry.content)
+          const format = entry.path.toLocaleLowerCase().endsWith(".canvas") ? "canvas" as const : "markdown" as const
+          if (isWebDav) {
+            imported.push({
+              ...indexed,
+              content: entry.content,
+              contentCached: true,
+              contentLoaded: true,
+              draft: false,
+              folder: deriveRemoteFolder(entry.path),
+              format,
+              id: `webdav:${storagePath}`,
+              modifiedAt: Date.now(),
+              pendingOperation: "create",
+              preview: buildNotePreview(entry.content, format),
+              readOnly: format === "canvas",
+              remotePath: storagePath,
+              source: "webdav",
+              starred: false,
+              syncStatus: "modified",
+              title: entry.path.split("/").pop()?.replace(/\.(?:canvas|md)$/i, "") ?? "未命名笔记",
+              updatedAt: "从备份恢复 · 待同步",
+            })
+          } else {
+            const result = await adapter!.createTextFile!(storagePath, entry.content)
+            revisionByPathRef.current.set(result.path, result.revision)
+            imported.push({
+              ...indexed,
+              content: entry.content,
+              contentCached: true,
+              contentLoaded: true,
+              draft: false,
+              folder: deriveRemoteFolder(result.path),
+              format,
+              id: `${adapter!.kind}:${result.path}`,
+              modifiedAt: Date.now(),
+              preview: buildNotePreview(entry.content, format),
+              readOnly: format === "canvas",
+              remotePath: result.path,
+              revision: result.revision,
+              source: "local",
+              starred: false,
+              title: entry.path.split("/").pop()?.replace(/\.(?:canvas|md)$/i, "") ?? "未命名笔记",
+              updatedAt: "从备份恢复",
+            })
+          }
+          reserved.add(storagePath.toLocaleLowerCase())
+        } catch (error) {
+          errors.push(`${entry.path}：${error instanceof Error ? error.message : "恢复失败"}`)
+        }
+      }
+
+      for (const entry of backup.attachments) {
+        const storagePath = resolveStoragePath(entry.path)
+        try {
+          if (isWebDav) {
+            if (!activeCacheMeta) throw new Error("缺少离线工作副本")
+            await queueVaultAttachment({
+              cacheId: activeCacheMeta.id,
+              data: entry.data.slice().buffer,
+              mimeType: entry.mimeType,
+              noteId: imported[0]?.id ?? `backup:${file.name}`,
+              path: storagePath,
+            })
+          } else {
+            await adapter!.createBinaryFile!(storagePath, entry.data, entry.mimeType)
+          }
+          restoredAttachmentCount += 1
+        } catch (error) {
+          errors.push(`${entry.path}：${error instanceof Error ? error.message : "附件恢复失败"}`)
+        }
+      }
+
+      if (imported.length > 0) {
+        setNotes((current) => [...imported, ...current])
+        setSaveStates((current) => ({
+          ...current,
+          ...Object.fromEntries(imported.map((note) => [note.id, { status: note.source === "webdav" ? "pending" as const : "saved" as const }])),
+        }))
+        setVaultNoteCount((count) => count + imported.length)
+        setVaultDirectories((current) => [...new Set([
+          ...current,
+          ...directoryPaths.map(deriveDirectoryPath),
+        ])])
+      }
+      if (isWebDav && activeCacheMeta) {
+        setPendingAttachmentCount((await listPendingVaultAttachments(activeCacheMeta.id)).length)
+      }
+      setVaultError(`已恢复 ${imported.length} 篇笔记、${restoredAttachmentCount} 个附件${errors.length ? `；${errors.length} 项跳过或失败` : ""}`)
+      return true
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "恢复整库备份失败")
+      return false
+    } finally {
+      setIsManagingNote(false)
+    }
+  }
+
   useEffect(() => {
     const anchor = pendingWikiAnchorRef.current
     if (!anchor || !activeNote?.contentLoaded) return
@@ -3416,7 +3652,9 @@ function App() {
             <StorageMaintenancePage
               activeCacheId={activeCacheMeta?.id ?? null}
               notes={notes}
+              onExportBackup={exportVaultBackup}
               onRebuildSearchIndex={rebuildSearchIndex}
+              onRestoreBackup={restoreVaultBackup}
             />
           )}
         />
