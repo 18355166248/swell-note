@@ -44,6 +44,7 @@ import {
   type VaultCacheSummary,
 } from "@/services/cache/vault-cache"
 import { inspectCachedAttachments, type AttachmentMaintenanceReport } from "@/services/vault/attachment-maintenance"
+import { inspectStorageQuota, requestPersistentStorage, type StorageQuotaReport } from "@/services/storage/storage-quota"
 import { getNativeSearchIndexStatus, supportsNativeSearchIndex, type NativeSearchIndexStatus } from "@/services/search/sqlite-note-index"
 import { summarizeWebDavSync } from "@/services/sync/sync-summary"
 import type { AutoSyncMode } from "@/services/sync/sync-preferences"
@@ -308,17 +309,20 @@ export function StorageMaintenancePage({
 }) {
   const [attachments, setAttachments] = useState<AttachmentMaintenanceReport | null>(null)
   const [indexStatus, setIndexStatus] = useState<NativeSearchIndexStatus | null>(null)
-  const [busyAction, setBusyAction] = useState<"attachments" | "backup" | "index" | "restore" | null>(null)
+  const [storageQuota, setStorageQuota] = useState<StorageQuotaReport | null>(null)
+  const [busyAction, setBusyAction] = useState<"attachments" | "backup" | "index" | "persist" | "restore" | null>(null)
   const [message, setMessage] = useState("")
   const restoreInputRef = useRef<HTMLInputElement>(null)
 
   const refresh = async () => {
-    const [entries, nativeStatus] = await Promise.all([
+    const [entries, nativeStatus, quota] = await Promise.all([
       activeCacheId ? listVaultAttachments(activeCacheId) : Promise.resolve([]),
       getNativeSearchIndexStatus(),
+      inspectStorageQuota(),
     ])
     setAttachments(inspectCachedAttachments(notes, entries))
     setIndexStatus(nativeStatus)
+    setStorageQuota(quota)
   }
 
   useEffect(() => {
@@ -326,10 +330,12 @@ export function StorageMaintenancePage({
     void Promise.all([
       activeCacheId ? listVaultAttachments(activeCacheId) : Promise.resolve([]),
       getNativeSearchIndexStatus(),
-    ]).then(([entries, nativeStatus]) => {
+      inspectStorageQuota(),
+    ]).then(([entries, nativeStatus, quota]) => {
       if (cancelled) return
       setAttachments(inspectCachedAttachments(notes, entries))
       setIndexStatus(nativeStatus)
+      setStorageQuota(quota)
     }).catch(() => {
       if (!cancelled) setMessage("读取存储状态失败，请稍后重试")
     })
@@ -390,6 +396,22 @@ export function StorageMaintenancePage({
     }
   }
 
+  const persistStorage = async () => {
+    setBusyAction("persist")
+    setMessage("")
+    try {
+      const granted = await requestPersistentStorage()
+      await refresh()
+      setMessage(granted
+        ? "离线数据已获得持久化保护，系统不会在空间紧张时自动清理"
+        : "当前平台未授予持久化；建议定期导出整库备份")
+    } catch {
+      setMessage("申请持久化存储失败，现有离线数据未受影响")
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
   return (
     <div className="settings-content-card storage-maintenance-page">
       <div className="settings-content-heading">
@@ -397,6 +419,27 @@ export function StorageMaintenancePage({
         <div><h2>本机数据状态</h2><p>这里只清理可重建索引和本机附件缓存，不会直接修改 Vault 或坚果云文件。</p></div>
       </div>
       <div className="maintenance-card-list">
+        <section>
+          <div>
+            <strong>离线存储容量</strong>
+            <small>{!storageQuota
+              ? "正在读取应用存储配额…"
+              : !storageQuota.supported
+                ? "当前平台不提供容量查询，由系统管理应用数据"
+                : `${formatBytes(storageQuota.usageBytes ?? 0)} / ${formatBytes(storageQuota.quotaBytes ?? 0)}${storageQuota.usagePercent !== null ? ` · ${storageQuota.usagePercent}%` : ""} · ${storageQuota.persisted ? "已持久化" : "可能被系统清理"}`}</small>
+            {storageQuota?.usagePercent !== null && storageQuota?.usagePercent !== undefined ? (
+              <progress aria-label="离线存储占用" max="100" value={storageQuota.usagePercent} />
+            ) : null}
+          </div>
+          <Button
+            disabled={!storageQuota?.supported || storageQuota.persisted === true || busyAction !== null}
+            onClick={() => void persistStorage()}
+            variant="outline"
+          >
+            {busyAction === "persist" ? <RefreshCw className="spin" /> : <HardDrive />}
+            {storageQuota?.persisted ? "已持久化" : "保护离线数据"}
+          </Button>
+        </section>
         <section>
           <div><strong>全文搜索索引</strong><small>{supportsNativeSearchIndex()
             ? indexStatus
