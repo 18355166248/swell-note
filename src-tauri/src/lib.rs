@@ -7,6 +7,11 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
+#[cfg(target_os = "ios")]
+use objc2::{msg_send, rc::Retained, runtime::AnyObject};
+#[cfg(target_os = "ios")]
+use objc2_ui_kit::{UIScrollView, UIScrollViewContentInsetAdjustmentBehavior};
+
 const CREDENTIAL_SERVICE: &str = "com.xmly.swell-note.webdav";
 const SEARCH_INDEX_SCHEMA_VERSION: i64 = 1;
 
@@ -380,6 +385,20 @@ fn native_store_name() -> &'static str {
     "System Credential Store"
 }
 
+// iOS 的 WKWebView 默认按安全区自动调整内边距，布局视口会比窗口矮掉上下安全区之和（iPhone 上约 96pt）。
+// 页面里贴着视口底部的编辑工具栏因此悬在屏幕上方一大截，键盘收起后也回不到底边。
+// 关掉自动调整让布局视口铺满窗口，安全区继续由页面自己的 env(safe-area-inset-*) 负责。
+#[cfg(target_os = "ios")]
+fn stretch_webview_over_safe_area(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = window.with_webview(|webview| unsafe {
+        let scroll_view: Retained<UIScrollView> = msg_send![webview.inner() as *mut AnyObject, scrollView];
+        scroll_view.setContentInsetAdjustmentBehavior(UIScrollViewContentInsetAdjustmentBehavior::Never);
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 安全存储初始化失败不能阻断笔记启动；前端会降级为每次手动输入应用密码。
@@ -400,6 +419,8 @@ pub fn run() {
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
+            #[cfg(target_os = "ios")]
+            stretch_webview_over_safe_area(app.handle());
             Ok(())
         })
         .manage(credential_store_state)

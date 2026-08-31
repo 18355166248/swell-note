@@ -54,7 +54,14 @@ function FormatButton({ busy = false, children, icon: Icon, label, onClick }: {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button aria-label={label} disabled={busy} onClick={onClick} type="button">
+        <button
+          aria-label={label}
+          disabled={busy}
+          onClick={onClick}
+          // 手机键盘打开时，工具栏不能先抢走 CodeMirror 焦点，否则每次加粗/插入列表都会触发键盘收起再弹出。
+          onPointerDown={(event) => event.preventDefault()}
+          type="button"
+        >
           {busy ? <LoaderCircle className="animate-spin" /> : Icon ? <Icon /> : children}
         </button>
       </TooltipTrigger>

@@ -46,7 +46,8 @@ import {
 import { inspectCachedAttachments, type AttachmentMaintenanceReport } from "@/services/vault/attachment-maintenance"
 import { inspectStorageQuota, requestPersistentStorage, type StorageQuotaReport } from "@/services/storage/storage-quota"
 import { getNativeSearchIndexStatus, supportsNativeSearchIndex, type NativeSearchIndexStatus } from "@/services/search/sqlite-note-index"
-import { summarizeWebDavSync } from "@/services/sync/sync-summary"
+import { summarizeSyncQueue, summarizeWebDavSync } from "@/services/sync/sync-summary"
+import { getSyncProgressDescription, getSyncProgressPercent, type SyncProgress } from "@/services/sync/sync-progress"
 import type { AutoSyncMode } from "@/services/sync/sync-preferences"
 import type { SyncLogEntry } from "@/services/sync/sync-log"
 import type { Note } from "@/types/note"
@@ -730,12 +731,7 @@ export function SyncSettingsPage({
   onRestoreDeletedNote: (noteId: string) => void
   onSync: () => void
   sourceLabel: string
-  syncProgress: {
-    completed: number
-    currentLabel: string
-    phase: "attachments" | "notes" | "refreshing"
-    total: number
-  } | null
+  syncProgress: SyncProgress | null
   syncLogs: SyncLogEntry[]
 }) {
   const summary = summarizeWebDavSync(notes)
@@ -746,15 +742,10 @@ export function SyncSettingsPage({
   const deletedNotes = notes.filter((note) => note.source === "webdav" && note.pendingOperation === "delete")
   const indexing = indexProgress && indexProgress.indexed < indexProgress.total
   const canSync = isOnline && !isSyncing
-  const failedCount = summary.failed + failedAttachmentCount
-  const syncWorkCount = summary.pending + summary.failed + pendingAttachmentCount + failedAttachmentCount
-  const syncPercent = syncProgress
-    ? syncProgress.phase === "refreshing"
-      ? 100
-      : syncProgress.total === 0
-        ? 0
-        : Math.round((syncProgress.completed / syncProgress.total) * 100)
-    : 0
+  const queueMetrics = summarizeSyncQueue(notes, pendingAttachmentCount, failedAttachmentCount)
+  const failedCount = queueMetrics.failed
+  const syncWorkCount = queueMetrics.work
+  const syncPercent = syncProgress ? getSyncProgressPercent(syncProgress) : 0
 
   return (
     <div className="settings-content-card sync-center">
@@ -790,14 +781,12 @@ export function SyncSettingsPage({
             <strong>{syncPercent}%</strong>
           </div>
           <progress max="100" value={syncPercent} />
-          <small>{syncProgress.phase === "refreshing"
-            ? "正在刷新云端目录"
-            : `已处理 ${syncProgress.completed}/${syncProgress.total} 项；取消会在当前请求完成后生效`}</small>
+          <small>{getSyncProgressDescription(syncProgress)}</small>
         </div>
       ) : null}
 
       <div className="sync-stat-grid" aria-label="同步统计">
-        <div><strong>{summary.pending + pendingAttachmentCount}</strong><span>待同步</span></div>
+        <div><strong>{queueMetrics.pending}</strong><span>待同步</span></div>
         <div data-tone={summary.conflicts > 0 ? "warning" : undefined}><strong>{summary.conflicts}</strong><span>冲突</span></div>
         <div data-tone={failedCount > 0 ? "danger" : undefined}><strong>{failedCount}</strong><span>失败</span></div>
         <div><strong>{summary.synced}</strong><span>{connected ? "已同步" : "已缓存"}</span></div>
@@ -832,6 +821,9 @@ export function SyncSettingsPage({
             </button>
           ))}
         </div>
+        {failedCount > 0 && autoSyncMode !== "manual" ? (
+          <p className="sync-auto-retry-note" role="status">自动同步失败后会停止重复尝试；可手动重试，或在内容变化、网络重新连接后再次执行。</p>
+        ) : null}
       </section>
 
       <section className="sync-problem-section">

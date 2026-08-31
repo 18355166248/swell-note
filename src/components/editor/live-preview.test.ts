@@ -69,8 +69,14 @@ async function settleInlineDecorations(view: EditorView): Promise<DecorationSet>
 }
 
 async function settleTableDecorations(view: EditorView): Promise<DecorationSet> {
-  await settle()
-  const decorations = view.state.field(tableDecorationsField)
+  const initialDecorations = view.state.field(tableDecorationsField)
+  let decorations = initialDecorations
+  // 表格装饰通过延迟 transaction 提交；首次渲染等非空结果，编辑后则等旧装饰被新版本替换。
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    decorations = view.state.field(tableDecorationsField)
+    if (decorations !== initialDecorations && decorations.size > 0) break
+  }
   view.destroy()
   return decorations
 }

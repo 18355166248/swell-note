@@ -19,6 +19,14 @@ import { QuickWebDavConnectDialog } from "@/components/settings/quick-webdav-con
 import { hasSavedWebDavConfig, loadWebDavConfig, type WebDavConfig } from "@/lib/webdav-config"
 import { getNoteReturnRoute, getNotesListRoute } from "@/lib/note-routes"
 import {
+  normalizeVaultPathIdentity,
+  resolveRefreshedActiveNoteId,
+  resolveRouteNoteId,
+  resolveStableVaultNoteId,
+  shouldAutoLoadRouteNote,
+} from "@/lib/note-route-resolution"
+import { findMissingNoteSuggestions } from "@/lib/missing-note-suggestions"
+import {
   canSelectLocalVault,
   selectLocalVaultAdapter,
 } from "@/services/vault/local-vault-adapter"
@@ -115,6 +123,8 @@ import {
   shouldReadVaultDocument,
 } from "@/services/sync/webdav-working-copy"
 import { syncWebDavNoteQueue } from "@/services/sync/webdav-note-queue"
+import { buildAutoSyncQueueKey } from "@/services/sync/auto-sync-queue"
+import type { SyncProgress } from "@/services/sync/sync-progress"
 import { summarizeWebDavSync } from "@/services/sync/sync-summary"
 import { mergeMarkdownVersions } from "@/services/sync/three-way-merge"
 import { appendSyncLog, clearSyncLog, loadSyncLog, type SyncLogEntry } from "@/services/sync/sync-log"
@@ -158,12 +168,6 @@ import type { Note, NoteSaveState } from "@/types/note"
 import "./App.css"
 
 type ActiveCacheMeta = Pick<VaultCacheSnapshot, "id" | "label" | "lastSyncedAt" | "sourceKind">
-type SyncProgress = {
-  completed: number
-  currentLabel: string
-  phase: "attachments" | "notes" | "refreshing"
-  total: number
-}
 type SyncRun = { cancelled: boolean }
 type MarkdownLinkRepair = {
   changedCount: number
@@ -232,6 +236,11 @@ function App() {
   const [pendingAttachmentCount, setPendingAttachmentCount] = useState(0)
   const [failedAttachmentCount, setFailedAttachmentCount] = useState(0)
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
+  const [syncFailure, setSyncFailure] = useState<string | null>(null)
+  const showSyncFailure = useCallback((message: string) => {
+    setVaultError(message)
+    setSyncFailure(message)
+  }, [])
   const [nativeSearchResult, setNativeSearchResult] = useState<{ paths: Set<string>; query: string } | null>(null)
   const saveTimersRef = useRef(new Map<string, number>())
   const saveQueuesRef = useRef(new Map<string, Promise<void>>())
@@ -242,10 +251,12 @@ function App() {
   const notesRef = useRef(notes)
   const previousOnlineRef = useRef(isOnline)
   const activeSyncRunRef = useRef<SyncRun | null>(null)
+  const attemptedAutoSyncQueueRef = useRef<string | null>(null)
+  const autoSyncQueueKeyRef = useRef("")
   const pendingWikiAnchorRef = useRef("")
   const passiveWebDavReaderRef = useRef<Promise<VaultAdapter | null> | null>(null)
   const restoredCredentialCacheIdRef = useRef<string | null>(null)
-  const refreshVaultRef = useRef<(noteIds?: ReadonlySet<string>) => Promise<void>>(async () => undefined)
+  const refreshVaultRef = useRef<(noteIds?: ReadonlySet<string>, options?: { automatic?: boolean }) => Promise<void>>(async () => undefined)
   notesRef.current = notes
 
   useEffect(() => {
@@ -519,6 +530,12 @@ function App() {
     : libraryNotes
   const visibleNotes = sortNotes(filteredNotes, noteSort)
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? null
+  const requestedNoteId = resolveRouteNoteId(noteRouteMatch?.params.noteId, notes.map((note) => note.id))
+  const missingNoteRoute = Boolean(cacheReady && requestedNoteId && !notes.some((note) => note.id === requestedNoteId))
+  const missingNoteSuggestions = useMemo(
+    () => missingNoteRoute ? findMissingNoteSuggestions(requestedNoteId, availableNotes) : [],
+    [availableNotes, missingNoteRoute, requestedNoteId],
+  )
   // 待办页与快速添加共用同一个目标，避免界面提示与实际写入的文件不一致。
   const quickTaskTarget = useMemo(
     () => resolveQuickTaskTarget(activeNote, availableNotes),
@@ -569,7 +586,14 @@ function App() {
   }, [activeCacheMeta, normalizedQuery])
   const cached = !vaultSession && activeCacheMeta !== null && vaultNoteCount > 0
   const syncSummary = useMemo(() => summarizeWebDavSync(notes), [notes])
-  const pendingSyncCount = syncSummary.pending + syncSummary.failed + pendingWebDavDirectories.length
+  const pendingSyncCount = syncSummary.pending + syncSummary.failed + pendingWebDavDirectories.length + pendingAttachmentCount
+  const autoSyncQueueKey = useMemo(() => buildAutoSyncQueueKey(
+    activeCacheMeta?.id,
+    notes,
+    pendingWebDavDirectories,
+    pendingAttachmentCount,
+  ), [activeCacheMeta?.id, notes, pendingAttachmentCount, pendingWebDavDirectories])
+  autoSyncQueueKeyRef.current = autoSyncQueueKey
   const conflictCount = syncSummary.conflicts
   const syncLabel = connected
     ? !isOnline
@@ -616,7 +640,14 @@ function App() {
     setQuickConnectOpen(true)
   }, [activeCacheMeta?.id])
 
+  const assetResolverContextRef = useRef({ activeCacheMeta, activeNote, isOnline, vaultSession })
+  assetResolverContextRef.current = { activeCacheMeta, activeNote, isOnline, vaultSession }
+  const authenticationFailureRef = useRef(handleWebDavAuthenticationFailure)
+  authenticationFailureRef.current = handleWebDavAuthenticationFailure
+
   const resolveActiveAsset = useCallback(async (source: string) => {
+    // 同步会连续替换笔记和缓存元数据；读取入口必须保持引用稳定，否则图片组件会反复撤销 Blob URL 并重新加载。
+    const { activeCacheMeta, activeNote, isOnline, vaultSession } = assetResolverContextRef.current
     const notePath = activeNote?.remotePath
     if (!notePath) return null
     const assetPath = resolveVaultAssetPath(notePath, source)
@@ -642,7 +673,7 @@ function App() {
       asset = await assetReader.readBinaryFile(assetPath)
     } catch (error) {
       if (error instanceof WebDavAuthenticationError) {
-        await handleWebDavAuthenticationFailure("坚果云应用密码已失效，请输入新密码后重试加载附件")
+        await authenticationFailureRef.current("坚果云应用密码已失效，请输入新密码后重试加载附件")
       }
       throw error
     }
@@ -657,7 +688,7 @@ function App() {
       })
     }
     return asset
-  }, [activeCacheMeta, activeNote, handleWebDavAuthenticationFailure, isOnline, vaultSession])
+  }, [])
 
   const attachmentNoteId = activeNote?.id
   const attachmentNotePath = activeNote?.remotePath
@@ -1148,9 +1179,9 @@ function App() {
           tags: item.tags,
           title: item.path.split("/").pop()?.replace(/\.(?:canvas|md)$/i, "") ?? item.path,
         })))
-        const indexedByPath = new Map(batch.map((item) => [item.path, item]))
+        const indexedByPath = new Map(batch.map((item) => [normalizeVaultPathIdentity(item.path), item]))
         setNotes((current) => current.map((note) => {
-          const indexedNote = note.remotePath ? indexedByPath.get(note.remotePath) : undefined
+          const indexedNote = note.remotePath ? indexedByPath.get(normalizeVaultPathIdentity(note.remotePath)) : undefined
           const hasLocalChanges = note.syncStatus === "modified" || note.syncStatus === "conflict"
           return indexedNote
             && !hasLocalChanges
@@ -1200,6 +1231,7 @@ function App() {
   }
 
   const connectWebDav = async (config: WebDavConfig, password: string) => {
+    setSyncFailure(null)
     const adapter = createWebDavVaultAdapter(config, password)
     const cacheId = await createVaultCacheId(adapter.cacheIdentity)
     const restoreWorkingCopy = activeCacheMeta?.id === cacheId
@@ -1211,7 +1243,7 @@ function App() {
     )
     const attachmentResult = await pushPendingWebDavAttachments(adapter)
     if (!hasPendingChanges) {
-      if (attachmentResult.errorMessage) setVaultError(attachmentResult.errorMessage)
+      if (attachmentResult.errorMessage) showSyncFailure(attachmentResult.errorMessage)
       return mergedNotes.length
     }
 
@@ -1221,9 +1253,8 @@ function App() {
       : undefined
     const syncResult = await pushPendingWebDavNotes(adapter, mergedNotes, eligibleNoteIds)
     const refreshedNotes = await loadVault(adapter, true, syncResult.notes)
-    if (attachmentResult.errorMessage || syncResult.errorMessage) {
-      setVaultError(attachmentResult.errorMessage ?? syncResult.errorMessage)
-    }
+    const syncErrorMessage = attachmentResult.errorMessage ?? syncResult.errorMessage
+    if (syncErrorMessage) showSyncFailure(syncErrorMessage)
     return refreshedNotes.length
   }
 
@@ -1244,25 +1275,33 @@ function App() {
     ))
 
     const previousNotesByPath = preserveContext
-      ? new Map(contextNotes.filter((note) => note.remotePath).map((note) => [note.previousRemotePath ?? note.remotePath!, note]))
+      ? new Map(contextNotes.filter((note) => note.remotePath).map((note) => [
+          normalizeVaultPathIdentity(note.previousRemotePath ?? note.remotePath!),
+          note,
+        ]))
       : new Map<string, Note>()
-    const preferredPath = preserveContext && activeNote?.remotePath
-      && files.some((file) => file.path === activeNote.remotePath)
-      ? activeNote.remotePath
+    const preferredPathIdentity = activeNote?.remotePath
+      ? normalizeVaultPathIdentity(activeNote.remotePath)
+      : ""
+    const preferredRemoteFile = preserveContext && preferredPathIdentity
+      ? files.find((file) => normalizeVaultPathIdentity(file.path) === preferredPathIdentity)
+      : undefined
+    const preferredPath = preferredRemoteFile
+      ? preferredRemoteFile.path
       : files[0]?.path ?? ""
     const pathsToRead = files
       .filter((file) => shouldReadVaultDocument({
         filePath: file.path,
         preferredPath,
         preserveContext,
-        previousNote: previousNotesByPath.get(file.path),
+        previousNote: previousNotesByPath.get(normalizeVaultPathIdentity(file.path)),
         remoteRevision: file.revision,
       }))
       .map((file) => file.path)
     const loadedDocuments = await readVaultDocuments(adapter, pathsToRead)
     const remoteNotes: Note[] = files.map((file) => {
       const isCanvas = /\.canvas$/i.test(file.path)
-      const previousNote = previousNotesByPath.get(file.path)
+      const previousNote = previousNotesByPath.get(normalizeVaultPathIdentity(file.path))
       const loadedDocument = loadedDocuments.get(file.path)
       const workingCopy = previousNote && isWebDavWorkingCopy(previousNote) ? previousNote : undefined
       const preserveWorkingCopy = Boolean(workingCopy)
@@ -1284,7 +1323,13 @@ function App() {
       const contentIndex = contentLoaded ? indexNoteContent(content) : undefined
 
       return {
-        id: preserveWorkingCopy ? workingCopy!.id : `${adapter.kind}:${file.path}`,
+        id: preserveWorkingCopy
+          ? workingCopy!.id
+          : resolveStableVaultNoteId({
+              adapterKind: adapter.kind,
+              filePath: file.path,
+              previousNoteId: previousNote?.id,
+            }),
         title: preserveWorkingCopy ? workingCopy!.title : file.name.replace(/\.(?:canvas|md)$/i, ""),
         preview: preserveWorkingCopy
           ? workingCopy!.preview
@@ -1331,23 +1376,27 @@ function App() {
           : undefined,
       }
     })
-    const remotePaths = new Set(files.map((file) => file.path))
+    const remotePaths = new Set(files.map((file) => normalizeVaultPathIdentity(file.path)))
     // 远端删除不能顺带删除尚未上传的本地正文；保留为冲突项，交给用户显式处理。
     const orphanedWorkingCopies = Array.from(new Set(previousNotesByPath.values()))
       .filter((note) => note.source === "webdav"
         && note.remotePath
-        && !remotePaths.has(note.previousRemotePath ?? note.remotePath)
+        && !remotePaths.has(normalizeVaultPathIdentity(note.previousRemotePath ?? note.remotePath))
         && (note.syncStatus === "modified" || note.syncStatus === "conflict"))
       .map((note): Note => ({
         ...note,
         syncStatus: note.pendingOperation === "create" ? "modified" : "conflict",
       }))
     const mergedNotes = [...remoteNotes, ...orphanedWorkingCopies]
-    const preservedActiveNote = preserveContext
-      ? mergedNotes.find((note) => note.id === activeNoteId && note.pendingOperation !== "delete")
-      : undefined
-    const fallbackNote = mergedNotes.find((note) => note.pendingOperation !== "delete")
-    const nextActiveNoteId = preservedActiveNote?.id ?? fallbackNote?.id ?? ""
+    const availableNoteIds = mergedNotes
+      .filter((note) => note.pendingOperation !== "delete")
+      .map((note) => note.id)
+    const nextActiveNoteId = resolveRefreshedActiveNoteId({
+      activeNoteId,
+      availableIds: availableNoteIds,
+      preserveContext,
+      routeNoteId: noteRouteMatch?.params.noteId,
+    })
 
     revisionByPathRef.current.clear()
     for (const note of mergedNotes) {
@@ -1401,6 +1450,8 @@ function App() {
     setPendingWebDavDirectories(preservedPendingDirectories)
     setTrashEntries(nextTrashEntries)
     setActiveNoteId(nextActiveNoteId)
+    // 远端列表已成功刷新，允许之前读取失败的正文再自动尝试一次；同一轮失败仍由路由守卫阻止循环重试。
+    setNoteLoadErrors({})
     setVaultNoteCount(mergedNotes.filter((note) => note.pendingOperation !== "delete").length)
     setSaveStates(Object.fromEntries(mergedNotes.map((note) => [note.id, getNoteSaveState(note)])))
     setVaultError(null)
@@ -1537,11 +1588,13 @@ function App() {
     return { cancelled: Boolean(run?.cancelled), errorMessage, failedNoteIds }
   }
 
-  const refreshVault = async (noteIds?: ReadonlySet<string>) => {
+  const refreshVault = async (noteIds?: ReadonlySet<string>, options: { automatic?: boolean } = {}) => {
+    // 新一轮重试先收起旧错误；若仍失败会立即用本轮原因替换，成功则不会残留过期提示。
+    setSyncFailure(null)
     if (!vaultSession) {
       if (activeCacheMeta?.sourceKind === "webdav" && webDavConfigured) {
         if (!isOnline) {
-          setVaultError("当前设备离线，本地修改已保留；恢复网络后再同步")
+          showSyncFailure("当前设备离线，本地修改已保留；恢复网络后再同步")
           return
         }
         const config = loadWebDavConfig()
@@ -1552,7 +1605,7 @@ function App() {
           try {
             storedPassword = await loadWebDavPassword(config)
           } catch {
-            setVaultError("无法读取系统安全存储，请重新输入；本地修改仍安全保留")
+            showSyncFailure("无法读取系统安全存储，请重新输入；本地修改仍安全保留")
             setQuickConnectOpen(true)
             return
           }
@@ -1568,7 +1621,7 @@ function App() {
             await handleWebDavAuthenticationFailure("坚果云应用密码已失效，请输入新密码；本地修改仍安全保留")
           } else {
             // 网络、限流等错误不代表密码失效，保留系统凭据并等待用户重试。
-            setVaultError(error instanceof Error ? error.message : "连接坚果云失败，请稍后重试")
+            showSyncFailure(error instanceof Error ? error.message : "连接坚果云失败，请稍后重试")
           }
         } finally {
           setIsRefreshingVault(false)
@@ -1579,12 +1632,14 @@ function App() {
       return
     }
     if (vaultSession.kind === "webdav" && !isOnline) {
-      setVaultError("当前设备离线，本地修改已保留；恢复网络后再同步")
+      showSyncFailure("当前设备离线，本地修改已保留；恢复网络后再同步")
       return
     }
     // React 状态更新存在一个渲染间隔，使用运行令牌阻止手动与自动同步在同一时刻重复启动。
     if (activeSyncRunRef.current) return
 
+    // 手动同步和自动同步共用防重标记；同一份失败队列不能在后台无限重试并反复刷新当前页面。
+    attemptedAutoSyncQueueRef.current = autoSyncQueueKeyRef.current
     setIsRefreshingVault(true)
     setVaultError(null)
     const run: SyncRun = { cancelled: false }
@@ -1598,7 +1653,13 @@ function App() {
         && note.syncStatus === "modified"
         && (!noteIds || noteIds.has(note.id))).length
       const pendingDirectories = noteIds ? 0 : pendingWebDavDirectories.length
-      setSyncProgress({ completed: 0, currentLabel: "准备同步", phase: "attachments", total: pendingDirectories + pendingAttachments + pendingNotes })
+      setSyncProgress({
+        automatic: Boolean(options.automatic),
+        completed: 0,
+        currentLabel: "准备同步",
+        phase: "attachments",
+        total: pendingDirectories + pendingAttachments + pendingNotes,
+      })
       // 所有手动/自动同步都汇入同一条带版本校验的写入链路，避免不同入口产生覆盖差异。
       if (!noteIds) await pushPendingWebDavDirectories(vaultSession, run)
       if (run.cancelled) {
@@ -1624,7 +1685,7 @@ function App() {
       await loadVault(vaultSession, true, syncResult.notes)
       const combinedError = attachmentResult.errorMessage ?? syncResult.errorMessage
       if (combinedError) {
-        setVaultError(combinedError)
+        showSyncFailure(combinedError)
         setSyncLogs(appendSyncLog({ message: `同步完成，但部分内容失败：${combinedError}`, status: "error" }))
       } else {
         const pendingCount = notes.filter((note) => note.source === "webdav"
@@ -1642,7 +1703,7 @@ function App() {
       if (authenticationFailed) {
         await handleWebDavAuthenticationFailure(message)
       }
-      setVaultError(message)
+      showSyncFailure(message)
       setSyncLogs(appendSyncLog({ message: `同步失败：${message}`, status: "error" }))
     } finally {
       if (activeSyncRunRef.current === run) activeSyncRunRef.current = null
@@ -1675,16 +1736,23 @@ function App() {
   useEffect(() => {
     const justReconnected = !previousOnlineRef.current && isOnline
     previousOnlineRef.current = isOnline
+    if (!isOnline) {
+      // 网络重新连通属于新的外部条件，允许原队列再自动尝试一次。
+      attemptedAutoSyncQueueRef.current = null
+      return
+    }
     const shouldSync = autoSyncMode === "background"
       || (autoSyncMode === "reconnect" && justReconnected)
     if (!shouldSync || !isOnline || isRefreshingVault || pendingSyncCount === 0 || vaultSession?.kind !== "webdav") return
+    if (attemptedAutoSyncQueueRef.current === autoSyncQueueKey) return
 
-    // 后台模式采用防抖，避免每次按键都请求 WebDAV；联网模式只在离线转在线时触发一次。
+    // 队列签名包含正文内容，因此连续输入会持续重置计时；失败后签名不变，不会形成四秒一次的重试风暴。
     const timer = window.setTimeout(() => {
-      void refreshVaultRef.current()
+      attemptedAutoSyncQueueRef.current = autoSyncQueueKey
+      void refreshVaultRef.current(undefined, { automatic: true })
     }, autoSyncMode === "background" ? 4_000 : 600)
     return () => window.clearTimeout(timer)
-  }, [autoSyncMode, isOnline, isRefreshingVault, pendingSyncCount, vaultSession])
+  }, [autoSyncMode, autoSyncQueueKey, isOnline, isRefreshingVault, pendingSyncCount, vaultSession])
 
   const changeAutoSyncMode = (mode: AutoSyncMode) => {
     setAutoSyncMode(mode)
@@ -1902,15 +1970,25 @@ function App() {
 
   useEffect(() => {
     const routeNoteId = noteRouteMatch?.params.noteId
-    if (!routeNoteId) return
-    const decodedNoteId = decodeURIComponent(routeNoteId)
-    const routeNote = notes.find((note) => note.id === decodedNoteId)
-    if (!routeNote) return
+    if (!routeNoteId || !cacheReady) return
+    // 手机端直达失效链接也必须进入详情层，才能展示恢复入口；否则会无提示地停在笔记库首页。
     setMobileScreen("editor")
-    if (routeNote.id !== activeNoteId || !routeNote.contentLoaded) {
-      void selectNote(routeNote)
+    const decodedNoteId = resolveRouteNoteId(routeNoteId, notes.map((note) => note.id))
+    const routeNote = notes.find((note) => note.id === decodedNoteId)
+    if (!routeNote) {
+      // 详情不存在或缓存尚未包含目标时绝不能继续展示上一篇笔记，避免地址与正文错位。
+      if (activeNoteId) setActiveNoteId("")
+      return
     }
-  }, [activeNoteId, noteRouteMatch?.params.noteId, notes])
+    if (routeNote.id !== activeNoteId) setActiveNoteId(routeNote.id)
+    if (shouldAutoLoadRouteNote({
+      contentLoaded: Boolean(routeNote.contentLoaded),
+      hasLoadError: Boolean(noteLoadErrors[routeNote.id]),
+      isLoading: loadingNoteIdsRef.current.has(routeNote.id),
+    })) {
+      void loadNoteDocument(routeNote)
+    }
+  }, [activeNoteId, cacheReady, loadNoteDocument, noteLoadErrors, noteRouteMatch?.params.noteId, notes])
 
   const reloadActiveNote = async () => {
     if (!activeNote) return
@@ -3461,6 +3539,7 @@ function App() {
             canInsertAttachment={canWriteVaultAttachments(vaultSession)
               || (activeNote?.source === "webdav" && activeCacheMeta?.sourceKind === "webdav")}
             folders={folders}
+            allNotes={availableNotes}
             folderManagementMode={vaultSession?.kind === "browser" || vaultSession?.kind === "tauri"
               ? "local"
               : activeCacheMeta?.sourceKind === "webdav" ? "webdav" : null}
@@ -3468,6 +3547,8 @@ function App() {
             isCreatingNote={isCreatingNote}
             isManagingNote={isManagingNote}
             isNoteDetailRoute={Boolean(noteRouteMatch?.params.noteId)}
+            missingNoteRoute={missingNoteRoute}
+            missingNoteSuggestions={missingNoteSuggestions}
             includeNestedFolderNotes={includeNestedFolderNotes}
             isRefreshingVault={isRefreshingVault}
             libraryView={libraryView}
@@ -3480,6 +3561,11 @@ function App() {
             notes={visibleNotes}
             onCreateNote={() => void createNote()}
             onCreateFolder={(name, parentFolder) => void createLocalFolder(name, parentFolder)}
+            onCancelSync={cancelSync}
+            onDismissSyncFailure={() => {
+              setSyncFailure(null)
+              setVaultError(null)
+            }}
             onDeleteNote={() => void deleteActiveNote()}
             onDeleteNoteById={(noteId) => void deleteNote(noteId, false)}
             onDeleteFolder={deleteFolder}
@@ -3531,6 +3617,7 @@ function App() {
               if (activeNote) void loadNoteDocument(activeNote)
             }}
             onRefreshVault={() => void refreshVault()}
+            onRetrySync={() => void refreshVault()}
             onResolveConflict={(strategy) => void resolveActiveConflict(strategy)}
             onResolveAsset={resolveActiveAsset}
             onLoadWikiNote={loadWikiNote}
@@ -3569,6 +3656,8 @@ function App() {
               status: activeNote ? getNoteSaveState(activeNote).status : "saved",
             }}
             syncLabel={syncLabel}
+            syncFailure={syncFailure}
+            syncProgress={syncProgress}
             starredNoteCount={availableNotes.filter((note) => note.starred).length}
             totalNoteCount={availableNotes.length}
             vaultError={vaultError}

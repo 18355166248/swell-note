@@ -1,7 +1,13 @@
+// @vitest-environment jsdom
+
+import { act } from "react"
+import { createRoot } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it, vi } from "vitest"
 
 import MarkdownPreview from "./markdown-preview"
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
 const baseProps = {
   onLoadWikiNote: vi.fn(),
@@ -10,6 +16,94 @@ const baseProps = {
 }
 
 describe("Markdown preview integration", () => {
+  it("does not remount vault images when parent callbacks change", async () => {
+    const container = document.createElement("div")
+    const root = createRoot(container)
+    const pendingAsset = new Promise<null>(() => undefined)
+    const firstResolver = vi.fn(() => pendingAsset)
+    const secondResolver = vi.fn(() => pendingAsset)
+    const renderPreview = (onResolveAsset: typeof firstResolver) => (
+      <MarkdownPreview
+        {...baseProps}
+        content="![截图](./attachments/image.png)"
+        onResolveAsset={onResolveAsset}
+        onResolveWikiNote={() => ({ status: "missing" })}
+      />
+    )
+
+    await act(async () => root.render(renderPreview(firstResolver)))
+    const initialLoadingNode = container.querySelector(".markdown-image-state")
+    await act(async () => root.render(renderPreview(secondResolver)))
+
+    expect(container.querySelector(".markdown-image-state")).toBe(initialLoadingNode)
+    expect(firstResolver).toHaveBeenCalledTimes(1)
+    expect(secondResolver).not.toHaveBeenCalled()
+    await act(async () => root.unmount())
+  })
+
+  it("lets a mobile reader tap normal text to edit at the matching source line", async () => {
+    const container = document.createElement("div")
+    const root = createRoot(container)
+    const onRequestEditAtLine = vi.fn()
+    await act(async () => root.render(
+      <MarkdownPreview
+        {...baseProps}
+        content={"---\ntitle: 示例\n---\n\n## 小节\n\n点击正文\n\n[保留链接](https://example.com)"}
+        onRequestEditAtLine={onRequestEditAtLine}
+        onResolveWikiNote={() => ({ status: "missing" })}
+      />,
+    ))
+
+    await act(async () => container.querySelector("p")?.click())
+    expect(onRequestEditAtLine).toHaveBeenCalledWith(7)
+
+    onRequestEditAtLine.mockClear()
+    await act(async () => (container.querySelector("a") as HTMLAnchorElement | null)?.click())
+    expect(onRequestEditAtLine).not.toHaveBeenCalled()
+    await act(async () => root.unmount())
+  })
+
+  it("reuses a loaded vault image when sync remounts the preview", async () => {
+    vi.useFakeTimers()
+    const originalCreateObjectUrl = URL.createObjectURL
+    const originalRevokeObjectUrl = URL.revokeObjectURL
+    const createObjectUrl = vi.fn(() => "blob:stable-preview-image")
+    const revokeObjectUrl = vi.fn()
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectUrl })
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectUrl })
+    const resolver = vi.fn(async () => ({ data: new Uint8Array([1, 2, 3]), mimeType: "image/png" }))
+    const renderPreview = () => (
+      <MarkdownPreview
+        {...baseProps}
+        assetScope="cache-a:note-a"
+        content="![截图](./attachments/stable.png)"
+        onResolveAsset={resolver}
+        onResolveWikiNote={() => ({ status: "missing" })}
+      />
+    )
+    const firstContainer = document.createElement("div")
+    const firstRoot = createRoot(firstContainer)
+
+    await act(async () => firstRoot.render(renderPreview()))
+    await act(async () => Promise.resolve())
+    expect(firstContainer.querySelector("img")?.getAttribute("src")).toBe("blob:stable-preview-image")
+    await act(async () => firstRoot.unmount())
+
+    const secondContainer = document.createElement("div")
+    const secondRoot = createRoot(secondContainer)
+    await act(async () => secondRoot.render(renderPreview()))
+    expect(secondContainer.querySelector(".markdown-image-state")).toBeNull()
+    expect(secondContainer.querySelector("img")?.getAttribute("src")).toBe("blob:stable-preview-image")
+    expect(resolver).toHaveBeenCalledTimes(1)
+
+    await act(async () => secondRoot.unmount())
+    await act(async () => vi.advanceTimersByTime(30_000))
+    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:stable-preview-image")
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: originalCreateObjectUrl })
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: originalRevokeObjectUrl })
+    vi.useRealTimers()
+  })
+
   it("renders frontmatter as a properties panel instead of Markdown body", () => {
     const output = renderToStaticMarkup(
       <MarkdownPreview
@@ -39,8 +133,41 @@ describe("Markdown preview integration", () => {
 
     expect(output).toContain('class="wiki-link markdown-anchor-link"')
     expect(output).toContain('id="目标小节"')
-    expect(output).toContain('<div class="markdown-table-wrap"><table>')
+    expect(output).toContain('class="markdown-table-shell"')
+    expect(output).toContain('class="markdown-table-wrap"')
+    expect(output).toContain('class="markdown-table-scroll-hint">左右滑动')
     expect(output).not.toContain('href="#目标小节"')
+  })
+
+  it("exposes overflowing tables as keyboard-scrollable regions", async () => {
+    const container = document.createElement("div")
+    const root = createRoot(container)
+    await act(async () => root.render(
+      <MarkdownPreview
+        {...baseProps}
+        content={"| A | B | C |\n| - | - | - |\n| 1 | 2 | 3 |"}
+        onResolveWikiNote={() => ({ status: "missing" })}
+      />,
+    ))
+    const viewport = container.querySelector(".markdown-table-wrap") as HTMLDivElement
+    Object.defineProperty(viewport, "clientWidth", { configurable: true, value: 300 })
+    Object.defineProperty(viewport, "scrollWidth", { configurable: true, value: 600 })
+    await act(async () => window.dispatchEvent(new Event("resize")))
+
+    expect(viewport.getAttribute("role")).toBe("region")
+    expect(viewport.getAttribute("aria-label")).toBe("可横向滚动的表格")
+    expect(viewport.tabIndex).toBe(0)
+    expect(viewport.parentElement?.dataset.atStart).toBe("true")
+
+    await act(async () => viewport.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "ArrowRight" })))
+    expect(viewport.scrollLeft).toBeGreaterThan(0)
+    expect(viewport.parentElement?.dataset.atStart).toBe("false")
+
+    await act(async () => viewport.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "End" })))
+    expect(viewport.scrollLeft).toBe(300)
+    expect(viewport.parentElement?.dataset.atStart).toBe("false")
+    expect(viewport.parentElement?.dataset.atEnd).toBe("true")
+    await act(async () => root.unmount())
   })
 
   it("routes standard Markdown note links through the workspace", () => {

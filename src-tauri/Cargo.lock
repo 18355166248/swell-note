@@ -4010,6 +4010,8 @@ dependencies = [
  "jni 0.21.1",
  "keyring-core",
  "ndk-context",
+ "objc2",
+ "objc2-ui-kit",
  "rusqlite",
  "serde",
  "serde_json",

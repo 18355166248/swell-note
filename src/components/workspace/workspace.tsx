@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
+import { Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import {
   closestCenter,
   DndContext,
@@ -96,13 +96,14 @@ import {
   getFolderAncestorPaths,
   getParentFolderPath,
   getVisibleVaultFolders,
+  noteBelongsDirectlyToFolder,
   type VaultFolder,
 } from "@/services/search/vault-folders"
 import { buildNotePreview } from "@/services/markdown/note-preview"
 import { extractNoteOutline } from "@/services/markdown/note-outline"
 import { buildMarkdownNoteLink, buildRelativeMarkdownHref } from "@/services/markdown/markdown-link"
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
-import type { NoteSort } from "@/services/search/note-sort"
+import { sortNotes, type NoteSort } from "@/services/search/note-sort"
 import { loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
 import { applyFolderOrder, loadFolderOrder, saveFolderOrder } from "@/services/preferences/folder-order-preferences"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
@@ -110,11 +111,17 @@ import { FormattingToolbar } from "@/components/workspace/formatting-toolbar"
 import { NoteVersionHistoryDialog } from "@/components/workspace/note-version-history-dialog"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
+import { stableNoteRenderIdentity } from "@/lib/note-route-resolution"
 import { MobileNoteSearch } from "@/components/workspace/mobile-note-search"
 import { MobileFolderActionSheet, MobileNoteActionSheet } from "@/components/workspace/mobile-action-sheets"
 import { useLongPress } from "@/components/workspace/use-long-press"
 import { useEdgeSwipeAction } from "@/components/workspace/use-edge-swipe-action"
-import { mobileLibraryScrollMemory, mobileNoteListScrollMemory } from "@/services/navigation/mobile-scroll-memory"
+import { useKeyboardInset } from "@/components/workspace/use-keyboard-inset"
+import { SyncActivityToast } from "@/components/workspace/sync-activity-toast"
+import { mobileLibraryScrollMemory, mobileNoteListScrollMemory, noteEditorScrollMemory } from "@/services/navigation/mobile-scroll-memory"
+import type { SyncProgress } from "@/services/sync/sync-progress"
+import { shouldShowFloatingSyncProgress } from "@/services/sync/sync-progress"
+import { SyncFailureToast } from "./sync-failure-toast"
 
 // CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
 const MarkdownEditor = lazyWithRetry(() => import("@/components/editor/markdown-editor"))
@@ -139,6 +146,7 @@ type WorkspaceProps = {
   canCreateNote: boolean
   canCreateFolder: boolean
   folders: VaultFolder[]
+  allNotes: Note[]
   folderManagementMode: "local" | "webdav" | null
   includeNestedFolderNotes: boolean
   isOpeningVault: boolean
@@ -146,6 +154,8 @@ type WorkspaceProps = {
   canInsertAttachment: boolean
   isManagingNote: boolean
   isNoteDetailRoute: boolean
+  missingNoteRoute: boolean
+  missingNoteSuggestions: Note[]
   isRefreshingVault: boolean
   libraryView: LibraryView
   localVaultSupported: boolean
@@ -201,12 +211,20 @@ type WorkspaceProps = {
   selectedTag: string | null
   starredNoteCount: number
   syncLabel: string
+  syncFailure: string | null
+  syncProgress: SyncProgress | null
   totalNoteCount: number
+  onCancelSync: () => void
+  onDismissSyncFailure: () => void
+  onRetrySync: () => void
   vaultError: string | null
   vaultCaches: VaultCacheSummary[]
 }
 
 export function Workspace(props: WorkspaceProps) {
+  const mobileLayout = useMobileWorkspaceLayout()
+  useKeyboardInset()
+  const showSyncProgressToast = shouldShowFloatingSyncProgress(props.syncProgress, mobileLayout)
   const [expandedFolderPaths, setExpandedFolderPaths] = useState<Set<string>>(() => new Set())
   const activeNoteUsesSpecialPreview = Boolean(
     props.activeNote
@@ -287,20 +305,46 @@ export function Workspace(props: WorkspaceProps) {
 
   return (
     <main className="workspace-root">
-      <DesktopWorkspace
-        {...props}
-        expandedFolderPaths={expandedFolderPaths}
-        onToggleFolder={toggleFolder}
-        visibleFolders={visibleFolders}
-      />
-      <MobileWorkspace
-        {...props}
-        expandedFolderPaths={expandedFolderPaths}
-        onToggleFolder={toggleFolder}
-        visibleFolders={visibleFolders}
-      />
+      {mobileLayout ? (
+        <MobileWorkspace
+          {...props}
+          expandedFolderPaths={expandedFolderPaths}
+          onToggleFolder={toggleFolder}
+          visibleFolders={visibleFolders}
+        />
+      ) : (
+        <DesktopWorkspace
+          {...props}
+          expandedFolderPaths={expandedFolderPaths}
+          onToggleFolder={toggleFolder}
+          visibleFolders={visibleFolders}
+        />
+      )}
+      {showSyncProgressToast && props.syncProgress ? <SyncActivityToast onCancel={props.onCancelSync} progress={props.syncProgress} /> : null}
+      {!showSyncProgressToast && props.syncFailure ? (
+        <SyncFailureToast
+          message={props.syncFailure}
+          onDismiss={props.onDismissSyncFailure}
+          onRetry={props.onRetrySync}
+        />
+      ) : null}
     </main>
   )
+}
+
+function useMobileWorkspaceLayout() {
+  const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 767px)").matches)
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)")
+    const update = () => setMobile(media.matches)
+    // 只挂载当前断点的工作区，避免隐藏布局继续解析 Markdown、创建编辑器和读取图片。
+    update()
+    media.addEventListener("change", update)
+    return () => media.removeEventListener("change", update)
+  }, [])
+
+  return mobile
 }
 
 type FolderTreeProps = {
@@ -473,7 +517,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           saveState={props.saveState}
           syncing={props.isRefreshingVault}
         />
-      ) : <EmptyNoteEditor canCreateNote={props.canCreateNote} hasNotes={props.totalNoteCount > 0} isLoading={props.isRefreshingVault} onOpenSettings={props.onOpenSettings} />}
+      ) : <EmptyNoteEditor canCreateNote={props.canCreateNote} canRefresh={Boolean(props.activeCacheId)} hasNotes={props.totalNoteCount > 0} isLoading={props.isRefreshingVault} missing={props.missingNoteRoute} onBack={props.missingNoteRoute ? () => props.onMobileScreenChange("notes") : undefined} onOpenSettings={props.onOpenSettings} onRefresh={props.onRefreshVault} onSelectNote={props.onSelectNote} suggestions={props.missingNoteSuggestions} />}
     </div>
   )
 }
@@ -1166,24 +1210,39 @@ function NoteDocumentState({
   )
 }
 
-function EmptyNoteEditor({
+export function EmptyNoteEditor({
   backLabel = "全部笔记",
   canCreateNote,
+  canRefresh = false,
   hasNotes,
   isLoading,
+  missing = false,
   onBack,
   onOpenSettings,
+  onRefresh,
+  onSelectNote,
+  suggestions = [],
 }: {
   backLabel?: string
   canCreateNote: boolean
+  canRefresh?: boolean
   hasNotes: boolean
   isLoading: boolean
+  missing?: boolean
   onBack?: () => void
   onOpenSettings: () => void
+  onRefresh?: () => void
+  onSelectNote?: (note: Note) => void
+  suggestions?: Note[]
 }) {
-  const title = isLoading ? "正在读取笔记" : hasNotes ? "选择一篇笔记" : canCreateNote ? "笔记库还是空的" : "连接或打开笔记库"
-  const description = isLoading
-    ? "正在检查远端内容和本机缓存，请稍候。"
+  const suggestionsTitleId = useId()
+  const title = missing ? "找不到这篇笔记" : isLoading ? "正在读取笔记" : hasNotes ? "选择一篇笔记" : canCreateNote ? "笔记库还是空的" : "连接或打开笔记库"
+  const description = missing
+    ? isLoading
+      ? "正在重新连接笔记库并查找这篇文档，当前候选结果会继续保留。"
+      : "这篇笔记可能已被删除、移动，或尚未同步到当前缓存。可以重新连接查找，或从候选结果继续。"
+    : isLoading
+      ? "正在检查远端内容和本机缓存，请稍候。"
     : hasNotes
       ? "从左侧列表选择一篇笔记，即可在这里阅读或编辑。"
       : canCreateNote
@@ -1198,10 +1257,37 @@ function EmptyNoteEditor({
           <span className="mobile-back-label">{backLabel}</span>
         </header>
       ) : null}
-      <div className="empty-note-content" data-status={isLoading ? "loading" : hasNotes ? "idle" : "empty"} role={isLoading ? "status" : undefined} aria-live={isLoading ? "polite" : undefined}>
-        <span className="empty-note-icon">{isLoading ? <LoaderCircle className="app-loading-spinner" /> : hasNotes ? <FileText /> : <Cloud />}</span>
-        <h2>{title}</h2>
-        <p>{description}</p>
+      <div className="empty-note-content" data-status={missing ? "error" : isLoading ? "loading" : hasNotes ? "idle" : "empty"}>
+        <div className="empty-note-message" role={missing ? "alert" : isLoading ? "status" : undefined} aria-live={isLoading || missing ? "polite" : undefined}>
+          <span className="empty-note-icon">{missing ? <AlertTriangle /> : isLoading ? <LoaderCircle className="app-loading-spinner" /> : hasNotes ? <FileText /> : <Cloud />}</span>
+          <h2>{title}</h2>
+          <p>{description}</p>
+        </div>
+        {missing && suggestions.length > 0 && onSelectNote ? (
+          <section aria-labelledby={suggestionsTitleId} className="missing-note-suggestions">
+            <h3 id={suggestionsTitleId}>可能是这些笔记</h3>
+            <div className="missing-note-suggestion-list">
+              {suggestions.map((note) => (
+                <button key={note.id} onClick={() => onSelectNote(note)} type="button">
+                  <FileText />
+                  <span><strong>{note.title}</strong><small>{note.folder || "根目录"}</small></span>
+                  <ChevronRight />
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {missing ? (
+          <div className="missing-note-actions">
+            {canRefresh && onRefresh ? (
+              <Button disabled={isLoading} onClick={onRefresh}>
+                {isLoading ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <RefreshCw data-icon="inline-start" />}
+                {isLoading ? "正在查找" : "重新连接并查找"}
+              </Button>
+            ) : null}
+            {onBack ? <Button onClick={onBack} variant="outline"><ArrowLeft data-icon="inline-start" />返回笔记列表</Button> : null}
+          </div>
+        ) : null}
         {!isLoading && !hasNotes && !canCreateNote ? <Button onClick={onOpenSettings}><Cloud data-icon="inline-start" />连接坚果云</Button> : null}
       </div>
     </article>
@@ -1280,6 +1366,8 @@ type NoteEditorProps = {
 }
 
 function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
+  const noteRenderIdentity = stableNoteRenderIdentity(note.id, note.remotePath)
+  const assetScope = `${activeCacheId ?? "session"}:${noteRenderIdentity}`
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
   const isCanvas = note.format === "canvas"
   const isExcalidraw = isExcalidrawMarkdown(note.content)
@@ -1287,11 +1375,13 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
   const readOnly = isCanvas || (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
   const editorRef = useRef<MarkdownEditorHandle>(null)
   const editorArticleRef = useRef<HTMLElement>(null)
+  const editorViewportRef = useRef<HTMLDivElement>(null)
   // 特殊画布始终使用专属预览；普通 Markdown 读取 App 级偏好，切换笔记或路由不会重置。
   const previewing = isSpecialPreview || noteViewMode === "preview"
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false)
+  const [outlineDialogOpen, setOutlineDialogOpen] = useState(false)
   const [renameTitle, setRenameTitle] = useState(note.title)
   const [cursorPosition, setCursorPosition] = useState({ column: 1, line: 1 })
   const [findOpen, setFindOpen] = useState(false)
@@ -1299,6 +1389,7 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
   const [findReplacement, setFindReplacement] = useState("")
   const [findResult, setFindResult] = useState({ current: 0, total: 0 })
   const findInputRef = useRef<HTMLInputElement>(null)
+  const pendingMobileEditLineRef = useRef<number | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [insertingAttachment, setInsertingAttachment] = useState(false)
   const attachmentBusyRef = useRef(false)
@@ -1317,6 +1408,38 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
     }
   }, [isCanvas, note.content])
   const noteOutline = useMemo(() => isSpecialPreview ? [] : extractNoteOutline(note.content), [isSpecialPreview, note.content])
+  const editorScrollKey = `${activeCacheId ?? "session"}:${note.id}`
+
+  useLayoutEffect(() => {
+    const viewport = editorViewportRef.current
+    if (!viewport) return
+    const target = noteEditorScrollMemory.get(editorScrollKey)
+    let latestScrollTop = viewport.scrollTop
+    let frame = 0
+    let settlingFrame = 0
+    const restore = () => {
+      const maximum = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
+      viewport.scrollTop = Math.min(target, maximum)
+      latestScrollTop = viewport.scrollTop
+    }
+    const rememberVisiblePosition = () => {
+      // 断点切换会先用 CSS 隐藏旧布局，再卸载组件；隐藏阶段产生的 0 不能覆盖真实阅读位置。
+      if (viewport.clientHeight > 0) latestScrollTop = viewport.scrollTop
+    }
+    viewport.addEventListener("scroll", rememberVisiblePosition, { passive: true })
+    // 先在绘制前恢复，再等 Markdown/Suspense 完成本帧布局后校准，避免返回长笔记时先闪到顶部。
+    restore()
+    frame = window.requestAnimationFrame(() => {
+      restore()
+      settlingFrame = window.requestAnimationFrame(restore)
+    })
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.cancelAnimationFrame(settlingFrame)
+      viewport.removeEventListener("scroll", rememberVisiblePosition)
+      noteEditorScrollMemory.set(editorScrollKey, latestScrollTop)
+    }
+  }, [editorScrollKey])
 
   // Vault 笔记的标题对应文件名：编辑时先落草稿，失焦或回车再走统一的重命名链路，避免每次按键触发文件操作。
   const isVaultNote = note.source === "local" || note.source === "webdav"
@@ -1392,6 +1515,18 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
   }, [findOpen, previewing])
 
   useEffect(() => {
+    if (previewing || pendingMobileEditLineRef.current === null) return
+    const requestedLine = pendingMobileEditLineRef.current
+    pendingMobileEditLineRef.current = null
+    // 预览切换到 CodeMirror 需要等待组件挂载；定位到触摸段落后直接唤起键盘，减少一次额外点击。
+    const frame = window.requestAnimationFrame(() => {
+      if (requestedLine > 0) editorRef.current?.revealLine(requestedLine)
+      else editorRef.current?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [previewing])
+
+  useEffect(() => {
     if (isSpecialPreview) return
     const handleFindShortcut = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLocaleLowerCase() !== "f") return
@@ -1403,6 +1538,18 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
     window.addEventListener("keydown", handleFindShortcut)
     return () => window.removeEventListener("keydown", handleFindShortcut)
   }, [isSpecialPreview, onNoteViewModeChange, previewing])
+
+  const revealOutlineHeading = (heading: (typeof noteOutline)[number], index: number) => {
+    setOutlineDialogOpen(false)
+    if (!previewing) {
+      editorRef.current?.revealLine(heading.line)
+      return
+    }
+    const sameAnchorIndex = noteOutline.slice(0, index).filter((item) => item.anchor === heading.anchor).length
+    const target = Array.from(editorArticleRef.current?.querySelectorAll<HTMLElement>(".markdown-preview [id]") ?? [])
+      .filter((element) => element.id === heading.anchor)[sameAnchorIndex]
+    target?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }
 
   return (
     <article
@@ -1460,7 +1607,7 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
           {!isSpecialPreview ? (
             <NoteViewModeSwitch mode={noteViewMode} onChange={onNoteViewModeChange} />
           ) : null}
-          {!isSpecialPreview ? (
+          {!compact && !isSpecialPreview ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button aria-label="文档大纲" size="icon-sm" variant="ghost"><ListTree /></Button>
@@ -1470,16 +1617,7 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
                   <DropdownMenuItem
                     className="note-outline-item"
                     key={`${heading.line}-${index}`}
-                    onClick={() => {
-                      if (!previewing) {
-                        editorRef.current?.revealLine(heading.line)
-                        return
-                      }
-                      const sameAnchorIndex = noteOutline.slice(0, index).filter((item) => item.anchor === heading.anchor).length
-                      const target = Array.from(editorArticleRef.current?.querySelectorAll<HTMLElement>(".markdown-preview [id]") ?? [])
-                        .filter((element) => element.id === heading.anchor)[sameAnchorIndex]
-                      target?.scrollIntoView({ behavior: "smooth", block: "start" })
-                    }}
+                    onClick={() => revealOutlineHeading(heading, index)}
                     style={{ paddingLeft: `${8 + Math.max(0, heading.level - 1) * 12}px` }}
                   >
                     <span>{heading.text}</span>
@@ -1489,19 +1627,32 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
-          <Button
-            aria-label={note.starred ? "取消收藏" : "收藏"}
-            onClick={() => onUpdateNote({ starred: !note.starred })}
-            size="icon-sm"
-            variant="ghost"
-          >
-            <Star className={note.starred ? "starred-icon" : ""} />
-          </Button>
+          {!compact ? (
+            <Button
+              aria-label={note.starred ? "取消收藏" : "收藏"}
+              onClick={() => onUpdateNote({ starred: !note.starred })}
+              size="icon-sm"
+              variant="ghost"
+            >
+              <Star className={note.starred ? "starred-icon" : ""} />
+            </Button>
+          ) : null}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button aria-label="更多操作" size="icon-sm" variant="ghost"><MoreHorizontal /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {compact && !isSpecialPreview ? (
+                <DropdownMenuItem onClick={() => setOutlineDialogOpen(true)}>
+                  <ListTree /> 文档大纲{noteOutline.length > 0 ? `（${noteOutline.length}）` : ""}
+                </DropdownMenuItem>
+              ) : null}
+              {compact ? (
+                <DropdownMenuItem onClick={() => onUpdateNote({ starred: !note.starred })}>
+                  <Star className={note.starred ? "starred-icon" : ""} /> {note.starred ? "取消收藏" : "收藏笔记"}
+                </DropdownMenuItem>
+              ) : null}
+              {compact ? <DropdownMenuSeparator /> : null}
               {note.remotePath && !note.pendingOperation ? (
                 <DropdownMenuItem
                   disabled={saveState.status === "saving"}
@@ -1629,6 +1780,7 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
         <div className="excalidraw-workspace">
           <Suspense fallback={<EditorLoadingState label="Excalidraw 画布" />}>
             <MarkdownPreview
+              assetScope={assetScope}
               content={note.content}
               editable={!readOnly}
               immersive
@@ -1644,29 +1796,32 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
             />
           </Suspense>
         </div>
-      ) : <ScrollArea className="editor-scroll">
+      ) : <ScrollArea className="editor-scroll" viewportRef={editorViewportRef}>
         <div className="document-canvas">
-          <input
-            aria-label="笔记标题"
-            className="document-title"
-            onBlur={commitTitle}
-            onChange={(event) => {
-              if (isVaultNote) {
-                setTitleDraft(event.target.value)
-                return
-              }
-              onUpdateNote({ title: event.target.value })
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" && event.key !== "Escape") return
-              event.preventDefault()
-              if (event.key === "Escape") setTitleDraft(note.title)
-              ;(event.target as HTMLInputElement).blur()
-            }}
-            readOnly={note.readOnly === true}
-            placeholder="输入标题"
-            value={isVaultNote ? titleDraft : note.title}
-          />
+          {previewing || note.readOnly === true ? (
+            <h1 className="document-title document-title-readonly">{note.title || "未命名笔记"}</h1>
+          ) : (
+            <input
+              aria-label="笔记标题"
+              className="document-title"
+              onBlur={commitTitle}
+              onChange={(event) => {
+                if (isVaultNote) {
+                  setTitleDraft(event.target.value)
+                  return
+                }
+                onUpdateNote({ title: event.target.value })
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== "Escape") return
+                event.preventDefault()
+                if (event.key === "Escape") setTitleDraft(note.title)
+                ;(event.target as HTMLInputElement).blur()
+              }}
+              placeholder="输入标题"
+              value={isVaultNote ? titleDraft : note.title}
+            />
+          )}
           <div className="document-meta">
             <span>{note.updatedAt === "刚刚" ? "刚刚编辑" : note.updatedAt}</span>
             <span>·</span>
@@ -1683,14 +1838,22 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
           </div>
           {isCanvas ? (
             <Suspense fallback={<EditorLoadingState label="Canvas 画布" />}>
-              <CanvasPreview content={note.content} onResolveAsset={onResolveAsset} onWikiLink={onOpenWikiLink} />
+              <CanvasPreview key={note.id} content={note.content} onResolveAsset={onResolveAsset} onWikiLink={onOpenWikiLink} />
             </Suspense>
           ) : previewing ? (
             <Suspense fallback={<EditorLoadingState label="Markdown 预览" />}>
               <MarkdownPreview
+                assetScope={assetScope}
                 content={note.content}
                 editable={!readOnly}
+                key={noteRenderIdentity}
                 onLoadWikiNote={onLoadWikiNote}
+                onRequestEditAtLine={compact && !readOnly
+                  ? (line) => {
+                      pendingMobileEditLineRef.current = line ?? 0
+                      onNoteViewModeChange("edit")
+                    }
+                  : undefined}
                 onResolveAsset={onResolveAsset}
                 onResolveWikiNote={onResolveWikiNote}
                 onToggleTask={readOnly ? undefined : onToggleTask}
@@ -1703,7 +1866,7 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
                 {/* CodeMirror 会在提交后同步受控 value；按笔记重建实例，避免切换瞬间残留上一份正文。 */}
                 <MarkdownEditor
                   getWikiLinkSuggestions={getWikiLinkSuggestions}
-                  key={note.id}
+                  key={noteRenderIdentity}
                   onChange={(content) => onUpdateNote({
                     content,
                     preview: buildNotePreview(content, note.format),
@@ -1751,6 +1914,27 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
         onRestore={onRestoreNoteVersion}
         open={historyDialogOpen}
       />
+      <Dialog onOpenChange={setOutlineDialogOpen} open={outlineDialogOpen}>
+        <DialogContent className="mobile-outline-dialog">
+          <DialogHeader>
+            <DialogTitle>文档大纲</DialogTitle>
+            <DialogDescription>选择标题后跳转到对应位置。</DialogDescription>
+          </DialogHeader>
+          <div className="mobile-outline-list">
+            {noteOutline.length > 0 ? noteOutline.map((heading, index) => (
+              <button
+                key={`${heading.line}-${index}`}
+                onClick={() => revealOutlineHeading(heading, index)}
+                style={{ paddingLeft: `${14 + Math.max(0, heading.level - 1) * 14}px` }}
+                type="button"
+              >
+                <span>{heading.text}</span>
+                <small>H{heading.level}</small>
+              </button>
+            )) : <p>当前笔记没有标题。</p>}
+          </div>
+        </DialogContent>
+      </Dialog>
       <Dialog onOpenChange={setDeleteDialogOpen} open={deleteDialogOpen}>
         <DialogContent>
           <DialogHeader>
@@ -1845,10 +2029,61 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
     if (parentFolder) props.onSelectFolder(parentFolder)
     else props.onMobileScreenChange("library")
   }, [props.mobileScreen, props.onMobileScreenChange, props.onSelectFolder, props.selectedFolder])
-  const edgeSwipeProps = useEdgeSwipeAction(handleEdgeSwipe, !navigationOpen)
+  const isRootSwipe = props.mobileScreen === "library"
+    || (props.mobileScreen === "notes" && (!props.selectedFolder || props.selectedFolder === "根目录"))
+  const edgeSwipe = useEdgeSwipeAction(handleEdgeSwipe, !navigationOpen, isRootSwipe ? "drawer" : "back")
+  const previousFolder = props.mobileScreen === "notes" && props.selectedFolder
+    ? getParentFolderPath(props.selectedFolder)
+    : null
+  const previousFolderNotes = useMemo(() => previousFolder
+    ? sortNotes(props.allNotes.filter((note) => noteBelongsDirectlyToFolder(note, previousFolder)), props.noteSort)
+    : [], [previousFolder, props.allNotes, props.noteSort])
+
+  const previousPage = edgeSwipe.kind === "back"
+    ? props.mobileScreen === "editor"
+      ? (
+          <MobileNoteList
+            {...props}
+            initialScrollTop={mobileNoteListScrollMemory.get(listStateKey)}
+            navigationOpen={false}
+            onNavigationOpenChange={() => undefined}
+            onScrollPositionChange={() => undefined}
+          />
+        )
+      : previousFolder
+        ? (
+            <MobileNoteList
+              {...props}
+              includeNestedFolderNotes={false}
+              initialScrollTop={mobileNoteListScrollMemory.get(`${props.libraryView}\u0000${previousFolder}\u0000`)}
+              navigationOpen={false}
+              notes={previousFolderNotes}
+              onNavigationOpenChange={() => undefined}
+              onScrollPositionChange={() => undefined}
+              query=""
+              selectedFolder={previousFolder}
+              selectedTag={null}
+            />
+          )
+        : (
+            <MobileLibrary
+              {...props}
+              initialScrollTop={mobileLibraryScrollMemory.get(libraryStateKey)}
+              navigationOpen={false}
+              onNavigationOpenChange={() => undefined}
+              onScrollPositionChange={() => undefined}
+            />
+          )
+    : null
 
   return (
-    <div className="mobile-workspace" data-screen={props.mobileScreen} {...edgeSwipeProps}>
+    <div className="mobile-workspace" data-screen={props.mobileScreen} {...edgeSwipe.bind}>
+      {previousPage ? (
+        <div aria-hidden="true" className="mobile-edge-swipe-previous" inert>
+          {previousPage}
+        </div>
+      ) : null}
+      <div className="mobile-edge-swipe-current">
       {props.mobileScreen === "library" ? (
         <MobileLibrary
           {...props}
@@ -1926,8 +2161,9 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             saveState={props.saveState}
             syncing={props.isRefreshingVault}
           />
-        ) : <EmptyNoteEditor backLabel={backLabel} canCreateNote={props.canCreateNote} hasNotes={props.totalNoteCount > 0} isLoading={props.isRefreshingVault} onBack={() => props.onMobileScreenChange("notes")} onOpenSettings={props.onOpenSettings} />
+        ) : <EmptyNoteEditor backLabel={backLabel} canCreateNote={props.canCreateNote} canRefresh={Boolean(props.activeCacheId)} hasNotes={props.totalNoteCount > 0} isLoading={props.isRefreshingVault} missing={props.missingNoteRoute} onBack={() => props.onMobileScreenChange("notes")} onOpenSettings={props.onOpenSettings} onRefresh={props.onRefreshVault} onSelectNote={props.onSelectNote} suggestions={props.missingNoteSuggestions} />
       ) : null}
+      </div>
     </div>
   )
 }
@@ -2025,7 +2261,13 @@ function SaveStateIndicator({ cloudConnected, note, state }: { cloudConnected: b
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span aria-live="polite" className="saved-state" data-status={state.status} role="status">
+        <span
+          aria-label={state.message ?? label}
+          aria-live="polite"
+          className="saved-state"
+          data-status={state.status}
+          role="status"
+        >
           <Icon className={state.status === "saving" ? "animate-spin" : ""} />
           <span>{label}</span>
         </span>

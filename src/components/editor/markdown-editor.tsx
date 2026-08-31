@@ -10,6 +10,7 @@ import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-complet
 import "./markdown-table.css"
 
 export type MarkdownEditorHandle = {
+  focus: () => void
   findText: (query: string, direction?: "next" | "previous", fromStart?: boolean) => MarkdownFindResult
   insertText: (text: string) => void
   redo: () => void
@@ -106,6 +107,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     ], [readOnly, storageKey])
 
     useImperativeHandle(ref, () => ({
+      focus() {
+        editorRef.current?.view?.focus()
+      },
       findText(query, direction = "next", fromStart = false) {
         return findTextInView(editorRef.current?.view, query, direction, fromStart)
       },

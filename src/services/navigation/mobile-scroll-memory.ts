@@ -29,3 +29,5 @@ export function createScrollPositionMemory(maxEntries = 200): ScrollPositionMemo
 
 export const mobileLibraryScrollMemory = createScrollPositionMemory()
 export const mobileNoteListScrollMemory = createScrollPositionMemory()
+// 正文阅读位置同时服务手机与宽屏；按缓存和笔记组成的键隔离不同笔记库中的同名文件。
+export const noteEditorScrollMemory = createScrollPositionMemory()

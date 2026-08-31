@@ -1,4 +1,4 @@
-import { Component, Suspense, createContext, useContext, useEffect, useState, type ErrorInfo, type MouseEvent, type ReactNode } from "react"
+import { Component, Suspense, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
 import remarkGfm from "remark-gfm"
@@ -27,6 +27,7 @@ export type EmbeddedWikiNoteResult =
   | { status: "loading" | "missing" }
 
 type MarkdownPreviewProps = {
+  assetScope?: string
   content: string
   editable?: boolean
   immersive?: boolean
@@ -34,6 +35,7 @@ type MarkdownPreviewProps = {
   onContentChange?: (content: string) => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onLoadWikiNote: (target: string) => void
+  onRequestEditAtLine?: (line?: number) => void
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
   onToggleTask?: (line: number, checked: boolean) => void
   onWikiLink: (target: string) => void
@@ -100,13 +102,104 @@ class NoteRendererErrorBoundary extends Component<{
   }
 }
 
-function MarkdownContent({ content, depth, editable, onLoadWikiNote, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink }: MarkdownPreviewProps & { depth: number }) {
+function MarkdownContent({ assetScope, content, depth, editable, onLoadWikiNote, onRequestEditAtLine, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink }: MarkdownPreviewProps & { depth: number }) {
   // 预览正文已剥离 frontmatter，勾选任务时按 hast 行号补回偏移换算源文件行号。
   const sourceLineOffset = frontmatterLineCount(content)
   const body = stripMarkdownFrontmatter(content)
   const properties = depth === 0 ? Object.entries(extractFrontmatter(content).properties) : []
+  const handlersRef = useRef({ onLoadWikiNote, onRequestEditAtLine, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink })
+  handlersRef.current = { onLoadWikiNote, onRequestEditAtLine, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink }
+  const components = useMemo(() => ({
+    input({ checked, disabled }: { checked?: boolean; disabled?: boolean }) {
+      const previewLine = useContext(TaskItemLineContext)
+      const toggleTask = handlersRef.current.onToggleTask
+      if (!toggleTask || !disabled || !previewLine) {
+        return <input checked={checked} disabled={disabled} readOnly type="checkbox" />
+      }
+      const sourceLine = previewLine + sourceLineOffset
+      return (
+        <input
+          aria-label="切换任务状态"
+          checked={checked}
+          className="task-checkbox"
+          data-source-line={sourceLine}
+          onChange={(event) => toggleTask(sourceLine, event.target.checked)}
+          type="checkbox"
+        />
+      )
+    },
+    li({ children, node }: { children?: ReactNode; node?: { position?: { start: { line: number } }; properties?: { className?: unknown } } }) {
+      const classNames = node?.properties?.className
+      const isTaskItem = Array.isArray(classNames) && classNames.includes("task-list-item")
+      const previewLine = isTaskItem ? node?.position?.start.line : undefined
+      if (!handlersRef.current.onToggleTask || !previewLine) return <li data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}>{children}</li>
+      return <li data-source-line={previewLine + sourceLineOffset}><TaskItemLineContext.Provider value={previewLine}>{children}</TaskItemLineContext.Provider></li>
+    },
+    a({ children, href }: { children?: ReactNode; href?: string }) {
+      const embedTarget = parseWikiEmbedHref(href)
+      if (embedTarget) return <button className="wiki-link" onClick={() => handlersRef.current.onWikiLink(embedTarget)} type="button">{children}</button>
+      const wikiTarget = parseWikiHref(href)
+      if (wikiTarget) return <button className="wiki-link" onClick={() => handlersRef.current.onWikiLink(wikiTarget)} type="button">{children}</button>
+      const markdownNoteTarget = parseMarkdownNoteHref(href)
+      if (markdownNoteTarget) return <button className="wiki-link markdown-note-link" onClick={() => handlersRef.current.onWikiLink(markdownNoteTarget)} type="button">{children}</button>
+      const assetSource = parseVaultAssetHref(href) ?? (isRelativeAttachmentHref(href) ? href : null)
+      if (assetSource) return <VaultAttachment onResolveAsset={handlersRef.current.onResolveAsset} source={assetSource}>{children}</VaultAttachment>
+      if (href?.startsWith("#")) return <MarkdownAnchorLink href={href}>{children}</MarkdownAnchorLink>
+      return <a className="markdown-external-link" href={href} rel="noreferrer noopener" target="_blank">{children}</a>
+    },
+    img({ alt, src, title }: { alt?: string; src?: string; title?: string }) {
+      return <VaultImage alt={alt} assetScope={assetScope} onResolveAsset={handlersRef.current.onResolveAsset} source={src} title={title} />
+    },
+    pre({ children, node }: { children?: ReactNode; node?: Parameters<typeof CodeBlock>[0]["node"] }) {
+      return <CodeBlock node={node}>{children}</CodeBlock>
+    },
+    p({ children, node }: { children?: ReactNode; node?: { position?: { start: { line: number } } } }) {
+      return <p data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}>{children}</p>
+    },
+    td({ children, node }: { children?: ReactNode; node?: { position?: { start: { line: number } } } }) {
+      return <td data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}>{children}</td>
+    },
+    th({ children, node }: { children?: ReactNode; node?: { position?: { start: { line: number } } } }) {
+      return <th data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}>{children}</th>
+    },
+    table({ children }: { children?: ReactNode }) {
+      return <ScrollableMarkdownTable>{children}</ScrollableMarkdownTable>
+    },
+    div({ children, node }: { children?: ReactNode; node?: { properties?: Record<string, unknown> } }) {
+      const property = node?.properties?.["data-wiki-embed"] ?? node?.properties?.dataWikiEmbed
+      const embedTarget = typeof property === "string" ? property : ""
+      if (!embedTarget) return <div>{children}</div>
+      return (
+        <WikiEmbed
+          assetScope={assetScope}
+          depth={depth}
+          onLoadWikiNote={handlersRef.current.onLoadWikiNote}
+          onResolveAsset={handlersRef.current.onResolveAsset}
+          onResolveWikiNote={handlersRef.current.onResolveWikiNote}
+          onWikiLink={handlersRef.current.onWikiLink}
+          target={embedTarget}
+        />
+      )
+    },
+    h1({ children, node }: HeadingComponentProps) { return <Heading level={1} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
+    h2({ children, node }: HeadingComponentProps) { return <Heading level={2} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
+    h3({ children, node }: HeadingComponentProps) { return <Heading level={3} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
+    h4({ children, node }: HeadingComponentProps) { return <Heading level={4} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
+    h5({ children, node }: HeadingComponentProps) { return <Heading level={5} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
+    h6({ children, node }: HeadingComponentProps) { return <Heading level={6} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
+  }), [assetScope, depth, sourceLineOffset])
+  const requestEdit = (event: MouseEvent<HTMLDivElement>) => {
+    const request = handlersRef.current.onRequestEditAtLine
+    if (!request || depth !== 0 || !window.getSelection()?.isCollapsed) return
+    const target = event.target as HTMLElement
+    // 链接、任务、附件和嵌入笔记保留自身交互；正文空白与普通文本才进入编辑器。
+    if (target.closest("a,button,input,textarea,select,summary,details,[role='button'],[contenteditable='true'],.wiki-embed")) return
+    const lineNode = target.closest<HTMLElement>("[data-source-line]")
+    const line = Number(lineNode?.dataset.sourceLine)
+    request(Number.isFinite(line) && line > 0 ? line : undefined)
+  }
   return (
-    <div className={depth === 0 ? "markdown-preview" : "markdown-preview markdown-preview-embedded"}>
+    <div className={depth === 0 ? "markdown-preview" : "markdown-preview markdown-preview-embedded"} onClick={requestEdit}>
       {properties.length > 0 ? <MarkdownProperties properties={properties} /> : null}
       {!body.trim() && depth === 0 ? (
         <div className="markdown-empty-state">
@@ -115,117 +208,76 @@ function MarkdownContent({ content, depth, editable, onLoadWikiNote, onResolveAs
         </div>
       ) : null}
       <ReactMarkdown
-        components={{
-          input({ checked, disabled }) {
-            const previewLine = useContext(TaskItemLineContext)
-            if (!onToggleTask || !disabled || !previewLine) {
-              return <input checked={checked} disabled={disabled} readOnly type="checkbox" />
-            }
-            const sourceLine = previewLine + sourceLineOffset
-            return (
-              <input
-                aria-label="切换任务状态"
-                checked={checked}
-                className="task-checkbox"
-                data-source-line={sourceLine}
-                onChange={(event) => onToggleTask(sourceLine, event.target.checked)}
-                type="checkbox"
-              />
-            )
-          },
-          li({ children, node }) {
-            const classNames = node?.properties?.className
-            const isTaskItem = Array.isArray(classNames) && classNames.includes("task-list-item")
-            const previewLine = isTaskItem ? node?.position?.start.line : undefined
-            if (!onToggleTask || !previewLine) return <li>{children}</li>
-            return (
-              <li>
-                <TaskItemLineContext.Provider value={previewLine}>{children}</TaskItemLineContext.Provider>
-              </li>
-            )
-          },
-          a({ children, href }) {
-            const embedTarget = parseWikiEmbedHref(href)
-            if (embedTarget) {
-              return (
-                <button className="wiki-link" onClick={() => onWikiLink(embedTarget)} type="button">{children}</button>
-              )
-            }
-            const wikiTarget = parseWikiHref(href)
-            if (wikiTarget) {
-              return (
-                <button className="wiki-link" onClick={() => onWikiLink(wikiTarget)} type="button">
-                  {children}
-                </button>
-              )
-            }
-
-            const markdownNoteTarget = parseMarkdownNoteHref(href)
-            if (markdownNoteTarget) {
-              return (
-                <button className="wiki-link markdown-note-link" onClick={() => onWikiLink(markdownNoteTarget)} type="button">
-                  {children}
-                </button>
-              )
-            }
-
-            const assetSource = parseVaultAssetHref(href) ?? (isRelativeAttachmentHref(href) ? href : null)
-            if (assetSource) {
-              return (
-                <VaultAttachment onResolveAsset={onResolveAsset} source={assetSource}>
-                  {children}
-                </VaultAttachment>
-              )
-            }
-
-            // Hash Router 会把原生 #标题 当成页面路由；页内锚点必须在预览容器内自行定位。
-            if (href?.startsWith("#")) {
-              return <MarkdownAnchorLink href={href}>{children}</MarkdownAnchorLink>
-            }
-
-            return (
-              <a className="markdown-external-link" href={href} rel="noreferrer noopener" target="_blank">
-                {children}
-              </a>
-            )
-          },
-          img({ alt, src, title }) {
-            return <VaultImage alt={alt} onResolveAsset={onResolveAsset} source={src} title={title} />
-          },
-          pre({ children, node }) {
-            return <CodeBlock node={node}>{children}</CodeBlock>
-          },
-          table({ children }) {
-            return <div className="markdown-table-wrap"><table>{children}</table></div>
-          },
-          div({ children, node }) {
-            const property = node?.properties?.["data-wiki-embed"] ?? node?.properties?.dataWikiEmbed
-            const embedTarget = typeof property === "string" ? property : ""
-            if (!embedTarget) return <div>{children}</div>
-            return (
-              <WikiEmbed
-                depth={depth}
-                onLoadWikiNote={onLoadWikiNote}
-                onResolveAsset={onResolveAsset}
-                onResolveWikiNote={onResolveWikiNote}
-                onWikiLink={onWikiLink}
-                target={embedTarget}
-              />
-            )
-          },
-          h1({ children }) { return <Heading level={1}>{children}</Heading> },
-          h2({ children }) { return <Heading level={2}>{children}</Heading> },
-          h3({ children }) { return <Heading level={3}>{children}</Heading> },
-          h4({ children }) { return <Heading level={4}>{children}</Heading> },
-          h5({ children }) { return <Heading level={5}>{children}</Heading> },
-          h6({ children }) { return <Heading level={6}>{children}</Heading> },
-        }}
+        components={components}
         remarkPlugins={remarkPlugins}
         rehypePlugins={rehypePlugins}
         urlTransform={(url) => parseWikiHref(url) || parseWikiEmbedHref(url) || parseVaultAssetHref(url) ? url : defaultUrlTransform(url)}
       >
         {rewriteWikiLinks(body)}
       </ReactMarkdown>
+    </div>
+  )
+}
+
+function ScrollableMarkdownTable({ children }: { children?: ReactNode }) {
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const [scrollState, setScrollState] = useState({ atEnd: true, atStart: true, overflowing: false })
+  const updateScrollState = useCallback(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const overflowing = viewport.scrollWidth - viewport.clientWidth > 2
+    const atStart = !overflowing || viewport.scrollLeft <= 2
+    const atEnd = !overflowing || viewport.scrollLeft + viewport.clientWidth >= viewport.scrollWidth - 2
+    setScrollState((current) => current.atEnd === atEnd && current.atStart === atStart && current.overflowing === overflowing
+      ? current
+      : { atEnd, atStart, overflowing })
+  }, [])
+  const handleKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    const viewport = viewportRef.current
+    if (!viewport || !scrollState.overflowing || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
+    event.preventDefault()
+    const step = Math.max(48, Math.round(viewport.clientWidth * 0.2))
+    if (event.key === "Home") viewport.scrollLeft = 0
+    else if (event.key === "End") viewport.scrollLeft = viewport.scrollWidth - viewport.clientWidth
+    else viewport.scrollLeft += event.key === "ArrowRight" ? step : -step
+    updateScrollState()
+  }, [scrollState.overflowing, updateScrollState])
+
+  useEffect(() => {
+    updateScrollState()
+    const viewport = viewportRef.current
+    if (!viewport) return
+    // 字体、窗口和正文宽度都可能在首屏后变化，持续测量才能避免错误显示滑动提示。
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateScrollState)
+    observer?.observe(viewport)
+    const table = viewport.querySelector("table")
+    if (table) observer?.observe(table)
+    window.addEventListener("resize", updateScrollState)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener("resize", updateScrollState)
+    }
+  }, [updateScrollState])
+
+  return (
+    <div
+      className="markdown-table-shell"
+      data-at-end={scrollState.atEnd}
+      data-at-start={scrollState.atStart}
+      data-overflow={scrollState.overflowing}
+    >
+      <div
+        aria-label={scrollState.overflowing ? "可横向滚动的表格" : undefined}
+        className="markdown-table-wrap"
+        onKeyDown={handleKeyDown}
+        onScroll={updateScrollState}
+        ref={viewportRef}
+        role={scrollState.overflowing ? "region" : undefined}
+        tabIndex={scrollState.overflowing ? 0 : undefined}
+      >
+        <table>{children}</table>
+      </div>
+      <span aria-hidden="true" className="markdown-table-scroll-hint">左右滑动</span>
     </div>
   )
 }
@@ -269,10 +321,16 @@ function MarkdownAnchorLink({ children, href }: { children: ReactNode; href: str
   return <button className="wiki-link markdown-anchor-link" onClick={scrollToAnchor} type="button">{children}</button>
 }
 
-function Heading({ children, level }: { children: ReactNode; level: 1 | 2 | 3 | 4 | 5 | 6 }) {
+type HeadingComponentProps = { children?: ReactNode; node?: { position?: { start: { line: number } } } }
+
+function sourceLine(node: HeadingComponentProps["node"], offset: number) {
+  return node?.position?.start.line ? node.position.start.line + offset : undefined
+}
+
+function Heading({ children, level, sourceLine }: { children: ReactNode; level: 1 | 2 | 3 | 4 | 5 | 6; sourceLine?: number }) {
   const id = obsidianAnchorId(reactNodeText(children))
   const Tag = `h${level}` as const
-  return <Tag id={id || undefined}>{children}</Tag>
+  return <Tag data-source-line={sourceLine} id={id || undefined}>{children}</Tag>
 }
 
 // 只读取 hast 的结构信息（子节点、className），不引入 hast 类型依赖。
@@ -342,7 +400,8 @@ function CodeBlock({ children, node }: { children: ReactNode; node?: HastNode })
   )
 }
 
-function WikiEmbed({ depth, onLoadWikiNote, onResolveAsset, onResolveWikiNote, onWikiLink, target }: {
+function WikiEmbed({ assetScope, depth, onLoadWikiNote, onResolveAsset, onResolveWikiNote, onWikiLink, target }: {
+  assetScope?: string
   depth: number
   onLoadWikiNote: MarkdownPreviewProps["onLoadWikiNote"]
   onResolveAsset: MarkdownPreviewProps["onResolveAsset"]
@@ -370,6 +429,7 @@ function WikiEmbed({ depth, onLoadWikiNote, onResolveAsset, onResolveWikiNote, o
       {result.status === "ready" && depth < 2 ? (
         embeddedSection || !anchor ? (
           <MarkdownContent
+            assetScope={assetScope}
             content={embeddedContent}
             depth={depth + 1}
             onLoadWikiNote={onLoadWikiNote}
@@ -396,6 +456,7 @@ function reactNodeText(node: ReactNode): string {
 
 type VaultImageProps = {
   alt?: string
+  assetScope?: string
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   source?: string
   title?: string
@@ -416,14 +477,48 @@ function isRemoteImageSource(source?: string) {
   return Boolean(source && /^https?:\/\//i.test(source))
 }
 
-function VaultImage({ alt, onResolveAsset, source, title }: VaultImageProps) {
-  const [state, setState] = useState<{ status: "loading" | "ready" | "error"; url?: string }>({
-    status: isRemoteImageSource(source) ? "ready" : "loading",
-    url: isRemoteImageSource(source) ? source : undefined,
+type VaultImageCacheEntry = {
+  listeners: Set<(state: VaultImageState) => void>
+  refs: number
+  releaseTimer?: number
+  state: VaultImageState
+}
+
+type VaultImageState = { status: "loading" | "ready" | "error"; url?: string }
+
+const vaultImageCache = new Map<string, VaultImageCacheEntry>()
+
+function imageCacheKey(assetScope: string | undefined, source: string) {
+  return `${assetScope ?? "active-note"}\u0000${source}`
+}
+
+function releaseVaultImage(cacheKey: string, entry: VaultImageCacheEntry) {
+  entry.refs = Math.max(0, entry.refs - 1)
+  if (entry.refs > 0) return
+  // 同步刷新可能在相邻渲染帧卸载并重建 Markdown；延迟释放可直接复用原 Blob URL，避免图片先消失再加载。
+  entry.releaseTimer = window.setTimeout(() => {
+    if (entry.refs > 0 || vaultImageCache.get(cacheKey) !== entry) return
+    // 读取尚未结束时不能丢掉缓存项，否则迟到的 Blob URL 将无人负责释放。
+    if (entry.state.status === "loading") {
+      entry.releaseTimer = undefined
+      return
+    }
+    if (entry.state.url?.startsWith("blob:")) URL.revokeObjectURL(entry.state.url)
+    vaultImageCache.delete(cacheKey)
+  }, 30_000)
+}
+
+function VaultImage({ alt, assetScope, onResolveAsset, source, title }: VaultImageProps) {
+  const resolveAssetRef = useRef(onResolveAsset)
+  resolveAssetRef.current = onResolveAsset
+  const resolvedSource = parseVaultAssetHref(source) ?? source
+  const cacheKey = resolvedSource ? imageCacheKey(assetScope, resolvedSource) : ""
+  const [state, setState] = useState<VaultImageState>(() => {
+    if (isRemoteImageSource(resolvedSource)) return { status: "ready", url: resolvedSource }
+    return cacheKey ? vaultImageCache.get(cacheKey)?.state ?? { status: "loading" } : { status: "error" }
   })
 
   useEffect(() => {
-    const resolvedSource = parseVaultAssetHref(source) ?? source
     if (!resolvedSource) {
       setState({ status: "error" })
       return
@@ -439,29 +534,40 @@ function VaultImage({ alt, onResolveAsset, source, title }: VaultImageProps) {
       return
     }
 
-    let disposed = false
-    let objectUrl: string | undefined
-    setState({ status: "loading" })
-
-    void onResolveAsset(resolvedSource)
-      .then((asset) => {
-        if (!asset || disposed) {
-          if (!disposed) setState({ status: "error" })
-          return
-        }
-        const data = new Uint8Array(asset.data).buffer
-        objectUrl = URL.createObjectURL(new Blob([data], { type: asset.mimeType }))
-        setState({ status: "ready", url: objectUrl })
-      })
-      .catch(() => {
-        if (!disposed) setState({ status: "error" })
-      })
+    let entry = vaultImageCache.get(cacheKey)
+    if (!entry) {
+      entry = { listeners: new Set(), refs: 0, state: { status: "loading" } }
+      vaultImageCache.set(cacheKey, entry)
+      const ownedEntry = entry
+      void resolveAssetRef.current(resolvedSource)
+        .then((asset) => {
+          const nextState: VaultImageState = asset
+            ? {
+                status: "ready",
+                url: URL.createObjectURL(new Blob([new Uint8Array(asset.data).buffer], { type: asset.mimeType })),
+              }
+            : { status: "error" }
+          ownedEntry.state = nextState
+          for (const listener of ownedEntry.listeners) listener(nextState)
+          if (ownedEntry.refs === 0 && !ownedEntry.releaseTimer) releaseVaultImage(cacheKey, ownedEntry)
+        })
+        .catch(() => {
+          ownedEntry.state = { status: "error" }
+          for (const listener of ownedEntry.listeners) listener(ownedEntry.state)
+          if (ownedEntry.refs === 0 && !ownedEntry.releaseTimer) releaseVaultImage(cacheKey, ownedEntry)
+        })
+    }
+    if (entry.releaseTimer) window.clearTimeout(entry.releaseTimer)
+    entry.releaseTimer = undefined
+    entry.refs += 1
+    entry.listeners.add(setState)
+    setState(entry.state)
 
     return () => {
-      disposed = true
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      entry!.listeners.delete(setState)
+      releaseVaultImage(cacheKey, entry!)
     }
-  }, [onResolveAsset, source])
+  }, [cacheKey, resolvedSource])
 
   if (state.status === "ready" && state.url) {
     const presentation = parseImagePresentation(alt, title)
