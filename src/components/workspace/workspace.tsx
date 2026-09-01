@@ -114,9 +114,10 @@ import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
 import { stableNoteRenderIdentity } from "@/lib/note-route-resolution"
 import { MobileNoteSearch } from "@/components/workspace/mobile-note-search"
 import { MobileFolderActionSheet, MobileNoteActionSheet } from "@/components/workspace/mobile-action-sheets"
+import { SelectionActionBar } from "@/components/workspace/selection-action-bar"
+import { isSelectionDismissTap, keepsSelectionAlive, type PointerOrigin } from "@/components/workspace/selection-dismiss"
 import { useLongPress } from "@/components/workspace/use-long-press"
 import { useEdgeSwipeAction } from "@/components/workspace/use-edge-swipe-action"
-import { useKeyboardInset } from "@/components/workspace/use-keyboard-inset"
 import { SyncActivityToast } from "@/components/workspace/sync-activity-toast"
 import { mobileLibraryScrollMemory, mobileNoteListScrollMemory, noteEditorScrollMemory } from "@/services/navigation/mobile-scroll-memory"
 import type { SyncProgress } from "@/services/sync/sync-progress"
@@ -223,7 +224,6 @@ type WorkspaceProps = {
 
 export function Workspace(props: WorkspaceProps) {
   const mobileLayout = useMobileWorkspaceLayout()
-  useKeyboardInset()
   const showSyncProgressToast = shouldShowFloatingSyncProgress(props.syncProgress, mobileLayout)
   const [expandedFolderPaths, setExpandedFolderPaths] = useState<Set<string>>(() => new Set())
   const activeNoteUsesSpecialPreview = Boolean(
@@ -1375,6 +1375,7 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
   const readOnly = isCanvas || (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
   const editorRef = useRef<MarkdownEditorHandle>(null)
   const editorArticleRef = useRef<HTMLElement>(null)
+  const dismissSelectionOriginRef = useRef<PointerOrigin | null>(null)
   const editorViewportRef = useRef<HTMLDivElement>(null)
   // 特殊画布始终使用专属预览；普通 Markdown 读取 App 级偏好，切换笔记或路由不会重置。
   const previewing = isSpecialPreview || noteViewMode === "preview"
@@ -1384,6 +1385,7 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
   const [outlineDialogOpen, setOutlineDialogOpen] = useState(false)
   const [renameTitle, setRenameTitle] = useState(note.title)
   const [cursorPosition, setCursorPosition] = useState({ column: 1, line: 1 })
+  const [hasSelection, setHasSelection] = useState(false)
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState("")
   const [findReplacement, setFindReplacement] = useState("")
@@ -1557,6 +1559,16 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
       data-compact={compact}
       data-excalidraw={isExcalidraw}
       data-view-mode={previewing ? "preview" : "edit"}
+      onPointerDownCapture={compact ? (event) => {
+        dismissSelectionOriginRef.current = { at: event.timeStamp, x: event.clientX, y: event.clientY }
+      } : undefined}
+      onPointerUpCapture={compact && hasSelection ? (event) => {
+        const origin = dismissSelectionOriginRef.current
+        dismissSelectionOriginRef.current = null
+        if (!isSelectionDismissTap(origin, { at: event.timeStamp, x: event.clientX, y: event.clientY })) return
+        if (keepsSelectionAlive(event.target as Element)) return
+        editorRef.current?.collapseSelection()
+      } : undefined}
       ref={editorArticleRef}
     >
       <header className="editor-titlebar">
@@ -1865,6 +1877,7 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
               <Suspense fallback={<EditorLoadingState label="Markdown 编辑器" />}>
                 {/* CodeMirror 会在提交后同步受控 value；按笔记重建实例，避免切换瞬间残留上一份正文。 */}
                 <MarkdownEditor
+                  compact={compact}
                   getWikiLinkSuggestions={getWikiLinkSuggestions}
                   key={noteRenderIdentity}
                   onChange={(content) => onUpdateNote({
@@ -1875,6 +1888,7 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
                   onInsertFiles={canInsertAttachment && !insertingAttachment ? handleInsertFiles : undefined}
                   onOpenWikiLink={onOpenWikiLink}
                   onResolveAsset={onResolveAsset}
+                  onSelectionChange={setHasSelection}
                   readOnly={readOnly}
                   ref={editorRef}
                   storageKey={note.id}
@@ -1887,6 +1901,10 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
         </div>
       </ScrollArea>}
 
+      {/* 只读笔记同样要能复制，操作条不跟着格式工具栏一起被 readOnly 关掉，只是收起改写类按钮。 */}
+      {compact && !previewing && hasSelection ? (
+        <SelectionActionBar editorRef={editorRef} readOnly={readOnly} />
+      ) : null}
       {compact && !previewing && !readOnly ? (
         <FormattingToolbar
           attachmentBusy={insertingAttachment}

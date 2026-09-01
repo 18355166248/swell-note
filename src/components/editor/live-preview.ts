@@ -25,7 +25,10 @@ type MdSyntaxNode = {
 }
 
 // 打开链接是宿主行为：笔记内链交给工作区路由，外部链接默认走浏览器新窗口。
-export type LivePreviewOptions = TableInlineOptions
+// keepRenderedOnRangeSelection 服务触摸端：见 collectCursorLines 的说明。
+export type LivePreviewOptions = TableInlineOptions & {
+  keepRenderedOnRangeSelection?: boolean
+}
 
 export { TableWidget }
 
@@ -75,8 +78,12 @@ export class TaskCheckboxWidget extends WidgetType {
 }
 
 function collectCursorLines(state: EditorState) {
+  const keepRendered = state.facet(livePreviewOptions).keepRenderedOnRangeSelection === true
   const lines = new Set<number>()
   for (const range of state.selection.ranges) {
+    // 触摸端长按选词会一次覆盖整段：展开这些行的源码等于在选中瞬间改变行高，
+    // 选区和贴着选区的操作条都会跟着跳。非空选区因此保持渲染态，光标态仍还原原始 Markdown。
+    if (keepRendered && !range.empty) continue
     const from = state.doc.lineAt(Math.min(range.from, range.to)).number
     const to = state.doc.lineAt(Math.max(range.from, range.to)).number
     for (let number = from; number <= to; number += 1) lines.add(number)

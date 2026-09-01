@@ -50,6 +50,16 @@ describe("vault cache", () => {
     expect(await createVaultCacheId(identity)).not.toContain("user@example.com")
   })
 
+  it("Web Crypto 不可用时返回可操作的安全提示，而不是访问 digest 崩溃", async () => {
+    const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto")
+    Object.defineProperty(globalThis, "crypto", { configurable: true, value: {} })
+    try {
+      await expect(createVaultCacheId("webdav:test")).rejects.toThrow(/Web Crypto|HTTPS/)
+    } finally {
+      if (cryptoDescriptor) Object.defineProperty(globalThis, "crypto", cryptoDescriptor)
+    }
+  })
+
   it("保存多个缓存并恢复最后使用项", async () => {
     await saveVaultCache({
       activeNoteId: "a",

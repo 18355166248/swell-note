@@ -165,6 +165,7 @@ import {
   toStorageDirectoryPath,
 } from "@/services/app/app-note-utils"
 import type { Note, NoteSaveState } from "@/types/note"
+import { useKeyboardInset } from "@/components/use-keyboard-inset"
 import "./App.css"
 
 type ActiveCacheMeta = Pick<VaultCacheSnapshot, "id" | "label" | "lastSyncedAt" | "sourceKind">
@@ -178,6 +179,8 @@ type MarkdownLinkRepair = {
 }
 
 function App() {
+  // 键盘高度写在根节点上，工作区、设置页和各类弹层都要靠它避让，所以挂在应用最外层而不是某个页面里。
+  useKeyboardInset()
   const navigate = useNavigate()
   const location = useLocation()
   const notesLibraryRouteMatch = useMatch("/notes")

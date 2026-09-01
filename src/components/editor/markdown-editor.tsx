@@ -3,6 +3,7 @@ import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { EditorView } from "@codemirror/view"
 
+import { readClipboardText, writeClipboardText } from "@/services/clipboard/clipboard-text"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 import { markdownLivePreview } from "./live-preview"
@@ -10,13 +11,18 @@ import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-complet
 import "./markdown-table.css"
 
 export type MarkdownEditorHandle = {
+  collapseSelection: () => void
+  copySelection: () => Promise<boolean>
+  cutSelection: () => Promise<boolean>
   focus: () => void
   findText: (query: string, direction?: "next" | "previous", fromStart?: boolean) => MarkdownFindResult
   insertText: (text: string) => void
+  pasteAtSelection: () => Promise<boolean>
   redo: () => void
   replaceAll: (query: string, replacement: string) => number
   replaceCurrent: (query: string, replacement: string) => MarkdownFindResult
   revealLine: (line: number) => void
+  selectAll: () => void
   undo: () => void
 }
 
@@ -26,11 +32,13 @@ export type MarkdownFindResult = {
 }
 
 type MarkdownEditorProps = {
+  compact?: boolean
   onChange: (value: string) => void
   onCursorChange?: (line: number, column: number) => void
   onInsertFiles?: (files: File[]) => void
   onOpenWikiLink?: (target: string) => void
   onResolveAsset?: (source: string) => Promise<VaultAsset | null>
+  onSelectionChange?: (hasSelection: boolean) => void
   getWikiLinkSuggestions?: () => WikiLinkSuggestion[]
   readOnly?: boolean
   storageKey?: string
@@ -38,20 +46,24 @@ type MarkdownEditorProps = {
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, readOnly = false, storageKey, value }, ref) {
+  function MarkdownEditor({ compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange, readOnly = false, storageKey, value }, ref) {
     const editorRef = useRef<ReactCodeMirrorRef>(null)
 
     // CodeMirror 的扩展数组一旦换引用就会整体重配置（语言也会重新解析）；
     // 调用方传入的回调多为内联函数，用 ref 中转后扩展只在只读状态切换时重建。
-    const handlers = useRef({ getWikiLinkSuggestions, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset })
+    const handlers = useRef({ getWikiLinkSuggestions, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange })
     useEffect(() => {
-      handlers.current = { getWikiLinkSuggestions, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset }
+      handlers.current = { getWikiLinkSuggestions, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange }
     })
+
+    // 切换笔记会按 key 重建编辑器，卸载时要撤回选区状态，新笔记才不会带着上一篇的选区操作条打开。
+    useEffect(() => () => handlers.current.onSelectionChange?.(false), [])
 
     const extensions = useMemo(() => [
       // GFM 基座：表格、删除线与任务列表才能进入语法树，供语法高亮与即时渲染装饰使用。
       markdown({ base: markdownLanguage }),
       markdownLivePreview({
+        keepRenderedOnRangeSelection: compact,
         onOpenWikiLink: (target) => handlers.current.onOpenWikiLink?.(target),
         onResolveAsset: (source) => handlers.current.onResolveAsset?.(source) ?? Promise.resolve(null),
         tableStorageKey: storageKey,
@@ -63,8 +75,19 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const position = update.state.selection.main.head
         const line = update.state.doc.lineAt(position)
         handlers.current.onCursorChange?.(line.number, position - line.from + 1)
+        handlers.current.onSelectionChange?.(!update.state.selection.main.empty)
       }),
       EditorView.domEventHandlers({
+        // CodeMirror 的选区不随失焦清空：点走标题输入框后选区高亮已经没了，
+        // 选区操作条却会继续占着底部，所以焦点变化时同步汇报一次。
+        blur() {
+          handlers.current.onSelectionChange?.(false)
+          return false
+        },
+        focus(_event, view) {
+          handlers.current.onSelectionChange?.(!view.state.selection.main.empty)
+          return false
+        },
         drop(event) {
           const onInsertFiles = handlers.current.onInsertFiles
           const files = collectTransferFiles(event.dataTransfer)
@@ -104,9 +127,35 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           return true
         },
       }),
-    ], [readOnly, storageKey])
+    ], [compact, readOnly, storageKey])
 
     useImperativeHandle(ref, () => ({
+      collapseSelection() {
+        const view = editorRef.current?.view
+        if (!view || view.state.selection.main.empty) return
+        // 不抢焦点：点空白与点标题输入框都会走到这里，抢回来会把刚给出去的焦点又夺走。
+        view.dispatch({ selection: { anchor: view.state.selection.main.head } })
+      },
+      async copySelection() {
+        const view = editorRef.current?.view
+        const selected = readSelectedText(view)
+        if (!selected) return false
+        return writeClipboardText(selected)
+      },
+      async cutSelection() {
+        const view = editorRef.current?.view
+        const selected = readSelectedText(view)
+        if (!view || readOnly || !selected) return false
+        // 先确认内容已进入剪贴板再删除；复制失败时保留原文，避免这段文字既没被复制又已经没了。
+        if (!await writeClipboardText(selected)) return false
+        const selection = view.state.selection.main
+        view.dispatch({
+          changes: { from: selection.from, to: selection.to, insert: "" },
+          selection: { anchor: selection.from },
+        })
+        view.focus()
+        return true
+      },
       focus() {
         editorRef.current?.view?.focus()
       },
@@ -129,6 +178,20 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           scrollIntoView: true,
         })
         view.focus()
+      },
+      async pasteAtSelection() {
+        const view = editorRef.current?.view
+        if (!view || readOnly) return false
+        const text = await readClipboardText()
+        if (!text) return false
+        const selection = view.state.selection.main
+        view.dispatch({
+          changes: { from: selection.from, to: selection.to, insert: text },
+          selection: { anchor: selection.from + text.length },
+          scrollIntoView: true,
+        })
+        view.focus()
+        return true
       },
       redo() {
         dispatchHistoryShortcut(editorRef.current?.view, true)
@@ -166,6 +229,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         view.dispatch({ selection: { anchor: target.from }, scrollIntoView: true })
         view.focus()
       },
+      selectAll() {
+        const view = editorRef.current?.view
+        if (!view) return
+        view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } })
+        view.focus()
+      },
       undo() {
         dispatchHistoryShortcut(editorRef.current?.view, false)
       },
@@ -197,6 +266,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
 function collectTransferFiles(transfer: DataTransfer | null) {
   return Array.from(transfer?.files ?? [])
+}
+
+function readSelectedText(view: EditorView | undefined) {
+  if (!view) return ""
+  const selection = view.state.selection.main
+  return view.state.sliceDoc(selection.from, selection.to)
 }
 
 export function findPlainTextMatches(text: string, query: string) {

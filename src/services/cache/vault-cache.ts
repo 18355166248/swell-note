@@ -189,7 +189,17 @@ export async function remapVaultAttachmentNoteId(cacheId: string, previousNoteId
 }
 
 export async function createVaultCacheId(identity: string) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(identity))
+  const subtle = globalThis.crypto?.subtle
+  if (!subtle) {
+    const insecureWebOrigin = typeof window !== "undefined"
+      && window.location.protocol === "http:"
+      && !["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)
+    // WebDAV 会携带应用密码；非安全来源不能用弱哈希兜底继续连接，否则会让用户误以为 HTTP 部署是安全的。
+    throw new Error(insecureWebOrigin
+      ? "Web 端坚果云同步需要通过 HTTPS 访问；请为当前站点配置 HTTPS 后重试"
+      : "当前浏览器不支持 Web Crypto，无法安全连接坚果云；请升级浏览器后重试")
+  }
+  const digest = await subtle.digest("SHA-256", new TextEncoder().encode(identity))
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
