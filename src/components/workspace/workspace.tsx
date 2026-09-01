@@ -967,6 +967,12 @@ function NoteListPanel({
         <Input
           aria-label="搜索笔记"
           onChange={(event) => onQueryChange(event.target.value)}
+          onKeyDown={(event) => {
+            // 搜索框没有清空按钮，键盘用户只能靠 Esc 退出：先清空关键词，已经空了就交还焦点。
+            if (event.key !== "Escape") return
+            if (query) onQueryChange("")
+            else event.currentTarget.blur()
+          }}
           placeholder="搜索笔记、标签、内容"
           value={query}
         />
@@ -1522,6 +1528,19 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
   }, [findOpen, previewing])
 
   useEffect(() => {
+    if (!findOpen) return
+    // 查找栏挂在编辑器下沿，点回正文改内容是常事；Esc 只绑在查找框上的话，
+    // 焦点一离开输入框就收不起来了，只能回去点关闭按钮。
+    const closeOnEscape = (event: KeyboardEvent) => {
+      // 弹窗自己要用 Esc 关闭，别把它的这一下抢过来。
+      if (event.key !== "Escape" || hasOpenModal()) return
+      setFindOpen(false)
+    }
+    document.addEventListener("keydown", closeOnEscape)
+    return () => document.removeEventListener("keydown", closeOnEscape)
+  }, [findOpen])
+
+  useEffect(() => {
     if (previewing || pendingMobileEditLineRef.current === null) return
     const requestedLine = pendingMobileEditLineRef.current
     pendingMobileEditLineRef.current = null
@@ -1765,10 +1784,7 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
                 })
               }}
               onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  setFindOpen(false)
-                  return
-                }
+                // Esc 由查找栏统一接管，输入框这里只管翻匹配项。
                 if (event.key !== "Enter" || event.nativeEvent.isComposing) return
                 event.preventDefault()
                 runFind(event.shiftKey ? "previous" : "next")
@@ -1788,11 +1804,6 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
                 className="editor-replace-input"
                 onChange={(event) => setFindReplacement(event.target.value)}
                 onKeyDown={(event) => {
-                  // 查找框按 Esc 能收起查找栏，光标挪到替换框后同样要能收起。
-                  if (event.key === "Escape") {
-                    setFindOpen(false)
-                    return
-                  }
                   if (event.key !== "Enter" || event.nativeEvent.isComposing) return
                   event.preventDefault()
                   setFindResult(editorRef.current?.replaceCurrent(findQuery, findReplacement) ?? { current: 0, total: 0 })
