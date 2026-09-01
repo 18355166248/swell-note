@@ -161,6 +161,27 @@ describe("markdown live preview", () => {
     expect(tables[0].to).toBe(tableDoc.indexOf("| 普通 | 2 |") + "| 普通 | 2 |".length)
   })
 
+  it("keeps a paragraph appended after the table out of the widget range", async () => {
+    const view = createView({ anchor: 0 }, tableDoc)
+    // 首次装饰同样延迟提交，等它落地后再模拟“在表格后面补空行”。
+    for (let attempt = 0; attempt < 40 && view.state.field(tableDecorationsField).size === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    const tableEnd = view.state.doc.length
+    view.dispatch({ changes: { from: tableEnd, insert: "\n\n" } })
+
+    let tables: Array<{ from: number; to: number }> = []
+    // 块级替换会把边界处的插入并进自己，装饰重算后范围要收回表格本身。
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      tables = collect(view.state.field(tableDecorationsField)).tables
+      if (tables.length === 1 && tables[0].to === tableEnd) break
+    }
+    view.destroy()
+
+    expect(tables).toEqual([{ from: tableDoc.indexOf("| 列 A"), to: tableEnd }])
+  })
+
   it("keeps the rendered table when the cursor enters its source range", async () => {
     const view = createView({ anchor: tableDoc.indexOf("| 普通") + 2 }, tableDoc)
     const { tables } = collect(await settleTableDecorations(view))

@@ -727,13 +727,17 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .note-editor[data-view-mode="edit"]:not([data-excalidraw="true"]) .editor-scroll { background: color-mix(in oklab,var(--primary) 1.5%,white); }
 .dark .note-editor[data-view-mode="edit"]:not([data-excalidraw="true"]) .editor-scroll { background: color-mix(in oklab,var(--primary) 3%,var(--background)); }
 .note-editor[data-view-mode="edit"]:not([data-excalidraw="true"]) .document-canvas { box-shadow: inset 2px 0 0 color-mix(in oklab,var(--primary) 58%,transparent); }
-.markdown-editor-shell { width: 100%; min-height: calc(100dvh - 250px); color: #28313e; }
+.markdown-editor-shell { --editor-min-height: calc(100dvh - 250px); width: 100%; min-height: var(--editor-min-height); color: #28313e; }
 .markdown-editor-shell .cm-editor { min-height: inherit; background: transparent; font-size: 14px; }
 .markdown-editor-shell .cm-editor.cm-focused,
 .markdown-editor-shell .cm-content:focus,
-.markdown-editor-shell .cm-content:focus-visible { outline: none !important; }
+.markdown-editor-shell .cm-content:focus-visible,
+/* CodeMirror 给滚动容器留了 tabindex，点到正文以外的空白再按键就会亮出整块焦点框，像误选中了整篇正文。 */
+.markdown-editor-shell .cm-scroller:focus,
+.markdown-editor-shell .cm-scroller:focus-visible { outline: none !important; }
 .markdown-editor-shell .cm-scroller { overflow: visible; font-family: "Geist Variable","PingFang SC",sans-serif; line-height: 1.85; }
-.markdown-editor-shell .cm-content { padding: 0; caret-color: var(--primary); }
+/* 正文下方的空白必须属于文本层：正文只有一张表格时，它是唯一能落下光标的地方。 */
+.markdown-editor-shell .cm-content { min-height: var(--editor-min-height); padding: 0; caret-color: var(--primary); }
 .markdown-editor-shell .cm-line { padding: 0; }
 .markdown-editor-shell .cm-selectionBackground,
 .markdown-editor-shell .cm-content ::selection { background: color-mix(in oklab,var(--primary) 18%,transparent) !important; }
@@ -1089,7 +1093,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .note-editor[data-compact="true"] .document-title { font-size: 28px; }
   .note-editor[data-compact="true"] .document-meta { margin: 10px 0 25px; }
   .note-editor[data-compact="true"] .note-edit-mode-status { flex-basis: max-content; margin-left: 0; }
-  .note-editor[data-compact="true"] .markdown-editor-shell { min-height: calc(100dvh - 245px); }
+  .note-editor[data-compact="true"] .markdown-editor-shell { --editor-min-height: calc(100dvh - 245px); }
   .note-editor[data-compact="true"] .markdown-preview { min-height: calc(100dvh - 215px); font-size: 15px; }
   .note-editor[data-compact="true"] .markdown-properties { margin-bottom: 22px; }
   .note-editor[data-compact="true"] .markdown-property-row { grid-template-columns: 88px minmax(0,1fr); }

@@ -3,8 +3,11 @@ import { act, createRef } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
+import { EditorState } from "@codemirror/state"
+
 import type { MarkdownEditorHandle } from "./markdown-editor"
-import MarkdownEditor, { findPlainTextMatches, formatToolbarText } from "./markdown-editor"
+import MarkdownEditor, { findPlainTextMatches, formatToolbarText, paragraphSeparatorAtEnd } from "./markdown-editor"
 
 // React 19 在测试里要求显式打开 act 环境标记。
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -76,5 +79,24 @@ describe("MarkdownEditor", () => {
 
     expect(second).toHaveBeenCalledWith(1, 3)
     expect(first).not.toHaveBeenCalled()
+  })
+
+  describe("在正文末尾补落点", () => {
+    const table = "| 列 A | 列 B |\n| --- | --- |\n| 1 | 2 |"
+
+    function stateOf(doc: string) {
+      return EditorState.create({ doc, extensions: [markdown({ base: markdownLanguage })] })
+    }
+
+    it("在表格正下方补一个空行，新写的内容才不会被并进表格", () => {
+      expect(paragraphSeparatorAtEnd(stateOf(table))).toBe("\n\n")
+      expect(paragraphSeparatorAtEnd(stateOf(`${table}\n`))).toBe("\n")
+      expect(paragraphSeparatorAtEnd(stateOf(`${table}\n\n`))).toBe("")
+    })
+
+    it("正文以普通段落结尾时不改动文档", () => {
+      expect(paragraphSeparatorAtEnd(stateOf("第一段\n\n第二段"))).toBe("")
+      expect(paragraphSeparatorAtEnd(stateOf(`${table}\n\n表格后的段落`))).toBe("")
+    })
   })
 })

@@ -1,6 +1,8 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react"
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
+import { syntaxTree } from "@codemirror/language"
+import type { EditorState } from "@codemirror/state"
 import { EditorView } from "@codemirror/view"
 
 import { readClipboardText, writeClipboardText } from "@/services/clipboard/clipboard-text"
@@ -87,6 +89,26 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         focus(_event, view) {
           handlers.current.onSelectionChange?.(!view.state.selection.main.empty)
           return false
+        },
+        // 正文以表格结尾时，点最后一块下方的空白本该在表格后面接着写，
+        // 但紧邻表格的那一行会被 Markdown 并进表格，先补出空行再落光标。
+        // 其余情况交给 CodeMirror 自己定位，拖选等原生行为保持不变。
+        mousedown(event, view) {
+          if (event.button !== 0 || event.shiftKey || event.target !== view.contentDOM) return false
+          if (view.state.readOnly) return false
+          const lastBlock = view.lineBlockAt(view.state.doc.length)
+          if (event.clientY <= view.documentTop + lastBlock.bottom) return false
+          const separator = paragraphSeparatorAtEnd(view.state)
+          if (!separator) return false
+          event.preventDefault()
+          const end = view.state.doc.length
+          view.dispatch({
+            changes: { from: end, insert: separator },
+            scrollIntoView: true,
+            selection: { anchor: end + separator.length },
+          })
+          view.focus()
+          return true
         },
         drop(event) {
           const onInsertFiles = handlers.current.onInsertFiles
@@ -273,6 +295,28 @@ function readSelectedText(view: EditorView | undefined) {
   const selection = view.state.selection.main
   return view.state.sliceDoc(selection.from, selection.to)
 }
+
+// 只用到节点名与父链；按结构声明，避免为类型引入 @lezer/common 显式依赖。
+type MdNode = { name: string; parent: MdNode | null }
+
+function isInsideTable(state: EditorState, position: number) {
+  for (let node: MdNode | null = syntaxTree(state).resolveInner(position, 1); node; node = node.parent) {
+    if (node.name === "Table") return true
+  }
+  return false
+}
+
+// 表格会把紧随其后的非空行并进自己，只有隔开一个空行，新写的内容才是独立段落。
+export function paragraphSeparatorAtEnd(state: EditorState) {
+  const { doc } = state
+  const lastLine = doc.line(doc.lines)
+  if (lastLine.text.trim() !== "") return isInsideTable(state, lastLine.from) ? "\n\n" : ""
+  if (doc.lines < 2) return ""
+  const previous = doc.line(doc.lines - 1)
+  if (previous.text.trim() === "") return ""
+  return isInsideTable(state, previous.from) ? "\n" : ""
+}
+
 
 export function findPlainTextMatches(text: string, query: string) {
   if (!query) return []

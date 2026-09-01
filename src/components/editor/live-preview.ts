@@ -264,6 +264,18 @@ function tableBlocksKey(blocks: TableBlock[]) {
   return blocks.map((block) => `${block.from}:${block.to}:${block.source.length}:${block.source}`).join("|")
 }
 
+// 块级替换会把紧贴它两端的插入并进自己的范围：在表格末尾换行或补空行后，
+// 新起的一行会被留在 Widget 里，既看不见也落不下光标。原文没变时 key 是相同的，
+// 因此还要比对装饰的实际范围，错位就重建。
+function tableDecorationsDrifted(state: EditorState, blocks: TableBlock[]) {
+  const ranges: DocRange[] = []
+  state.field(tableDecorationsField).between(0, state.doc.length, (from, to) => {
+    ranges.push({ from, to })
+  })
+  if (ranges.length !== blocks.length) return true
+  return blocks.some((block, index) => ranges[index].from !== block.from || ranges[index].to !== block.to)
+}
+
 function tableBlocksDecorations(blocks: TableBlock[], view: EditorView): DecorationSet {
   return Decoration.set(
     blocks.map((block, tableIndex) =>
@@ -487,7 +499,8 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
     // 表格装饰变化时经 effect 写入 StateField，内容不变则跳过，避免无意义的重绘。
     // 插件 update 期间不允许同步 dispatch，延迟到当前更新结束后提交。
     syncTableDecorations(view: EditorView) {
-      if (tableBlocksKey(collectTableBlocks(view.state)) === this.tableBlocksKey) return
+      const current = collectTableBlocks(view.state)
+      if (tableBlocksKey(current) === this.tableBlocksKey && !tableDecorationsDrifted(view.state, current)) return
       window.setTimeout(() => {
         if (this.destroyed) return
         // 等待期间文档可能已被同步合并或撤销改写，必须按当前状态重算，
