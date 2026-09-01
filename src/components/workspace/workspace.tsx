@@ -116,6 +116,7 @@ import { MobileNoteSearch } from "@/components/workspace/mobile-note-search"
 import { MobileFolderActionSheet, MobileNoteActionSheet } from "@/components/workspace/mobile-action-sheets"
 import { SelectionActionBar } from "@/components/workspace/selection-action-bar"
 import { isSelectionDismissTap, keepsSelectionAlive, type PointerOrigin } from "@/components/workspace/selection-dismiss"
+import { hasOpenModal, isTextEntryElement, selectElementContents } from "@/components/workspace/shortcut-scope"
 import { useLongPress } from "@/components/workspace/use-long-press"
 import { useEdgeSwipeAction } from "@/components/workspace/use-edge-swipe-action"
 import { SyncActivityToast } from "@/components/workspace/sync-activity-toast"
@@ -234,7 +235,9 @@ export function Workspace(props: WorkspaceProps) {
   useEffect(() => {
     if (!props.activeNote || activeNoteUsesSpecialPreview) return
     const toggleViewMode = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLocaleLowerCase() !== "e") return
+      // 与其他桌面快捷键一致地忽略长按重复：按住不放会连着翻转视图，来回闪。
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat) return
+      if (event.key.toLocaleLowerCase() !== "e" || hasOpenModal()) return
       event.preventDefault()
       props.onNoteViewModeChange(props.noteViewMode === "preview" ? "edit" : "preview")
     }
@@ -247,6 +250,8 @@ export function Workspace(props: WorkspaceProps) {
     const handleDesktopShortcut = (event: KeyboardEvent) => {
       if (window.matchMedia("(max-width: 767px)").matches) return
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat) return
+      // 弹窗开着时这些动作都会打断当前操作：抢走焦点、在背后新建笔记或触发同步。
+      if (hasOpenModal()) return
       const key = event.key.toLocaleLowerCase()
       if (key === "k") {
         event.preventDefault()
@@ -1532,6 +1537,7 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
     if (isSpecialPreview) return
     const handleFindShortcut = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLocaleLowerCase() !== "f") return
+      if (hasOpenModal()) return
       event.preventDefault()
       // 阅读状态下先切到编辑器再打开查找，确保选中结果可以滚动到可见区域。
       if (previewing) onNoteViewModeChange("edit")
@@ -1540,6 +1546,26 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
     window.addEventListener("keydown", handleFindShortcut)
     return () => window.removeEventListener("keydown", handleFindShortcut)
   }, [isSpecialPreview, onNoteViewModeChange, previewing])
+
+  useEffect(() => {
+    // 画布有自己的全选语义（选中所有图形），不接管。
+    if (isSpecialPreview) return
+    const handleSelectAll = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
+      if (event.key.toLocaleLowerCase() !== "a") return
+      // 输入框与可编辑正文的全选范围本来就是对的，只有焦点漂到正文之外时才需要接管。
+      // 弹窗开着时更不能接管：焦点可能停在按钮上，此时去全选背后的笔记正文没有意义。
+      if (isTextEntryElement(document.activeElement) || hasOpenModal()) return
+      event.preventDefault()
+      if (previewing) {
+        selectElementContents(editorArticleRef.current?.querySelector(".markdown-preview") ?? null)
+        return
+      }
+      editorRef.current?.selectAll()
+    }
+    document.addEventListener("keydown", handleSelectAll)
+    return () => document.removeEventListener("keydown", handleSelectAll)
+  }, [isSpecialPreview, previewing])
 
   const revealOutlineHeading = (heading: (typeof noteOutline)[number], index: number) => {
     setOutlineDialogOpen(false)
@@ -1762,6 +1788,11 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
                 className="editor-replace-input"
                 onChange={(event) => setFindReplacement(event.target.value)}
                 onKeyDown={(event) => {
+                  // 查找框按 Esc 能收起查找栏，光标挪到替换框后同样要能收起。
+                  if (event.key === "Escape") {
+                    setFindOpen(false)
+                    return
+                  }
                   if (event.key !== "Enter" || event.nativeEvent.isComposing) return
                   event.preventDefault()
                   setFindResult(editorRef.current?.replaceCurrent(findQuery, findReplacement) ?? { current: 0, total: 0 })
