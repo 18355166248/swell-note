@@ -8,6 +8,7 @@ import { EditorView } from "@codemirror/view"
 import { readClipboardText, writeClipboardText } from "@/services/clipboard/clipboard-text"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
+import { scrollCursorIntoView } from "./cursor-visibility"
 import { markdownLivePreview } from "./live-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import "./markdown-table.css"
@@ -61,6 +62,28 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     // 切换笔记会按 key 重建编辑器，卸载时要撤回选区状态，新笔记才不会带着上一篇的选区操作条打开。
     useEffect(() => () => handlers.current.onSelectionChange?.(false), [])
 
+    useEffect(() => {
+      const viewport = window.visualViewport
+      if (!compact || !viewport) return
+      // 键盘升起会把可视区压掉一半，此前落在下半屏的光标就藏到了键盘后面。
+      // 布局要等 --keyboard-inset 写入后才是最终高度，所以推迟一帧再量。
+      let frame = 0
+      const follow = () => {
+        frame = 0
+        const view = editorRef.current?.view
+        if (view?.hasFocus) scrollCursorIntoView(view)
+      }
+      const schedule = () => {
+        if (frame) return
+        frame = requestAnimationFrame(follow)
+      }
+      viewport.addEventListener("resize", schedule)
+      return () => {
+        if (frame) cancelAnimationFrame(frame)
+        viewport.removeEventListener("resize", schedule)
+      }
+    }, [compact])
+
     const extensions = useMemo(() => [
       // GFM 基座：表格、删除线与任务列表才能进入语法树，供语法高亮与即时渲染装饰使用。
       markdown({ base: markdownLanguage }),
@@ -78,6 +101,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const line = update.state.doc.lineAt(position)
         handlers.current.onCursorChange?.(line.number, position - line.from + 1)
         handlers.current.onSelectionChange?.(!update.state.selection.main.empty)
+        // 打字打到可视区边缘、或光标跳到远处时同样要跟过去，否则又落到键盘后面。
+        if (compact && update.view.hasFocus) scrollCursorIntoView(update.view)
       }),
       EditorView.domEventHandlers({
         // CodeMirror 的选区不随失焦清空：点走标题输入框后选区高亮已经没了，
