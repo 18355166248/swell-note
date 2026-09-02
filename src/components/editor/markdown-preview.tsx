@@ -35,7 +35,6 @@ type MarkdownPreviewProps = {
   onContentChange?: (content: string) => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onLoadWikiNote: (target: string) => void
-  onRequestEditAtLine?: (line?: number) => void
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
   onToggleTask?: (line: number, checked: boolean) => void
   onWikiLink: (target: string) => void
@@ -102,13 +101,13 @@ class NoteRendererErrorBoundary extends Component<{
   }
 }
 
-function MarkdownContent({ assetScope, content, depth, editable, onLoadWikiNote, onRequestEditAtLine, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink }: MarkdownPreviewProps & { depth: number }) {
+function MarkdownContent({ assetScope, content, depth, editable, onLoadWikiNote, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink }: MarkdownPreviewProps & { depth: number }) {
   // 预览正文已剥离 frontmatter，勾选任务时按 hast 行号补回偏移换算源文件行号。
   const sourceLineOffset = frontmatterLineCount(content)
   const body = stripMarkdownFrontmatter(content)
   const properties = depth === 0 ? Object.entries(extractFrontmatter(content).properties) : []
-  const handlersRef = useRef({ onLoadWikiNote, onRequestEditAtLine, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink })
-  handlersRef.current = { onLoadWikiNote, onRequestEditAtLine, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink }
+  const handlersRef = useRef({ onLoadWikiNote, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink })
+  handlersRef.current = { onLoadWikiNote, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink }
   const components = useMemo(() => ({
     input({ checked, disabled }: { checked?: boolean; disabled?: boolean }) {
       const previewLine = useContext(TaskItemLineContext)
@@ -188,18 +187,8 @@ function MarkdownContent({ assetScope, content, depth, editable, onLoadWikiNote,
     h5({ children, node }: HeadingComponentProps) { return <Heading level={5} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
     h6({ children, node }: HeadingComponentProps) { return <Heading level={6} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
   }), [assetScope, depth, sourceLineOffset])
-  const requestEdit = (event: MouseEvent<HTMLDivElement>) => {
-    const request = handlersRef.current.onRequestEditAtLine
-    if (!request || depth !== 0 || !window.getSelection()?.isCollapsed) return
-    const target = event.target as HTMLElement
-    // 链接、任务、附件和嵌入笔记保留自身交互；正文空白与普通文本才进入编辑器。
-    if (target.closest("a,button,input,textarea,select,summary,details,[role='button'],[contenteditable='true'],.wiki-embed")) return
-    const lineNode = target.closest<HTMLElement>("[data-source-line]")
-    const line = Number(lineNode?.dataset.sourceLine)
-    request(Number.isFinite(line) && line > 0 ? line : undefined)
-  }
   return (
-    <div className={depth === 0 ? "markdown-preview" : "markdown-preview markdown-preview-embedded"} onClick={requestEdit}>
+    <div className={depth === 0 ? "markdown-preview" : "markdown-preview markdown-preview-embedded"}>
       {properties.length > 0 ? <MarkdownProperties properties={properties} /> : null}
       {!body.trim() && depth === 0 ? (
         <div className="markdown-empty-state">

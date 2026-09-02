@@ -41,28 +41,6 @@ describe("Markdown preview integration", () => {
     await act(async () => root.unmount())
   })
 
-  it("lets a mobile reader tap normal text to edit at the matching source line", async () => {
-    const container = document.createElement("div")
-    const root = createRoot(container)
-    const onRequestEditAtLine = vi.fn()
-    await act(async () => root.render(
-      <MarkdownPreview
-        {...baseProps}
-        content={"---\ntitle: 示例\n---\n\n## 小节\n\n点击正文\n\n[保留链接](https://example.com)"}
-        onRequestEditAtLine={onRequestEditAtLine}
-        onResolveWikiNote={() => ({ status: "missing" })}
-      />,
-    ))
-
-    await act(async () => container.querySelector("p")?.click())
-    expect(onRequestEditAtLine).toHaveBeenCalledWith(7)
-
-    onRequestEditAtLine.mockClear()
-    await act(async () => (container.querySelector("a") as HTMLAnchorElement | null)?.click())
-    expect(onRequestEditAtLine).not.toHaveBeenCalled()
-    await act(async () => root.unmount())
-  })
-
   it("reuses a loaded vault image when sync remounts the preview", async () => {
     vi.useFakeTimers()
     const originalCreateObjectUrl = URL.createObjectURL

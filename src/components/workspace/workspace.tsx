@@ -1402,7 +1402,6 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
   const [findReplacement, setFindReplacement] = useState("")
   const [findResult, setFindResult] = useState({ current: 0, total: 0 })
   const findInputRef = useRef<HTMLInputElement>(null)
-  const pendingMobileEditLineRef = useRef<number | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [insertingAttachment, setInsertingAttachment] = useState(false)
   const attachmentBusyRef = useRef(false)
@@ -1539,18 +1538,6 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
     document.addEventListener("keydown", closeOnEscape)
     return () => document.removeEventListener("keydown", closeOnEscape)
   }, [findOpen])
-
-  useEffect(() => {
-    if (previewing || pendingMobileEditLineRef.current === null) return
-    const requestedLine = pendingMobileEditLineRef.current
-    pendingMobileEditLineRef.current = null
-    // 预览切换到 CodeMirror 需要等待组件挂载；定位到触摸段落后直接唤起键盘，减少一次额外点击。
-    const frame = window.requestAnimationFrame(() => {
-      if (requestedLine > 0) editorRef.current?.revealLine(requestedLine)
-      else editorRef.current?.focus()
-    })
-    return () => window.cancelAnimationFrame(frame)
-  }, [previewing])
 
   useEffect(() => {
     if (isSpecialPreview) return
@@ -1902,12 +1889,6 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
                 editable={!readOnly}
                 key={noteRenderIdentity}
                 onLoadWikiNote={onLoadWikiNote}
-                onRequestEditAtLine={compact && !readOnly
-                  ? (line) => {
-                      pendingMobileEditLineRef.current = line ?? 0
-                      onNoteViewModeChange("edit")
-                    }
-                  : undefined}
                 onResolveAsset={onResolveAsset}
                 onResolveWikiNote={onResolveWikiNote}
                 onToggleTask={readOnly ? undefined : onToggleTask}
