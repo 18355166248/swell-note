@@ -141,6 +141,9 @@ const CanvasPreview = lazyWithRetry(() => import("@/components/editor/canvas-pre
 
 export type MobileScreen = "library" | "notes" | "editor"
 
+// 手机端三级页面的层级深浅，用来判断这次切换是往里走还是往回退。
+const MOBILE_SCREEN_DEPTH: Record<MobileScreen, number> = { editor: 2, library: 0, notes: 1 }
+
 export type AppSection = "notes" | "settings" | "todos"
 export type LibraryView = "all" | "recent" | "starred"
 
@@ -957,7 +960,8 @@ function LibraryRow({ active = false, contextActions, contextFolder, count, dept
             onClick={onToggle}
             type="button"
           >
-            {expanded ? <ChevronDown /> : <ChevronRight />}
+            {/* 展开态靠 CSS 旋转同一个图标，换组件会让箭头直接跳变，接不上折叠动画。 */}
+            <ChevronRight />
           </button>
         ) : <span className="library-chevron-placeholder" />
       ) : <span className="library-chevron-placeholder" />}
@@ -2167,6 +2171,9 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
   const libraryStateKey = `${props.totalNoteCount}\u0000${props.folders.map((folder) => folder.path).join("\u0000")}`
   // 返回按钮会回到来源列表，文案必须跟着来源变化，否则从目录进入时会谎称回到「全部笔记」。
   const backLabel = getMobileBackLabel(props.libraryView, props.selectedFolder)
+  // 手势已经把页面跟着手指送到位，交接路由后不能再补一段入场动画，否则会二次位移。
+  // 相位在同一批更新里就回到 idle，光看 edgeSwipe.active 判断不出这次导航来自手势。
+  const swipeNavigationRef = useRef(false)
   const handleEdgeSwipe = useCallback(() => {
     const isRootNoteList = props.mobileScreen === "notes"
       && (!props.selectedFolder || props.selectedFolder === "根目录")
@@ -2175,17 +2182,49 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
       return
     }
     if (props.mobileScreen === "editor") {
+      swipeNavigationRef.current = true
       props.onMobileScreenChange("notes")
       return
     }
     if (props.mobileScreen !== "notes") return
     const parentFolder = props.selectedFolder ? getParentFolderPath(props.selectedFolder) : null
     if (parentFolder) props.onSelectFolder(parentFolder)
-    else props.onMobileScreenChange("library")
+    else {
+      swipeNavigationRef.current = true
+      props.onMobileScreenChange("library")
+    }
   }, [props.mobileScreen, props.onMobileScreenChange, props.onSelectFolder, props.selectedFolder])
   const isRootSwipe = props.mobileScreen === "library"
     || (props.mobileScreen === "notes" && (!props.selectedFolder || props.selectedFolder === "根目录"))
   const edgeSwipe = useEdgeSwipeAction(handleEdgeSwipe, !navigationOpen, isRootSwipe ? "drawer" : "back")
+  // 侧滑返回是跟手的，点击进入却是硬切，同一个层级切换会给出两种观感。
+  // 这里给点击路径补一段方向一致的入场动画；手势自己已经把页面送到位，就不再叠加。
+  // 用 Web Animations API 而不是 CSS class：连续两次同方向切换时，属性值不变的 CSS 动画不会重播。
+  const currentPageRef = useRef<HTMLDivElement | null>(null)
+  const screenAnimationRef = useRef<Animation | null>(null)
+  const previousScreenRef = useRef(props.mobileScreen)
+  useEffect(() => {
+    const previous = previousScreenRef.current
+    if (previous === props.mobileScreen) return
+    previousScreenRef.current = props.mobileScreen
+    const bySwipe = swipeNavigationRef.current
+    swipeNavigationRef.current = false
+    const element = currentPageRef.current
+    if (!element || bySwipe) return
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
+    const forward = MOBILE_SCREEN_DEPTH[props.mobileScreen] > MOBILE_SCREEN_DEPTH[previous]
+    // 连点两级时上一段还没播完，不取消的话两个 transform 会叠在同一个元素上。
+    screenAnimationRef.current?.cancel()
+    screenAnimationRef.current = element.animate(
+      [
+        { opacity: forward ? 0.45 : 0.55, transform: `translate3d(${forward ? "15%" : "-9%"},0,0)` },
+        { opacity: 1, transform: "translate3d(0,0,0)" },
+      ],
+      { duration: forward ? 210 : 195, easing: "cubic-bezier(.22,.8,.25,1)" },
+    )
+  }, [props.mobileScreen])
+
+  useEffect(() => () => screenAnimationRef.current?.cancel(), [])
   const previousFolder = props.mobileScreen === "notes" && props.selectedFolder
     ? getParentFolderPath(props.selectedFolder)
     : null
@@ -2237,7 +2276,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
           {previousPage}
         </div>
       ) : null}
-      <div className="mobile-edge-swipe-current">
+      <div className="mobile-edge-swipe-current" ref={currentPageRef}>
       {props.mobileScreen === "library" ? (
         <MobileLibrary
           {...props}
@@ -2672,7 +2711,7 @@ function MobileLibraryRow({ count, depth = 0, expanded, folderTree = false, icon
             onClick={onToggle}
             type="button"
           >
-            {expanded ? <ChevronDown /> : <ChevronRight />}
+            <ChevronRight />
           </button>
         ) : <span className="mobile-folder-toggle-placeholder" />
       ) : null}
