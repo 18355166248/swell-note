@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from "react"
 
 import { getEdgeSwipeProgress, shouldCompleteEdgeSwipe } from "@/services/navigation/edge-swipe"
 
@@ -24,6 +24,7 @@ type Gesture = {
 export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kind: EdgeSwipeKind = "back") {
   const pointerGestureRef = useRef<Gesture | null>(null)
   const touchGestureRef = useRef<Gesture | null>(null)
+  const suppressClickRef = useRef(false)
   const timersRef = useRef<number[]>([])
   const workspaceRef = useRef<HTMLDivElement | null>(null)
   const [phase, setPhase] = useState<EdgeSwipePhase>("idle")
@@ -75,6 +76,10 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
       if (deltaY >= 10 && deltaY > deltaX * 1.1) return "vertical" as const
       if (deltaX < 8 || deltaX < deltaY * 1.1) return "pending" as const
       gesture.horizontal = true
+      // 横向拖动一旦成立，这一轮补发的 click 必须吞掉。React 把 touchmove 挂成 passive 监听，
+      // onTouchMove 里的 preventDefault 拦不住它，松手时手指下方的笔记会被当成点击直接打开，
+      // 紧接着手势再把页面切到上一级，看起来就是侧滑中间闪一下别的页面。
+      suppressClickRef.current = true
     }
     const progress = getEdgeSwipeProgress(deltaX)
     // 根目录手势只负责识别“打开导航”，拖动期间不移动正文；只有返回上页才做跟手转场。
@@ -121,6 +126,8 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
   })
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    // 每次新的按下都先解除抑制，否则上一轮残留的标记会把这次正常点击一起吞掉。
+    suppressClickRef.current = false
     if (!enabled || !event.isPrimary || event.clientX > 32) return
     clearScheduled()
     pointerGestureRef.current = startGesture(event.clientX, event.clientY, event.pointerId)
@@ -148,6 +155,7 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
     returnToStart()
   }
   const onTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
+    suppressClickRef.current = false
     const touch = event.touches[0]
     if (!enabled || event.touches.length !== 1 || !touch || touch.clientX > 32) return
     clearScheduled()
@@ -177,6 +185,12 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
     clearTouchGesture()
     returnToStart()
   }
+  const onClickCapture = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (!suppressClickRef.current) return
+    suppressClickRef.current = false
+    event.preventDefault()
+    event.stopPropagation()
+  }
 
   return {
     active: phase !== "idle",
@@ -184,6 +198,7 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
       ref: workspaceRef,
       "data-edge-swipe-kind": kind,
       "data-edge-swipe-state": phase,
+      onClickCapture,
       onPointerCancel,
       onPointerDown,
       onPointerMove,

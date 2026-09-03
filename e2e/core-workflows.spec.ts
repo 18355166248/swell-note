@@ -281,6 +281,50 @@ test.describe("核心笔记流程", () => {
     await expect(page.getByRole("dialog", { name: "主导航" })).toBeVisible({ timeout: 1_000 })
   })
 
+  test("移动端侧滑返回不会误打开手指下方的笔记", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await seedCachedVault(page)
+    const workspace = page.locator(".mobile-workspace:visible")
+
+    await workspace.getByText("测试", { exact: true }).first().click()
+    await expect(workspace).toHaveAttribute("data-screen", "notes")
+    // 记录手势全程出现过的页面：松手补发的 click 会打开手指下方的笔记，
+    // 而手势的路由交接要等到 170ms 后，最终页面仍是正确的，只能靠中途的快照抓到这次误触。
+    await page.evaluate(() => {
+      const target = document.querySelector(".mobile-workspace") as HTMLElement
+      const visited = new Set<string>([target.dataset.screen ?? ""])
+      const observer = new MutationObserver(() => visited.add(target.dataset.screen ?? ""))
+      observer.observe(target, { attributeFilter: ["data-screen"] })
+      Object.assign(window, { __swipeObserver: observer, __visitedScreens: visited })
+    })
+
+    // 等页面入场动画落位，否则量到的行位置还带着动画偏移，起手点会落到行外面
+    await page.waitForTimeout(400)
+    // 起手高度取自真实的笔记行：手指必须压在可点击的行上，才能复现松手补发的那次 click
+    const row = workspace.locator(".note-list-row").first()
+    const rowBox = await row.boundingBox()
+    const swipeY = Math.round((rowBox?.y ?? 360) + (rowBox?.height ?? 0) / 2)
+    await page.mouse.move(6, swipeY)
+    await page.mouse.down()
+    // 逐帧推进，贴近真实滑动的节奏；一次性拖到位时事件会被合并，复现不出这次误触
+    for (const x of [20, 45, 80, 120, 165, 210]) {
+      await page.mouse.move(x, swipeY + 2, { steps: 2 })
+      await page.waitForTimeout(16)
+    }
+    await page.mouse.up()
+    await expect(workspace).toHaveAttribute("data-screen", "library", { timeout: 1_000 })
+
+    const visitedScreens = await page.evaluate(() => {
+      const { __swipeObserver: observer, __visitedScreens: visited } = window as unknown as {
+        __swipeObserver: MutationObserver
+        __visitedScreens: Set<string>
+      }
+      observer.disconnect()
+      return [...visited]
+    })
+    expect(visitedScreens).not.toContain("editor")
+  })
+
   test("移动端阅读页保留高频操作并从更多菜单打开大纲", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "mobile-chrome")
     await seedCachedVault(page)
