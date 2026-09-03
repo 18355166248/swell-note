@@ -2833,6 +2833,7 @@ function MobileNoteList(props: MobileNoteListProps) {
             <VirtualNoteRows
               activeNoteId={props.activeNoteId}
               folders={childFolders}
+              initialScrollOffset={props.initialScrollTop}
               mobile
               noteSort={props.noteSort}
               notes={props.notes}
@@ -2973,6 +2974,7 @@ type VirtualNoteItem =
 function VirtualNoteRows({
   activeNoteId,
   folders = [],
+  initialScrollOffset = 0,
   mobile = false,
   noteSort,
   notes,
@@ -2984,6 +2986,7 @@ function VirtualNoteRows({
 }: {
   activeNoteId: string
   folders?: VaultFolder[]
+  initialScrollOffset?: number
   mobile?: boolean
   noteSort: NoteSort
   notes: Note[]
@@ -3018,6 +3021,9 @@ function VirtualNoteRows({
       : items[index]?.kind === "folder" ? mobile ? 58 : 56 : mobile ? 96 : 104,
     getItemKey: (index) => items[index]?.key ?? index,
     getScrollElement: () => viewportRef.current,
+    // 挂载首帧就把渲染窗口摆到恢复位置；否则先按顶部渲染、滚动恢复再逐帧追上来，
+    // 侧滑返回交接与返回键回列表时都会看到列表从顶部闪跳回中段。
+    initialOffset: () => initialScrollOffset,
     overscan: 8,
   })
 
