@@ -306,13 +306,24 @@ const tableDecorationsField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 })
 
-function buildLivePreviewDecorations(view: EditorView): { decorations: DecorationSet; tableBlocks: TableBlock[] } {
+// 装饰只在渲染出来的行上才有意义，但范围贴着视口切会让滚动时露出未渲染的源码。
+// 上下各留一屏左右的缓冲，滚动落到缓冲区内时装饰已经就位，viewportChanged 再补下一批。
+const DECORATION_BUFFER = 4000
+
+function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   const isCursorActive = cursorLineChecker(view.state)
-  const tableBlocks: TableBlock[] = []
   const frontmatter = findFrontmatterRange(view.state)
-  // 编辑器自身不滚动，实际滚动发生在外层 ScrollArea；CodeMirror.visibleRanges 因此只覆盖初始视口。
-  // 装饰必须按整篇文档计算，否则下半篇的图片、链接和标题永远不会进入即时预览。
-  const decorationRanges = [{ from: 0, to: view.state.doc.length }]
+  // 早期这里按整篇文档计算，33KB 的笔记每敲一个字就要重建整篇装饰集，
+  // 连带 CodeMirror 重新套用 RangeSet 与重算行高，实测占掉按键开销的九成。
+  // 编辑器自身不滚动，但 CodeMirror 会跟着外层 ScrollArea 更新 viewport，
+  // 因此按可见范围加缓冲计算即可，滚动时由 viewportChanged 续算。
+  const doc = view.state.doc
+  const decorationRanges = view.visibleRanges.length > 0
+    ? view.visibleRanges.map((range) => ({
+        from: Math.max(0, range.from - DECORATION_BUFFER),
+        to: Math.min(doc.length, range.to + DECORATION_BUFFER),
+      }))
+    : [{ from: 0, to: doc.length }]
 
   const decorations: Range<Decoration>[] = []
   const hide = (node: MdSyntaxNode) => {
@@ -470,11 +481,6 @@ function buildLivePreviewDecorations(view: EditorView): { decorations: Decoratio
           }
           case "Table": {
             // 表格由可编辑 Widget 始终接管，避免光标进入后整块退回 Markdown 源码。
-            // 顺手在这次遍历里收下块范围：表格装饰原本要再走一遍整篇语法树，长笔记里这是纯粹的重复劳动。
-            const firstLine = view.state.doc.lineAt(node.from)
-            const lastLine = view.state.doc.lineAt(node.to)
-            const source = view.state.sliceDoc(firstLine.from, lastLine.to)
-            if (parseMarkdownTable(source)) tableBlocks.push({ from: firstLine.from, source, to: lastLine.to })
             return false
           }
         }
@@ -482,7 +488,7 @@ function buildLivePreviewDecorations(view: EditorView): { decorations: Decoratio
     })
   }
 
-  return { decorations: Decoration.set(decorations, true), tableBlocks }
+  return Decoration.set(decorations, true)
 }
 
 const markdownLivePreviewPlugin = ViewPlugin.fromClass(
@@ -494,16 +500,15 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
 
     constructor(view: EditorView) {
       this.cursorLinesKey = cursorLinesKey(view.state)
-      const built = buildLivePreviewDecorations(view)
-      this.decorations = built.decorations
+      this.decorations = buildLivePreviewDecorations(view)
       // 初次构建即提交表格装饰（构造期 dispatch 延迟到挂载后执行）。
-      this.syncTableDecorations(view, built.tableBlocks)
+      this.syncTableDecorations(view)
     }
 
     update(update: ViewUpdate) {
       if (!update.docChanged && !update.viewportChanged && !update.selectionSet) return
-      // 编辑器本身不滚动，装饰只能按整篇文档计算，长笔记里这是每次更新最贵的一步。
-      // 文档没变时先比对光标行签名：同一行内移动光标不会改变任何装饰，直接沿用上一次的结果。
+      // 文档没变、视口也没动时先比对光标行签名：同一行内移动光标不会改变任何装饰，
+      // 直接沿用上一次的结果，长笔记里按方向键就不必重算。
       if (!update.docChanged && !update.viewportChanged) {
         const nextCursorLinesKey = cursorLinesKey(update.state)
         if (nextCursorLinesKey === this.cursorLinesKey) return
@@ -511,9 +516,9 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
       } else {
         this.cursorLinesKey = cursorLinesKey(update.state)
       }
-      const built = buildLivePreviewDecorations(update.view)
-      this.decorations = built.decorations
-      this.syncTableDecorations(update.view, built.tableBlocks)
+      this.decorations = buildLivePreviewDecorations(update.view)
+      // 表格块只在文档变化时才可能增减；滚动不会改变它们，没必要跟着重扫一遍语法树。
+      if (update.docChanged) this.syncTableDecorations(update.view)
     }
 
     destroy() {
@@ -522,7 +527,8 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
 
     // 表格装饰变化时经 effect 写入 StateField，内容不变则跳过，避免无意义的重绘。
     // 插件 update 期间不允许同步 dispatch，延迟到当前更新结束后提交。
-    syncTableDecorations(view: EditorView, current: TableBlock[]) {
+    syncTableDecorations(view: EditorView) {
+      const current = collectTableBlocks(view.state)
       if (tableBlocksKey(current) === this.tableBlocksKey && !tableDecorationsDrifted(view.state, current)) return
       window.setTimeout(() => {
         if (this.destroyed) return

@@ -1,4 +1,4 @@
-import { Component, Suspense, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
+import { Component, memo, Suspense, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
 import remarkGfm from "remark-gfm"
@@ -46,7 +46,9 @@ const rehypePlugins = [rehypeHighlight]
 // 任务勾选框由 remark-gfm 合成、自身没有源码位置，行号从所属任务列表项（li）经 Context 传入。
 const TaskItemLineContext = createContext<number | null>(null)
 
-export default function MarkdownPreview(props: MarkdownPreviewProps) {
+// 切换笔记时这棵子树会连着渲染四次：旧正文两次、新正文两次，每一次都要把整篇
+// Markdown 重新解析成 React 元素。正文没变时没有任何理由重算，这里挡住重复的那两次。
+export default memo(function MarkdownPreview(props: MarkdownPreviewProps) {
   const renderer = resolveOfficialNoteRenderer(props.content)
   if (renderer) {
     const PluginRenderer = renderer.component
@@ -68,7 +70,7 @@ export default function MarkdownPreview(props: MarkdownPreviewProps) {
     )
   }
   return <MarkdownContent {...props} depth={0} />
-}
+})
 
 function NoteRendererLoading({ label }: { label: string }) {
   return <div className="note-renderer-loading" role="status">正在加载 {label} 预览…</div>
