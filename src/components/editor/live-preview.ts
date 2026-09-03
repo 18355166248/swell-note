@@ -91,6 +91,12 @@ function collectCursorLines(state: EditorState) {
   return lines
 }
 
+// 装饰只关心「哪些行处于光标/选区内」；同一行内左右移动光标不会改变任何一条装饰，
+// 拿它当签名就能把长笔记里最常见的光标移动挡在整篇重算之外。
+function cursorLinesKey(state: EditorState) {
+  return [...collectCursorLines(state)].join(",")
+}
+
 function cursorLineChecker(state: EditorState) {
   const cursorLines = collectCursorLines(state)
   // 节点跨多行时，只要任一行处于选区就保持原样，避免只隐藏一半标记。
@@ -300,8 +306,9 @@ const tableDecorationsField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 })
 
-function buildLivePreviewDecorations(view: EditorView): DecorationSet {
+function buildLivePreviewDecorations(view: EditorView): { decorations: DecorationSet; tableBlocks: TableBlock[] } {
   const isCursorActive = cursorLineChecker(view.state)
+  const tableBlocks: TableBlock[] = []
   const frontmatter = findFrontmatterRange(view.state)
   // 编辑器自身不滚动，实际滚动发生在外层 ScrollArea；CodeMirror.visibleRanges 因此只覆盖初始视口。
   // 装饰必须按整篇文档计算，否则下半篇的图片、链接和标题永远不会进入即时预览。
@@ -463,6 +470,11 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
           }
           case "Table": {
             // 表格由可编辑 Widget 始终接管，避免光标进入后整块退回 Markdown 源码。
+            // 顺手在这次遍历里收下块范围：表格装饰原本要再走一遍整篇语法树，长笔记里这是纯粹的重复劳动。
+            const firstLine = view.state.doc.lineAt(node.from)
+            const lastLine = view.state.doc.lineAt(node.to)
+            const source = view.state.sliceDoc(firstLine.from, lastLine.to)
+            if (parseMarkdownTable(source)) tableBlocks.push({ from: firstLine.from, source, to: lastLine.to })
             return false
           }
         }
@@ -470,7 +482,7 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
     })
   }
 
-  return Decoration.set(decorations, true)
+  return { decorations: Decoration.set(decorations, true), tableBlocks }
 }
 
 const markdownLivePreviewPlugin = ViewPlugin.fromClass(
@@ -478,18 +490,30 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
     decorations: DecorationSet
     destroyed = false
     tableBlocksKey = ""
+    cursorLinesKey: string
 
     constructor(view: EditorView) {
-      this.decorations = buildLivePreviewDecorations(view)
+      this.cursorLinesKey = cursorLinesKey(view.state)
+      const built = buildLivePreviewDecorations(view)
+      this.decorations = built.decorations
       // 初次构建即提交表格装饰（构造期 dispatch 延迟到挂载后执行）。
-      this.syncTableDecorations(view)
+      this.syncTableDecorations(view, built.tableBlocks)
     }
 
     update(update: ViewUpdate) {
-      if (update.docChanged || update.selectionSet || update.viewportChanged) {
-        this.decorations = buildLivePreviewDecorations(update.view)
-        this.syncTableDecorations(update.view)
+      if (!update.docChanged && !update.viewportChanged && !update.selectionSet) return
+      // 编辑器本身不滚动，装饰只能按整篇文档计算，长笔记里这是每次更新最贵的一步。
+      // 文档没变时先比对光标行签名：同一行内移动光标不会改变任何装饰，直接沿用上一次的结果。
+      if (!update.docChanged && !update.viewportChanged) {
+        const nextCursorLinesKey = cursorLinesKey(update.state)
+        if (nextCursorLinesKey === this.cursorLinesKey) return
+        this.cursorLinesKey = nextCursorLinesKey
+      } else {
+        this.cursorLinesKey = cursorLinesKey(update.state)
       }
+      const built = buildLivePreviewDecorations(update.view)
+      this.decorations = built.decorations
+      this.syncTableDecorations(update.view, built.tableBlocks)
     }
 
     destroy() {
@@ -498,8 +522,7 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
 
     // 表格装饰变化时经 effect 写入 StateField，内容不变则跳过，避免无意义的重绘。
     // 插件 update 期间不允许同步 dispatch，延迟到当前更新结束后提交。
-    syncTableDecorations(view: EditorView) {
-      const current = collectTableBlocks(view.state)
+    syncTableDecorations(view: EditorView, current: TableBlock[]) {
       if (tableBlocksKey(current) === this.tableBlocksKey && !tableDecorationsDrifted(view.state, current)) return
       window.setTimeout(() => {
         if (this.destroyed) return

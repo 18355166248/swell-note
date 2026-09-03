@@ -504,19 +504,21 @@ function App() {
     () => buildVaultFolders(availableNotes, vaultDirectories),
     [availableNotes, vaultDirectories],
   )
-  const folderNotes = selectedFolder
+  // 目录筛选、标签筛选、视图筛选和排序都要扫全库，随手一个菜单开合都重算的话，
+  // 笔记一多就会拖慢每一次交互；这里逐层缓存，只有真正相关的输入变了才重跑。
+  const folderNotes = useMemo(() => selectedFolder
     ? availableNotes.filter((note) => includeNestedFolderNotes
       ? noteBelongsToFolder(note, selectedFolder)
       : noteBelongsDirectlyToFolder(note, selectedFolder))
-    : availableNotes
-  const taggedNotes = selectedTag
+    : availableNotes, [availableNotes, includeNestedFolderNotes, selectedFolder])
+  const taggedNotes = useMemo(() => selectedTag
     ? folderNotes.filter((note) => note.tags?.includes(selectedTag))
-    : folderNotes
-  const libraryNotes = libraryView === "recent"
+    : folderNotes, [folderNotes, selectedTag])
+  const libraryNotes = useMemo(() => libraryView === "recent"
     ? sortNotes(taggedNotes, "updated-desc").slice(0, 32)
     : libraryView === "starred"
       ? taggedNotes.filter((note) => note.starred)
-      : taggedNotes
+      : taggedNotes, [libraryView, taggedNotes])
   const availableTags = useMemo(
     () => [...new Set(availableNotes.flatMap((note) => note.tags ?? []))].sort((left, right) => left.localeCompare(right)),
     [availableNotes],
@@ -524,17 +526,17 @@ function App() {
   const nativeSearchPaths = nativeSearchResult?.query === normalizedQuery
     ? nativeSearchResult.paths
     : null
-  const filteredNotes = normalizedQuery
+  const filteredNotes = useMemo(() => normalizedQuery
     ? libraryNotes.filter((note) => {
-        const metadataMatches = `${note.title} ${note.preview}`.toLocaleLowerCase().includes(normalizedQuery)
+        // 标题和摘要都很短，逐条小写化的代价可以忽略。正文索引写入时已经是小写，
+        // 这里绝不能再把它拼进大字符串重新小写：那等于每敲一个字就把整库正文复制一遍。
+        if (`${note.title} ${note.preview}`.toLocaleLowerCase().includes(normalizedQuery)) return true
         return nativeSearchPaths
-          ? metadataMatches || Boolean(note.remotePath && nativeSearchPaths.has(note.remotePath))
-          : `${note.title} ${note.preview} ${note.searchText ?? ""}`
-            .toLocaleLowerCase()
-            .includes(normalizedQuery)
+          ? Boolean(note.remotePath && nativeSearchPaths.has(note.remotePath))
+          : Boolean(note.searchText?.includes(normalizedQuery))
       })
-    : libraryNotes
-  const visibleNotes = sortNotes(filteredNotes, noteSort)
+    : libraryNotes, [libraryNotes, nativeSearchPaths, normalizedQuery])
+  const visibleNotes = useMemo(() => sortNotes(filteredNotes, noteSort), [filteredNotes, noteSort])
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? null
   const requestedNoteId = resolveRouteNoteId(noteRouteMatch?.params.noteId, notes.map((note) => note.id))
   const missingNoteRoute = Boolean(cacheReady && requestedNoteId && !notes.some((note) => note.id === requestedNoteId))
@@ -557,6 +559,16 @@ function App() {
     [activeNoteId, activeTarget, availableNotes],
   )
   const connected = vaultSession !== null && vaultNoteCount > 0
+  const starredNoteCount = useMemo(
+    () => availableNotes.filter((note) => note.starred).length,
+    [availableNotes],
+  )
+  // 兜底状态对象不能在渲染里现造：编辑器面板靠 memo 跳过与自己无关的重渲染，
+  // 每次都换一个新对象等于把这层 memo 直接废掉。
+  const activeSaveState = useMemo<NoteSaveState>(
+    () => saveStates[activeNoteId] ?? { status: activeNote ? getNoteSaveState(activeNote).status : "saved" },
+    [activeNote, activeNoteId, saveStates],
+  )
 
   useEffect(() => {
     if (!activeCacheMeta || !activeNote?.remotePath || !activeNote.contentLoaded || !supportsNativeSearchIndex()) return
@@ -3670,13 +3682,11 @@ function App() {
             query={query}
             selectedFolder={selectedFolder}
             selectedTag={selectedTag}
-            saveState={saveStates[activeNoteId] ?? {
-              status: activeNote ? getNoteSaveState(activeNote).status : "saved",
-            }}
+            saveState={activeSaveState}
             syncLabel={syncLabel}
             syncFailure={syncFailure}
             syncProgress={syncProgress}
-            starredNoteCount={availableNotes.filter((note) => note.starred).length}
+            starredNoteCount={starredNoteCount}
             totalNoteCount={availableNotes.length}
             vaultError={vaultError}
             vaultCaches={vaultCaches}

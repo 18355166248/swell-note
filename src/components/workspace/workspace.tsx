@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
+import { memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import {
   closestCenter,
   DndContext,
@@ -61,6 +61,7 @@ import {
 import swellNoteLogo from "@/assets/brand/swell-note-logo-ribbon-s.svg"
 import { Button } from "@/components/ui/button"
 import { lazyWithRetry } from "@/lib/lazy-with-retry"
+import { useOptionalStableCallback, useStableCallback } from "@/lib/use-stable-callback"
 import type { AttachmentWriteResult } from "@/services/vault/attachment-writer"
 import {
   DropdownMenu,
@@ -139,6 +140,7 @@ const MarkdownPreview = lazyWithRetry(() => import("@/components/editor/markdown
 const CanvasPreview = lazyWithRetry(() => import("@/components/editor/canvas-preview"))
 
 export type MobileScreen = "library" | "notes" | "editor"
+
 export type AppSection = "notes" | "settings" | "todos"
 export type LibraryView = "all" | "recent" | "starred"
 
@@ -299,7 +301,7 @@ export function Workspace(props: WorkspaceProps) {
     [expandedFolderPaths, props.folders],
   )
 
-  const toggleFolder = (folderPath: string) => {
+  const toggleFolder = useCallback((folderPath: string) => {
     // 展开状态只记录路径；目录刷新后仍可依赖相同路径恢复，已经消失的路径不会影响渲染。
     setExpandedFolderPaths((current) => {
       const next = new Set(current)
@@ -316,7 +318,7 @@ export function Workspace(props: WorkspaceProps) {
       }
       return next
     })
-  }
+  }, [props.folders])
 
   return (
     <main className="workspace-root">
@@ -400,22 +402,67 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
   const [contextRequest, setContextRequest] = useState<ContextMenuRequest | null>(null)
   // 与移动端长按面板一致：只有笔记正在被重命名/移动/删除时才禁用，同步刷新不挡住菜单。
   const contextActionsDisabled = props.isManagingNote
-  const noteContextActions: NoteContextActions = {
+  // 列表行靠 memo 跳过重渲染，传进去的回调和菜单配置必须引用稳定，
+  // 否则编辑正文时每次按键都会把整屏笔记行重画一遍。
+  const selectNote = useStableCallback(props.onSelectNote)
+  const selectFolder = useStableCallback(props.onSelectFolder)
+  const moveNoteById = useStableCallback(props.onMoveNoteById)
+  const toggleNoteStar = useStableCallback(props.onToggleNoteStar)
+  const createNoteInFolder = useStableCallback(props.onCreateNoteInFolder)
+  // 编辑器面板与搜索、目录树毫无关系，却因为回调每次重建而跟着整屏重渲染。
+  // 这一组把它的入参全部固定下来，memo 才拦得住。
+  const deleteNote = useStableCallback(props.onDeleteNote)
+  const exportNote = useStableCallback(props.onExportNote)
+  const formatNote = useStableCallback(props.onFormat)
+  const formatNoteById = useStableCallback(props.onFormatNote)
+  const insertAttachments = useStableCallback(props.onInsertAttachments)
+  const loadWikiNote = useStableCallback(props.onLoadWikiNote)
+  const openWikiLink = useStableCallback(props.onOpenWikiLink)
+  const openSourceFile = useStableCallback(props.onOpenSourceFile)
+  const moveNote = useStableCallback(props.onMoveNote)
+  const changeNoteViewMode = useStableCallback(props.onNoteViewModeChange)
+  const renameNote = useStableCallback(props.onRenameNote)
+  const updateNote = useStableCallback(props.onUpdateNote)
+  const reloadNote = useStableCallback(props.onReloadNote)
+  const resolveConflict = useStableCallback(props.onResolveConflict)
+  const resolveAsset = useStableCallback(props.onResolveAsset)
+  const resolveWikiNote = useStableCallback(props.onResolveWikiNote)
+  const restoreNoteVersion = useStableCallback(props.onRestoreNoteVersion)
+  const refreshVault = useStableCallback(props.onRefreshVault)
+  const activeNoteId = props.activeNoteId
+  // 上游传的是内联箭头，不先稳定住，下面按笔记绑定的那层每次渲染都会换新函数，memo 就白加了。
+  const toggleNoteTask = useOptionalStableCallback(props.onToggleNoteTask)
+  // 侧栏与搜索、正文同样无关；这些回调固定后 memo 才能把它挡在重渲染之外。
+  const createNote = useStableCallback(props.onCreateNote)
+  const createFolder = useStableCallback(props.onCreateFolder)
+  const importNotes = useStableCallback(props.onImportNotes)
+  const openLocalVault = useStableCallback(props.onOpenLocalVault)
+  const openSettings = useStableCallback(props.onOpenSettings)
+  const toggleFolder = useStableCallback(props.onToggleFolder)
+  const selectLibraryView = useStableCallback(props.onSelectLibraryView)
+  const selectVaultCache = useStableCallback(props.onSelectVaultCache)
+  const toggleActiveNoteTask = useMemo(
+    () => toggleNoteTask
+      ? (line: number, checked: boolean) => toggleNoteTask(activeNoteId, line, checked)
+      : undefined,
+    [activeNoteId, toggleNoteTask],
+  )
+  const noteContextActions = useMemo<NoteContextActions>(() => ({
     disabled: contextActionsDisabled,
     folders: props.folders,
-    onMove: props.onMoveNoteById,
-    onOpen: props.onSelectNote,
+    onMove: moveNoteById,
+    onOpen: selectNote,
     onRequest: setContextRequest,
-    onToggleStar: props.onToggleNoteStar,
-  }
-  const folderContextActions: FolderContextActions = {
+    onToggleStar: toggleNoteStar,
+  }), [contextActionsDisabled, moveNoteById, props.folders, selectNote, toggleNoteStar])
+  const folderContextActions = useMemo<FolderContextActions>(() => ({
     canCreateNote: props.canCreateNote && !props.isCreatingNote,
     disabled: contextActionsDisabled,
     mode: props.folderManagementMode,
-    onCreateNote: props.onCreateNoteInFolder,
-    onOpen: props.onSelectFolder,
+    onCreateNote: createNoteInFolder,
+    onOpen: selectFolder,
     onRequest: setContextRequest,
-  }
+  }), [contextActionsDisabled, createNoteInFolder, props.canCreateNote, props.folderManagementMode, props.isCreatingNote, selectFolder])
   return (
     <div className="desktop-workspace" data-immersive-excalidraw={immersiveExcalidraw} style={workspaceStyle}>
       <AppNavigationRail
@@ -436,16 +483,16 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         libraryView={props.libraryView}
         noteCount={props.totalNoteCount}
         starredNoteCount={props.starredNoteCount}
-        onCreateNote={props.onCreateNote}
-        onCreateFolder={props.onCreateFolder}
-        onImportNotes={props.onImportNotes}
-        onOpenLocalVault={props.onOpenLocalVault}
-        onOpenSettings={props.onOpenSettings}
-        onRefreshVault={props.onRefreshVault}
-        onSelectFolder={props.onSelectFolder}
-        onToggleFolder={props.onToggleFolder}
-        onSelectLibraryView={props.onSelectLibraryView}
-        onSelectVaultCache={props.onSelectVaultCache}
+        onCreateNote={createNote}
+        onCreateFolder={createFolder}
+        onImportNotes={importNotes}
+        onOpenLocalVault={openLocalVault}
+        onOpenSettings={openSettings}
+        onRefreshVault={refreshVault}
+        onSelectFolder={selectFolder}
+        onToggleFolder={toggleFolder}
+        onSelectLibraryView={selectLibraryView}
+        onSelectVaultCache={selectVaultCache}
         selectedFolder={props.selectedFolder}
         isManagingFolder={props.isManagingNote}
         isOpeningVault={props.isOpeningVault}
@@ -484,8 +531,8 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         onNoteSortChange={props.onNoteSortChange}
         onDeleteFolder={props.onDeleteFolder}
         onRenameFolder={props.onRenameFolder}
-        onSelectNote={props.onSelectNote}
-        onSelectFolder={props.onSelectFolder}
+        onSelectNote={selectNote}
+        onSelectFolder={selectFolder}
         availableTags={props.availableTags}
         onSelectTag={props.onSelectTag}
         query={props.query}
@@ -515,7 +562,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         <NoteEditor
           activeCacheId={props.activeCacheId}
           backlinks={props.backlinks}
-          onSelectFolder={props.onSelectFolder}
+          onSelectFolder={selectFolder}
           canInsertAttachment={props.canInsertAttachment}
           cloudConnected={props.cloudConnected}
           canManageNote={Boolean(
@@ -525,33 +572,29 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           isManagingNote={props.isManagingNote}
           moveTargets={props.folders}
           note={props.activeNote}
-          wikiLinkNotes={props.notes}
+          // 补全候选取整库而不是当前筛选结果：搜索时列表被裁短，链接候选不该跟着一起消失。
+          wikiLinkNotes={props.allNotes}
           noteViewMode={props.noteViewMode}
-          onDeleteNote={props.onDeleteNote}
-          onExportNote={props.onExportNote}
-          onFormat={props.onFormat}
-          onFormatNote={props.onFormatNote}
-          onInsertAttachments={props.onInsertAttachments}
-          onLoadWikiNote={props.onLoadWikiNote}
-          onOpenWikiLink={props.onOpenWikiLink}
-          onOpenSourceFile={props.onOpenSourceFile}
-          onMoveNote={props.onMoveNote}
-          onNoteViewModeChange={props.onNoteViewModeChange}
-          onRenameNote={props.onRenameNote}
-          onSelectNote={props.onSelectNote}
-          onUpdateNote={props.onUpdateNote}
-          onReloadNote={props.onReloadNote}
-          onResolveConflict={props.onResolveConflict}
-          onResolveAsset={props.onResolveAsset}
-          onResolveWikiNote={props.onResolveWikiNote}
-          onRestoreNoteVersion={props.onRestoreNoteVersion}
-          onSync={props.onRefreshVault}
-          onToggleTask={props.onToggleNoteTask
-            ? (line, checked) => {
-                const noteId = props.activeNote?.id
-                if (noteId) props.onToggleNoteTask?.(noteId, line, checked)
-              }
-            : undefined}
+          onDeleteNote={deleteNote}
+          onExportNote={exportNote}
+          onFormat={formatNote}
+          onFormatNote={formatNoteById}
+          onInsertAttachments={insertAttachments}
+          onLoadWikiNote={loadWikiNote}
+          onOpenWikiLink={openWikiLink}
+          onOpenSourceFile={openSourceFile}
+          onMoveNote={moveNote}
+          onNoteViewModeChange={changeNoteViewMode}
+          onRenameNote={renameNote}
+          onSelectNote={selectNote}
+          onUpdateNote={updateNote}
+          onReloadNote={reloadNote}
+          onResolveConflict={resolveConflict}
+          onResolveAsset={resolveAsset}
+          onResolveWikiNote={resolveWikiNote}
+          onRestoreNoteVersion={restoreNoteVersion}
+          onSync={refreshVault}
+          onToggleTask={toggleActiveNoteTask}
           saveState={props.saveState}
           syncing={props.isRefreshingVault}
         />
@@ -720,7 +763,8 @@ type LibraryPanelProps = {
   vaultCaches: VaultCacheSummary[]
 }
 
-function LibraryPanel({
+// 侧栏只关心目录树与笔记库状态，搜索输入和正文编辑都不该惊动它。
+const LibraryPanel = memo(function LibraryPanel({
   activeCacheId,
   connected,
   canCreateNote,
@@ -843,7 +887,7 @@ function LibraryPanel({
       </div>
     </aside>
   )
-}
+})
 
 function CacheSwitcher({
   activeCacheId,
@@ -1367,12 +1411,18 @@ type NoteListRowProps = {
   active: boolean
   contextActions?: NoteContextActions
   note: Note
-  onLongPress?: () => void
+  onLongPress?: (note: Note) => void
   onSelect: (note: Note) => void
 }
 
-function NoteListRow({ active, contextActions, note, onLongPress, onSelect }: NoteListRowProps) {
-  const longPressProps = useLongPress(onLongPress)
+// 列表是最容易掉帧的地方：编辑正文、切换选中都会刷新整个 notes 数组，
+// 但真正变了的只有一两行。这里 memo 掉其余行，让每次输入只重渲染受影响的那几行。
+const NoteListRow = memo(function NoteListRow({ active, contextActions, note, onLongPress, onSelect }: NoteListRowProps) {
+  const handleLongPress = useMemo(
+    () => onLongPress ? () => onLongPress(note) : undefined,
+    [note, onLongPress],
+  )
+  const longPressProps = useLongPress(handleLongPress)
   const row = (
     <button
       className="note-list-row"
@@ -1396,7 +1446,7 @@ function NoteListRow({ active, contextActions, note, onLongPress, onSelect }: No
   )
   // 移动端用长按弹操作面板，桌面端才把这一行接到右键菜单上。
   return contextActions ? <NoteRowContextMenu actions={contextActions} note={note}>{row}</NoteRowContextMenu> : row
-}
+})
 
 type NoteEditorProps = {
   activeCacheId: string | null
@@ -1437,7 +1487,9 @@ type NoteEditorProps = {
   wikiLinkNotes: Note[]
 }
 
-function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
+// 搜索、切目录、展开侧栏统统与正文无关，但它们每一次都把编辑器整棵子树重画一遍
+// （实测搜索敲 6 个字，编辑器白渲染 11 次）。上面已经把入参固定住，这里收口。
+const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
   const noteRenderIdentity = stableNoteRenderIdentity(note.id, note.remotePath)
   const assetScope = `${activeCacheId ?? "session"}:${noteRenderIdentity}`
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
@@ -2064,7 +2116,7 @@ function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canI
       </Dialog>
     </article>
   )
-}
+})
 
 function EditorLoadingState({ label }: { label: string }) {
   return (
@@ -2230,7 +2282,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             compact
             moveTargets={props.folders}
             note={props.activeNote}
-            wikiLinkNotes={props.notes}
+            wikiLinkNotes={props.allNotes}
             noteViewMode={props.noteViewMode}
             backLabel={backLabel}
             onSelectFolder={props.onSelectFolder}
@@ -3108,9 +3160,9 @@ function VirtualNoteRows({
             {item.kind === "heading" ? (
               <div className="note-group-label"><span>{item.label}</span>{mobile ? null : <small>{item.noteCount}</small>}</div>
             ) : item.kind === "folder" ? (
-              <FolderListRow contextActions={folderContextActions} folder={item.folder} mobile={mobile} onLongPress={onFolderLongPress ? () => onFolderLongPress(item.folder) : undefined} onSelect={onSelectFolder} />
+              <FolderListRow contextActions={folderContextActions} folder={item.folder} mobile={mobile} onLongPress={onFolderLongPress} onSelect={onSelectFolder} />
             ) : (
-              <NoteListRow active={item.note.id === activeNoteId} contextActions={noteContextActions} note={item.note} onLongPress={onNoteLongPress ? () => onNoteLongPress(item.note) : undefined} onSelect={onSelectNote} />
+              <NoteListRow active={item.note.id === activeNoteId} contextActions={noteContextActions} note={item.note} onLongPress={onNoteLongPress} onSelect={onSelectNote} />
             )}
           </div>
         )
@@ -3119,7 +3171,7 @@ function VirtualNoteRows({
   )
 }
 
-function FolderListRow({
+const FolderListRow = memo(function FolderListRow({
   contextActions,
   folder,
   mobile,
@@ -3129,10 +3181,14 @@ function FolderListRow({
   contextActions?: FolderContextActions
   folder: VaultFolder
   mobile: boolean
-  onLongPress?: () => void
+  onLongPress?: (folder: VaultFolder) => void
   onSelect?: (folder: string) => void
 }) {
-  const longPressProps = useLongPress(onLongPress)
+  const handleLongPress = useMemo(
+    () => onLongPress ? () => onLongPress(folder) : undefined,
+    [folder, onLongPress],
+  )
+  const longPressProps = useLongPress(handleLongPress)
   const row = (
     <button
       className="folder-list-row"
@@ -3150,7 +3206,7 @@ function FolderListRow({
     </button>
   )
   return contextActions ? <FolderRowContextMenu actions={contextActions} folder={folder}>{row}</FolderRowContextMenu> : row
-}
+})
 
 function getMobileBackLabel(libraryView: LibraryView, selectedFolder: string | null) {
   if (selectedFolder) {
