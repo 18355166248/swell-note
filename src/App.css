@@ -957,6 +957,10 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .mobile-edge-swipe-current { position: relative; z-index: 2; width: 100%; height: 100%; min-width: 0; min-height: 0; transform: translate3d(var(--edge-swipe-offset,0),0,0); will-change: transform; }
   .mobile-edge-swipe-previous { position: absolute; inset: env(safe-area-inset-top,0px) 0 0; z-index: 1; overflow: hidden; opacity: 0; pointer-events: none; transform: translate3d(calc((1 - var(--edge-swipe-progress,0)) * -24px),0,0); visibility: hidden; will-change: transform,opacity; }
   .mobile-workspace[data-edge-swipe-kind="back"]:not([data-edge-swipe-state="idle"]) > .mobile-edge-swipe-previous { opacity: calc(.82 + var(--edge-swipe-progress,0) * .18); visibility: visible; }
+  /* 交接那一帧，当前层要同时换掉整棵子树并从屏幕外归位。真机上编辑器卸载偶尔慢一拍，
+     底层若在同一刻就撤掉，中间会空出一帧纯背景——就是侧滑结束时看到的那下闪白。
+     让底层淡出而不是立即消失，把这一帧盖住。 */
+  .mobile-workspace[data-edge-swipe-kind="back"][data-edge-swipe-state="idle"] > .mobile-edge-swipe-previous { transition: visibility 0s 120ms, opacity 120ms ease; }
   .mobile-workspace[data-edge-swipe-state="dragging"] > .mobile-edge-swipe-current { box-shadow: -14px 0 34px rgb(15 23 42 / calc(.08 + var(--edge-swipe-progress,0) * .12)); transition: none; }
   .mobile-workspace[data-edge-swipe-state="returning"] > .mobile-edge-swipe-current,
   .mobile-workspace[data-edge-swipe-state="completing"] > .mobile-edge-swipe-current,

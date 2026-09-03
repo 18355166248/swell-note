@@ -141,6 +141,9 @@ const CanvasPreview = lazyWithRetry(() => import("@/components/editor/canvas-pre
 
 export type MobileScreen = "library" | "notes" | "editor"
 
+// 手机端两层页面的渲染单元：key 是页面身份，交接时靠它决定复用还是重建。
+type MobileScreenLayer = { key: string; node: ReactNode }
+
 // 手机端三级页面的层级深浅，用来判断这次切换是往里走还是往回退。
 const MOBILE_SCREEN_DEPTH: Record<MobileScreen, number> = { editor: 2, library: 0, notes: 1 }
 
@@ -2232,52 +2235,63 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
     ? sortNotes(props.allNotes.filter((note) => noteBelongsDirectlyToFolder(note, previousFolder)), props.noteSort)
     : [], [previousFolder, props.allNotes, props.noteSort])
 
-  const previousPage = edgeSwipe.kind === "back"
+  // 底层与当前层用同一个数组渲染，页面身份进 key。
+  // 侧滑交接时两层互换角色，key 不变的那个页面会被 React 复用；分成两棵子树写的话，
+  // 底层那份笔记列表会连同虚拟列表一起卸载、当前层再挂载一份一模一样的，
+  // 返回时「整页刷新一下」正是这次重建。
+  const previousLayer: MobileScreenLayer | null = edgeSwipe.kind === "back"
     ? props.mobileScreen === "editor"
-      ? (
-          <MobileNoteList
-            {...props}
-            initialScrollTop={mobileNoteListScrollMemory.get(listStateKey)}
-            navigationOpen={false}
-            onNavigationOpenChange={() => undefined}
-            onScrollPositionChange={() => undefined}
-          />
-        )
-      : previousFolder
-        ? (
+      ? {
+          key: `notes:${listRouteKey}`,
+          node: (
             <MobileNoteList
               {...props}
-              includeNestedFolderNotes={false}
-              initialScrollTop={mobileNoteListScrollMemory.get(`${props.libraryView}\u0000${previousFolder}\u0000`)}
-              navigationOpen={false}
-              notes={previousFolderNotes}
-              onNavigationOpenChange={() => undefined}
-              onScrollPositionChange={() => undefined}
-              query=""
-              selectedFolder={previousFolder}
-              selectedTag={null}
-            />
-          )
-        : (
-            <MobileLibrary
-              {...props}
-              initialScrollTop={mobileLibraryScrollMemory.get(libraryStateKey)}
+              initialScrollTop={mobileNoteListScrollMemory.get(listStateKey)}
               navigationOpen={false}
               onNavigationOpenChange={() => undefined}
               onScrollPositionChange={() => undefined}
             />
-          )
+          ),
+        }
+      : previousFolder
+        ? {
+            key: `notes:${props.libraryView}\u0000${previousFolder}`,
+            node: (
+              <MobileNoteList
+                {...props}
+                includeNestedFolderNotes={false}
+                initialScrollTop={mobileNoteListScrollMemory.get(`${props.libraryView}\u0000${previousFolder}\u0000`)}
+                navigationOpen={false}
+                notes={previousFolderNotes}
+                onNavigationOpenChange={() => undefined}
+                onScrollPositionChange={() => undefined}
+                query=""
+                selectedFolder={previousFolder}
+                selectedTag={null}
+              />
+            ),
+          }
+        : {
+            key: "library",
+            node: (
+              <MobileLibrary
+                {...props}
+                initialScrollTop={mobileLibraryScrollMemory.get(libraryStateKey)}
+                navigationOpen={false}
+                onNavigationOpenChange={() => undefined}
+                onScrollPositionChange={() => undefined}
+              />
+            ),
+          }
     : null
 
-  return (
-    <div className="mobile-workspace" data-screen={props.mobileScreen} {...edgeSwipe.bind}>
-      {previousPage ? (
-        <div aria-hidden="true" className="mobile-edge-swipe-previous" inert>
-          {previousPage}
-        </div>
-      ) : null}
-      <div className="mobile-edge-swipe-current" ref={currentPageRef}>
-      {props.mobileScreen === "library" ? (
+  const currentLayer: MobileScreenLayer = {
+    key: props.mobileScreen === "library"
+      ? "library"
+      : props.mobileScreen === "notes"
+        ? `notes:${listRouteKey}`
+        : `editor:${props.activeNote?.id ?? "__empty__"}`,
+    node: props.mobileScreen === "library" ? (
         <MobileLibrary
           {...props}
           initialScrollTop={mobileLibraryScrollMemory.get(libraryStateKey)}
@@ -2285,19 +2299,15 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
           onNavigationOpenChange={setNavigationOpen}
           onScrollPositionChange={(scrollTop) => mobileLibraryScrollMemory.set(libraryStateKey, scrollTop)}
         />
-      ) : null}
-      {props.mobileScreen === "notes" ? (
+      ) : props.mobileScreen === "notes" ? (
         <MobileNoteList
           {...props}
           initialScrollTop={mobileNoteListScrollMemory.get(listStateKey)}
-          // 搜索词不能进入 React key，否则每输入或删除一个字符都会重建页面并让真机键盘失焦。
-          key={listRouteKey}
           navigationOpen={navigationOpen}
           onNavigationOpenChange={setNavigationOpen}
           onScrollPositionChange={(scrollTop) => mobileNoteListScrollMemory.set(listStateKey, scrollTop)}
         />
-      ) : null}
-      {props.mobileScreen === "editor" ? (
+      ) : (
         props.activeNote ? props.activeNoteLoading || props.activeNoteLoadError ? (
           <NoteDocumentState
             backLabel={backLabel}
@@ -2355,8 +2365,25 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             syncing={props.isRefreshingVault}
           />
         ) : <EmptyNoteEditor backLabel={backLabel} canCreateNote={props.canCreateNote} canRefresh={Boolean(props.activeCacheId)} hasNotes={props.totalNoteCount > 0} isLoading={props.isRefreshingVault} missing={props.missingNoteRoute} onBack={() => props.onMobileScreenChange("notes")} onOpenSettings={props.onOpenSettings} onRefresh={props.onRefreshVault} onSelectNote={props.onSelectNote} suggestions={props.missingNoteSuggestions} />
-      ) : null}
-      </div>
+      ),
+  }
+
+  return (
+    <div className="mobile-workspace" data-screen={props.mobileScreen} {...edgeSwipe.bind}>
+      {(previousLayer ? [
+        { ...previousLayer, role: "previous" as const },
+        { ...currentLayer, role: "current" as const },
+      ] : [{ ...currentLayer, role: "current" as const }]).map((layer) => (
+        <div
+          aria-hidden={layer.role === "previous" || undefined}
+          className={`mobile-edge-swipe-${layer.role}`}
+          inert={layer.role === "previous" || undefined}
+          key={layer.key}
+          ref={layer.role === "current" ? currentPageRef : undefined}
+        >
+          {layer.node}
+        </div>
+      ))}
     </div>
   )
 }
