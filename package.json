@@ -20,6 +20,7 @@
     "ios:dev": "node scripts/ios-device-run.mjs --dev --device Swell5",
     "build": "tsc && vite build",
     "bench:notes": "vitest bench src/services/search/note-library.bench.ts",
+    "bench:interaction": "node scripts/perf-bench.mjs",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",

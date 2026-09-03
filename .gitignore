@@ -16,6 +16,8 @@ dist-ssr
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
+# launch.json 是共享的本地服务定义，个人权限设置不入库
+.claude/settings.local.json
 .idea
 .DS_Store
 *.suo
