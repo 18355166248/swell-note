@@ -794,7 +794,10 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .folder-list-row strong { font-size: 12.5px; font-weight: 650; }
 .folder-list-row small { margin-top: 3px; color: var(--muted-foreground); font-size: 10.5px; }
 .folder-list-row > svg { width: 15px; color: var(--muted-foreground); }
-.note-list-row { content-visibility: auto; contain-intrinsic-size: 118px; }
+/* 这里曾用 content-visibility: auto 跳过视口外的行，但占位高度（118px 内容盒，连同内边距
+   和边框实际撑到 145px）比真实行高 94px 高出一截：切换页面时新挂载的列表会先按占位撑开，
+   下一帧完成可见性判定后再收回来，看起来就是列表闪一下。
+   列表本身已经虚拟化，只渲染视口附近的行，这层跳过渲染是重复优化，去掉即可。 */
 .note-row-tags { display: flex; gap: 5px; margin-top: 7px; overflow: hidden; }
 .note-row-tags span { border-radius: 999px; background: var(--blue-soft); padding: 1px 6px; color: var(--primary); font-size: 10px; white-space: nowrap; }
 .markdown-preview { width: 100%; min-width: 0; max-width: 100%; min-height: calc(100dvh - 250px); color: #28313e; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
