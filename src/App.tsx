@@ -924,7 +924,13 @@ function App() {
     return true
   }
 
-  const createNote = async () => {
+  const toggleNoteStar = (noteId: string) => {
+    setNotes((current) => current.map((note) => note.id === noteId
+      ? { ...note, starred: !note.starred }
+      : note))
+  }
+
+  const createNote = async (targetFolder?: string | null) => {
     const adapter = vaultSession
     const canCreateOfflineWebDav = !adapter && activeCacheMeta?.sourceKind === "webdav" && webDavConfigured
     if ((!adapter && !canCreateOfflineWebDav)
@@ -939,7 +945,9 @@ function App() {
       const now = new Date()
       const timestamp = formatFileTimestamp(now)
       const title = ""
-      const directory = selectedFolder?.split(/\s*\/\s*/).filter(Boolean).join("/")
+      // 右键文件夹新建时目标目录由菜单指定；其余入口仍沿用当前选中的目录。
+      const noteFolder = targetFolder === undefined ? selectedFolder : targetFolder
+      const directory = noteFolder?.split(/\s*\/\s*/).filter(Boolean).join("/")
       const displayPath = `${directory ? `${directory}/` : ""}新笔记-${timestamp}-${now.getMilliseconds().toString().padStart(3, "0")}.md`
       const config = loadWebDavConfig()
       const webDavStoragePath = `${config.remotePath.replace(/\/+$/g, "")}/${displayPath.replace(/^\/+/, "")}`
@@ -3568,6 +3576,7 @@ function App() {
             noteSort={noteSort}
             notes={visibleNotes}
             onCreateNote={() => void createNote()}
+            onCreateNoteInFolder={(folderPath) => void createNote(folderPath)}
             onCreateFolder={(name, parentFolder) => void createLocalFolder(name, parentFolder)}
             onCancelSync={cancelSync}
             onDismissSyncFailure={() => {
@@ -3631,6 +3640,7 @@ function App() {
             onLoadWikiNote={loadWikiNote}
             onResolveWikiNote={resolveWikiNote}
             onRestoreNoteVersion={restoreActiveNoteVersion}
+            onToggleNoteStar={toggleNoteStar}
             onToggleNoteTask={(noteId, line, checked) => toggleTask({
               checked,
               id: `${noteId}:${line}`,

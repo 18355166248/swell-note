@@ -117,6 +117,14 @@ import { MobileFolderActionSheet, MobileNoteActionSheet } from "@/components/wor
 import { SelectionActionBar } from "@/components/workspace/selection-action-bar"
 import { isSelectionDismissTap, keepsSelectionAlive, type PointerOrigin } from "@/components/workspace/selection-dismiss"
 import { hasOpenModal, isTextEntryElement, selectElementContents } from "@/components/workspace/shortcut-scope"
+import {
+  ContextMenuRequestDialog,
+  FolderRowContextMenu,
+  NoteRowContextMenu,
+  type ContextMenuRequest,
+  type FolderContextActions,
+  type NoteContextActions,
+} from "@/components/workspace/context-menus"
 import { useLongPress } from "@/components/workspace/use-long-press"
 import { useEdgeSwipeAction } from "@/components/workspace/use-edge-swipe-action"
 import { SyncActivityToast } from "@/components/workspace/sync-activity-toast"
@@ -168,6 +176,7 @@ type WorkspaceProps = {
   noteSort: NoteSort
   notes: Note[]
   onCreateNote: () => void
+  onCreateNoteInFolder: (folderPath: string) => void
   onCreateFolder: (name: string, parentFolder: string | null) => void
   onFormat: (syntax: string) => void
   onFormatNote: (noteId: string, syntax: string) => void
@@ -200,6 +209,7 @@ type WorkspaceProps = {
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
   onRestoreNoteVersion: (content: string) => void
+  onToggleNoteStar: (noteId: string) => void
   onToggleNoteTask?: (noteId: string, line: number, checked: boolean) => void
   onSelectFolder: (folder: string | null) => void
   onSelectLibraryView: (view: LibraryView) => void
@@ -386,6 +396,26 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
     && props.activeNote
     && isExcalidrawMarkdown(props.activeNote.content),
   )
+  // 右键菜单里的重命名、删除都要接着弹对话框；请求集中放在工作区，行随虚拟列表回收也不会打断。
+  const [contextRequest, setContextRequest] = useState<ContextMenuRequest | null>(null)
+  // 与移动端长按面板一致：只有笔记正在被重命名/移动/删除时才禁用，同步刷新不挡住菜单。
+  const contextActionsDisabled = props.isManagingNote
+  const noteContextActions: NoteContextActions = {
+    disabled: contextActionsDisabled,
+    folders: props.folders,
+    onMove: props.onMoveNoteById,
+    onOpen: props.onSelectNote,
+    onRequest: setContextRequest,
+    onToggleStar: props.onToggleNoteStar,
+  }
+  const folderContextActions: FolderContextActions = {
+    canCreateNote: props.canCreateNote && !props.isCreatingNote,
+    disabled: contextActionsDisabled,
+    mode: props.folderManagementMode,
+    onCreateNote: props.onCreateNoteInFolder,
+    onOpen: props.onSelectFolder,
+    onRequest: setContextRequest,
+  }
   return (
     <div className="desktop-workspace" data-immersive-excalidraw={immersiveExcalidraw} style={workspaceStyle}>
       <AppNavigationRail
@@ -401,6 +431,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         connected={props.connected}
         connectionLabel={props.connectionLabel}
         expandedFolderPaths={props.expandedFolderPaths}
+        folderContextActions={folderContextActions}
         folders={props.visibleFolders}
         libraryView={props.libraryView}
         noteCount={props.totalNoteCount}
@@ -438,7 +469,9 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
       {!immersiveExcalidraw ? <NoteListPanel
         activeNoteId={props.activeNoteId}
         canCreateNote={props.canCreateNote}
+        folderContextActions={folderContextActions}
         folders={props.folders}
+        noteContextActions={noteContextActions}
         includeNestedFolderNotes={props.includeNestedFolderNotes}
         notes={props.notes}
         noteSort={props.noteSort}
@@ -523,6 +556,16 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           syncing={props.isRefreshingVault}
         />
       ) : <EmptyNoteEditor canCreateNote={props.canCreateNote} canRefresh={Boolean(props.activeCacheId)} hasNotes={props.totalNoteCount > 0} isLoading={props.isRefreshingVault} missing={props.missingNoteRoute} onBack={props.missingNoteRoute ? () => props.onMobileScreenChange("notes") : undefined} onOpenSettings={props.onOpenSettings} onRefresh={props.onRefreshVault} onSelectNote={props.onSelectNote} suggestions={props.missingNoteSuggestions} />}
+      <ContextMenuRequestDialog
+        folderMode={props.folderManagementMode}
+        onClose={() => setContextRequest(null)}
+        onCreateFolder={props.onCreateFolder}
+        onDeleteFolder={props.onDeleteFolder}
+        onDeleteNote={props.onDeleteNoteById}
+        onRenameFolder={props.onRenameFolder}
+        onRenameNote={props.onRenameNoteById}
+        request={contextRequest}
+      />
     </div>
   )
 }
@@ -649,6 +692,7 @@ type LibraryPanelProps = {
   canCreateFolder: boolean
   canCreateNote: boolean
   connected: boolean
+  folderContextActions: FolderContextActions
   connectionLabel: string
   expandedFolderPaths: ReadonlySet<string>
   folders: VaultFolder[]
@@ -683,6 +727,7 @@ function LibraryPanel({
   canCreateFolder,
   connectionLabel,
   expandedFolderPaths,
+  folderContextActions,
   folders,
   isManagingFolder,
   isOpeningVault,
@@ -759,6 +804,8 @@ function LibraryPanel({
           {folders.map((folder) => (
             <LibraryRow
               active={libraryView === "all" && selectedFolder === folder.path}
+              contextActions={folderContextActions}
+              contextFolder={folder}
               count={folder.count}
               depth={folder.depth}
               expanded={folder.hasChildren ? expandedFolderPaths.has(folder.path) : undefined}
@@ -842,6 +889,8 @@ function CacheSwitcher({
 
 type LibraryRowProps = {
   active?: boolean
+  contextActions?: FolderContextActions
+  contextFolder?: VaultFolder
   count?: number
   depth?: number
   expanded?: boolean
@@ -852,8 +901,8 @@ type LibraryRowProps = {
   onToggle?: () => void
 }
 
-function LibraryRow({ active = false, count, depth = 0, expanded, folderTree = false, icon: Icon, label, onClick, onToggle }: LibraryRowProps) {
-  return (
+function LibraryRow({ active = false, contextActions, contextFolder, count, depth = 0, expanded, folderTree = false, icon: Icon, label, onClick, onToggle }: LibraryRowProps) {
+  const row = (
     <div className="library-row" data-active={active} data-depth={Math.min(depth, 3)}>
       {folderTree ? (
         onToggle ? (
@@ -875,12 +924,17 @@ function LibraryRow({ active = false, count, depth = 0, expanded, folderTree = f
       </button>
     </div>
   )
+  return contextActions && contextFolder
+    ? <FolderRowContextMenu actions={contextActions} folder={contextFolder}>{row}</FolderRowContextMenu>
+    : row
 }
 
 type NoteListPanelProps = {
   activeNoteId: string
   availableTags: string[]
   canCreateNote: boolean
+  folderContextActions: FolderContextActions
+  noteContextActions: NoteContextActions
   folders: VaultFolder[]
   folderLabel: string
   folderManagementMode: "local" | "webdav" | null
@@ -908,6 +962,8 @@ function NoteListPanel({
   activeNoteId,
   availableTags,
   canCreateNote,
+  folderContextActions,
+  noteContextActions,
   folders,
   folderLabel,
   folderManagementMode,
@@ -984,7 +1040,9 @@ function NoteListPanel({
           {viewportReady && (notes.length > 0 || childFolders.length > 0) ? (
             <VirtualNoteRows
               activeNoteId={activeNoteId}
+              folderContextActions={folderContextActions}
               folders={childFolders}
+              noteContextActions={noteContextActions}
               noteSort={noteSort}
               notes={notes}
               onSelectFolder={onSelectFolder}
@@ -1307,14 +1365,15 @@ export function EmptyNoteEditor({
 
 type NoteListRowProps = {
   active: boolean
+  contextActions?: NoteContextActions
   note: Note
   onLongPress?: () => void
   onSelect: (note: Note) => void
 }
 
-function NoteListRow({ active, note, onLongPress, onSelect }: NoteListRowProps) {
+function NoteListRow({ active, contextActions, note, onLongPress, onSelect }: NoteListRowProps) {
   const longPressProps = useLongPress(onLongPress)
-  return (
+  const row = (
     <button
       className="note-list-row"
       data-active={active}
@@ -1335,6 +1394,8 @@ function NoteListRow({ active, note, onLongPress, onSelect }: NoteListRowProps) 
       </div>
     </button>
   )
+  // 移动端用长按弹操作面板，桌面端才把这一行接到右键菜单上。
+  return contextActions ? <NoteRowContextMenu actions={contextActions} note={note}>{row}</NoteRowContextMenu> : row
 }
 
 type NoteEditorProps = {
@@ -2973,9 +3034,11 @@ type VirtualNoteItem =
 
 function VirtualNoteRows({
   activeNoteId,
+  folderContextActions,
   folders = [],
   initialScrollOffset = 0,
   mobile = false,
+  noteContextActions,
   noteSort,
   notes,
   onFolderLongPress,
@@ -2985,9 +3048,11 @@ function VirtualNoteRows({
   viewportRef,
 }: {
   activeNoteId: string
+  folderContextActions?: FolderContextActions
   folders?: VaultFolder[]
   initialScrollOffset?: number
   mobile?: boolean
+  noteContextActions?: NoteContextActions
   noteSort: NoteSort
   notes: Note[]
   onFolderLongPress?: (folder: VaultFolder) => void
@@ -3043,9 +3108,9 @@ function VirtualNoteRows({
             {item.kind === "heading" ? (
               <div className="note-group-label"><span>{item.label}</span>{mobile ? null : <small>{item.noteCount}</small>}</div>
             ) : item.kind === "folder" ? (
-              <FolderListRow folder={item.folder} mobile={mobile} onLongPress={onFolderLongPress ? () => onFolderLongPress(item.folder) : undefined} onSelect={onSelectFolder} />
+              <FolderListRow contextActions={folderContextActions} folder={item.folder} mobile={mobile} onLongPress={onFolderLongPress ? () => onFolderLongPress(item.folder) : undefined} onSelect={onSelectFolder} />
             ) : (
-              <NoteListRow active={item.note.id === activeNoteId} note={item.note} onLongPress={onNoteLongPress ? () => onNoteLongPress(item.note) : undefined} onSelect={onSelectNote} />
+              <NoteListRow active={item.note.id === activeNoteId} contextActions={noteContextActions} note={item.note} onLongPress={onNoteLongPress ? () => onNoteLongPress(item.note) : undefined} onSelect={onSelectNote} />
             )}
           </div>
         )
@@ -3055,18 +3120,20 @@ function VirtualNoteRows({
 }
 
 function FolderListRow({
+  contextActions,
   folder,
   mobile,
   onLongPress,
   onSelect,
 }: {
+  contextActions?: FolderContextActions
   folder: VaultFolder
   mobile: boolean
   onLongPress?: () => void
   onSelect?: (folder: string) => void
 }) {
   const longPressProps = useLongPress(onLongPress)
-  return (
+  const row = (
     <button
       className="folder-list-row"
       data-mobile={mobile}
@@ -3082,6 +3149,7 @@ function FolderListRow({
       <ChevronRight />
     </button>
   )
+  return contextActions ? <FolderRowContextMenu actions={contextActions} folder={folder}>{row}</FolderRowContextMenu> : row
 }
 
 function getMobileBackLabel(libraryView: LibraryView, selectedFolder: string | null) {

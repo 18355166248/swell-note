@@ -136,6 +136,60 @@ test.describe("核心笔记流程", () => {
     expect(storedViewMode).not.toBe("edit")
   })
 
+  test("桌面端右键笔记与文件夹弹出自定义菜单并接上后续对话框", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedCachedVault(page)
+    const workspace = page.locator(".desktop-workspace:visible")
+
+    // 云端笔记的正文缓存下来之后才允许改名/移动/删除，先打开一次再右键。
+    await workspace.getByText("第二篇", { exact: true }).first().click()
+    await expect(workspace.getByRole("article").getByText("正文 B", { exact: true })).toBeVisible()
+    await workspace.getByText("第二篇", { exact: true }).first().click({ button: "right" })
+    const noteMenu = page.getByRole("menu")
+    await expect(noteMenu.getByRole("menuitem", { name: "打开笔记" })).toBeVisible()
+    await expect(noteMenu.getByRole("menuitem", { name: "收藏" })).toBeVisible()
+    await expect(noteMenu.getByRole("menuitem", { name: "删除笔记" })).toBeVisible()
+
+    // 移动目标来自当前笔记库目录，子菜单里能选到根目录与已有文件夹。
+    await noteMenu.getByRole("menuitem", { name: "移动到文件夹" }).hover()
+    await expect(page.getByRole("menuitem", { name: "根目录" })).toBeVisible()
+    await expect(page.getByRole("menuitem", { name: "测试", exact: true })).toBeVisible()
+
+    await noteMenu.getByRole("menuitem", { name: "重命名…" }).click()
+    const renameDialog = page.getByRole("dialog")
+    await expect(renameDialog.getByRole("heading", { name: "重命名笔记" })).toBeVisible()
+    await expect(renameDialog.getByRole("textbox", { name: "新笔记标题" })).toHaveValue("第二篇")
+    await renameDialog.getByRole("button", { name: "取消" }).click()
+
+    // 侧栏文件夹右键给的是目录级操作。
+    await workspace.locator(".library-row").filter({ hasText: "测试" }).first().click({ button: "right" })
+    const folderMenu = page.getByRole("menu")
+    await expect(folderMenu.getByRole("menuitem", { name: "在此新建笔记" })).toBeVisible()
+    await expect(folderMenu.getByRole("menuitem", { name: "新建子文件夹…" })).toBeVisible()
+    await folderMenu.getByRole("menuitem", { name: "删除文件夹" }).click()
+    const deleteDialog = page.getByRole("dialog")
+    await expect(deleteDialog.getByRole("heading", { name: "删除“测试”" })).toBeVisible()
+    await deleteDialog.getByRole("button", { name: "取消" }).click()
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+  })
+
+  test("桌面端右键删除笔记会经确认后从列表移除", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedCachedVault(page)
+    const workspace = page.locator(".desktop-workspace:visible")
+
+    await workspace.getByText("第二篇", { exact: true }).first().click()
+    await expect(workspace.getByRole("article").getByText("正文 B", { exact: true })).toBeVisible()
+    await workspace.getByText("第二篇", { exact: true }).first().click({ button: "right" })
+    await page.getByRole("menuitem", { name: "删除笔记" }).click()
+    const dialog = page.getByRole("dialog")
+    await expect(dialog.getByRole("heading", { name: "删除“第二篇”" })).toBeVisible()
+    await dialog.getByRole("button", { name: "删除笔记" }).click()
+
+    await expect(workspace.locator(".note-list-panel").getByText("第二篇", { exact: true })).toHaveCount(0)
+    await expect(workspace.locator(".note-list-panel").getByText("第一篇", { exact: true }).first()).toBeVisible()
+  })
+
   test("桌面端失效详情链接不会继续展示上一篇笔记", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page)
