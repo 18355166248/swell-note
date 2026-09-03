@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from "react"
 
 import { getEdgeSwipeProgress, shouldCompleteEdgeSwipe } from "@/services/navigation/edge-swipe"
 
 type EdgeSwipeKind = "back" | "drawer"
+type EdgeSwipePhase = "completing" | "dragging" | "idle" | "returning"
 type Gesture = {
   horizontal: boolean
   pointerId?: number
@@ -14,23 +15,36 @@ type Gesture = {
   x: number
   y: number
 }
-type VisualState = {
-  offset: number
-  phase: "completing" | "dragging" | "idle" | "returning"
-  progress: number
-}
 
-const IDLE_VISUAL: VisualState = { offset: 0, phase: "idle", progress: 0 }
-
+// 跟手的关键是拖动期间不碰 React：位移/进度直接写工作区 DOM 上的 CSS 变量，
+// transform 由合成器消化，一帧都不重渲染；此前每次 touchmove 都 setState，
+// 整个工作区（编辑器 + 垫底的上一页列表）按触摸频率重渲染，主线程被占满，
+// translate3d 更新到达不匀，肉眼就是抖动。相位仍走 state：它驱动 transition
+// 与上一页显隐，且每次手势最多变三次。
 export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kind: EdgeSwipeKind = "back") {
   const pointerGestureRef = useRef<Gesture | null>(null)
   const touchGestureRef = useRef<Gesture | null>(null)
   const timersRef = useRef<number[]>([])
-  const [visual, setVisual] = useState<VisualState>(IDLE_VISUAL)
+  const workspaceRef = useRef<HTMLDivElement | null>(null)
+  const [phase, setPhase] = useState<EdgeSwipePhase>("idle")
 
   useEffect(() => () => {
     timersRef.current.forEach((timer) => window.clearTimeout(timer))
   }, [])
+
+  const applyVisual = (offset: number, progress: number) => {
+    const element = workspaceRef.current
+    if (!element) return
+    element.style.setProperty("--edge-swipe-offset", `${offset}px`)
+    element.style.setProperty("--edge-swipe-progress", `${progress}`)
+  }
+
+  // 相位提交后、绘制前补齐目标变量：transition 随相位生效，变量在同一帧写入，
+  // 动画才能从手指松开时的位置起播；idle 没有 transition，同一帧写入即瞬时复位。
+  useLayoutEffect(() => {
+    if (phase === "idle" || phase === "returning") applyVisual(0, 0)
+    else if (phase === "completing") applyVisual(window.innerWidth, 1)
+  }, [phase])
 
   const schedule = (callback: () => void, delay: number) => {
     const timer = window.setTimeout(callback, delay)
@@ -42,9 +56,9 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
   }
   const clearPointerGesture = () => { pointerGestureRef.current = null }
   const clearTouchGesture = () => { touchGestureRef.current = null }
-  const reset = () => setVisual(IDLE_VISUAL)
+  const reset = () => setPhase("idle")
   const returnToStart = () => {
-    setVisual((current) => current.phase === "idle" ? current : { ...current, offset: 0, phase: "returning", progress: 0 })
+    setPhase((current) => current === "idle" ? current : "returning")
     schedule(reset, 190)
   }
   const updateDrag = (gesture: Gesture, currentX: number, currentY: number) => {
@@ -64,8 +78,8 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
     }
     const progress = getEdgeSwipeProgress(deltaX)
     // 根目录手势只负责识别“打开导航”，拖动期间不移动正文；只有返回上页才做跟手转场。
-    const offset = kind === "drawer" ? 0 : deltaX
-    setVisual({ offset, phase: "dragging", progress })
+    applyVisual(kind === "drawer" ? 0 : deltaX, progress)
+    setPhase("dragging")
     return "horizontal" as const
   }
   const finish = (gesture: Gesture | null) => {
@@ -87,7 +101,7 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
       reset()
       return
     }
-    setVisual({ offset: window.innerWidth, phase: "completing", progress: 1 })
+    setPhase("completing")
     schedule(() => {
       // 滑出期间底层已经是真实上一页，完成后直接交接路由，避免再做一次反向入场造成闪动。
       onComplete()
@@ -165,10 +179,11 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
   }
 
   return {
-    active: visual.phase !== "idle",
+    active: phase !== "idle",
     bind: {
+      ref: workspaceRef,
       "data-edge-swipe-kind": kind,
-      "data-edge-swipe-state": visual.phase,
+      "data-edge-swipe-state": phase,
       onPointerCancel,
       onPointerDown,
       onPointerMove,
@@ -177,13 +192,8 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
       onTouchEnd,
       onTouchMove,
       onTouchStart,
-      style: {
-        "--edge-swipe-offset": `${visual.offset}px`,
-        "--edge-swipe-progress": visual.progress,
-      } as CSSProperties,
     },
     kind,
-    phase: visual.phase,
-    progress: visual.progress,
+    phase,
   }
 }
