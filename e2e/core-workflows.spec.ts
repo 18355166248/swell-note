@@ -325,6 +325,54 @@ test.describe("核心笔记流程", () => {
     expect(visitedScreens).not.toContain("editor")
   })
 
+  test("移动端从编辑器侧滑返回不会被编辑器抢走焦点", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await seedCachedVault(page)
+    const workspace = page.locator(".mobile-workspace:visible")
+
+    await workspace.getByText("测试", { exact: true }).first().click()
+    await workspace.locator(".note-list-row").first().click()
+    await expect(workspace).toHaveAttribute("data-screen", "editor")
+    const editButton = workspace.locator('.note-view-mode-button[data-mode="edit"]')
+    if (await editButton.getAttribute("aria-pressed") !== "true") await editButton.click()
+    await expect(workspace.locator(".cm-content")).toBeVisible()
+    await page.waitForTimeout(400)
+
+    await page.evaluate(() => {
+      const focused: string[] = []
+      const onFocusIn = (event: FocusEvent) => {
+        const target = event.target
+        if (target instanceof Element) focused.push(target.className.toString())
+      }
+      document.addEventListener("focusin", onFocusIn, true)
+      Object.assign(window, { __focusedDuringSwipe: focused, __removeFocusProbe: () => document.removeEventListener("focusin", onFocusIn, true) })
+    })
+
+    // 起手落在编辑器容器的留白上：浏览器会把光标塞进这一片里最近的 contenteditable，
+    // 手机上编辑器一聚焦就顶起输入辅助栏，手势走完焦点又消失，布局一缩一放就是闪动。
+    const canvas = workspace.locator(".document-canvas")
+    const canvasBox = await canvas.boundingBox()
+    const swipeY = Math.round((canvasBox?.y ?? 400) + 120)
+    await page.mouse.move(6, swipeY)
+    await page.mouse.down()
+    for (const x of [20, 45, 80, 120, 165, 210]) {
+      await page.mouse.move(x, swipeY + 1, { steps: 2 })
+      await page.waitForTimeout(16)
+    }
+    await page.mouse.up()
+    await expect(workspace).toHaveAttribute("data-screen", "notes", { timeout: 1_000 })
+
+    const focusedDuringSwipe = await page.evaluate(() => {
+      const { __focusedDuringSwipe: focused, __removeFocusProbe: remove } = window as unknown as {
+        __focusedDuringSwipe: string[]
+        __removeFocusProbe: () => void
+      }
+      remove()
+      return focused
+    })
+    expect(focusedDuringSwipe.filter((name) => name.includes("cm-content"))).toEqual([])
+  })
+
   test("移动端阅读页保留高频操作并从更多菜单打开大纲", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "mobile-chrome")
     await seedCachedVault(page)

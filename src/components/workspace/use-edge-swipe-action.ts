@@ -2,6 +2,9 @@ import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactM
 
 import { getEdgeSwipeProgress, shouldCompleteEdgeSwipe } from "@/services/navigation/edge-swipe"
 
+// 边缘手势的起手区宽度，指针与触摸两条路径共用。
+const EDGE_ZONE_WIDTH = 32
+
 type EdgeSwipeKind = "back" | "drawer"
 type EdgeSwipePhase = "completing" | "dragging" | "idle" | "returning"
 type Gesture = {
@@ -14,6 +17,14 @@ type Gesture = {
   velocityX: number
   x: number
   y: number
+}
+
+function isEditorSurface(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false
+  // 起手未必正落在编辑器上：落在容器留白里同样会被夺焦——浏览器会把光标塞进这一片中
+  // 最近的 contenteditable，所以容器自身也要算进来。
+  const surface = target.closest(".cm-editor, .document-canvas")
+  return Boolean(surface && (surface.matches(".cm-editor") || surface.querySelector(".cm-editor")))
 }
 
 // 跟手的关键是拖动期间不碰 React：位移/进度直接写工作区 DOM 上的 CSS 变量，
@@ -32,6 +43,21 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
   useEffect(() => () => {
     timersRef.current.forEach((timer) => window.clearTimeout(timer))
   }, [])
+
+  useEffect(() => {
+    const element = workspaceRef.current
+    if (!element || !enabled) return
+    // React 把 touchstart 统一挂成 passive 监听，onTouchStart 里调用 preventDefault 是无效的。
+    // 真机走的正是触摸这条路径，所以单独补一个非 passive 的原生监听来拦截编辑器抢焦点。
+    const blockEditorFocus = (event: TouchEvent) => {
+      const touch = event.touches[0]
+      if (!touch || event.touches.length !== 1 || touch.clientX > EDGE_ZONE_WIDTH) return
+      if (!isEditorSurface(event.target)) return
+      event.preventDefault()
+    }
+    element.addEventListener("touchstart", blockEditorFocus, { passive: false })
+    return () => element.removeEventListener("touchstart", blockEditorFocus)
+  }, [enabled])
 
   const applyVisual = (offset: number, progress: number) => {
     const element = workspaceRef.current
@@ -80,6 +106,10 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
       // onTouchMove 里的 preventDefault 拦不住它，松手时手指下方的笔记会被当成点击直接打开，
       // 紧接着手势再把页面切到上一级，看起来就是侧滑中间闪一下别的页面。
       suppressClickRef.current = true
+      // 带着键盘侧滑时，焦点要等编辑器卸载才消失，键盘于是在列表已经落位之后才收起，
+      // 布局又跳一次。手势一确立就主动失焦，让键盘收起与页面滑出并成同一个动作。
+      const focused = document.activeElement
+      if (focused instanceof HTMLElement && isEditorSurface(focused)) focused.blur()
     }
     const progress = getEdgeSwipeProgress(deltaX)
     // 根目录手势只负责识别“打开导航”，拖动期间不移动正文；只有返回上页才做跟手转场。
@@ -128,7 +158,10 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     // 每次新的按下都先解除抑制，否则上一轮残留的标记会把这次正常点击一起吞掉。
     suppressClickRef.current = false
-    if (!enabled || !event.isPrimary || event.clientX > 32) return
+    if (!enabled || !event.isPrimary || event.clientX > EDGE_ZONE_WIDTH) return
+    // 起手落在编辑器上就别让它拿到焦点：contenteditable 一聚焦，iOS 立刻顶起输入辅助栏，
+    // 布局跟着收缩，手势走完焦点又消失、布局回落，看起来就是侧滑中途闪一下。
+    if (isEditorSurface(event.target)) event.preventDefault()
     clearScheduled()
     pointerGestureRef.current = startGesture(event.clientX, event.clientY, event.pointerId)
   }
@@ -157,7 +190,7 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
   const onTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
     suppressClickRef.current = false
     const touch = event.touches[0]
-    if (!enabled || event.touches.length !== 1 || !touch || touch.clientX > 32) return
+    if (!enabled || event.touches.length !== 1 || !touch || touch.clientX > EDGE_ZONE_WIDTH) return
     clearScheduled()
     clearPointerGesture()
     touchGestureRef.current = startGesture(touch.clientX, touch.clientY)
