@@ -219,7 +219,9 @@ test.describe("核心笔记流程", () => {
     await expect(workspace.getByRole("heading", { name: "找不到这篇笔记" })).toBeVisible()
     await workspace.getByRole("button", { name: /第一篇/ }).click()
     await expect(page).toHaveURL(/#\/notes\/webdav/)
-    await expect(workspace.getByRole("textbox", { name: "笔记标题" })).toHaveValue("第一篇")
+    // 从恢复页打开的是一篇已有笔记，视图模式沿用用户偏好（默认阅读态），
+    // 此时标题是只读标题而不是输入框；强制切编辑态只发生在新建笔记时。
+    await expect(workspace.locator(".document-title")).toHaveText("第一篇")
   })
 
   test("移动端搜索确认会失焦，清空后恢复全部数据", async ({ page }, testInfo) => {
