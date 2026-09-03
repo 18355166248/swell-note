@@ -208,6 +208,9 @@ function App() {
     setNoteViewMode(mode)
     saveUiPreferences({ noteViewMode: mode })
   }, [])
+  // 新建笔记必须落在编辑态：空白笔记在阅读态下只有一片空白，既看不到光标也无从下手。
+  // 这里只切当前视图，不写入偏好，用户设定的默认阅读态在下次启动时依然生效。
+  const openNoteViewForEditing = useCallback(() => setNoteViewMode("edit"), [])
   const changeColorMode = useCallback((mode: ColorMode) => {
     setColorMode(mode)
     saveUiPreferences({ colorMode: mode })
@@ -969,6 +972,7 @@ function App() {
         setLibraryView("all")
         setNotes((current) => [newNote, ...current])
         setActiveNoteId(id)
+        openNoteViewForEditing()
         setSaveStates((current) => ({ ...current, [id]: { status: "pending" } }))
         setVaultNoteCount((count) => count + 1)
         setMobileScreen("editor")
@@ -1000,6 +1004,7 @@ function App() {
       setLibraryView("all")
       setNotes((current) => [newNote, ...current])
       setActiveNoteId(id)
+      openNoteViewForEditing()
       setSaveStates((current) => ({ ...current, [id]: { status: "saved" } }))
       setVaultNoteCount((count) => count + 1)
       setMobileScreen("editor")

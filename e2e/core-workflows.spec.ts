@@ -109,6 +109,33 @@ test.describe("核心笔记流程", () => {
     await expect(page.getByRole("button", { name: /恢复 ZIP/ })).toBeVisible()
   })
 
+  test("阅读态下新建笔记直接进入编辑态，且不改写默认显示偏好", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedCachedVault(page)
+    await page.evaluate(() => {
+      localStorage.setItem("swell-note:webdav-config:v1", JSON.stringify({
+        provider: "jianguoyun",
+        remotePath: "/Swell/",
+        serverUrl: "https://dav.jianguoyun.com/dav/",
+        username: "e2e@example.com",
+      }))
+    })
+    await page.reload()
+    const workspace = page.locator(".desktop-workspace:visible")
+
+    await expect(page.getByRole("button", { name: "阅读模式" })).toHaveAttribute("aria-pressed", "true")
+    await workspace.getByRole("button", { name: "新建笔记" }).click()
+    await expect(workspace.locator(".note-editor")).toHaveAttribute("data-view-mode", "edit")
+    await expect(page.getByRole("button", { name: "编辑模式" })).toHaveAttribute("aria-pressed", "true")
+
+    // 只切当前视图：本次新建不会把用户的默认阅读态写成编辑态。
+    const storedViewMode = await page.evaluate(() => {
+      const raw = localStorage.getItem("swell-note:ui-preferences:v1")
+      return raw ? (JSON.parse(raw) as { noteViewMode?: string }).noteViewMode ?? null : null
+    })
+    expect(storedViewMode).not.toBe("edit")
+  })
+
   test("桌面端失效详情链接不会继续展示上一篇笔记", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page)
