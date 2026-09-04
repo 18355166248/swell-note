@@ -1,4 +1,4 @@
-import { memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
+import { Fragment, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import {
   closestCenter,
   DndContext,
@@ -100,7 +100,9 @@ import {
   noteBelongsDirectlyToFolder,
   type VaultFolder,
 } from "@/services/search/vault-folders"
-import { buildNotePreview } from "@/services/markdown/note-preview"
+import { buildNotePreview, buildNoteSearchSnippet } from "@/services/markdown/note-preview"
+import { splitByQuery } from "@/services/search/note-search-highlight"
+import { countWords, estimateReadingMinutes } from "@/services/markdown/note-stats"
 import { extractNoteOutline } from "@/services/markdown/note-outline"
 import { buildMarkdownNoteLink, buildRelativeMarkdownHref } from "@/services/markdown/markdown-link"
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
@@ -135,6 +137,8 @@ import { shouldShowFloatingSyncProgress } from "@/services/sync/sync-progress"
 import { SyncFailureToast } from "./sync-failure-toast"
 
 // CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
+// 实际预取时机在应用启动阶段（见 preload-note-renderers.ts）：等 Workspace 挂载再预取
+// 已经太晚——cacheReady 一变 true，笔记多半已经激活，编辑器和 Workspace 在同一帧里就都要用到。
 const MarkdownEditor = lazyWithRetry(() => import("@/components/editor/markdown-editor"))
 const MarkdownPreview = lazyWithRetry(() => import("@/components/editor/markdown-preview"))
 const CanvasPreview = lazyWithRetry(() => import("@/components/editor/canvas-preview"))
@@ -1098,6 +1102,7 @@ function NoteListPanel({
               notes={notes}
               onSelectFolder={onSelectFolder}
               onSelectNote={onSelectNote}
+              query={query}
               viewportRef={viewportRef}
             />
           ) : viewportReady ? <EmptyNoteList canCreateNote={canCreateNote} isLoading={isLoading} onCreateNote={onCreateNote} onOpenSettings={onOpenSettings} selectedFolder={selectedFolder} /> : null}
@@ -1420,16 +1425,44 @@ type NoteListRowProps = {
   note: Note
   onLongPress?: (note: Note) => void
   onSelect: (note: Note) => void
+  query?: string
+}
+
+// 命中词经常落在固定摘要之外，用户看着列表想不明白这篇为什么会搜到；
+// 标题命中就够了，标题和默认摘要都没命中才去正文里现摘一段带关键词的片段。
+function useSearchMatch(note: Note, query: string) {
+  return useMemo(() => {
+    const needle = query.trim()
+    if (!needle) return note.preview
+    const haystack = `${note.title} ${note.preview}`.toLocaleLowerCase()
+    if (haystack.includes(needle.toLocaleLowerCase())) return note.preview
+    return buildNoteSearchSnippet(note.content, needle, note.format) ?? note.preview
+  }, [note.content, note.format, note.preview, note.title, query])
+}
+
+// query 为空、或这段文字压根没命中时直接原样渲染，避免给列表里每一行都套一层 <mark> 开销。
+function HighlightedText({ query, text }: { query: string; text: string }) {
+  if (!query.trim()) return <>{text}</>
+  const segments = splitByQuery(text, query)
+  if (!segments.some((segment) => segment.matched)) return <>{text}</>
+  return (
+    <>
+      {segments.map((segment, index) => segment.matched
+        ? <mark key={index}>{segment.text}</mark>
+        : <Fragment key={index}>{segment.text}</Fragment>)}
+    </>
+  )
 }
 
 // 列表是最容易掉帧的地方：编辑正文、切换选中都会刷新整个 notes 数组，
 // 但真正变了的只有一两行。这里 memo 掉其余行，让每次输入只重渲染受影响的那几行。
-const NoteListRow = memo(function NoteListRow({ active, contextActions, note, onLongPress, onSelect }: NoteListRowProps) {
+const NoteListRow = memo(function NoteListRow({ active, contextActions, note, onLongPress, onSelect, query = "" }: NoteListRowProps) {
   const handleLongPress = useMemo(
     () => onLongPress ? () => onLongPress(note) : undefined,
     [note, onLongPress],
   )
   const longPressProps = useLongPress(handleLongPress)
+  const previewText = useSearchMatch(note, query)
   const row = (
     <button
       className="note-list-row"
@@ -1439,10 +1472,10 @@ const NoteListRow = memo(function NoteListRow({ active, contextActions, note, on
       {...longPressProps}
     >
       <div className="note-row-heading">
-        <strong>{note.title || "未命名笔记"}</strong>
+        <strong><HighlightedText query={query} text={note.title || "未命名笔记"} /></strong>
         {note.starred ? <Star className="starred-icon" /> : null}
       </div>
-      <p>{note.preview}</p>
+      <p><HighlightedText query={query} text={previewText} /></p>
       {note.tags?.length ? <div className="note-row-tags">{note.tags.slice(0, 3).map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
       <div className="note-row-meta">
         <time>{note.updatedAt}</time>
@@ -1576,6 +1609,13 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
       return "无法解析的画布"
     }
   }, [isCanvas, note.content])
+  // 字数与阅读时长：Canvas / Excalidraw 没有可读正文，不显示。
+  const readingHint = useMemo(() => {
+    if (isSpecialPreview) return null
+    const words = countWords(note.content)
+    if (words === 0) return null
+    return `${words} 字 · 约 ${estimateReadingMinutes(note.content)} 分钟`
+  }, [isSpecialPreview, note.content])
   // 大纲只在菜单里用，却跟着每一次按键把全文扫一遍：长笔记上这一遍要占掉近四成的按键开销。
   // 改成停顿下来再算，菜单是手动打开的，拿到的照样是最新内容。
   const outlineSource = useSettledContent(note.id, note.content)
@@ -2172,6 +2212,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
       ) : !compact && !isExcalidraw ? (
         <footer className="editor-statusbar">
           <span>{documentSize}</span>
+          {readingHint ? <span>{readingHint}</span> : null}
           <span>{isCanvas ? "Canvas" : "Markdown"}</span>
           {/* 预览与 Canvas 都没有可编辑光标，此时展示行列位置只会误导。 */}
           {!isCanvas && !previewing ? (
@@ -2501,6 +2542,8 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
 }
 
 function BacklinksPanel({ backlinks, onSelectNote }: { backlinks: Note[]; onSelectNote: (note: Note) => void }) {
+  // 没有反向链接时整块不渲染：这段常驻的空占位会把每篇笔记的正文尾部顶起一屏边距。
+  if (backlinks.length === 0) return null
   return (
     <section className="backlinks-panel">
       <div className="backlinks-title">
@@ -2508,18 +2551,14 @@ function BacklinksPanel({ backlinks, onSelectNote }: { backlinks: Note[]; onSele
         <strong>反向链接</strong>
         <span>{backlinks.length}</span>
       </div>
-      {backlinks.length > 0 ? (
-        <div className="backlinks-list">
-          {backlinks.map((note) => (
-            <button key={note.id} onClick={() => onSelectNote(note)} type="button">
-              <strong>{note.title || "未命名笔记"}</strong>
-              <span>{note.preview}</span>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <p>索引完成后，链接到当前笔记的内容会显示在这里。</p>
-      )}
+      <div className="backlinks-list">
+        {backlinks.map((note) => (
+          <button key={note.id} onClick={() => onSelectNote(note)} type="button">
+            <strong>{note.title || "未命名笔记"}</strong>
+            <span>{note.preview}</span>
+          </button>
+        ))}
+      </div>
     </section>
   )
 }
@@ -3132,6 +3171,7 @@ function MobileNoteList(props: MobileNoteListProps) {
               onNoteLongPress={setActionNote}
               onSelectFolder={selectFolder}
               onSelectNote={selectNote}
+              query={props.query}
               viewportRef={viewportRef}
             />
           ) : viewportReady ? <EmptyNoteList canCreateNote={props.canCreateNote} isLoading={props.isRefreshingVault} onCreateNote={props.onCreateNote} onOpenSettings={props.onOpenSettings} selectedFolder={props.selectedFolder} /> : null}
@@ -3275,6 +3315,7 @@ function VirtualNoteRows({
   onNoteLongPress,
   onSelectFolder,
   onSelectNote,
+  query = "",
   viewportRef,
 }: {
   activeNoteId: string
@@ -3289,6 +3330,7 @@ function VirtualNoteRows({
   onNoteLongPress?: (note: Note) => void
   onSelectFolder?: (folder: string) => void
   onSelectNote: (note: Note) => void
+  query?: string
   viewportRef: RefObject<HTMLDivElement | null>
 }) {
   // 分组按本地日历日划分；把当天序号纳入依赖，跨零点后的首次渲染就会重算，
@@ -3340,7 +3382,7 @@ function VirtualNoteRows({
             ) : item.kind === "folder" ? (
               <FolderListRow contextActions={folderContextActions} folder={item.folder} mobile={mobile} onLongPress={onFolderLongPress} onSelect={onSelectFolder} />
             ) : (
-              <NoteListRow active={item.note.id === activeNoteId} contextActions={noteContextActions} note={item.note} onLongPress={onNoteLongPress} onSelect={onSelectNote} />
+              <NoteListRow active={item.note.id === activeNoteId} contextActions={noteContextActions} note={item.note} onLongPress={onNoteLongPress} onSelect={onSelectNote} query={query} />
             )}
           </div>
         )

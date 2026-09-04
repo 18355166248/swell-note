@@ -10,6 +10,7 @@ import { readClipboardText, writeClipboardText } from "@/services/clipboard/clip
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 import { scrollCursorIntoView } from "./cursor-visibility"
+import { markdownInputEnhancements, wrapSelectionAsLink } from "./markdown-input"
 import { markdownLivePreview } from "./live-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import "./markdown-table.css"
@@ -99,6 +100,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         onResolveAsset: (source) => handlers.current.onResolveAsset?.(source) ?? Promise.resolve(null),
         tableStorageKey: storageKey,
       }),
+      // 列表 / 引用回车续写、结构行 Tab 缩进、选中文字敲 * ` ~ 即包裹。
+      markdownInputEnhancements(),
       wikiLinkCompletion(() => handlers.current.getWikiLinkSuggestions?.() ?? []),
       EditorView.lineWrapping,
       EditorView.updateListener.of((update) => {
@@ -149,12 +152,18 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           onInsertFiles(files)
           return true
         },
-        paste(event) {
+        paste(event, view) {
+          const text = event.clipboardData?.getData("text/plain")
+          // 选中文字时粘一个链接，直接包成 [选中文字](URL)。
+          if (text && !readOnly && wrapSelectionAsLink(view, text)) {
+            event.preventDefault()
+            return true
+          }
           // 截图与图片文件的剪贴板不带纯文本；Excel 等来源同时带文本时仍按普通粘贴处理。
           const onInsertFiles = handlers.current.onInsertFiles
           const files = collectTransferFiles(event.clipboardData)
           if (!onInsertFiles || readOnly || files.length === 0) return false
-          if (event.clipboardData?.getData("text/plain")) return false
+          if (text) return false
           event.preventDefault()
           onInsertFiles(files)
           return true
@@ -165,6 +174,21 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           if (key === "s") {
             // 文档变化已实时进入本地工作副本；拦截浏览器“保存网页”即可避免误操作。
             event.preventDefault()
+            return true
+          }
+          if (key === "k") {
+            // 选中文字则作为链接文案，否则用占位文案；两种情况都把 https:// 选中，方便直接粘地址。
+            event.preventDefault()
+            const range = view.state.selection.main
+            const label = view.state.sliceDoc(range.from, range.to) || "链接文字"
+            const inserted = `[${label}](https://)`
+            const urlFrom = range.from + label.length + 3
+            view.dispatch({
+              changes: { from: range.from, to: range.to, insert: inserted },
+              selection: { anchor: urlFrom, head: urlFrom + 8 },
+              scrollIntoView: true,
+            })
+            view.focus()
             return true
           }
           if (key !== "b" && key !== "i") return false
@@ -402,10 +426,18 @@ function findTextInView(
   return { current: index + 1, total: matches.length }
 }
 
+// 工具栏模板 → 包裹选中文字用的前后缀。没有选区时按原模板（含占位文案）整段插入。
+const WRAP_TEMPLATES: Record<string, [string, string]> = {
+  "**加粗文字**": ["**", "**"],
+  "*斜体文字*": ["*", "*"],
+  "~~删除线文字~~": ["~~", "~~"],
+  "`行内代码`": ["`", "`"],
+}
+
 export function formatToolbarText(template: string, selected: string) {
   if (!selected) return { text: template }
-  if (template === "**加粗文字**") return { text: `**${selected}**` }
-  if (template === "*斜体文字*") return { text: `*${selected}*` }
+  const wrap = WRAP_TEMPLATES[template]
+  if (wrap) return { text: `${wrap[0]}${selected}${wrap[1]}` }
   if (template === "[链接](https://)") {
     const text = `[${selected}](https://)`
     const urlStart = selected.length + 3
@@ -413,7 +445,7 @@ export function formatToolbarText(template: string, selected: string) {
   }
   if (template === "\n```\n\n```\n") return { text: `\n\`\`\`\n${selected}\n\`\`\`\n` }
 
-  const prefix = template.match(/^\n(#{2,3} |> |- |- \[ \] )$/)?.[1]
+  const prefix = template.match(/^\n(#{1,3} |> |- |- \[ \] )$/)?.[1]
   if (prefix) return { text: selected.split("\n").map((line) => `${prefix}${line}`).join("\n") }
   return { text: template }
 }

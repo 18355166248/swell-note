@@ -6,7 +6,7 @@ import { DecorationSet, EditorView } from "@codemirror/view"
 import { describe, expect, it, vi } from "vitest"
 
 import type { LivePreviewOptions } from "./live-preview"
-import { markdownLivePreview, markdownLivePreviewPlugin, MarkdownImageWidget, mergeDecorationRanges, tableDecorationsField, TableWidget, TaskCheckboxWidget } from "./live-preview"
+import { ListBulletWidget, markdownLivePreview, markdownLivePreviewPlugin, MarkdownImageWidget, mergeDecorationRanges, tableDecorationsField, TableWidget, TaskCheckboxWidget } from "./live-preview"
 
 const doc = [
   "# 标题",
@@ -91,6 +91,7 @@ function collect(decorations: DecorationSet) {
   const tables: Array<{ from: number; to: number }> = []
   const images: Array<{ alt: string; block: boolean; from: number; source: string; to: number }> = []
   const marks: Array<{ attributes?: Record<string, string>; class: string; from: number; to: number }> = []
+  const bullets: Array<{ from: number; to: number }> = []
   const cursor = decorations.iter()
   while (cursor.value) {
     const spec = (cursor.value.spec ?? {}) as DecorationSpec
@@ -99,12 +100,13 @@ function collect(decorations: DecorationSet) {
     if (!spec.class && !spec.widget && cursor.from < cursor.to) hidden.push({ from: cursor.from, to: cursor.to })
     if (spec.widget instanceof TaskCheckboxWidget) checkboxes.push({ checked: spec.widget.checked, from: spec.widget.from })
     if (spec.widget instanceof TableWidget) tables.push({ from: cursor.from, to: cursor.to })
+    if (spec.widget instanceof ListBulletWidget) bullets.push({ from: cursor.from, to: cursor.to })
     if (spec.widget instanceof MarkdownImageWidget) {
       images.push({ alt: spec.widget.alt, block: spec.widget.block, from: cursor.from, source: spec.widget.source, to: cursor.to })
     }
     cursor.next()
   }
-  return { checkboxes, classes, hidden, images, marks, tables }
+  return { bullets, checkboxes, classes, hidden, images, marks, tables }
 }
 
 function markOf(marks: ReturnType<typeof collect>["marks"], className: string) {
@@ -177,6 +179,56 @@ describe("markdown live preview", () => {
     const { hidden } = collect(await settleInlineDecorations(view))
 
     expect(hidden).not.toContainEqual({ from: boldLine, to: boldLine + 2 })
+  })
+
+  const listDoc = [
+    "- 要点一",
+    "  - 嵌套项",
+    "",
+    "1. 第一",
+    "2. 第二",
+    "",
+    "- [ ] 待办",
+  ].join("\n")
+
+  it("hides bullet markers away from the cursor and renders a bullet widget", async () => {
+    // 光标放在两组列表之间的空行上，两级列表的标记都不在光标所在行。
+    const blankLine = listDoc.indexOf("\n\n") + 1
+    const view = createView({ anchor: blankLine }, listDoc)
+    const { bullets } = collect(await settleInlineDecorations(view))
+
+    // 顶层项和嵌套项各出一个圆点，标记连同后面的空格一起被换掉（widget 装饰本身就是替换，不落进 hidden）。
+    expect(bullets).toEqual([
+      { from: listDoc.indexOf("- 要点一"), to: listDoc.indexOf("要点一") },
+      { from: listDoc.indexOf("- 嵌套项"), to: listDoc.indexOf("嵌套项") },
+    ])
+  })
+
+  it("only reveals the list item whose own marker line has the cursor, not its nested children", async () => {
+    // 光标停在父项「要点一」这一行：父项标记还原成源码，不出现在圆点列表里；
+    // 嵌套子项「嵌套项」不受影响，仍然渲染成圆点。
+    const view = createView({ anchor: 0 }, listDoc)
+    const { bullets } = collect(await settleInlineDecorations(view))
+
+    expect(bullets).toEqual([{ from: listDoc.indexOf("- 嵌套项"), to: listDoc.indexOf("嵌套项") }])
+  })
+
+  it("keeps the ordered list number visible but styles it", async () => {
+    const view = createView({ anchor: 0 }, listDoc)
+    const { hidden, marks } = collect(await settleInlineDecorations(view))
+
+    const ordinals = markOf(marks, "cm-md-list-ordinal")
+    expect(ordinals.map((mark) => listDoc.slice(mark.from, mark.to))).toEqual(["1.", "2."])
+    // 数字本身是内容，不能像 bullet 一样被隐藏掉。
+    expect(hidden).not.toContainEqual({ from: listDoc.indexOf("1."), to: listDoc.indexOf("1.") + 2 })
+  })
+
+  it("does not add a bullet on task list items (checkbox already covers it)", async () => {
+    const view = createView({ anchor: 0 }, listDoc)
+    const { bullets, checkboxes } = collect(await settleInlineDecorations(view))
+
+    expect(checkboxes).toEqual([{ checked: false, from: listDoc.indexOf("[ ]") }])
+    expect(bullets.some((bullet) => bullet.from === listDoc.indexOf("- [ ]"))).toBe(false)
   })
 
   it("renders tables as block widgets away from the cursor", async () => {

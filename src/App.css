@@ -656,6 +656,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .starred-icon { fill: currentColor; color: #f2a100; }
 .note-row-heading svg { width: 13px; height: 13px; }
 .note-list-row p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 1; margin: 7px 0 7px; color: var(--muted-foreground); font-size: 11.5px; line-height: 1.5; }
+.note-row-heading strong mark, .note-list-row p mark { background: var(--blue-soft); color: var(--primary); border-radius: 3px; padding: 0 1px; font-weight: inherit; }
 .note-row-meta { display: flex; align-items: center; gap: 7px; color: #7e8793; font-size: 10.5px; }
 .note-list-empty { display: flex; min-height: 280px; flex-direction: column; align-items: center; justify-content: center; padding: 28px 22px; color: var(--muted-foreground); text-align: center; }
 .note-list-empty > svg { width: 25px; height: 25px; margin-bottom: 12px; color: var(--primary); }
@@ -768,6 +769,9 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-editor-shell .cm-md-strike { color: var(--muted-foreground); text-decoration: line-through; }
 .markdown-editor-shell .cm-md-inline-code { border-radius: 4px; background: var(--muted); padding: .1em .32em; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
 .markdown-editor-shell .cm-md-quote { border-left: 3px solid var(--blue-line); background: var(--panel-soft); color: var(--muted-foreground); }
+.markdown-editor-shell .cm-md-bullet { display: inline-block; width: 1.1em; margin-right: .2em; text-align: center; vertical-align: 1px; }
+.markdown-editor-shell .cm-md-bullet::before { content: "•"; color: var(--muted-foreground); font-weight: 700; }
+.markdown-editor-shell .cm-md-list-ordinal { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 /* 编辑器整体开着自动折行，代码块也吃这一套：长行折下来后顶到最左边，读起来像新的一条语句。
    给续行留出悬挂缩进，折行位置一眼可辨；代码块自身不横向滚动，避免与外层滚动容器打架。 */
 .markdown-editor-shell .cm-md-codeblock { padding-left: 3ch; background: #f5f7fa; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; text-indent: -3ch; }
@@ -922,7 +926,11 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-preview input[type="checkbox"] { margin-right: .45em; accent-color: var(--primary); }
 .markdown-preview .task-checkbox { cursor: pointer; }
 .markdown-preview mark { border-radius: 3px; background: #ffe58f; padding: 0 .12em; color: inherit; }
-.markdown-preview img { display: block; max-width: 100%; height: auto; margin: 1.25em auto; border-radius: 8px; }
+.markdown-preview img { display: block; max-width: 100%; height: auto; margin: 1.25em auto; border-radius: 8px; cursor: zoom-in; }
+.markdown-preview img:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.markdown-image-zoom { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: clamp(16px, 5vw, 56px); background: color-mix(in oklab,#0b1220 90%,transparent); cursor: zoom-out; animation: markdown-image-zoom-in 120ms ease-out; }
+.markdown-image-zoom img { max-width: 100%; max-height: 100%; border-radius: 10px; object-fit: contain; box-shadow: 0 24px 70px rgb(0 0 0 / .5); }
+@keyframes markdown-image-zoom-in { from { opacity: 0 } to { opacity: 1 } }
 .markdown-attachment-button, .markdown-attachment-download { display: inline-flex; align-items: center; min-height: 34px; margin: .35em 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); padding: 6px 10px; color: var(--primary); font: inherit; cursor: pointer; }
 .markdown-attachment-button:disabled { cursor: wait; opacity: .65; }
 .markdown-attachment-frame { display: block; width: 100%; min-height: 520px; margin: 1em 0; border: 1px solid var(--border); border-radius: 10px; background: white; }

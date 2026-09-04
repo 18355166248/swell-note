@@ -1,4 +1,5 @@
-import { Component, memo, Suspense, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
+import { Component, memo, Suspense, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ErrorInfo, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
 import remarkGfm from "remark-gfm"
@@ -48,6 +49,52 @@ const rehypePlugins = [rehypeHighlight]
 // 任务勾选框由 remark-gfm 合成、自身没有源码位置，行号从所属任务列表项（li）经 Context 传入。
 const TaskItemLineContext = createContext<number | null>(null)
 
+// 图片放大预览：图片散落在分块、双链嵌入的深处，用一个模块级小 store 让任意深度的图片都能唤起同一个浮层。
+type ImageZoom = { alt: string; src: string }
+let imageZoom: ImageZoom | null = null
+const imageZoomListeners = new Set<() => void>()
+
+function openImageZoom(src: string, alt: string) {
+  imageZoom = { alt, src }
+  imageZoomListeners.forEach((listener) => listener())
+}
+
+function closeImageZoom() {
+  if (!imageZoom) return
+  imageZoom = null
+  imageZoomListeners.forEach((listener) => listener())
+}
+
+function useImageZoom() {
+  return useSyncExternalStore(
+    (onChange) => {
+      imageZoomListeners.add(onChange)
+      return () => imageZoomListeners.delete(onChange)
+    },
+    () => imageZoom,
+    () => null,
+  )
+}
+
+function ImageZoomOverlay() {
+  const zoom = useImageZoom()
+  useEffect(() => {
+    if (!zoom) return
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") closeImageZoom()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [zoom])
+  if (!zoom || typeof document === "undefined") return null
+  return createPortal(
+    <div aria-modal="true" className="markdown-image-zoom" onClick={closeImageZoom} role="dialog">
+      <img alt={zoom.alt} src={zoom.src} />
+    </div>,
+    document.body,
+  )
+}
+
 // 切换笔记时这棵子树会连着渲染四次：旧正文两次、新正文两次，每一次都要把整篇
 // Markdown 重新解析成 React 元素。正文没变时没有任何理由重算，这里挡住重复的那两次。
 export default memo(function MarkdownPreview(props: MarkdownPreviewProps) {
@@ -71,7 +118,12 @@ export default memo(function MarkdownPreview(props: MarkdownPreviewProps) {
       </NoteRendererErrorBoundary>
     )
   }
-  return <MarkdownContent {...props} depth={0} />
+  return (
+    <>
+      <MarkdownContent {...props} depth={0} />
+      <ImageZoomOverlay />
+    </>
+  )
 })
 
 function NoteRendererLoading({ label }: { label: string }) {
@@ -689,15 +741,26 @@ function VaultImage({ alt, assetScope, onResolveAsset, source, title }: VaultIma
 
   if (state.status === "ready" && state.url) {
     const presentation = parseImagePresentation(alt, title)
+    const zoomedSrc = state.url
     return (
       <img
         alt={presentation.alt}
+        aria-label={`放大查看图片：${presentation.alt}`}
         decoding="async"
         loading="lazy"
+        onClick={() => openImageZoom(zoomedSrc, presentation.alt)}
         onError={() => setState({ status: "error" })}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault()
+            openImageZoom(zoomedSrc, presentation.alt)
+          }
+        }}
         referrerPolicy="no-referrer"
+        role="button"
         src={state.url}
         style={presentation.size ? { height: presentation.size.height, width: presentation.size.width } : undefined}
+        tabIndex={0}
       />
     )
   }

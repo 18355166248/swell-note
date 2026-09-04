@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { buildNotePreview } from "@/services/markdown/note-preview"
+import { buildNotePreview, buildNoteSearchSnippet } from "@/services/markdown/note-preview"
 
 describe("buildNotePreview", () => {
   it("剥离 YAML frontmatter，不把元数据当正文", () => {
@@ -110,5 +110,39 @@ describe("buildNotePreview 去除 Markdown 标记", () => {
     expect(preview).not.toContain("- [ ]")
     expect(preview).not.toContain("---")
     expect(preview.startsWith(">")).toBe(false)
+  })
+})
+
+describe("buildNoteSearchSnippet", () => {
+  it("摘取命中词附近的正文，并在截断处加省略号", () => {
+    const filler = "内容填充。".repeat(30)
+    const content = `${filler}这里藏着关键词要点四，前后还有更多内容。${filler}`
+
+    const snippet = buildNoteSearchSnippet(content, "要点四")
+
+    expect(snippet).not.toBeNull()
+    expect(snippet).toContain("要点四")
+    expect(snippet?.startsWith("…")).toBe(true)
+    expect(snippet?.endsWith("…")).toBe(true)
+  })
+
+  it("命中在开头或结尾时不加多余的省略号", () => {
+    expect(buildNoteSearchSnippet("要点四开头的正文", "要点四")?.startsWith("…")).toBe(false)
+    expect(buildNoteSearchSnippet("正文结尾是要点四", "要点四")?.endsWith("…")).toBe(false)
+  })
+
+  it("query 为空或没有命中时返回 null", () => {
+    expect(buildNoteSearchSnippet("随便什么正文", "")).toBeNull()
+    expect(buildNoteSearchSnippet("随便什么正文", "找不到")).toBeNull()
+  })
+
+  it("片段不包含 Markdown 标记", () => {
+    const snippet = buildNoteSearchSnippet("这是 **加粗的要点四** 内容", "要点四")
+    expect(snippet).toContain("要点四")
+    expect(snippet).not.toContain("**")
+  })
+
+  it("Canvas 笔记不生成片段", () => {
+    expect(buildNoteSearchSnippet('{"nodes":[{"text":"要点四"}]}', "要点四", "canvas")).toBeNull()
   })
 })

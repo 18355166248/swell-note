@@ -78,6 +78,24 @@ export class TaskCheckboxWidget extends WidgetType {
   }
 }
 
+// 无序列表原来一直露着 `- `/`* `/`+ ` 源码：标题的 #、引用的 >、强调的 ** 都会在光标离开后
+// 隐藏并换成最终样式，唯独列表标记从没走这条路，读起来像没做完。这里补上同一套处理，
+// 换成一个不可编辑的圆点，光标进入该行时和其他标记一样还原成原始字符。
+export class ListBulletWidget extends WidgetType {
+  toDOM() {
+    const bullet = document.createElement("span")
+    bullet.className = "cm-md-bullet"
+    bullet.setAttribute("aria-hidden", "true")
+    return bullet
+  }
+
+  ignoreEvent() {
+    return true
+  }
+}
+
+const listBulletWidget = new ListBulletWidget()
+
 // 编辑态原本把 ![alt](src) 原样摊成源码，图多的笔记等于在看源文件。
 // 光标不在这一行时换成真实图片，光标一进来立刻还原成可编辑的原文，源文件始终不变。
 export class MarkdownImageWidget extends WidgetType {
@@ -499,6 +517,22 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             // 只有首行的 QuoteMark 是 Blockquote 的直接子节点，后续行的会被并进段落等子节点里，
             // 按直接子节点找会漏掉它们，第二行开始的 > 就一直露在外面。
             if (!active) hideQuoteMarks(node.node, hide)
+            break
+          }
+          case "ListItem": {
+            // 任务项的标记交给下面的 TaskMarker 分支处理（换成勾选框），这里再隐藏一遍
+            // 会把同一段源码替换两次；有序列表的数字是内容本身，只弱化颜色，不能隐藏。
+            if (node.node.getChild("Task")) break
+            const mark = node.node.getChild("ListMark")
+            if (!mark) break
+            // ListItem 常常跨行覆盖着嵌套子列表，不能像标题、引用那样按整块判断光标是否在内：
+            // 那样一来，光标停在子项里，父项的标记也会跟着露出来。这里只看标记自己所在的那一行。
+            if (isCursorActive(mark.from, mark.to)) break
+            if (node.node.parent?.name === "OrderedList") {
+              decorations.push(Decoration.mark({ class: "cm-md-list-ordinal" }).range(mark.from, mark.to))
+            } else {
+              decorations.push(Decoration.replace({ widget: listBulletWidget }).range(mark.from, skipSpacesAfter(view.state, mark.to)))
+            }
             break
           }
           case "TaskMarker": {

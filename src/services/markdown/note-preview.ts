@@ -21,6 +21,26 @@ export function buildNotePreview(content: string, format?: Note["format"]) {
   return collapse(stripMarkdownSyntax(stripMarkdownFrontmatter(head))).slice(0, PREVIEW_LENGTH)
 }
 
+// 命中词经常落在摘要之外的正文深处：搜索列表这时候还是显示固定的开头摘要，用户看不出这篇为什么会命中。
+// 只在摘要本身没包含关键词时才用得到——调用方应该先检查 title/preview，找不到再退回来正文找片段。
+const SNIPPET_SCAN_LENGTH = 20000
+const SNIPPET_RADIUS = 42
+
+export function buildNoteSearchSnippet(content: string, query: string, format?: Note["format"]): string | null {
+  const needle = query.trim()
+  if (!needle || format === "canvas") return null
+  const head = content.slice(0, SNIPPET_SCAN_LENGTH)
+  if (isExcalidrawMarkdown(head)) return null
+
+  const stripped = collapse(stripMarkdownSyntax(stripMarkdownFrontmatter(head)))
+  const index = stripped.toLocaleLowerCase().indexOf(needle.toLocaleLowerCase())
+  if (index === -1) return null
+
+  const start = Math.max(0, index - SNIPPET_RADIUS)
+  const end = Math.min(stripped.length, index + needle.length + SNIPPET_RADIUS)
+  return `${start > 0 ? "…" : ""}${stripped.slice(start, end)}${end < stripped.length ? "…" : ""}`
+}
+
 // 摘要是给人扫一眼的，此前只去掉了标题的 #，**加粗**、`代码`、[链接](url)、![[图.png]]
 // 这些标记都原样留在列表里。这里把常见写法统一还原成纯文字。
 function stripMarkdownSyntax(body: string) {
