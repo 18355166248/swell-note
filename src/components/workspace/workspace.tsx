@@ -1494,6 +1494,27 @@ type NoteEditorProps = {
   wikiLinkNotes: Note[]
 }
 
+// 对位最多跟一秒：长笔记分帧铺完约需十几帧，懒加载的编辑器再慢也在这个范围内。
+const ANCHOR_ALIGN_FRAMES = 60
+
+// 阅读态里把源码行对应的块顶到可视区顶端。预览元素按文档顺序排列，行号随之递增，
+// 因此取最后一个不超过目标行的块即可，遇到更大的行号就可以收手。
+function alignPreviewToSourceLine(viewport: HTMLElement, article: HTMLElement | null, line: number) {
+  const elements = article?.querySelectorAll<HTMLElement>(".markdown-preview [data-source-line]")
+  if (!elements?.length) return false
+  let anchor: HTMLElement | null = null
+  for (const element of elements) {
+    const value = Number(element.dataset.sourceLine)
+    if (!Number.isFinite(value)) continue
+    if (value > line) break
+    anchor = element
+  }
+  if (!anchor) return false
+  const delta = anchor.getBoundingClientRect().top - viewport.getBoundingClientRect().top
+  if (Math.abs(delta) >= 1) viewport.scrollTop += delta
+  return true
+}
+
 // 搜索、切目录、展开侧栏统统与正文无关，但它们每一次都把编辑器整棵子树重画一遍
 // （实测搜索敲 6 个字，编辑器白渲染 11 次）。上面已经把入参固定住，这里收口。
 const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
@@ -1542,6 +1563,28 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   const noteOutline = useMemo(() => isSpecialPreview ? [] : extractNoteOutline(note.content), [isSpecialPreview, note.content])
   const editorScrollKey = `${activeCacheId ?? "session"}:${note.id}`
 
+  // 切换阅读/编辑时用来对位：滚动过程中随手记下可视区顶端落在哪一源码行。
+  // 用命中测试而不是遍历整篇，长笔记里滚动才不会为此多花时间。
+  const anchorLineRef = useRef<number | null>(null)
+  const previewingRef = useRef(previewing)
+  previewingRef.current = previewing
+  const readTopSourceLine = useCallback(() => {
+    const viewport = editorViewportRef.current
+    if (!viewport || viewport.clientHeight <= 0) return null
+    const bounds = viewport.getBoundingClientRect()
+    if (!previewingRef.current) return editorRef.current?.lineAtViewportTop(bounds.top) ?? null
+    const x = bounds.left + bounds.width / 2
+    // 顶端可能正落在两个块之间的空白上，往下多探两次再放弃。
+    for (const offset of [2, 16, 36]) {
+      const element = document.elementFromPoint(x, bounds.top + offset)
+      const line = Number(element?.closest<HTMLElement>("[data-source-line]")?.dataset.sourceLine)
+      if (Number.isFinite(line)) return line
+    }
+    return null
+  }, [])
+  // 换了笔记就丢掉上一篇的锚点，否则下一次切视图会按别的文档的行号对位。
+  useEffect(() => { anchorLineRef.current = null }, [note.id])
+
   useLayoutEffect(() => {
     const viewport = editorViewportRef.current
     if (!viewport) return
@@ -1549,6 +1592,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     let latestScrollTop = viewport.scrollTop
     let frame = 0
     let settlingFrame = 0
+    let anchorFrame = 0
     const restore = () => {
       const maximum = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
       viewport.scrollTop = Math.min(target, maximum)
@@ -1556,22 +1600,71 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     }
     const rememberVisiblePosition = () => {
       // 断点切换会先用 CSS 隐藏旧布局，再卸载组件；隐藏阶段产生的 0 不能覆盖真实阅读位置。
-      if (viewport.clientHeight > 0) latestScrollTop = viewport.scrollTop
+      if (viewport.clientHeight <= 0) return
+      latestScrollTop = viewport.scrollTop
+      // 阅读与编辑两侧的排版高度不一样，切换视图时只有源码行才是共同的坐标。
+      // 推迟一帧再问：编辑器要等自己的滚动处理跑完才会渲染新位置的行，
+      // 在滚动事件里当场问，拿到的是按估算高度换算出来的旧位置。
+      if (anchorFrame) return
+      anchorFrame = window.requestAnimationFrame(() => {
+        anchorFrame = 0
+        const line = readTopSourceLine()
+        if (line !== null) anchorLineRef.current = line
+      })
     }
     viewport.addEventListener("scroll", rememberVisiblePosition, { passive: true })
     // 先在绘制前恢复，再等 Markdown/Suspense 完成本帧布局后校准，避免返回长笔记时先闪到顶部。
     restore()
     frame = window.requestAnimationFrame(() => {
       restore()
-      settlingFrame = window.requestAnimationFrame(restore)
+      settlingFrame = window.requestAnimationFrame(() => {
+        restore()
+        // 恢复到位后先记一次锚点：读者还没滚动就直接切视图时，另一侧也有位置可对。
+        rememberVisiblePosition()
+      })
     })
     return () => {
       window.cancelAnimationFrame(frame)
       window.cancelAnimationFrame(settlingFrame)
+      window.cancelAnimationFrame(anchorFrame)
       viewport.removeEventListener("scroll", rememberVisiblePosition)
       noteEditorScrollMemory.set(editorScrollKey, latestScrollTop)
     }
   }, [editorScrollKey])
+
+  // 切换视图不会重建滚动容器，像素偏移被原样带到另一侧；但同一段正文在两边的高度并不相同
+  // （图片、表格在编辑态还是源码），沿用像素等于换个地方落地。这里按切换前记下的源码行重新对位。
+  useEffect(() => {
+    const line = anchorLineRef.current
+    const viewport = editorViewportRef.current
+    // 断点切换时两套布局会同时挂载，被 CSS 隐藏的那一份没有可视区，不参与对位。
+    if (line === null || !viewport || viewport.clientHeight <= 0 || isSpecialPreview) return
+    let frame = 0
+    let attempts = 0
+    const stop = () => {
+      if (frame) window.cancelAnimationFrame(frame)
+      frame = 0
+      viewport.removeEventListener("wheel", stop)
+      viewport.removeEventListener("touchstart", stop)
+    }
+    const align = () => {
+      frame = 0
+      attempts += 1
+      const article = editorArticleRef.current
+      // 阅读态是分帧铺开的、编辑器是懒加载的，目标位置要一直跟到内容就位为止。
+      const ready = previewing ? !article?.querySelector(".markdown-preview-pending") : Boolean(editorRef.current)
+      const applied = previewing
+        ? alignPreviewToSourceLine(viewport, article, line)
+        : editorRef.current?.scrollLineToTop(line) === true
+      if ((ready && applied) || attempts >= ANCHOR_ALIGN_FRAMES) return stop()
+      frame = window.requestAnimationFrame(align)
+    }
+    // 读者自己动手了就别再抢滚动条。
+    viewport.addEventListener("wheel", stop, { passive: true })
+    viewport.addEventListener("touchstart", stop, { passive: true })
+    frame = window.requestAnimationFrame(align)
+    return stop
+  }, [isSpecialPreview, previewing])
 
   // Vault 笔记的标题对应文件名：编辑时先落草稿，失焦或回车再走统一的重命名链路，避免每次按键触发文件操作。
   const isVaultNote = note.source === "local" || note.source === "webdav"

@@ -20,11 +20,14 @@ export type MarkdownEditorHandle = {
   focus: () => void
   findText: (query: string, direction?: "next" | "previous", fromStart?: boolean) => MarkdownFindResult
   insertText: (text: string) => void
+  // 与阅读态互换视图时用来对齐阅读位置：一个按屏幕坐标问行号，一个把指定行顶到可视区顶端。
+  lineAtViewportTop: (clientY: number) => number | null
   pasteAtSelection: () => Promise<boolean>
   redo: () => void
   replaceAll: (query: string, replacement: string) => number
   replaceCurrent: (query: string, replacement: string) => MarkdownFindResult
   revealLine: (line: number) => void
+  scrollLineToTop: (line: number) => boolean
   selectAll: () => void
   undo: () => void
 }
@@ -226,6 +229,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         })
         view.focus()
       },
+      lineAtViewportTop(clientY) {
+        const view = editorRef.current?.view
+        if (!view) return null
+        // 编辑器本身不滚动，可视区由外层容器决定，所以按屏幕坐标反查位置而不是读编辑器的滚动量。
+        const bounds = view.contentDOM.getBoundingClientRect()
+        const position = view.posAtCoords({ x: bounds.left + 1, y: clientY + 1 }, false)
+        return position === null ? null : view.state.doc.lineAt(position).number
+      },
       async pasteAtSelection() {
         const view = editorRef.current?.view
         if (!view || readOnly) return false
@@ -275,6 +286,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const target = view.state.doc.line(Math.max(1, Math.min(line, view.state.doc.lines)))
         view.dispatch({ selection: { anchor: target.from }, scrollIntoView: true })
         view.focus()
+      },
+      scrollLineToTop(line) {
+        const view = editorRef.current?.view
+        if (!view) return false
+        const target = view.state.doc.line(Math.max(1, Math.min(line, view.state.doc.lines)))
+        // 不动选区也不抢焦点：这是切换视图时的对位，手机上抢焦点会顺带把键盘顶起来。
+        view.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: "start" }) })
+        return true
       },
       selectAll() {
         const view = editorRef.current?.view
