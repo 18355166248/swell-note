@@ -6,7 +6,16 @@
 .markdown-editor-shell .cm-md-table-wrap[data-width-mode="equal"],
 .markdown-editor-shell .cm-md-table-wrap[data-width-mode="manual"] { width: 100%; }
 .markdown-editor-shell .cm-md-table-scroll { box-sizing: border-box; width: 100%; min-width: 0; overflow-x: auto; border-radius: 0 0 9px 9px; }
+/* 列多的表格会被容器切掉右边，看不出后面还有内容；按滚动位置在两侧给出渐隐提示。 */
+.markdown-editor-shell .cm-md-table-wrap { position: relative; }
+.markdown-editor-shell .cm-md-table-wrap[data-overflow="true"]::before,
+.markdown-editor-shell .cm-md-table-wrap[data-overflow="true"]::after { position: absolute; z-index: 2; top: 1px; bottom: 1px; width: 24px; content: ""; pointer-events: none; }
+.markdown-editor-shell .cm-md-table-wrap[data-overflow="true"][data-at-start="false"]::before { left: 1px; background: linear-gradient(90deg,color-mix(in oklab,var(--background) 78%,transparent),transparent); }
+.markdown-editor-shell .cm-md-table-wrap[data-overflow="true"][data-at-end="false"]::after { right: 1px; background: linear-gradient(270deg,color-mix(in oklab,var(--background) 78%,transparent),transparent); }
 .markdown-editor-shell .cm-md-table-toolbar { position: relative; z-index: 3; display: flex; min-width: 0; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); background: var(--panel-soft); padding: 4px 6px; }
+/* 没在编辑这张表时收起工具条：表格一多，常驻的灰条会把正文切得很碎，手机上还白占一行。
+   收起时机交给 :focus-within，焦点进出表格由浏览器负责，不必自己追 focusout。 */
+.markdown-editor-shell .cm-md-table-wrap:not(:focus-within) .cm-md-table-toolbar { display: none; }
 .markdown-editor-shell .cm-md-table-toolbar::after { content: "Tab 切换 · Enter 下移 · Shift+Enter 换行"; margin-left: auto; padding-left: 14px; color: var(--muted-foreground); font-size: 10px; }
 .markdown-editor-shell .cm-md-table-toolbar button { border: 0; border-radius: 5px; background: transparent; padding: 3px 7px; color: var(--muted-foreground); font: inherit; font-size: 11px; cursor: pointer; }
 .markdown-editor-shell .cm-md-table-toolbar button:hover { background: var(--blue-soft); color: var(--primary); }

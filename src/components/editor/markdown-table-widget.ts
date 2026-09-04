@@ -197,6 +197,7 @@ export class TableWidget extends WidgetType {
     wrapper.appendChild(tableScroll)
     applyTableWidthMode(wrapper, preference.mode, preference.widths)
     applyTableVerticalMode(wrapper, loadTableVerticalMode())
+    this.trackHorizontalOverflow(wrapper, tableScroll)
 
     if (!this.view.state.readOnly) {
       wrapper.insertBefore(this.createToolbar(wrapper, table), tableScroll)
@@ -345,6 +346,28 @@ export class TableWidget extends WidgetType {
         this.cleanupCallbacks.add(cleanup)
       })
       cell.appendChild(handle)
+    })
+  }
+
+  // 列多的表格在编辑态会被容器直接切掉右边，看不出后面还有内容。阅读态本来就有边缘渐隐提示，
+  // 这里补上同一套：溢出时两侧按滚动位置显示渐隐，滚到头就收起对应那侧。
+  private trackHorizontalOverflow(wrapper: HTMLDivElement, scroller: HTMLDivElement) {
+    const update = () => {
+      const overflowing = scroller.scrollWidth - scroller.clientWidth > 2
+      wrapper.dataset.overflow = String(overflowing)
+      wrapper.dataset.atStart = String(!overflowing || scroller.scrollLeft <= 2)
+      wrapper.dataset.atEnd = String(!overflowing || scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 2)
+    }
+    update()
+    scroller.addEventListener("scroll", update, { passive: true })
+    // 字号、窗口宽度与列宽都可能在首帧之后变化，持续测量才不会显示错误的提示。
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update)
+    observer?.observe(scroller)
+    const table = scroller.querySelector("table")
+    if (table) observer?.observe(table)
+    this.cleanupCallbacks.add(() => {
+      scroller.removeEventListener("scroll", update)
+      observer?.disconnect()
     })
   }
 
