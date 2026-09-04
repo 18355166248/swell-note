@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "rea
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { syntaxTree } from "@codemirror/language"
+import { languages } from "@codemirror/language-data"
 import type { EditorState } from "@codemirror/state"
 import { EditorView } from "@codemirror/view"
 
@@ -89,7 +90,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
     const extensions = useMemo(() => [
       // GFM 基座：表格、删除线与任务列表才能进入语法树，供语法高亮与即时渲染装饰使用。
-      markdown({ base: markdownLanguage }),
+      // codeLanguages 让围栏代码块按 info 字符串套用对应语言的高亮，与阅读态保持一致；
+      // 各语言由官方的 language-data 按需动态加载，不写代码块的笔记不会为此付出代价。
+      markdown({ base: markdownLanguage, codeLanguages: languages }),
       markdownLivePreview({
         keepRenderedOnRangeSelection: compact,
         onOpenWikiLink: (target) => handlers.current.onOpenWikiLink?.(target),

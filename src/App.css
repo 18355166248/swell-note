@@ -768,7 +768,9 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-editor-shell .cm-md-strike { color: var(--muted-foreground); text-decoration: line-through; }
 .markdown-editor-shell .cm-md-inline-code { border-radius: 4px; background: var(--muted); padding: .1em .32em; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
 .markdown-editor-shell .cm-md-quote { border-left: 3px solid var(--blue-line); background: var(--panel-soft); color: var(--muted-foreground); }
-.markdown-editor-shell .cm-md-codeblock { background: #f5f7fa; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
+/* 编辑器整体开着自动折行，代码块也吃这一套：长行折下来后顶到最左边，读起来像新的一条语句。
+   给续行留出悬挂缩进，折行位置一眼可辨；代码块自身不横向滚动，避免与外层滚动容器打架。 */
+.markdown-editor-shell .cm-md-codeblock { padding-left: 3ch; background: #f5f7fa; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; text-indent: -3ch; }
 .markdown-editor-shell .cm-widgetBuffer { display: inline !important; width: 0 !important; }
 .markdown-editor-shell .cm-md-task-checkbox { display: inline-block !important; box-sizing: border-box; width: 15px; height: 15px; margin: 0 .5em 0 0; accent-color: var(--primary); cursor: pointer; vertical-align: -2px; }
 .markdown-editor-shell .cm-md-link, .markdown-editor-shell .cm-md-wiki-link { color: var(--primary); text-decoration-line: underline; text-decoration-color: color-mix(in oklab,var(--primary) 52%,transparent); text-decoration-thickness: 1px; text-underline-offset: 3px; }

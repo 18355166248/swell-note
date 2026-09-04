@@ -7,6 +7,16 @@ import { defineConfig } from "vite";
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
+// Markdown 本身与它静态依赖的几个语法必须随编辑器一起就位；其余语言只在代码块用到时才加载。
+const eagerGrammars = /@(?:codemirror[/+]lang-markdown|lezer[/+](?:common|highlight|lr|markdown))/;
+
+function isOnDemandGrammar(id: string) {
+  if (eagerGrammars.test(id)) return false;
+  // legacy-modes 一个包就装着上百种老式语法，漏掉它会让整包被拽进首屏。
+  return /@codemirror[/+](?:language-data|legacy-modes|lang-)/.test(id)
+    || /@lezer[/+]/.test(id);
+}
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
@@ -29,6 +39,10 @@ export default defineConfig(async () => ({
           // Excalidraw 是可选官方能力，保持独立 chunk，普通笔记与应用首屏不会下载它。
           if (id.includes("@excalidraw/excalidraw") || id.includes("@excalidraw+excalidraw") || id.includes("lz-string")) return "plugin-excalidraw";
           if (id.includes("@codemirror/view") || id.includes("@codemirror/state")) return "editor-core";
+          // 围栏代码块的各语言由 @codemirror/language-data 按需动态加载。把它们一起归进
+          // editor-features 会让整票语法在首屏就下载下来（实测该包会从 364kB 涨到 1.4MB），
+          // 这里放手交给 Rollup：静态用到的仍并入引用它的 chunk，只被动态引用的各自成包。
+          if (isOnDemandGrammar(id)) return undefined;
           if (id.includes("@codemirror/") || id.includes("@lezer/")) return "editor-features";
           if (id.includes("react-markdown") || id.includes("remark-") || id.includes("micromark") || id.includes("mdast-") || id.includes("hast-")) return "markdown-vendor";
           if (id.includes("radix-ui") || id.includes("lucide-react")) return "ui-vendor";
