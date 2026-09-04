@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
+import { forceParsing, syntaxTree } from "@codemirror/language"
 import { EditorState } from "@codemirror/state"
 import { DecorationSet, EditorView } from "@codemirror/view"
 import { describe, expect, it, vi } from "vitest"
@@ -798,5 +799,31 @@ describe("markdown live preview frontmatter and rules", () => {
     const rule = linkDoc.indexOf("---", linkDoc.indexOf("![[封面.png]]"))
     expect(classes).toContain("cm-md-hr")
     expect(hidden).toContainEqual({ from: rule, to: rule + 3 })
+  })
+})
+
+describe("markdown live preview incremental parsing", () => {
+  it("rebuilds decorations once the parser reaches the visible range", async () => {
+    // 语法树是后台增量解析出来的。编辑器在外层容器已滚到深处时挂载，可见范围所在的一段
+    // 还没被解析，装饰会算成空；解析器随后推进时既没有文档变化也没有视口变化，
+    // 插件必须自己认出这类更新，否则那一屏会一直停在没渲染的 Markdown 源码上。
+    const content = Array.from({ length: 400 }, (_, index) => `## 小节 ${index + 1}\n\n第 ${index + 1} 段正文。\n`).join("\n")
+    const view = createView(undefined, content)
+    await settle()
+
+    const visible = view.visibleRanges[0]
+    expect(visible).toBeDefined()
+    // 装饰按可见范围加缓冲计算；这个用例要成立，初始语法树必须还没覆盖到缓冲区末尾。
+    const bufferEnd = visible.to + 4000
+    expect(syntaxTree(view.state).length).toBeLessThan(bufferEnd)
+
+    const before = view.plugin(markdownLivePreviewPlugin)?.decorations.size ?? 0
+    forceParsing(view, bufferEnd, 5000)
+    await settle()
+    const after = view.plugin(markdownLivePreviewPlugin)?.decorations.size ?? 0
+    view.destroy()
+
+    expect(before).toBeGreaterThan(0)
+    expect(after).toBeGreaterThan(before)
   })
 })

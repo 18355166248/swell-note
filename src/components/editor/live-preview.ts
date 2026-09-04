@@ -506,10 +506,15 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      if (!update.docChanged && !update.viewportChanged && !update.selectionSet) return
+      // 语法树是后台增量解析出来的。编辑器如果在外层容器已经滚到深处时挂载（切回编辑态、
+      // 恢复上次阅读位置、从大纲跳转都会这样），可见范围所在的那一段还没被解析，装饰算出来是空的；
+      // 而解析器随后追上来时的更新既没有 docChanged 也没有 viewportChanged，
+      // 不把它算进来的话，那一屏就会一直停在没有渲染的 Markdown 源码上。
+      const parsed = syntaxTree(update.startState) !== syntaxTree(update.state)
+      if (!update.docChanged && !update.viewportChanged && !update.selectionSet && !parsed) return
       // 文档没变、视口也没动时先比对光标行签名：同一行内移动光标不会改变任何装饰，
       // 直接沿用上一次的结果，长笔记里按方向键就不必重算。
-      if (!update.docChanged && !update.viewportChanged) {
+      if (!update.docChanged && !update.viewportChanged && !parsed) {
         const nextCursorLinesKey = cursorLinesKey(update.state)
         if (nextCursorLinesKey === this.cursorLinesKey) return
         this.cursorLinesKey = nextCursorLinesKey
@@ -517,8 +522,8 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
         this.cursorLinesKey = cursorLinesKey(update.state)
       }
       this.decorations = buildLivePreviewDecorations(update.view)
-      // 表格块只在文档变化时才可能增减；滚动不会改变它们，没必要跟着重扫一遍语法树。
-      if (update.docChanged) this.syncTableDecorations(update.view)
+      // 表格块只在文档变化或语法树推进时才可能增减；滚动不会改变它们，没必要跟着重扫一遍语法树。
+      if (update.docChanged || parsed) this.syncTableDecorations(update.view)
     }
 
     destroy() {
