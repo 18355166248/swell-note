@@ -827,3 +827,52 @@ describe("markdown live preview incremental parsing", () => {
     expect(after).toBeGreaterThan(before)
   })
 })
+
+describe("markdown live preview blocks", () => {
+  const blockDoc = [
+    "## 标题",
+    "",
+    "> 第一行",
+    "> 第二行",
+    ">",
+    "> > 嵌套",
+    "",
+    "    const indented = true",
+    "    console.log(indented)",
+  ].join("\n")
+
+  it("hides quote marks on every line, not just the first", async () => {
+    const view = createView({ anchor: 0 }, blockDoc)
+    const { hidden } = collect(await settleInlineDecorations(view))
+
+    // 逐行找出 > 的位置，每一个都应当被隐藏。
+    const marks: number[] = []
+    for (let index = 0; index < blockDoc.length; index += 1) if (blockDoc[index] === ">") marks.push(index)
+    expect(marks).toHaveLength(5)
+    for (const mark of marks) expect(hidden).toContainEqual({ from: mark, to: mark + 1 })
+  })
+
+  it("reveals quote marks when the cursor is inside the quote", async () => {
+    const view = createView({ anchor: blockDoc.indexOf("第二行") }, blockDoc)
+    const { hidden } = collect(await settleInlineDecorations(view))
+
+    const first = blockDoc.indexOf(">")
+    expect(hidden).not.toContainEqual({ from: first, to: first + 1 })
+  })
+
+  it("styles indented code blocks", async () => {
+    const view = createView({ anchor: 0 }, blockDoc)
+    const { classes } = collect(await settleInlineDecorations(view))
+
+    expect(classes).toContain("cm-md-codeblock")
+  })
+
+  it("hides the space after the heading mark so the title aligns with body text", async () => {
+    // 光标停在标题行时按约定还原原文，这里把它放到文末。
+    const view = createView({ anchor: blockDoc.length }, blockDoc)
+    const { hidden } = collect(await settleInlineDecorations(view))
+
+    // "## " 三个字符一起隐藏，行首才不会留下一个孤零零的缩进。
+    expect(hidden).toContainEqual({ from: 0, to: 3 })
+  })
+})

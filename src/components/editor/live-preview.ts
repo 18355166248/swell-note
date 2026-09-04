@@ -112,6 +112,23 @@ function cursorLineChecker(state: EditorState) {
 
 type DocRange = { from: number; to: number }
 
+// 隐藏标记时把紧随其后的空格一起收进去，行首才不会留下一个孤零零的缩进。
+function skipSpacesAfter(state: EditorState, position: number) {
+  const line = state.doc.lineAt(position)
+  let end = position
+  while (end < line.to && state.sliceDoc(end, end + 1) === " ") end += 1
+  return end
+}
+
+// 逐层下探收集引用块里的全部 QuoteMark；嵌套的引用块留给它自己那一轮处理，
+// 否则内层的标记会被隐藏两次，也会绕开内层自己的光标判断。
+function hideQuoteMarks(blockquote: MdSyntaxNode, hide: (node: MdSyntaxNode) => void) {
+  for (let child = blockquote.firstChild; child; child = child.nextSibling) {
+    if (child.name === "QuoteMark") hide(child)
+    else if (child.name !== "Blockquote") hideQuoteMarks(child, hide)
+  }
+}
+
 // frontmatter 在 CommonMark 里没有对应节点：首行 --- 被解析成分割线，其余属性行被并入 SetextHeading2。
 // 先单独识别整段范围，避免属性区被放大成标题、分隔线被隐藏，同时保持纯文本可编辑。
 const frontmatterFencePattern = /^---\s*$/
@@ -374,7 +391,8 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
           decorations.push(Decoration.line({ class: `cm-md-heading cm-md-h${heading[1]}` }).range(node.from))
           if (!active) {
             const headerMark = node.node.getChild("HeaderMark")
-            if (headerMark) hide(headerMark)
+            // 只隐藏 # 会把它后面那个空格留在行首，标题左边缘比正文缩进一格，字号越大越明显。
+            if (headerMark) decorations.push(Decoration.replace({}).range(headerMark.from, skipSpacesAfter(view.state, headerMark.to)))
           }
           return
         }
@@ -408,13 +426,16 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             }
             break
           }
+          case "CodeBlock": {
+            // 四空格缩进的代码块此前没有任何装饰，在编辑态里和普通段落长得一样。
+            decorateLines(node.from, node.to, "cm-md-codeblock")
+            break
+          }
           case "Blockquote": {
             decorateLines(node.from, node.to, "cm-md-quote")
-            if (!active) {
-              for (let child = node.node.firstChild; child; child = child.nextSibling) {
-                if (child.name === "QuoteMark") hide(child)
-              }
-            }
+            // 只有首行的 QuoteMark 是 Blockquote 的直接子节点，后续行的会被并进段落等子节点里，
+            // 按直接子节点找会漏掉它们，第二行开始的 > 就一直露在外面。
+            if (!active) hideQuoteMarks(node.node, hide)
             break
           }
           case "TaskMarker": {
