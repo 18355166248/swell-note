@@ -63,6 +63,7 @@ import {
   saveVaultCache,
   searchCachedNoteDocuments,
   hydrateNoteFromCachedDocument,
+  isIndexedDbConnectionLostError,
   updateVaultAttachmentStatus,
   type VaultCacheSnapshot,
   type VaultCacheSummary,
@@ -244,8 +245,12 @@ function App() {
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
   const [syncFailure, setSyncFailure] = useState<string | null>(null)
   const showSyncFailure = useCallback((message: string) => {
-    setVaultError(message)
-    setSyncFailure(message)
+    // WKWebView 的 IndexedDB 断连只抛英文系统信息，重试无效，翻译成可操作的提示。
+    const display = isIndexedDbConnectionLostError(message)
+      ? "本地数据库连接已被系统中断，请完全退出应用重新打开后再同步"
+      : message
+    setVaultError(display)
+    setSyncFailure(display)
   }, [])
   const [nativeSearchResult, setNativeSearchResult] = useState<{ paths: Set<string>; query: string } | null>(null)
   const saveTimersRef = useRef(new Map<string, number>())

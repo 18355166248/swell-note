@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react"
-import { AlertCircle, Eye, EyeOff, KeyRound, LoaderCircle } from "lucide-react"
+import { AlertCircle, Eye, EyeOff, KeyRound, LoaderCircle, RefreshCw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { isIndexedDbConnectionLostError } from "@/services/cache/vault-cache"
 import { getCredentialStoreStatus } from "@/services/security/credential-store"
 
 export function QuickWebDavConnectDialog({
@@ -29,6 +30,7 @@ export function QuickWebDavConnectDialog({
   const [passwordVisible, setPasswordVisible] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [connectionError, setConnectionError] = useState("")
+  const [databaseConnectionLost, setDatabaseConnectionLost] = useState(false)
   const [secureStoreName, setSecureStoreName] = useState<string | null>(null)
 
   useEffect(() => {
@@ -40,8 +42,10 @@ export function QuickWebDavConnectDialog({
   }, [])
 
   useEffect(() => {
-    if (open) setConnectionError("")
-    else {
+    if (open) {
+      setConnectionError("")
+      setDatabaseConnectionLost(false)
+    } else {
       // 密码只活在弹窗生命周期内；关闭后立即清空，避免进入缓存或跨页面残留。
       setPassword("")
       setPasswordVisible(false)
@@ -57,7 +61,12 @@ export function QuickWebDavConnectDialog({
       await onConnect(password)
       onOpenChange(false)
     } catch (error) {
-      setConnectionError(error instanceof Error ? error.message : "重新连接坚果云失败")
+      if (isIndexedDbConnectionLostError(error)) {
+        // 本地数据库断连时重试无意义，引导用户刷新重建连接。
+        setDatabaseConnectionLost(true)
+      } else {
+        setConnectionError(error instanceof Error ? error.message : "重新连接坚果云失败")
+      }
     } finally {
       setConnecting(false)
     }
@@ -111,7 +120,17 @@ export function QuickWebDavConnectDialog({
                 ? "密码只进入系统安全存储，不会写入笔记缓存。"
                 : "密码不会写入 Swell Note 本地缓存。"}</p>
             </div>
-            {connectionError ? <div className="settings-form-error"><AlertCircle />{connectionError}</div> : null}
+            {databaseConnectionLost ? (
+              <div className="settings-form-error">
+                <AlertCircle />
+                <span className="flex flex-col items-start gap-2">
+                  本地数据库连接已被系统中断（应用退到后台后被回收），刷新页面即可恢复；尚未保存的修改会丢失。
+                  <Button onClick={() => window.location.reload()} size="sm" type="button" variant="outline">
+                    <RefreshCw />刷新页面
+                  </Button>
+                </span>
+              </div>
+            ) : connectionError ? <div className="settings-form-error"><AlertCircle />{connectionError}</div> : null}
           </div>
 
           <DialogFooter>

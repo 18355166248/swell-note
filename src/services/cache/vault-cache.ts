@@ -355,6 +355,13 @@ export async function deleteVaultCache(id: string) {
   database.close()
 }
 
+// WKWebView（iOS）退到后台后系统可能回收网络进程，IndexedDB 连接随之断开；
+// 此后所有请求都抛出带此信息的异常且不会自愈，只有重新加载页面才能重建连接。
+export function isIndexedDbConnectionLostError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : ""
+  return message.includes("Indexed Database server lost")
+}
+
 function openDatabase() {
   return new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION)
