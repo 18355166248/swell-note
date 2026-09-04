@@ -368,6 +368,21 @@ const tableDecorationsField = StateField.define<DecorationSet>({
 // 上下各留一屏左右的缓冲，滚动落到缓冲区内时装饰已经就位，viewportChanged 再补下一批。
 const DECORATION_BUFFER = 4000
 
+// 块级替换（表格）会把可见范围切成好几段。各段再各自向外扩一屏缓冲后往往互相重叠，
+// 不合并的话同一批节点会被遍历、装饰好几遍——一篇笔记里表格越多，倍数越高。
+export function mergeDecorationRanges(ranges: readonly DocRange[], buffer: number, docLength: number): DocRange[] {
+  const merged: DocRange[] = []
+  // visibleRanges 本身按位置升序，单趟合并即可。
+  for (const range of ranges) {
+    const from = Math.max(0, range.from - buffer)
+    const to = Math.min(docLength, range.to + buffer)
+    const last = merged[merged.length - 1]
+    if (last && from <= last.to) last.to = Math.max(last.to, to)
+    else merged.push({ from, to })
+  }
+  return merged
+}
+
 function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   const isCursorActive = cursorLineChecker(view.state)
   const frontmatter = findFrontmatterRange(view.state)
@@ -377,10 +392,7 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   // 因此按可见范围加缓冲计算即可，滚动时由 viewportChanged 续算。
   const doc = view.state.doc
   const decorationRanges = view.visibleRanges.length > 0
-    ? view.visibleRanges.map((range) => ({
-        from: Math.max(0, range.from - DECORATION_BUFFER),
-        to: Math.min(doc.length, range.to + DECORATION_BUFFER),
-      }))
+    ? mergeDecorationRanges(view.visibleRanges, DECORATION_BUFFER, doc.length)
     : [{ from: 0, to: doc.length }]
 
   const decorations: Range<Decoration>[] = []

@@ -6,7 +6,7 @@ import { DecorationSet, EditorView } from "@codemirror/view"
 import { describe, expect, it, vi } from "vitest"
 
 import type { LivePreviewOptions } from "./live-preview"
-import { markdownLivePreview, markdownLivePreviewPlugin, MarkdownImageWidget, tableDecorationsField, TableWidget, TaskCheckboxWidget } from "./live-preview"
+import { markdownLivePreview, markdownLivePreviewPlugin, MarkdownImageWidget, mergeDecorationRanges, tableDecorationsField, TableWidget, TaskCheckboxWidget } from "./live-preview"
 
 const doc = [
   "# 标题",
@@ -910,5 +910,23 @@ describe("markdown live preview blocks", () => {
 
     // "## " 三个字符一起隐藏，行首才不会留下一个孤零零的缩进。
     expect(hidden).toContainEqual({ from: 0, to: 3 })
+  })
+})
+
+describe("mergeDecorationRanges", () => {
+  it("merges ranges that overlap once the buffer is applied", () => {
+    // 表格这类块级替换会把可见范围切成好几段，各自扩一屏缓冲后就连成一片。
+    const merged = mergeDecorationRanges([{ from: 100, to: 200 }, { from: 260, to: 400 }], 50, 10_000)
+    expect(merged).toEqual([{ from: 50, to: 450 }])
+  })
+
+  it("keeps ranges apart when they stay separate after the buffer", () => {
+    const merged = mergeDecorationRanges([{ from: 0, to: 100 }, { from: 5_000, to: 5_100 }], 50, 10_000)
+    expect(merged).toEqual([{ from: 0, to: 150 }, { from: 4_950, to: 5_150 }])
+  })
+
+  it("clamps to the document bounds", () => {
+    const merged = mergeDecorationRanges([{ from: 10, to: 90 }], 50, 100)
+    expect(merged).toEqual([{ from: 0, to: 100 }])
   })
 })
