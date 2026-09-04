@@ -4,6 +4,9 @@ import { getEdgeSwipeProgress, shouldCompleteEdgeSwipe } from "@/services/naviga
 
 // 边缘手势的起手区宽度，指针与触摸两条路径共用。
 const EDGE_ZONE_WIDTH = 32
+// 交接路由的兜底时长：略长于当前层滑出的 CSS 过渡（190ms），
+// transitionend 收不到时（被打断、reduce-motion 等）用它收尾。
+const EDGE_SWIPE_HANDOFF_FALLBACK_MS = 230
 
 type EdgeSwipeKind = "back" | "drawer"
 type EdgeSwipePhase = "completing" | "dragging" | "idle" | "returning"
@@ -38,10 +41,14 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
   const suppressClickRef = useRef(false)
   const timersRef = useRef<number[]>([])
   const workspaceRef = useRef<HTMLDivElement | null>(null)
+  // 滑出动画结束前不交接路由；等待期间把「立即收尾 / 取消」两个入口存这里，
+  // 供下一次手势或组件卸载时处理，避免路由交接被丢掉或在卸载后才触发。
+  const pendingHandoffRef = useRef<{ cancel: () => void; run: () => void } | null>(null)
   const [phase, setPhase] = useState<EdgeSwipePhase>("idle")
 
   useEffect(() => () => {
     timersRef.current.forEach((timer) => window.clearTimeout(timer))
+    pendingHandoffRef.current?.cancel()
   }, [])
 
   useEffect(() => {
@@ -119,6 +126,8 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
   }
   const finish = (gesture: Gesture | null) => {
     if (!gesture) return
+    // 上一次返回若还在等滑出动画收尾，先把它的路由交接补上，再处理这一次。
+    pendingHandoffRef.current?.run()
     const complete = gesture.horizontal && shouldCompleteEdgeSwipe({
       elapsedMs: Date.now() - gesture.startedAt,
       endX: gesture.x,
@@ -137,11 +146,34 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
       return
     }
     setPhase("completing")
-    schedule(() => {
-      // 滑出期间底层已经是真实上一页，完成后直接交接路由，避免再做一次反向入场造成闪动。
+    // 底层此刻已是真实上一页。交接路由会把正在滑出的当前层整棵子树卸载，
+    // 真机上 var() 驱动的 transform 过渡跑在主线程、还要和列表回收抢占，
+    // 若在滑出结束前就卸载，旧页往往还盖着小半屏，被硬删后下一页瞬间顶上——
+    // 就是返回时的那下闪。等这一层真的滑出屏幕（transitionend）再交接。
+    const outgoing = workspaceRef.current?.querySelector<HTMLElement>(":scope > .mobile-edge-swipe-current") ?? null
+    let done = false
+    const handoff = () => {
+      if (done) return
+      done = true
+      pendingHandoffRef.current = null
+      outgoing?.removeEventListener("transitionend", onTransitionEnd)
+      // 手势已经把页面送到位，交接后不再补一段反向入场动画，避免二次位移。
       onComplete()
       reset()
-    }, 170)
+    }
+    function onTransitionEnd(event: TransitionEvent) {
+      if (event.target === outgoing && event.propertyName === "transform") handoff()
+    }
+    outgoing?.addEventListener("transitionend", onTransitionEnd)
+    // transitionend 收不到时的兜底；下次手势 run()、卸载 cancel()。
+    schedule(handoff, EDGE_SWIPE_HANDOFF_FALLBACK_MS)
+    pendingHandoffRef.current = {
+      cancel: () => {
+        done = true
+        outgoing?.removeEventListener("transitionend", onTransitionEnd)
+      },
+      run: handoff,
+    }
   }
   const startGesture = (startX: number, startY: number, pointerId?: number): Gesture => ({
     horizontal: false,
@@ -162,6 +194,8 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
     // 起手落在编辑器上就别让它拿到焦点：contenteditable 一聚焦，iOS 立刻顶起输入辅助栏，
     // 布局跟着收缩，手势走完焦点又消失、布局回落，看起来就是侧滑中途闪一下。
     if (isEditorSurface(event.target)) event.preventDefault()
+    // 上一次返回若还在等滑出动画收尾，这里先把路由交接补上，别让它悬着。
+    pendingHandoffRef.current?.run()
     clearScheduled()
     pointerGestureRef.current = startGesture(event.clientX, event.clientY, event.pointerId)
   }
@@ -191,6 +225,8 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
     suppressClickRef.current = false
     const touch = event.touches[0]
     if (!enabled || event.touches.length !== 1 || !touch || touch.clientX > EDGE_ZONE_WIDTH) return
+    // 上一次返回若还在等滑出动画收尾，这里先把路由交接补上，别让它悬着。
+    pendingHandoffRef.current?.run()
     clearScheduled()
     clearPointerGesture()
     touchGestureRef.current = startGesture(touch.clientX, touch.clientY)
