@@ -7,6 +7,11 @@ const fileExtensionPattern = /\.[a-z\d]{1,8}(?:#.*)?$/i
 const imageSizePattern = /^(\d+)(?:x(\d+))?$/
 const hybridMarkdownImagePattern = /!\[\[([^\[\]\n]+)\]\]\(/g
 
+// 判断一个 Vault 内的相对路径是不是图片；编辑态决定 ![[...]] 要不要渲染成图片时共用同一份判断。
+export function isImageAssetPath(path: string) {
+  return imageExtensionPattern.test(path)
+}
+
 function rewriteHybridMarkdownImagesInLine(line: string) {
   // 兼容历史内容里的 ![[说明|300]](path) 混合写法，统一转换为标准 Markdown 图片后再解析。
   return line.replace(hybridMarkdownImagePattern, "![$1](")

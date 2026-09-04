@@ -1,6 +1,8 @@
 import { parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
+import { resolveCachedImageUrl } from "./markdown-image-cache"
+
 export type TableInlineOptions = {
   onOpenExternalLink?: (href: string) => void
   onOpenWikiLink?: (target: string) => void
@@ -82,12 +84,15 @@ function appendLink(parent: HTMLElement, label: string, href: string, options: T
   parent.appendChild(link)
 }
 
+// cacheScope 给编辑态的图片装饰用：同一张图会随滚动反复挂载，按作用域缓存 Blob URL
+// 才不会每次都重读附件。表格单元格不传，沿用原来的「用完即撤销」。
 export function appendMarkdownImage(
   parent: HTMLElement,
   alt: string,
   source: string,
   options: TableInlineOptions,
   registerObjectUrl?: (url: string) => void,
+  cacheScope?: string,
 ) {
   const image = document.createElement("img")
   image.alt = alt
@@ -104,15 +109,22 @@ export function appendMarkdownImage(
     return
   }
 
+  const resolveAsset = options.onResolveAsset
   const loading = appendAssetState(parent, alt ? `正在读取图片：${alt}` : "正在读取图片…")
-  void options.onResolveAsset(source).then((asset) => {
-    if (!asset || !loading.isConnected) {
+  const objectUrl = cacheScope
+    ? resolveCachedImageUrl(cacheScope, source, resolveAsset)
+    : resolveAsset(source).then((asset) => {
+      if (!asset) return null
+      const url = URL.createObjectURL(new Blob([new Uint8Array(asset.data).buffer], { type: asset.mimeType }))
+      registerObjectUrl?.(url)
+      return url
+    })
+  void objectUrl.then((url) => {
+    if (!url || !loading.isConnected) {
       if (loading.isConnected) loading.textContent = alt ? `无法读取图片：${alt}` : "无法读取图片"
       return
     }
-    const objectUrl = URL.createObjectURL(new Blob([new Uint8Array(asset.data).buffer], { type: asset.mimeType }))
-    registerObjectUrl?.(objectUrl)
-    image.src = objectUrl
+    image.src = url
     loading.replaceWith(image)
   }).catch(() => {
     if (loading.isConnected) loading.textContent = alt ? `无法读取图片：${alt}` : "无法读取图片"

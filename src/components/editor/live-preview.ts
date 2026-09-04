@@ -3,10 +3,10 @@ import type { EditorState, Range } from "@codemirror/state"
 import { Facet, StateEffect, StateField } from "@codemirror/state"
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view"
 
-import { parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
+import { isImageAssetPath, parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
 
 import { parseMarkdownTable } from "./markdown-table-model"
-import type { TableInlineOptions } from "./markdown-table-inline"
+import { appendMarkdownImage, type TableInlineOptions } from "./markdown-table-inline"
 import { TableWidget } from "./markdown-table-widget"
 
 // Markdown 即时预览：
@@ -74,6 +74,37 @@ export class TaskCheckboxWidget extends WidgetType {
 
   ignoreEvent() {
     return false
+  }
+}
+
+// 编辑态原本把 ![alt](src) 原样摊成源码，图多的笔记等于在看源文件。
+// 光标不在这一行时换成真实图片，光标一进来立刻还原成可编辑的原文，源文件始终不变。
+export class MarkdownImageWidget extends WidgetType {
+  constructor(
+    readonly alt: string,
+    readonly source: string,
+    readonly block: boolean,
+    readonly options: LivePreviewOptions,
+  ) {
+    super()
+  }
+
+  eq(other: MarkdownImageWidget) {
+    return other.source === this.source && other.alt === this.alt && other.block === this.block
+  }
+
+  toDOM() {
+    const host = document.createElement("span")
+    host.className = this.block ? "cm-md-image cm-md-image-block" : "cm-md-image"
+    host.title = this.alt || this.source
+    // tableStorageKey 是当前笔记的标识，拿它当缓存作用域，不同笔记里的同名相对路径不会串。
+    appendMarkdownImage(host, this.alt, this.source, this.options, undefined, this.options.tableStorageKey ?? "editor")
+    return host
+  }
+
+  // 交给 CodeMirror 处理点击：点图片即把光标落到这段语法上，源码随之还原、可以直接改。
+  ignoreEvent() {
+    return true
   }
 }
 
@@ -155,7 +186,8 @@ function isInsideCode(state: EditorState, position: number) {
 
 function isInsideParsedLinkOrCode(state: EditorState, position: number) {
   for (let node: MdSyntaxNode | null = syntaxTree(state).resolveInner(position, 1); node; node = node.parent) {
-    if (node.name.includes("Code") || node.name === "Link" || node.name === "Autolink") return true
+    // 图片的 URL 同样由图片装饰接管，裸链接扫描不能再往里插一层链接装饰。
+    if (node.name.includes("Code") || node.name === "Link" || node.name === "Autolink" || node.name === "Image") return true
   }
   return false
 }
@@ -180,8 +212,17 @@ function decorateWikiLinks(
 
     // 后接 Markdown 目标的是历史混合图片语法，由图片装饰器统一接管。
     if (match[1] && state.sliceDoc(end, end + 1) === "(") continue
-    // 嵌入（![[...]]）在编辑器里没有等价的渲染形态，只上色不隐藏标记，避免与普通链接混淆。
     if (match[1]) {
+      // ![[图.png|300]] 这类图片嵌入按图片渲染；别名部分只是显示尺寸，不参与路径解析。
+      const embedTarget = match[2].split("|", 1)[0].trim()
+      if (embedTarget && isImageAssetPath(embedTarget) && !isCursorActive(start, end)) {
+        const line = state.doc.lineAt(start)
+        push(Decoration.replace({
+          widget: new MarkdownImageWidget(embedTarget, embedTarget, line.text.trim() === match[0], state.facet(livePreviewOptions)),
+        }).range(start, end))
+        continue
+      }
+      // 笔记嵌入在编辑器里没有等价的渲染形态，只上色不隐藏标记，避免与普通链接混淆。
       push(Decoration.mark({ class: "cm-md-wiki-embed" }).range(start, end))
       continue
     }
@@ -493,6 +534,24 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             if (!open || !close || close.from <= open.to) break
             decorations.push(Decoration.replace({}).range(open.from, open.to))
             decorations.push(Decoration.replace({}).range(close.from, node.to))
+            break
+          }
+          case "Image": {
+            const url = node.node.getChild("URL")
+            if (!url || active) break
+            const source = view.state.sliceDoc(url.from, url.to)
+            if (!source) break
+            const marks: MdSyntaxNode[] = []
+            for (let child = node.node.firstChild; child; child = child.nextSibling) {
+              if (child.name === "LinkMark") marks.push(child)
+            }
+            // alt 文本没有独立节点，取 ![ 与 ] 之间的原文。
+            const alt = marks.length >= 2 ? view.state.sliceDoc(marks[0].to, marks[1].from) : ""
+            const line = view.state.doc.lineAt(node.from)
+            const alone = line.text.trim() === view.state.sliceDoc(node.from, node.to).trim()
+            decorations.push(Decoration.replace({
+              widget: new MarkdownImageWidget(alt, source, alone, view.state.facet(livePreviewOptions)),
+            }).range(node.from, node.to))
             break
           }
           case "HorizontalRule": {

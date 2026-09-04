@@ -777,6 +777,12 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-editor-shell .cm-md-link-actionable { cursor: pointer; }
 .markdown-editor-shell .cm-md-link-actionable:hover, .markdown-editor-shell .cm-md-wiki-link:hover { text-decoration-color: currentColor; text-decoration-thickness: 2px; }
 .markdown-editor-shell .cm-md-wiki-embed { color: color-mix(in oklab,var(--primary) 75%,var(--muted-foreground)); }
+/* 编辑态的图片：独占一行的按块排版，夹在文字里的跟着行内基线走。 */
+.markdown-editor-shell .cm-md-image { display: inline-block; max-width: 100%; vertical-align: middle; }
+.markdown-editor-shell .cm-md-image-block { display: block; margin: .25em 0; }
+.markdown-editor-shell .cm-md-image img { max-width: 100%; height: auto; border-radius: 8px; cursor: pointer; }
+.markdown-editor-shell .cm-md-image:not(.cm-md-image-block) img { max-height: 1.6em; vertical-align: -.35em; border-radius: 4px; }
+.markdown-editor-shell .cm-md-image .cm-md-table-asset-state { color: var(--muted-foreground); font-size: .85em; }
 /* 分割线正文被隐藏后只剩空行，靠行底边框呈现横线；光标进入该行会还原 --- 原文。 */
 .markdown-editor-shell .cm-md-hr { border-bottom: 1px solid var(--border); }
 /* frontmatter 属性区保持纯文本可编辑，只做视觉降噪，避免与正文标题混淆。 */

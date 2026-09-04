@@ -6,7 +6,7 @@ import { DecorationSet, EditorView } from "@codemirror/view"
 import { describe, expect, it, vi } from "vitest"
 
 import type { LivePreviewOptions } from "./live-preview"
-import { markdownLivePreview, markdownLivePreviewPlugin, tableDecorationsField, TableWidget, TaskCheckboxWidget } from "./live-preview"
+import { markdownLivePreview, markdownLivePreviewPlugin, MarkdownImageWidget, tableDecorationsField, TableWidget, TaskCheckboxWidget } from "./live-preview"
 
 const doc = [
   "# 标题",
@@ -89,6 +89,7 @@ function collect(decorations: DecorationSet) {
   const hidden: Array<{ from: number; to: number }> = []
   const checkboxes: Array<{ checked: boolean; from: number }> = []
   const tables: Array<{ from: number; to: number }> = []
+  const images: Array<{ alt: string; block: boolean; from: number; source: string; to: number }> = []
   const marks: Array<{ attributes?: Record<string, string>; class: string; from: number; to: number }> = []
   const cursor = decorations.iter()
   while (cursor.value) {
@@ -98,9 +99,12 @@ function collect(decorations: DecorationSet) {
     if (!spec.class && !spec.widget && cursor.from < cursor.to) hidden.push({ from: cursor.from, to: cursor.to })
     if (spec.widget instanceof TaskCheckboxWidget) checkboxes.push({ checked: spec.widget.checked, from: spec.widget.from })
     if (spec.widget instanceof TableWidget) tables.push({ from: cursor.from, to: cursor.to })
+    if (spec.widget instanceof MarkdownImageWidget) {
+      images.push({ alt: spec.widget.alt, block: spec.widget.block, from: cursor.from, source: spec.widget.source, to: cursor.to })
+    }
     cursor.next()
   }
-  return { checkboxes, classes, hidden, marks, tables }
+  return { checkboxes, classes, hidden, images, marks, tables }
 }
 
 function markOf(marks: ReturnType<typeof collect>["marks"], className: string) {
@@ -108,24 +112,46 @@ function markOf(marks: ReturnType<typeof collect>["marks"], className: string) {
 }
 
 describe("markdown live preview", () => {
-  it("keeps image Markdown visible while editing", async () => {
-    const content = [
-      "正文",
-      "",
-      "![标准图](../attachments/standard.png)",
-      "![[截图.png|300]](../attachments/legacy.png)",
-      "",
-      "```md",
-      "![代码图片](../attachments/code.png)",
-      "```",
-    ].join("\n")
-    const view = createView({ anchor: 0 }, content)
-    await settle()
+  const imageDoc = [
+    "正文",
+    "",
+    "![标准图](../attachments/standard.png)",
+    "![[截图.png|300]](../attachments/legacy.png)",
+    "",
+    "句中还有 ![小图标](../attachments/icon.png) 后面接着写。",
+    "",
+    "```md",
+    "![代码图片](../attachments/code.png)",
+    "```",
+  ].join("\n")
 
-    expect(view.contentDOM.querySelector(".cm-md-inline-image")).toBeNull()
-    expect(view.contentDOM.textContent).toContain("![标准图](../attachments/standard.png)")
-    expect(view.contentDOM.textContent).toContain("![[截图.png|300]](../attachments/legacy.png)")
-    view.destroy()
+  it("renders images away from the cursor", async () => {
+    const view = createView({ anchor: 0 }, imageDoc)
+    const { images } = collect(await settleInlineDecorations(view))
+
+    expect(images.map((image) => image.source)).toEqual([
+      "../attachments/standard.png",
+      "../attachments/legacy.png",
+      "../attachments/icon.png",
+    ])
+    // 独占一行的按块排版，夹在文字里的保持行内。
+    expect(images.map((image) => image.block)).toEqual([true, true, false])
+    expect(images[0].alt).toBe("标准图")
+    // 代码块里的图片语法属于代码内容，不参与渲染。
+    const inCode = imageDoc.indexOf("![代码图片]")
+    expect(images.some((image) => image.from <= inCode && image.to >= inCode)).toBe(false)
+    // 源文件始终是纯文本：装饰只是替换显示，光标进入该行即还原。
+    expect(imageDoc).toContain("![标准图](../attachments/standard.png)")
+  })
+
+  it("restores image source on the cursor line", async () => {
+    const standard = imageDoc.indexOf("![标准图]")
+    const view = createView({ anchor: standard + 3 }, imageDoc)
+    const { images } = collect(await settleInlineDecorations(view))
+
+    expect(images.map((image) => image.source)).not.toContain("../attachments/standard.png")
+    // 同一段里的其他图片不受影响，仍然是渲染态。
+    expect(images.map((image) => image.source)).toContain("../attachments/icon.png")
   })
 
   it("styles headings, quotes and hides inline marks away from the cursor", async () => {
@@ -706,17 +732,27 @@ describe("markdown live preview links", () => {
     expect(hidden).toContainEqual({ from: plain + "[[原样".length, to: plain + "[[原样]]".length })
   })
 
-  it("keeps embeds and fenced code untouched", async () => {
+  it("renders image embeds and keeps fenced code untouched", async () => {
     const view = createView({ anchor: 0 }, linkDoc)
-    const { hidden, marks } = collect(await settleInlineDecorations(view))
+    const { images, marks } = collect(await settleInlineDecorations(view))
 
-    const embed = linkDoc.indexOf("![[封面.png]]")
-    expect(markOf(marks, "cm-md-wiki-embed")).toHaveLength(1)
-    // 嵌入没有等价的编辑器渲染形态，只上色不隐藏标记。
-    expect(hidden).not.toContainEqual({ from: embed + 1, to: embed + 3 })
+    // ![[封面.png]] 指向图片，按图片渲染；别名部分只是显示尺寸，不参与路径解析。
+    expect(images.map((image) => image.source)).toEqual(["封面.png"])
     // 代码块里的 [[...]] 属于代码语义，完全不参与装饰。
     const inCode = linkDoc.indexOf("[[代码里的]]")
     expect(marks.some((mark) => mark.from <= inCode && mark.to >= inCode + 2 && mark.class.includes("wiki"))).toBe(false)
+  })
+
+  it("keeps note embeds as plain marks", async () => {
+    // 笔记嵌入在编辑器里没有等价的渲染形态，仍然只上色、不隐藏标记。
+    const content = "正文\n\n嵌入 ![[某篇笔记]] 收尾。"
+    const view = createView({ anchor: 0 }, content)
+    const { hidden, images, marks } = collect(await settleInlineDecorations(view))
+
+    const embed = content.indexOf("![[某篇笔记]]")
+    expect(images).toHaveLength(0)
+    expect(markOf(marks, "cm-md-wiki-embed")).toHaveLength(1)
+    expect(hidden).not.toContainEqual({ from: embed + 1, to: embed + 3 })
   })
 
   it("reveals wiki link source on the cursor line", async () => {
