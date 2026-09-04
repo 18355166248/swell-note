@@ -1,4 +1,5 @@
 import { parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
+import { openExternalUrl } from "@/services/open-external-url"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 import { resolveCachedImageUrl } from "./markdown-image-cache"
@@ -144,5 +145,5 @@ function openExternalLink(href: string, options: TableInlineOptions) {
     options.onOpenExternalLink(href)
     return
   }
-  window.open(href, "_blank", "noopener,noreferrer")
+  void openExternalUrl(href)
 }

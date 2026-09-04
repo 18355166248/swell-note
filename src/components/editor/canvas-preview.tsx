@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
+import { openExternalUrl } from "@/services/open-external-url"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 type CanvasSide = "bottom" | "left" | "right" | "top"
@@ -110,7 +111,20 @@ export default function CanvasPreview({ content, onResolveAsset, onWikiLink }: C
             {node.type === "file" && node.file ? (
               <CanvasFileNode file={node.file} onResolveAsset={onResolveAsset} onWikiLink={onWikiLink} />
             ) : null}
-            {node.type === "link" && node.url ? <a href={node.url} rel="noreferrer noopener" target="_blank">{node.url}</a> : null}
+            {node.type === "link" && node.url ? (
+              // 与阅读态外链一致：Tauri WebView 里 target=_blank 会被静默拒绝，统一走 openExternalUrl。
+              <a
+                href={node.url}
+                onClick={(event) => {
+                  event.preventDefault()
+                  void openExternalUrl(node.url!)
+                }}
+                rel="noreferrer noopener"
+                target="_blank"
+              >
+                {node.url}
+              </a>
+            ) : null}
             {node.text ? <ReactMarkdown remarkPlugins={remarkPlugins}>{node.text}</ReactMarkdown> : null}
           </article>
         ))}

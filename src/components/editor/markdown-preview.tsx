@@ -19,6 +19,7 @@ import {
 import { splitMarkdownIntoChunks, type MarkdownChunk } from "@/services/markdown/markdown-chunks"
 import { resolveOfficialNoteRenderer } from "@/plugins/official-note-renderers"
 import { remarkObsidian } from "@/services/markdown/remark-obsidian"
+import { openExternalUrl } from "@/services/open-external-url"
 import { extractFrontmatter } from "@/services/search/note-index"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
@@ -275,7 +276,23 @@ function buildMarkdownComponents(
       const assetSource = parseVaultAssetHref(href) ?? (isRelativeAttachmentHref(href) ? href : null)
       if (assetSource) return <VaultAttachment onResolveAsset={handlersRef.current.onResolveAsset} source={assetSource}>{children}</VaultAttachment>
       if (href?.startsWith("#")) return <MarkdownAnchorLink href={href}>{children}</MarkdownAnchorLink>
-      return <a className="markdown-external-link" href={href} rel="noreferrer noopener" target="_blank">{children}</a>
+      // Tauri WebView 默认拒绝 target=_blank 的新窗口请求，点击统一交给 openExternalUrl；
+      // href 保留给悬停预览与右键菜单。
+      return (
+        <a
+          className="markdown-external-link"
+          href={href}
+          onClick={(event) => {
+            if (!href) return
+            event.preventDefault()
+            void openExternalUrl(href)
+          }}
+          rel="noreferrer noopener"
+          target="_blank"
+        >
+          {children}
+        </a>
+      )
     },
     img({ alt, src, title }: { alt?: string; src?: string; title?: string }) {
       return <VaultImage alt={alt} assetScope={assetScope} onResolveAsset={handlersRef.current.onResolveAsset} source={src} title={title} />

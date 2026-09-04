@@ -4,6 +4,7 @@ import { Facet, StateEffect, StateField } from "@codemirror/state"
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view"
 
 import { isImageAssetPath, parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
+import { openExternalUrl } from "@/services/open-external-url"
 
 import { parseMarkdownTable } from "./markdown-table-model"
 import { appendMarkdownImage, type TableInlineOptions } from "./markdown-table-inline"
@@ -283,7 +284,16 @@ function openExternalLink(href: string, options: LivePreviewOptions) {
     options.onOpenExternalLink(href)
     return
   }
-  window.open(href, "_blank", "noopener,noreferrer")
+  void openExternalUrl(href)
+}
+
+// 桌面端 mousedown 与触屏合成的 click 会先后触发，去重避免一次点按跳转两次。
+let lastLinkActivationAt = 0
+
+function activateActionableLink(element: Element, options: LivePreviewOptions) {
+  if (!openActionableLink(element, options)) return false
+  lastLinkActivationAt = Date.now()
+  return true
 }
 
 function openActionableLink(element: Element, options: LivePreviewOptions) {
@@ -650,9 +660,23 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
         return true
       },
       mousedown(event: MouseEvent, view: EditorView) {
+        if (event.button !== 0) return false
         const element = event.target instanceof Element ? event.target : null
         if (!element) return false
-        if (!openActionableLink(element, view.state.facet(livePreviewOptions))) return false
+        if (!activateActionableLink(element, view.state.facet(livePreviewOptions))) return false
+        event.preventDefault()
+        return true
+      },
+      // iOS WebView 的点按不一定合成 mousedown，触屏端靠 click 兜底；桌面端 mousedown
+      // 已经跳转过的话，紧随的 click 直接吞掉。
+      click(event: MouseEvent, view: EditorView) {
+        const element = event.target instanceof Element ? event.target : null
+        if (!element) return false
+        if (Date.now() - lastLinkActivationAt < 500) {
+          event.preventDefault()
+          return true
+        }
+        if (!activateActionableLink(element, view.state.facet(livePreviewOptions))) return false
         event.preventDefault()
         return true
       },
