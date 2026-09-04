@@ -1,6 +1,7 @@
-import { indentLess, indentMore } from "@codemirror/commands"
+import { copyLineDown, copyLineUp, indentLess, indentMore, moveLineDown, moveLineUp } from "@codemirror/commands"
 import { deleteMarkupBackward, insertNewlineContinueMarkup } from "@codemirror/lang-markdown"
-import { EditorSelection, Prec } from "@codemirror/state"
+import { syntaxTree } from "@codemirror/language"
+import { type ChangeSpec, EditorSelection, type EditorState, Prec, type Transaction } from "@codemirror/state"
 import { EditorView, keymap } from "@codemirror/view"
 
 // 选中文字后直接敲这些成对标记，就用它包裹选区而不是把选中的文字替换掉。
@@ -36,6 +37,74 @@ function shouldHandleIndent(view: EditorView) {
   return STRUCTURE_LINE.test(state.doc.lineAt(range.head).text)
 }
 
+// 只用到语法节点的结构信息，按结构声明以避免为类型引入 @lezer/common 显式依赖。
+type MdListNode = {
+  firstChild: MdListNode | null
+  from: number
+  name: string
+  nextSibling: MdListNode | null
+  parent: MdListNode | null
+  to: number
+}
+
+function findOrderedList(state: EditorState, position: number): MdListNode | null {
+  let node: MdListNode | null = syntaxTree(state).resolveInner(position, 1)
+  while (node && node.name !== "OrderedList") node = node.parent
+  return node
+}
+
+function firstListItemNumber(list: MdListNode, state: EditorState): number | null {
+  for (let item = list.firstChild; item; item = item.nextSibling) {
+    if (item.name !== "ListItem") continue
+    const match = /^(\s*)(\d+)(?=[.)])/.exec(state.doc.sliceString(item.from, item.from + 12))
+    return match ? Number(match[2]) : null
+  }
+  return null
+}
+
+// Alt+↑/↓ 移动、Shift+Alt+↑/↓ 复制整行是 CodeMirror 默认键位（basicSetup 自带，未在工具栏出现），
+// 但它们只是逐行搬文本：有序列表项挪了位置或被复制一份，编号仍留在原处，读起来像「1. 2. 1.」错位。
+// 命令跑完之后，从移动前记下的起始号开始，把同一个有序列表重新连续编号——
+// 不能以移动后排在最前的那一项的号码为准，它未必是原来的首项。
+function renumberChangesInOrderedList(state: EditorState, position: number, start: number): ChangeSpec[] {
+  const node = findOrderedList(state, position)
+  if (!node) return []
+
+  const changes: ChangeSpec[] = []
+  let expected = start
+  for (let item = node.firstChild; item; item = item.nextSibling) {
+    if (item.name !== "ListItem") continue
+    const match = /^(\s*)(\d+)(?=[.)])/.exec(state.doc.sliceString(item.from, item.from + 12))
+    if (!match) continue
+    const [whole, leading, digits] = match
+    if (Number(digits) !== expected) {
+      changes.push({ from: item.from + leading.length, insert: String(expected), to: item.from + whole.length })
+    }
+    expected += 1
+  }
+  return changes
+}
+
+// 借官方命令算出的搬运/复制结果，再在同一个事务里追加编号修正，撤销时两步一起退回。
+function withOrderedListRenumber(
+  command: (target: { dispatch: (transaction: Transaction) => void; state: EditorState }) => boolean,
+) {
+  return (view: EditorView) => {
+    const list = findOrderedList(view.state, view.state.selection.main.head)
+    const start = list && firstListItemNumber(list, view.state)
+
+    let moved: Transaction | null = null
+    if (!command({ dispatch: (transaction) => { moved = transaction }, state: view.state })) return false
+    if (!moved) return false
+    const applied: Transaction = moved
+    const fix = start === null ? [] : renumberChangesInOrderedList(applied.state, applied.state.selection.main.head, start)
+    const moveSpec = { changes: applied.changes, scrollIntoView: true, selection: applied.state.selection, userEvent: "move.line" }
+    // sequential: true 让第二个 spec 的 changes 按第一个 spec 生效后的文档坐标解释，否则会按原文档校验，位置全错。
+    view.dispatch(view.state.update(...(fix.length ? [moveSpec, { changes: fix, sequential: true }] : [moveSpec])))
+    return true
+  }
+}
+
 const markdownInputKeymap = Prec.high(
   keymap.of([
     // 官方命令：在列表 / 引用 / 任务项里回车续写标记，空项回车则删标记退出；普通段落回退到默认换行。
@@ -47,6 +116,10 @@ const markdownInputKeymap = Prec.high(
       run: (view) => (shouldHandleIndent(view) ? indentMore(view) : false),
       shift: (view) => (shouldHandleIndent(view) ? indentLess(view) : false),
     },
+    { key: "Alt-ArrowUp", run: withOrderedListRenumber(moveLineUp) },
+    { key: "Alt-ArrowDown", run: withOrderedListRenumber(moveLineDown) },
+    { key: "Shift-Alt-ArrowUp", run: withOrderedListRenumber(copyLineUp) },
+    { key: "Shift-Alt-ArrowDown", run: withOrderedListRenumber(copyLineDown) },
   ]),
 )
 
