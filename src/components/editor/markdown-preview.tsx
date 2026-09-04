@@ -1,4 +1,4 @@
-import { Component, memo, Suspense, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
+import { Component, memo, Suspense, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
 import remarkGfm from "remark-gfm"
@@ -16,6 +16,7 @@ import {
   splitWikiTarget,
   stripMarkdownFrontmatter,
 } from "@/services/markdown/markdown-preview-utils"
+import { splitMarkdownIntoChunks, type MarkdownChunk } from "@/services/markdown/markdown-chunks"
 import { resolveOfficialNoteRenderer } from "@/plugins/official-note-renderers"
 import { remarkObsidian } from "@/services/markdown/remark-obsidian"
 import { extractFrontmatter } from "@/services/search/note-index"
@@ -110,7 +111,135 @@ function MarkdownContent({ assetScope, content, depth, editable, onLoadWikiNote,
   const properties = depth === 0 ? Object.entries(extractFrontmatter(content).properties) : []
   const handlersRef = useRef({ onLoadWikiNote, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink })
   handlersRef.current = { onLoadWikiNote, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink }
-  const components = useMemo(() => ({
+  // 双链嵌入本身就短，再分帧只会让嵌入内容一段段跳出来；只有顶层正文参与分块。
+  const chunks = useMemo(() => {
+    const rewritten = rewriteWikiLinks(body)
+    return depth === 0 ? splitMarkdownIntoChunks(rewritten) : [{ startLine: 1, text: rewritten }]
+  }, [body, depth])
+  return (
+    <div className={depth === 0 ? "markdown-preview" : "markdown-preview markdown-preview-embedded"}>
+      {properties.length > 0 ? <MarkdownProperties properties={properties} /> : null}
+      {!body.trim() && depth === 0 ? (
+        <div className="markdown-empty-state">
+          <strong>这篇笔记还没有正文</strong>
+          <span>{editable ? "切换到编辑模式开始记录。" : "源文件目前没有可预览的 Markdown 内容。"}</span>
+        </div>
+      ) : null}
+      <ProgressiveChunks
+        assetScope={assetScope}
+        chunks={chunks}
+        depth={depth}
+        handlers={handlersRef}
+        sourceLineOffset={sourceLineOffset}
+      />
+    </div>
+  )
+}
+
+// 首屏先铺够两段（约一屏半），其余每帧补一段：整篇解析原本是一个三百毫秒级的长任务，
+// 摊成一串短任务后，点「阅读」时界面不再整体僵住，滚动与返回都能立刻响应。
+const INITIAL_CHUNKS = 2
+
+// 未渲染的部分先用占位撑住高度。少了这一层，从编辑态切过来的瞬间正文只有两段高，
+// 浏览器会把滚动位置夹到底部，等剩下的段落补齐时读者已经被甩到别的地方了。
+function ProgressiveChunks({ assetScope, chunks, depth, handlers, sourceLineOffset }: {
+  assetScope?: string
+  chunks: MarkdownChunk[]
+  depth: number
+  handlers: { current: MarkdownHandlers }
+  sourceLineOffset: number
+}) {
+  // 进度只增不减：换笔记时整棵预览会按 key 重建，这里自然回到起点；
+  // 而在阅读态勾选任务只改动一个字符，若跟着从头铺一遍，读者眼前那段会先空掉再补回来。
+  // 段落各自记忆化，没被改到的段不会重新解析，勾选的代价就只剩它所在的那一段。
+  const [rendered, setRendered] = useState(INITIAL_CHUNKS)
+  const visible = Math.min(rendered, chunks.length)
+  const pending = chunks.length - visible
+  const spacerRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const spacer = spacerRef.current
+    const container = spacer?.parentElement
+    if (!spacer || !container) return
+    // 用已渲染部分的「每字符像素高」推算剩余高度；越往后铺，估得越准。
+    // 直接写 DOM：占位高度只服务滚动条，走 state 会让每补一段都把已铺好的段落重新过一遍。
+    const renderedChars = chunks.slice(0, visible).reduce((sum, chunk) => sum + chunk.text.length + 1, 0)
+    const pendingChars = chunks.slice(visible).reduce((sum, chunk) => sum + chunk.text.length + 1, 0)
+    const renderedHeight = spacer.getBoundingClientRect().top - container.getBoundingClientRect().top
+    if (renderedChars <= 0 || renderedHeight <= 0) return
+    spacer.style.height = `${Math.round(renderedHeight / renderedChars * pendingChars)}px`
+  }, [chunks, visible])
+
+  useEffect(() => {
+    if (visible >= chunks.length) return
+    const frame = window.requestAnimationFrame(() => setRendered((count) => count + 1))
+    return () => window.cancelAnimationFrame(frame)
+  }, [chunks.length, visible])
+
+  return (
+    <>
+      {chunks.slice(0, visible).map((chunk, index) => (
+        <MarkdownChunk
+          assetScope={assetScope}
+          depth={depth}
+          handlers={handlers}
+          key={index}
+          sourceLineOffset={sourceLineOffset + chunk.startLine - 1}
+          text={chunk.text}
+        />
+      ))}
+      {pending > 0 ? (
+        <div aria-hidden="true" className="markdown-preview-pending" ref={spacerRef} />
+      ) : null}
+    </>
+  )
+}
+
+type MarkdownHandlers = {
+  onLoadWikiNote: MarkdownPreviewProps["onLoadWikiNote"]
+  onResolveAsset: MarkdownPreviewProps["onResolveAsset"]
+  onResolveWikiNote: MarkdownPreviewProps["onResolveWikiNote"]
+  onToggleTask: MarkdownPreviewProps["onToggleTask"]
+  onWikiLink: MarkdownPreviewProps["onWikiLink"]
+}
+
+type MarkdownChunkProps = {
+  assetScope?: string
+  depth: number
+  handlers: { current: MarkdownHandlers }
+  sourceLineOffset: number
+  text: string
+}
+
+// 已铺好的段落不该因为后面又补了一段而重渲染，回调统一走 ref 中转，props 全是稳定值。
+const MarkdownChunk = memo(function MarkdownChunk({ assetScope, depth, handlers, sourceLineOffset, text }: MarkdownChunkProps) {
+  const components = useMemo(
+    () => buildMarkdownComponents(assetScope, depth, handlers, sourceLineOffset),
+    [assetScope, depth, handlers, sourceLineOffset],
+  )
+  return (
+    <ReactMarkdown
+      components={components}
+      remarkPlugins={remarkPlugins}
+      rehypePlugins={rehypePlugins}
+      urlTransform={previewUrlTransform}
+    >
+      {text}
+    </ReactMarkdown>
+  )
+})
+
+function previewUrlTransform(url: string) {
+  return parseWikiHref(url) || parseWikiEmbedHref(url) || parseVaultAssetHref(url) ? url : defaultUrlTransform(url)
+}
+
+function buildMarkdownComponents(
+  assetScope: string | undefined,
+  depth: number,
+  handlersRef: { current: MarkdownHandlers },
+  sourceLineOffset: number,
+) {
+  return {
     input({ checked, disabled }: { checked?: boolean; disabled?: boolean }) {
       const previewLine = useContext(TaskItemLineContext)
       const toggleTask = handlersRef.current.onToggleTask
@@ -188,26 +317,7 @@ function MarkdownContent({ assetScope, content, depth, editable, onLoadWikiNote,
     h4({ children, node }: HeadingComponentProps) { return <Heading level={4} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
     h5({ children, node }: HeadingComponentProps) { return <Heading level={5} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
     h6({ children, node }: HeadingComponentProps) { return <Heading level={6} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
-  }), [assetScope, depth, sourceLineOffset])
-  return (
-    <div className={depth === 0 ? "markdown-preview" : "markdown-preview markdown-preview-embedded"}>
-      {properties.length > 0 ? <MarkdownProperties properties={properties} /> : null}
-      {!body.trim() && depth === 0 ? (
-        <div className="markdown-empty-state">
-          <strong>这篇笔记还没有正文</strong>
-          <span>{editable ? "切换到编辑模式开始记录。" : "源文件目前没有可预览的 Markdown 内容。"}</span>
-        </div>
-      ) : null}
-      <ReactMarkdown
-        components={components}
-        remarkPlugins={remarkPlugins}
-        rehypePlugins={rehypePlugins}
-        urlTransform={(url) => parseWikiHref(url) || parseWikiEmbedHref(url) || parseVaultAssetHref(url) ? url : defaultUrlTransform(url)}
-      >
-        {rewriteWikiLinks(body)}
-      </ReactMarkdown>
-    </div>
-  )
+  }
 }
 
 function ScrollableMarkdownTable({ children }: { children?: ReactNode }) {
