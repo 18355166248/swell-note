@@ -1497,6 +1497,22 @@ type NoteEditorProps = {
 // 对位最多跟一秒：长笔记分帧铺完约需十几帧，懒加载的编辑器再慢也在这个范围内。
 const ANCHOR_ALIGN_FRAMES = 60
 
+// 输入停顿多久才认为正文稳定下来，可以做那些不必逐键跟进的全文计算。
+const SETTLE_DELAY = 400
+
+// 返回一份「打字停下来之后」的正文；换笔记时立刻跟上，免得菜单里短暂显示上一篇的内容。
+function useSettledContent(noteId: string, content: string) {
+  const [settled, setSettled] = useState({ content, noteId })
+  if (settled.noteId !== noteId) setSettled({ content, noteId })
+  const current = settled.noteId === noteId ? settled.content : content
+  useEffect(() => {
+    if (current === content) return
+    const timer = window.setTimeout(() => setSettled({ content, noteId }), SETTLE_DELAY)
+    return () => window.clearTimeout(timer)
+  }, [content, current, noteId])
+  return current
+}
+
 // 阅读态里把源码行对应的块顶到可视区顶端。预览元素按文档顺序排列，行号随之递增，
 // 因此取最后一个不超过目标行的块即可，遇到更大的行号就可以收手。
 function alignPreviewToSourceLine(viewport: HTMLElement, article: HTMLElement | null, line: number) {
@@ -1560,7 +1576,10 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
       return "无法解析的画布"
     }
   }, [isCanvas, note.content])
-  const noteOutline = useMemo(() => isSpecialPreview ? [] : extractNoteOutline(note.content), [isSpecialPreview, note.content])
+  // 大纲只在菜单里用，却跟着每一次按键把全文扫一遍：长笔记上这一遍要占掉近四成的按键开销。
+  // 改成停顿下来再算，菜单是手动打开的，拿到的照样是最新内容。
+  const outlineSource = useSettledContent(note.id, note.content)
+  const noteOutline = useMemo(() => isSpecialPreview ? [] : extractNoteOutline(outlineSource), [isSpecialPreview, outlineSource])
   const editorScrollKey = `${activeCacheId ?? "session"}:${note.id}`
 
   // 切换阅读/编辑时用来对位：滚动过程中随手记下可视区顶端落在哪一源码行。
