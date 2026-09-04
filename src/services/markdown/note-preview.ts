@@ -18,8 +18,31 @@ export function buildNotePreview(content: string, format?: Note["format"]) {
   if (isExcalidrawMarkdown(head)) {
     return summarizeDrawingTexts(extractExcalidrawTextElements(content), "Excalidraw 画布")
   }
-  const body = stripMarkdownFrontmatter(head).replace(/^#+\s*/gm, "")
-  return collapse(body).slice(0, PREVIEW_LENGTH)
+  return collapse(stripMarkdownSyntax(stripMarkdownFrontmatter(head))).slice(0, PREVIEW_LENGTH)
+}
+
+// 摘要是给人扫一眼的，此前只去掉了标题的 #，**加粗**、`代码`、[链接](url)、![[图.png]]
+// 这些标记都原样留在列表里。这里把常见写法统一还原成纯文字。
+function stripMarkdownSyntax(body: string) {
+  return body
+    // 图片没有可读文字，整段去掉；链接与双链只留可见文字。
+    .replace(/!\[\[[^\]\n]*\]\]/g, " ")
+    .replace(/!\[[^\]\n]*\]\([^)\n]*\)/g, " ")
+    .replace(/\[\[([^\]\n|]+)(?:\|([^\]\n]+))?\]\]/g, (_match, target: string, alias?: string) => alias ?? target)
+    .replace(/\[([^\]\n]*)\]\([^)\n]*\)/g, "$1")
+    // 块级标记：标题、引用、列表、表格分隔行、分割线。
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/^\s*(?:[-+*]|\d{1,9}[.)])\s+(?:\[[ xX]\]\s+)?/gm, "")
+    .replace(/^\s*\|?[\s:|-]{3,}\|?\s*$/gm, " ")
+    .replace(/^\s{0,3}(?:```|~~~).*$/gm, " ")
+    .replace(/^\s{0,3}(?:[-*_]\s*){3,}$/gm, " ")
+    // 行内强调与代码：只摘掉标记，保留文字。
+    .replace(/~~([^~\n]+)~~/g, "$1")
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/(?<![\p{L}\p{N}])__([^_\n]+)__(?![\p{L}\p{N}])/gu, "$1")
+    .replace(/\*([^*\n]+)\*/g, "$1")
+    .replace(/`+([^`\n]+)`+/g, "$1")
 }
 
 function summarizeCanvas(content: string) {

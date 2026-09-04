@@ -70,3 +70,45 @@ describe("buildNotePreview", () => {
     expect(buildNotePreview("---\ntitle: 仅有元数据\n---\n")).toBe("")
   })
 })
+
+describe("buildNotePreview 去除 Markdown 标记", () => {
+  it("摘要里不再出现强调、代码与链接的标记", () => {
+    const preview = buildNotePreview([
+      "# 一级标题",
+      "",
+      "这一段有 **加粗**、*斜体*、~~删除线~~ 和 `行内代码`。",
+      "",
+      "还有 [外链](https://example.com)、[[双链]]、[[目标|别名]] 与 ![图](a.png)。",
+    ].join("\n"))
+
+    expect(preview).toContain("一级标题")
+    expect(preview).toContain("加粗")
+    expect(preview).toContain("行内代码")
+    expect(preview).toContain("外链")
+    expect(preview).toContain("双链")
+    expect(preview).toContain("别名")
+    for (const marker of ["**", "~~", "`", "](", "[[", "!["]) {
+      expect(preview).not.toContain(marker)
+    }
+  })
+
+  it("列表、引用与表格分隔行只留正文", () => {
+    const preview = buildNotePreview([
+      "> 引用一句",
+      "",
+      "- [ ] 待办事项",
+      "- 普通列表项",
+      "",
+      "| 列 A | 列 B |",
+      "| --- | --- |",
+      "| 甲 | 乙 |",
+    ].join("\n"))
+
+    expect(preview).toContain("引用一句")
+    expect(preview).toContain("待办事项")
+    expect(preview).toContain("普通列表项")
+    expect(preview).not.toContain("- [ ]")
+    expect(preview).not.toContain("---")
+    expect(preview.startsWith(">")).toBe(false)
+  })
+})
