@@ -1,4 +1,4 @@
-import { Fragment, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
+import { memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import {
   closestCenter,
   DndContext,
@@ -38,6 +38,7 @@ import {
   FolderCog,
   FolderPlus,
   FolderTree,
+  Globe,
   GripVertical,
   ListTree,
   ListFilter,
@@ -100,8 +101,8 @@ import {
   noteBelongsDirectlyToFolder,
   type VaultFolder,
 } from "@/services/search/vault-folders"
-import { buildNotePreview, buildNoteSearchSnippet } from "@/services/markdown/note-preview"
-import { splitByQuery } from "@/services/search/note-search-highlight"
+import { buildNotePreview } from "@/services/markdown/note-preview"
+import { HighlightedText, useSearchMatch } from "@/components/workspace/note-search-match"
 import { countWords, estimateReadingMinutes } from "@/services/markdown/note-stats"
 import { extractNoteOutline } from "@/services/markdown/note-outline"
 import { buildMarkdownNoteLink, buildRelativeMarkdownHref } from "@/services/markdown/markdown-link"
@@ -112,6 +113,7 @@ import { applyFolderOrder, loadFolderOrder, saveFolderOrder } from "@/services/p
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import { FormattingToolbar } from "@/components/workspace/formatting-toolbar"
 import { NoteVersionHistoryDialog } from "@/components/workspace/note-version-history-dialog"
+import { GlobalSearchDialog } from "@/components/workspace/global-search-dialog"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
 import { stableNoteRenderIdentity } from "@/lib/note-route-resolution"
@@ -249,6 +251,8 @@ export function Workspace(props: WorkspaceProps) {
   const mobileLayout = useMobileWorkspaceLayout()
   const showSyncProgressToast = shouldShowFloatingSyncProgress(props.syncProgress, mobileLayout)
   const [expandedFolderPaths, setExpandedFolderPaths] = useState<Set<string>>(() => new Set())
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
+  const openGlobalSearch = useCallback(() => setGlobalSearchOpen(true), [])
   const activeNoteUsesSpecialPreview = Boolean(
     props.activeNote
     && (props.activeNote.format === "canvas" || isExcalidrawMarkdown(props.activeNote.content)),
@@ -277,9 +281,7 @@ export function Workspace(props: WorkspaceProps) {
       const key = event.key.toLocaleLowerCase()
       if (key === "k") {
         event.preventDefault()
-        const search = document.querySelector<HTMLInputElement>(".desktop-workspace .note-search-wrap input")
-        search?.focus()
-        search?.select()
+        openGlobalSearch()
         return
       }
       if (key === "n" && !event.shiftKey && props.canCreateNote && !props.isCreatingNote) {
@@ -295,7 +297,7 @@ export function Workspace(props: WorkspaceProps) {
     // 桌面端高频动作统一由工作区分发，避免输入框和编辑器各自重复注册全局快捷键。
     document.addEventListener("keydown", handleDesktopShortcut)
     return () => document.removeEventListener("keydown", handleDesktopShortcut)
-  }, [props.canCreateNote, props.isCreatingNote, props.isRefreshingVault, props.onCreateNote, props.onRefreshVault])
+  }, [openGlobalSearch, props.canCreateNote, props.isCreatingNote, props.isRefreshingVault, props.onCreateNote, props.onRefreshVault])
 
   useEffect(() => {
     const ancestors = getFolderAncestorPaths(props.selectedFolder)
@@ -336,6 +338,7 @@ export function Workspace(props: WorkspaceProps) {
         <MobileWorkspace
           {...props}
           expandedFolderPaths={expandedFolderPaths}
+          onOpenGlobalSearch={openGlobalSearch}
           onToggleFolder={toggleFolder}
           visibleFolders={visibleFolders}
         />
@@ -343,6 +346,7 @@ export function Workspace(props: WorkspaceProps) {
         <DesktopWorkspace
           {...props}
           expandedFolderPaths={expandedFolderPaths}
+          onOpenGlobalSearch={openGlobalSearch}
           onToggleFolder={toggleFolder}
           visibleFolders={visibleFolders}
         />
@@ -355,6 +359,14 @@ export function Workspace(props: WorkspaceProps) {
           onRetry={props.onRetrySync}
         />
       ) : null}
+      <GlobalSearchDialog
+        cacheId={props.activeCacheId}
+        notes={props.allNotes}
+        onOpenChange={setGlobalSearchOpen}
+        onSelectNote={props.onSelectNote}
+        open={globalSearchOpen}
+        placement={mobileLayout ? "bottom" : "center"}
+      />
     </main>
   )
 }
@@ -376,6 +388,7 @@ function useMobileWorkspaceLayout() {
 
 type FolderTreeProps = {
   expandedFolderPaths: ReadonlySet<string>
+  onOpenGlobalSearch: () => void
   onToggleFolder: (folderPath: string) => void
   visibleFolders: VaultFolder[]
 }
@@ -534,6 +547,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         noteSort={props.noteSort}
         folderLabel={props.selectedFolder ?? (props.libraryView === "recent" ? "最近更新" : props.libraryView === "starred" ? "收藏" : "全部笔记")}
         folderManagementMode={props.folderManagementMode}
+        onOpenGlobalSearch={props.onOpenGlobalSearch}
         onOpenSettings={props.onOpenSettings}
         onCreateNote={props.onCreateNote}
         onIncludeNestedFolderNotesChange={props.onIncludeNestedFolderNotesChange}
@@ -1000,6 +1014,7 @@ type NoteListPanelProps = {
   isLoading: boolean
   onCreateNote: () => void
   onIncludeNestedFolderNotesChange: (include: boolean) => void
+  onOpenGlobalSearch: () => void
   onOpenSettings: () => void
   onQueryChange: (query: string) => void
   onNoteSortChange: (sort: NoteSort) => void
@@ -1029,6 +1044,7 @@ function NoteListPanel({
   noteSort,
   onCreateNote,
   onIncludeNestedFolderNotesChange,
+  onOpenGlobalSearch,
   onOpenSettings,
   onQueryChange,
   onNoteSortChange,
@@ -1073,21 +1089,25 @@ function NoteListPanel({
         </div>
       </div>
 
-      <div className="note-search-wrap">
-        <Search />
-        <Input
-          aria-label="搜索笔记"
-          onChange={(event) => onQueryChange(event.target.value)}
-          onKeyDown={(event) => {
-            // 搜索框没有清空按钮，键盘用户只能靠 Esc 退出：先清空关键词，已经空了就交还焦点。
-            if (event.key !== "Escape") return
-            if (query) onQueryChange("")
-            else event.currentTarget.blur()
-          }}
-          placeholder="搜索笔记、标签、内容"
-          value={query}
-        />
-        <kbd aria-hidden="true">⌘K</kbd>
+      <div className="note-search-row">
+        <div className="note-search-wrap">
+          <Search />
+          <Input
+            aria-label="搜索当前目录"
+            onChange={(event) => onQueryChange(event.target.value)}
+            onKeyDown={(event) => {
+              // 搜索框没有清空按钮，键盘用户只能靠 Esc 退出：先清空关键词，已经空了就交还焦点。
+              if (event.key !== "Escape") return
+              if (query) onQueryChange("")
+              else event.currentTarget.blur()
+            }}
+            placeholder="搜索当前目录"
+            value={query}
+          />
+        </div>
+        <Button aria-label="全局搜索（⌘K）" onClick={onOpenGlobalSearch} size="icon" title="全局搜索（⌘K）" variant="ghost">
+          <Globe />
+        </Button>
       </div>
 
       <ScrollArea className="note-list-scroll" viewportRef={setViewportRef}>
@@ -1426,32 +1446,6 @@ type NoteListRowProps = {
   onLongPress?: (note: Note) => void
   onSelect: (note: Note) => void
   query?: string
-}
-
-// 命中词经常落在固定摘要之外，用户看着列表想不明白这篇为什么会搜到；
-// 标题命中就够了，标题和默认摘要都没命中才去正文里现摘一段带关键词的片段。
-function useSearchMatch(note: Note, query: string) {
-  return useMemo(() => {
-    const needle = query.trim()
-    if (!needle) return note.preview
-    const haystack = `${note.title} ${note.preview}`.toLocaleLowerCase()
-    if (haystack.includes(needle.toLocaleLowerCase())) return note.preview
-    return buildNoteSearchSnippet(note.content, needle, note.format) ?? note.preview
-  }, [note.content, note.format, note.preview, note.title, query])
-}
-
-// query 为空、或这段文字压根没命中时直接原样渲染，避免给列表里每一行都套一层 <mark> 开销。
-function HighlightedText({ query, text }: { query: string; text: string }) {
-  if (!query.trim()) return <>{text}</>
-  const segments = splitByQuery(text, query)
-  if (!segments.some((segment) => segment.matched)) return <>{text}</>
-  return (
-    <>
-      {segments.map((segment, index) => segment.matched
-        ? <mark key={index}>{segment.text}</mark>
-        : <Fragment key={index}>{segment.text}</Fragment>)}
-    </>
-  )
 }
 
 // 列表是最容易掉帧的地方：编辑正文、切换选中都会刷新整个 notes 数组，
@@ -2754,6 +2748,7 @@ function MobileLibrary(props: MobileLibraryProps) {
             {props.isRefreshingVault ? <LoaderCircle className="animate-spin" /> : <RefreshCw />}
           </Button>
           <Button aria-label="搜索笔记" onClick={() => searchRef.current?.focus()} size="icon" variant="ghost"><Search /></Button>
+          <Button aria-label="全局搜索" onClick={props.onOpenGlobalSearch} size="icon" variant="ghost"><Globe /></Button>
         </div>
       </header>
       <ScrollArea className="mobile-scroll-content" viewportRef={viewportRef}>

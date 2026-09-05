@@ -625,15 +625,15 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .note-search-wrap { position: relative; min-width: 0; }
 .note-search-wrap > svg { position: absolute; z-index: 1; left: 11px; top: 50%; width: 15px; height: 15px; transform: translateY(-50%); color: var(--muted-foreground); pointer-events: none; }
 .note-search-wrap input { height: 36px; padding-left: 34px; background: var(--muted); border-color: transparent; box-shadow: none; font-size: 12px; transition: background-color 140ms ease, border-color 140ms ease; }
-.note-search-wrap > kbd { position: absolute; top: 50%; right: 8px; transform: translateY(-50%); border: 1px solid var(--border); border-radius: 5px; background: color-mix(in oklab,white 68%,transparent); padding: 1px 5px; color: var(--muted-foreground); font-family: inherit; font-size: 9px; line-height: 16px; pointer-events: none; }
-.note-search-wrap:focus-within > kbd { display: none; }
-.note-search-wrap:has(> kbd) input { padding-right: 42px; }
 .note-search-wrap:has(> .note-search-clear) input { padding-right: 42px; }
 .note-search-clear { position: absolute; z-index: 2; top: 50%; right: 4px; display: grid; width: 32px; height: 32px; transform: translateY(-50%); place-items: center; border-radius: 8px; color: var(--muted-foreground); -webkit-tap-highlight-color: transparent; transition: background-color 130ms ease, color 130ms ease; }
 .note-search-clear:hover, .note-search-clear:active { background: color-mix(in oklab,var(--muted-foreground) 10%,transparent); color: var(--foreground); }
 .note-search-clear svg { width: 16px; height: 16px; }
 .note-search-wrap input:focus { background: white; border-color: var(--ring); }
-.note-list-panel > .note-search-wrap { margin: 0 14px 10px; }
+.note-list-panel > .note-search-row { display: flex; align-items: center; gap: 6px; margin: 0 14px 10px; }
+.note-search-row > .note-search-wrap { flex: 1; min-width: 0; }
+.note-search-row > button { flex: 0 0 auto; color: var(--muted-foreground); }
+.note-search-row > button:hover { color: var(--foreground); }
 .note-groups { padding-bottom: 24px; }
 .virtual-note-list { position: relative; width: 100%; }
 .virtual-note-row { position: absolute; top: 0; left: 0; width: 100%; }
@@ -1328,5 +1328,41 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .note-history-list {
     border-right: 0;
     border-bottom: 1px solid var(--border);
+  }
+}
+
+.global-search-dialog {
+  display: flex;
+  width: min(600px, calc(100vw - 32px));
+  max-width: 600px;
+  max-height: min(70vh, 560px);
+  flex-direction: column;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.global-search-input-wrap { position: relative; flex: 0 0 auto; padding: 14px; border-bottom: 1px solid var(--border); }
+.global-search-input-wrap > svg { position: absolute; top: 50%; left: 25px; width: 16px; height: 16px; transform: translateY(-50%); color: var(--muted-foreground); pointer-events: none; }
+.global-search-input-wrap input { height: 40px; padding-left: 36px; border-color: transparent; background: var(--muted); font-size: 13px; box-shadow: none; }
+.global-search-input-wrap input:focus { border-color: var(--ring); background: var(--background); }
+
+.global-search-results { flex: 1; min-height: 0; }
+.global-search-empty { display: flex; min-height: 160px; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--muted-foreground); font-size: 12.5px; }
+.global-search-empty > svg { width: 22px; height: 22px; }
+
+.global-search-result { display: block; width: 100%; padding: 10px 16px; border: 0; background: transparent; text-align: left; transition: background-color 100ms ease; }
+.global-search-result:hover, .global-search-result[data-active="true"] { background: var(--muted); }
+.global-search-result-heading { display: flex; align-items: baseline; gap: 8px; }
+.global-search-result-heading strong { min-width: 0; overflow: hidden; flex: 0 1 auto; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 620; }
+.global-search-result-folder { flex: 1 1 auto; overflow: hidden; color: var(--muted-foreground); text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; }
+.global-search-result p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 1; margin: 4px 0 0; color: var(--muted-foreground); font-size: 11.5px; line-height: 1.5; }
+.global-search-result-heading strong mark, .global-search-result p mark { background: var(--blue-soft); color: var(--primary); border-radius: 3px; padding: 0 1px; font-weight: inherit; }
+
+@media (max-width: 767px) {
+  .global-search-dialog {
+    width: 100vw;
+    max-width: none;
+    max-height: 78dvh;
   }
 }
