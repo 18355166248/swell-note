@@ -95,7 +95,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       // 各语言由官方的 language-data 按需动态加载，不写代码块的笔记不会为此付出代价。
       markdown({ base: markdownLanguage, codeLanguages: languages }),
       markdownLivePreview({
-        keepRenderedOnRangeSelection: compact,
         onOpenWikiLink: (target) => handlers.current.onOpenWikiLink?.(target),
         onResolveAsset: (source) => handlers.current.onResolveAsset?.(source) ?? Promise.resolve(null),
         tableStorageKey: storageKey,

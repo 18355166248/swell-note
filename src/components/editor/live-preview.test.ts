@@ -45,7 +45,7 @@ const linkDoc = [
   "```",
 ].join("\n")
 
-function createView(selection?: { anchor: number }, content = doc, options: LivePreviewOptions = {}) {
+function createView(selection?: { anchor: number; head?: number }, content = doc, options: LivePreviewOptions = {}) {
   return new EditorView({
     parent: document.body,
     state: EditorState.create({
@@ -179,6 +179,18 @@ describe("markdown live preview", () => {
     const { hidden } = collect(await settleInlineDecorations(view))
 
     expect(hidden).not.toContainEqual({ from: boldLine, to: boldLine + 2 })
+  })
+
+  it("keeps marks hidden across a non-empty drag selection instead of revealing raw syntax", async () => {
+    // 拖选跨行时如果逐行展开源码，标记显隐会实时改变行高，选区落点和贴着选区的操作条都会跟着跳，
+    // 鼠标选区还会出现对不上可见文字的残影。非空选区因此不应触发任何一行还原为原始 Markdown。
+    const headingMark = { from: 0, to: 2 }
+    const boldLine = doc.indexOf("**加粗**")
+    const view = createView({ anchor: 0, head: boldLine + 3 })
+    const { hidden } = collect(await settleInlineDecorations(view))
+
+    expect(hidden).toContainEqual(headingMark)
+    expect(hidden).toContainEqual({ from: boldLine, to: boldLine + 2 })
   })
 
   const listDoc = [

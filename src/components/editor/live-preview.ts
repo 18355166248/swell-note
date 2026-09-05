@@ -26,10 +26,7 @@ type MdSyntaxNode = {
 }
 
 // 打开链接是宿主行为：笔记内链交给工作区路由，外部链接默认走浏览器新窗口。
-// keepRenderedOnRangeSelection 服务触摸端：见 collectCursorLines 的说明。
-export type LivePreviewOptions = TableInlineOptions & {
-  keepRenderedOnRangeSelection?: boolean
-}
+export type LivePreviewOptions = TableInlineOptions
 
 export { TableWidget }
 
@@ -128,15 +125,14 @@ export class MarkdownImageWidget extends WidgetType {
 }
 
 function collectCursorLines(state: EditorState) {
-  const keepRendered = state.facet(livePreviewOptions).keepRenderedOnRangeSelection === true
   const lines = new Set<number>()
   for (const range of state.selection.ranges) {
-    // 触摸端长按选词会一次覆盖整段：展开这些行的源码等于在选中瞬间改变行高，
-    // 选区和贴着选区的操作条都会跟着跳。非空选区因此保持渲染态，光标态仍还原原始 Markdown。
-    if (keepRendered && !range.empty) continue
-    const from = state.doc.lineAt(Math.min(range.from, range.to)).number
-    const to = state.doc.lineAt(Math.max(range.from, range.to)).number
-    for (let number = from; number <= to; number += 1) lines.add(number)
+    // 拖选（含触摸端长按选词）一旦跨行就会不断把新覆盖的行展开成源码：标记显隐导致行高实时变化，
+    // 拖动中的选区落点、贴着选区的操作条都会跟着跳，鼠标选区还会因此出现对不上可见文字的残影。
+    // 非空选区因此统一保持渲染态，只有光标本身停留（空选区）的那一行才还原原始 Markdown 供编辑。
+    if (!range.empty) continue
+    const line = state.doc.lineAt(range.head)
+    lines.add(line.number)
   }
   return lines
 }
