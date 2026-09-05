@@ -5,7 +5,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { EditorState } from "@codemirror/state"
 import { EditorView, keymap } from "@codemirror/view"
 
-import { markdownInputEnhancements, toggleInlineMark } from "./markdown-input"
+import { focusExistingLinkUrl, markdownInputEnhancements, toggleInlineMark } from "./markdown-input"
 
 function createView(doc: string, anchor: number, head = anchor) {
   const state = EditorState.create({
@@ -151,6 +151,41 @@ describe("toggleInlineMark", () => {
     const view = createView("这是文字", 2)
     toggleInlineMark(view, "strong", "加粗文字")
     expect(view.state.doc.toString()).toBe("这是**加粗文字**文字")
+    view.destroy()
+  })
+})
+
+// Cmd+K 在光标（无选区）落在已有链接文字里时，此前会在原文字中间插一段新链接，
+// 拼出嵌套错乱的 Markdown；现在改成直接选中已有链接的 URL 方便就地改地址。
+describe("focusExistingLinkUrl", () => {
+  it("selects the URL when the empty cursor sits inside an existing link's label", () => {
+    const doc = "这是 [已有链接](https://example.com) 结尾"
+    const view = createView(doc, doc.indexOf("有链接"))
+    expect(focusExistingLinkUrl(view)).toBe(true)
+    expect(view.state.doc.toString()).toBe(doc)
+    const selection = view.state.selection.main
+    expect(view.state.sliceDoc(selection.from, selection.to)).toBe("https://example.com")
+    view.destroy()
+  })
+
+  it("leaves a real selection alone so the caller falls back to wrapping", () => {
+    const doc = "这是 [已有链接](https://example.com) 结尾"
+    const from = doc.indexOf("有链接")
+    const view = createView(doc, from, from + 2)
+    expect(focusExistingLinkUrl(view)).toBe(false)
+    view.destroy()
+  })
+
+  it("does nothing outside any link", () => {
+    const view = createView("这是普通文字，没有链接", 3)
+    expect(focusExistingLinkUrl(view)).toBe(false)
+    view.destroy()
+  })
+
+  it("does nothing for a bracket-only link with no URL child", () => {
+    const doc = "这是 [笔记双链] 结尾"
+    const view = createView(doc, doc.indexOf("笔记"))
+    expect(focusExistingLinkUrl(view)).toBe(false)
     view.destroy()
   })
 })

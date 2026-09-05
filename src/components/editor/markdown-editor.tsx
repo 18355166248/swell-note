@@ -10,7 +10,7 @@ import { readClipboardText, writeClipboardText } from "@/services/clipboard/clip
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 import { scrollCursorIntoView } from "./cursor-visibility"
-import { type InlineMarkKind, markdownInputEnhancements, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
+import { focusExistingLinkUrl, type InlineMarkKind, markdownInputEnhancements, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
 import { markdownLivePreview } from "./live-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import "./markdown-table.css"
@@ -177,8 +177,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
             return true
           }
           if (key === "k") {
-            // 选中文字则作为链接文案，否则用占位文案；两种情况都把 https:// 选中，方便直接粘地址。
             event.preventDefault()
+            // 光标没有选区、正落在已有链接文字里时改地址，而不是在原文字中间插一段新链接。
+            if (focusExistingLinkUrl(view)) return true
+            // 选中文字则作为链接文案，否则用占位文案；两种情况都把 https:// 选中，方便直接粘地址。
             const range = view.state.selection.main
             const label = view.state.sliceDoc(range.from, range.to) || "链接文字"
             const inserted = `[${label}](https://)`

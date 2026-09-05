@@ -184,6 +184,24 @@ export function toggleInlineMark(view: EditorView, kind: InlineMarkKind, placeho
   return true
 }
 
+// Cmd+K 在空光标（没有选区）落在已有链接文字里时，此前会在光标处硬插一段新的
+// [链接文字](https://)，把原链接的文字从中间劈开，拼出一段嵌套错乱的 Markdown。
+// 这里改成直接把已有链接的 URL 部分选中，方便就地改地址；有选区时维持原来的包裹行为不变。
+export function focusExistingLinkUrl(view: EditorView): boolean {
+  const { state } = view
+  const selection = state.selection.main
+  if (!selection.empty) return false
+  const link = findEnclosingMark(state, selection.from, selection.to, "Link")
+  if (!link) return false
+  for (let child = link.firstChild; child; child = child.nextSibling) {
+    if (child.name !== "URL") continue
+    view.dispatch({ selection: { anchor: child.from, head: child.to }, scrollIntoView: true })
+    view.focus()
+    return true
+  }
+  return false
+}
+
 // 单个 URL 粘到非空选区上时，包成 [选中文字](URL)。返回 true 表示已接管这次粘贴。
 export function wrapSelectionAsLink(view: EditorView, url: string) {
   const trimmed = url.trim()
