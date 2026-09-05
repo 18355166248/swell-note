@@ -226,3 +226,37 @@ describe("focusExistingLinkUrl", () => {
     view.destroy()
   })
 })
+
+// 回车续写由官方命令 insertNewlineContinueMarkup 提供，markdownInputEnhancements 把它绑在
+// Prec.high 的 Enter 上。这里锁定引用块场景：曾怀疑「引用块回车不接 >」，实测是自动化里
+// End 键没落到行尾、光标停在空行导致的误判，命令本身工作正常。留几条用例防将来回归。
+describe("Enter continues blockquote / list markup", () => {
+  it("continues the quote marker when Enter is pressed at the end of a quote line", () => {
+    const view = createView("> 引用一", 5)
+    press(view, "Enter")
+    expect(view.state.doc.toString()).toBe("> 引用一\n> ")
+    view.destroy()
+  })
+
+  it("keeps both halves quoted when Enter splits a quote line in the middle", () => {
+    const view = createView("> 引用一", 3) // 光标落在「> 引」之后
+    press(view, "Enter")
+    expect(view.state.doc.toString()).toBe("> 引\n> 用一")
+    view.destroy()
+  })
+
+  it("continues the quote marker from the last line of a multi-line quote", () => {
+    const doc = "> 第一行\n> 第二行"
+    const view = createView(doc, doc.length)
+    press(view, "Enter")
+    expect(view.state.doc.toString()).toBe("> 第一行\n> 第二行\n> ")
+    view.destroy()
+  })
+
+  it("continues a bullet list marker for comparison", () => {
+    const view = createView("- 要点一", 5)
+    press(view, "Enter")
+    expect(view.state.doc.toString()).toBe("- 要点一\n- ")
+    view.destroy()
+  })
+})
