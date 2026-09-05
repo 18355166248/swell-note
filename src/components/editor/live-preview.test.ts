@@ -87,7 +87,7 @@ type DecorationSpec = { attributes?: Record<string, string>; class?: string; wid
 function collect(decorations: DecorationSet) {
   const classes: string[] = []
   const hidden: Array<{ from: number; to: number }> = []
-  const checkboxes: Array<{ checked: boolean; from: number }> = []
+  const checkboxes: Array<{ checked: boolean; from: number; to: number }> = []
   const tables: Array<{ from: number; to: number }> = []
   const images: Array<{ alt: string; block: boolean; from: number; source: string; to: number }> = []
   const marks: Array<{ attributes?: Record<string, string>; class: string; from: number; to: number }> = []
@@ -98,7 +98,9 @@ function collect(decorations: DecorationSet) {
     if (spec.class) classes.push(...spec.class.split(" "))
     if (spec.class && !spec.widget) marks.push({ attributes: spec.attributes, class: spec.class, from: cursor.from, to: cursor.to })
     if (!spec.class && !spec.widget && cursor.from < cursor.to) hidden.push({ from: cursor.from, to: cursor.to })
-    if (spec.widget instanceof TaskCheckboxWidget) checkboxes.push({ checked: spec.widget.checked, from: spec.widget.from })
+    // from 取 widget 内部指向 `[ ]` 的位置（点击切换状态用它）；to 取装饰实际覆盖的范围，
+    // 包含被一起吞掉的标记后空格。
+    if (spec.widget instanceof TaskCheckboxWidget) checkboxes.push({ checked: spec.widget.checked, from: spec.widget.from, to: cursor.to })
     if (spec.widget instanceof TableWidget) tables.push({ from: cursor.from, to: cursor.to })
     if (spec.widget instanceof ListBulletWidget) bullets.push({ from: cursor.from, to: cursor.to })
     if (spec.widget instanceof MarkdownImageWidget) {
@@ -165,12 +167,15 @@ describe("markdown live preview", () => {
     expect(classes).toContain("cm-md-quote")
     expect(hidden).toContainEqual({ from: doc.indexOf("**"), to: doc.indexOf("**") + 2 })
     expect(hidden).not.toContainEqual({ from: 0, to: 1 })
+    // 勾选框替换范围一直延伸到 `[ ]` 后那个空格，任务文字前不再多一个源码空格。
     expect(checkboxes).toEqual([
-      { checked: false, from: doc.indexOf("[ ]") },
-      { checked: true, from: doc.indexOf("[x]") },
+      { checked: false, from: doc.indexOf("[ ]"), to: doc.indexOf("待办") },
+      { checked: true, from: doc.indexOf("[x]"), to: doc.indexOf("完成") },
     ])
     expect(hidden).toContainEqual({ from: doc.indexOf("- [ ]"), to: doc.indexOf("[ ]") })
     expect(hidden).toContainEqual({ from: doc.indexOf("- [x]"), to: doc.indexOf("[x]") })
+    // 引用标记 `>` 同样连同后面的空格一起隐藏。
+    expect(hidden).toContainEqual({ from: doc.indexOf("> 引用"), to: doc.indexOf("> 引用") + 2 })
   })
 
   it("reveals raw syntax on the cursor line", async () => {
@@ -239,7 +244,7 @@ describe("markdown live preview", () => {
     const view = createView({ anchor: 0 }, listDoc)
     const { bullets, checkboxes } = collect(await settleInlineDecorations(view))
 
-    expect(checkboxes).toEqual([{ checked: false, from: listDoc.indexOf("[ ]") }])
+    expect(checkboxes).toEqual([{ checked: false, from: listDoc.indexOf("[ ]"), to: listDoc.indexOf("待办") }])
     expect(bullets.some((bullet) => bullet.from === listDoc.indexOf("- [ ]"))).toBe(false)
   })
 
@@ -945,11 +950,15 @@ describe("markdown live preview blocks", () => {
     const view = createView({ anchor: 0 }, blockDoc)
     const { hidden } = collect(await settleInlineDecorations(view))
 
-    // 逐行找出 > 的位置，每一个都应当被隐藏。
+    // 逐行找出 > 的位置，每一个都应当被隐藏；`> ` 后的空格一并收掉，
+    // 引用文字才贴着左边线，独占一行的 `>` 则只隐藏自身。
     const marks: number[] = []
     for (let index = 0; index < blockDoc.length; index += 1) if (blockDoc[index] === ">") marks.push(index)
     expect(marks).toHaveLength(5)
-    for (const mark of marks) expect(hidden).toContainEqual({ from: mark, to: mark + 1 })
+    for (const mark of marks) {
+      const end = blockDoc[mark + 1] === " " ? mark + 2 : mark + 1
+      expect(hidden).toContainEqual({ from: mark, to: end })
+    }
   })
 
   it("reveals quote marks when the cursor is inside the quote", async () => {

@@ -512,7 +512,13 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             decorateLines(node.from, node.to, "cm-md-quote")
             // 只有首行的 QuoteMark 是 Blockquote 的直接子节点，后续行的会被并进段落等子节点里，
             // 按直接子节点找会漏掉它们，第二行开始的 > 就一直露在外面。
-            if (!active) hideQuoteMarks(node.node, hide)
+            // 连 `>` 后的空格一起隐藏，引用文字才贴着左边线，不会多缩进一格——
+            // 与列表圆点、任务勾选框吞掉标记后空格的处理保持一致。
+            if (!active) {
+              hideQuoteMarks(node.node, (mark) => {
+                decorations.push(Decoration.replace({}).range(mark.from, skipSpacesAfter(view.state, mark.to)))
+              })
+            }
             break
           }
           case "ListItem": {
@@ -534,10 +540,13 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
           case "TaskMarker": {
             if (active) break
             const checked = view.state.sliceDoc(node.from, node.to).toLocaleLowerCase().includes("x")
+            // 连 `[ ]` 后的空格一起替换，勾选框与任务文字之间才只剩 CSS 给的间距，
+            // 不会再多一个源码空格——和无序列表圆点吞掉标记后空格的处理保持一致。
+            // widget 的 from/to 仍指向 `[ ]` 本身，点击切换状态只改写这三个字符。
             decorations.push(
               Decoration.replace({
                 widget: new TaskCheckboxWidget(checked, node.from, node.to, view),
-              }).range(node.from, node.to),
+              }).range(node.from, skipSpacesAfter(view.state, node.to)),
             )
             // TaskMarker 的前一个语法兄弟并不稳定，直接按当前行定位列表标记；仅隐藏 `- ` 等标记并保留嵌套缩进。
             const line = view.state.doc.lineAt(node.from)
