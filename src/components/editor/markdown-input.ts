@@ -148,14 +148,27 @@ function findEnclosingMark(state: EditorState, from: number, to: number, name: s
   return null
 }
 
+// 三击选中「一行」时，浏览器给出的选区会带上行首的列表/引用标记和结尾的换行符——
+// 照单包裹的话，标记会插进列表编号内部（"**1. 文字**" 变成 "**1. 文字\n**"，编号被劈开）。
+// 这里把选区收缩到「这一行真正的内容」：掐掉尾随换行，跳过行首的结构前缀。
+function shrinkToLineContent(state: EditorState, from: number, to: number) {
+  while (to > from && state.doc.sliceString(to - 1, to) === "\n") to--
+  const line = state.doc.lineAt(from)
+  if (from === line.from) {
+    const match = STRUCTURE_LINE.exec(line.text)
+    if (match) from = Math.min(line.from + match[0].length, to)
+  }
+  return { from, to }
+}
+
 // 选区（或光标）已经落在对应的行内标记节点里时，Cmd+B 等快捷键与工具栏按钮应当「再点一次就取消」，
 // 而不是在外面再套一层标记，否则连续按会越叠越多层。找不到对应节点时退回普通包裹。
 export function toggleInlineMark(view: EditorView, kind: InlineMarkKind, placeholder: string): boolean {
   const { state } = view
   if (state.readOnly) return false
-  const selection = state.selection.main
   const marker = INLINE_MARK_TOKENS[kind]
-  const node = findEnclosingMark(state, selection.from, selection.to, INLINE_MARK_NODE_NAMES[kind])
+  const rawSelection = state.selection.main
+  const node = findEnclosingMark(state, rawSelection.from, rawSelection.to, INLINE_MARK_NODE_NAMES[kind])
 
   if (node) {
     const inner = state.sliceDoc(node.from + marker.length, node.to - marker.length)
@@ -166,18 +179,19 @@ export function toggleInlineMark(view: EditorView, kind: InlineMarkKind, placeho
     }
     view.dispatch({
       changes: { from: node.from, to: node.to, insert: inner },
-      selection: { anchor: unwrap(selection.from), head: unwrap(selection.to) },
+      selection: { anchor: unwrap(rawSelection.from), head: unwrap(rawSelection.to) },
       scrollIntoView: true,
     })
     view.focus()
     return true
   }
 
-  const selected = state.sliceDoc(selection.from, selection.to)
+  const { from, to } = rawSelection.empty ? rawSelection : shrinkToLineContent(state, rawSelection.from, rawSelection.to)
+  const selected = state.sliceDoc(from, to)
   const inserted = `${marker}${selected || placeholder}${marker}`
   view.dispatch({
-    changes: { from: selection.from, to: selection.to, insert: inserted },
-    selection: { anchor: selection.from + inserted.length },
+    changes: { from, to, insert: inserted },
+    selection: { anchor: from + inserted.length },
     scrollIntoView: true,
   })
   view.focus()

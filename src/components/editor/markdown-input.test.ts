@@ -164,6 +164,32 @@ describe("toggleInlineMark", () => {
     expect(view.state.doc.toString()).toBe("这是 加粗 文字")
     view.destroy()
   })
+
+  // 三击选中一整行时，浏览器给出的选区会带上行首的列表编号和结尾的换行符；
+  // 之前照单包裹会把 "**" 插进编号内部，把 "2. 第二项" 拆成 "**2. 第二项\n**"。
+  it("keeps the ordered list marker outside the wrap when the selection spans a whole line", () => {
+    const doc = "1. 第一项\n2. 第二项\n3. 第三项"
+    const view = createView(doc, doc.indexOf("2. 第二项"), doc.indexOf("3. 第三项"))
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("1. 第一项\n2. **第二项**\n3. 第三项")
+    view.destroy()
+  })
+
+  it("keeps the bullet marker outside the wrap the same way", () => {
+    const doc = "- 要点一\n- 要点二\n- 要点三"
+    const view = createView(doc, doc.indexOf("- 要点二"), doc.indexOf("- 要点三"))
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("- 要点一\n- **要点二**\n- 要点三")
+    view.destroy()
+  })
+
+  it("drops just the trailing newline for a plain-paragraph whole-line selection", () => {
+    const doc = "第一行\n第二行\n第三行"
+    const view = createView(doc, doc.indexOf("第二行"), doc.indexOf("第三行"))
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("第一行\n**第二行**\n第三行")
+    view.destroy()
+  })
 })
 
 // Cmd+K 在光标（无选区）落在已有链接文字里时，此前会在原文字中间插一段新链接，
