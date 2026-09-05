@@ -153,6 +153,17 @@ describe("toggleInlineMark", () => {
     expect(view.state.doc.toString()).toBe("这是**加粗文字**文字")
     view.destroy()
   })
+
+  it("participates in undo/redo like a normal edit", () => {
+    const view = createView("这是 **加粗** 文字", 6)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("这是 加粗 文字")
+    press(view, "z", { ctrlKey: true })
+    expect(view.state.doc.toString()).toBe("这是 **加粗** 文字")
+    press(view, "y", { ctrlKey: true })
+    expect(view.state.doc.toString()).toBe("这是 加粗 文字")
+    view.destroy()
+  })
 })
 
 // Cmd+K 在光标（无选区）落在已有链接文字里时，此前会在原文字中间插一段新链接，
