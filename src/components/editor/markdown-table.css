@@ -12,10 +12,12 @@
 .markdown-editor-shell .cm-md-table-wrap[data-overflow="true"]::after { position: absolute; z-index: 2; top: 1px; bottom: 1px; width: 24px; content: ""; pointer-events: none; }
 .markdown-editor-shell .cm-md-table-wrap[data-overflow="true"][data-at-start="false"]::before { left: 1px; background: linear-gradient(90deg,color-mix(in oklab,var(--background) 78%,transparent),transparent); }
 .markdown-editor-shell .cm-md-table-wrap[data-overflow="true"][data-at-end="false"]::after { right: 1px; background: linear-gradient(270deg,color-mix(in oklab,var(--background) 78%,transparent),transparent); }
-.markdown-editor-shell .cm-md-table-toolbar { position: relative; z-index: 3; display: flex; min-width: 0; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); background: var(--panel-soft); padding: 4px 6px; }
+.markdown-editor-shell .cm-md-table-toolbar { position: relative; z-index: 3; display: flex; overflow: hidden; min-width: 0; max-height: 44px; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); background: var(--panel-soft); padding: 4px 6px; opacity: 1; transition: max-height 140ms ease, opacity 100ms ease, padding 140ms ease; }
 /* 没在编辑这张表时收起工具条：表格一多，常驻的灰条会把正文切得很碎，手机上还白占一行。
-   收起时机交给 :focus-within，焦点进出表格由浏览器负责，不必自己追 focusout。 */
-.markdown-editor-shell .cm-md-table-wrap:not(:focus-within) .cm-md-table-toolbar { display: none; }
+   收起时机交给 :focus-within，焦点进出表格由浏览器负责，不必自己追 focusout。
+   用 max-height/opacity 过渡代替 display:none 的瞬时切换，避免点击进入编辑的一瞬间
+   表格内容整体“跳”一下，导致连续点击时命中错位。 */
+.markdown-editor-shell .cm-md-table-wrap:not(:focus-within) .cm-md-table-toolbar { max-height: 0; border-bottom-color: transparent; padding-top: 0; padding-bottom: 0; opacity: 0; pointer-events: none; }
 .markdown-editor-shell .cm-md-table-toolbar::after { content: "Tab 切换 · Enter 下移 · Shift+Enter 换行"; margin-left: auto; padding-left: 14px; color: var(--muted-foreground); font-size: 10px; }
 .markdown-editor-shell .cm-md-table-toolbar button { border: 0; border-radius: 5px; background: transparent; padding: 3px 7px; color: var(--muted-foreground); font: inherit; font-size: 11px; cursor: pointer; }
 .markdown-editor-shell .cm-md-table-toolbar button:hover { background: var(--blue-soft); color: var(--primary); }

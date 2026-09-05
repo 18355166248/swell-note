@@ -683,7 +683,8 @@ export class TableWidget extends WidgetType {
     input.addEventListener("input", resizeInput)
     // 单元格本身已经在视口内，禁止 focus 再次滚动页面，否则整张表会产生明显位移。
     input.focus({ preventScroll: true })
-    input.setSelectionRange(input.value.length, input.value.length)
+    // 进入单元格即全选原内容：Tab/Enter 连续填表时直接输入就能覆盖旧值，不必先手动全选。
+    input.select()
 
     let finished = false
     const restoreCell = () => {
@@ -698,6 +699,11 @@ export class TableWidget extends WidgetType {
         restoreCell()
         return
       }
+      // 内容未变时 replaceTable 派发的事务与原文完全相同，CodeMirror 会判定 Widget
+      // 未变而直接复用旧 DOM（不会重新走 toDOM）；这里必须显式收起输入框，
+      // 否则残留的 textarea 会一直挂在格子里，把下一次点击的合并目标搞错，
+      // 最终连续 Tab 时输入焦点会跌回 body。
+      restoreCell()
       const next = cloneMarkdownTable(table)
       if (rowIndex < 0) next.header[columnIndex] = input.value
       else next.rows[rowIndex][columnIndex] = input.value
