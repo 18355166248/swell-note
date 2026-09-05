@@ -961,6 +961,16 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .desktop-pane-resizer { display: none; }
   .library-panel { display: none; }
   .document-canvas { padding-inline: 44px; }
+
+  /* 编辑器面板让给笔记列表后剩下的宽度塞不下完整的面包屑 + 同步文案 + 视图切换，
+     没有这层收紧时 flex 子项会被压缩到逐字换行。跟移动端 data-compact 一样只留图标，
+     文案仍可通过 tooltip / aria-label 获取。 */
+  .saved-state > span,
+  .editor-sync-button > span { display: none; }
+  .editor-sync-button { width: 32px; padding-inline: 0; }
+  .saved-state { width: 26px; justify-content: center; margin-right: 0; }
+  .saved-state[data-status="saved"] { display: none; }
+  .editor-breadcrumb-link { max-width: 96px; }
 }
 
 /* 手机端用显式页面状态保留层级感，并保证每一个主要控件达到 44px 触摸面积。 */
