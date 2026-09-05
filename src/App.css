@@ -896,6 +896,17 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-code-block-lang { color: var(--muted-foreground); font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: 12px; text-transform: lowercase; }
 .markdown-code-block-copy { border: 0; border-radius: 5px; background: transparent; color: var(--primary); cursor: pointer; font-size: 12px; padding: 3px 8px; }
 .markdown-code-block-copy:hover { background: var(--muted); }
+/* 阅读态全选（⌘/Ctrl+A）会整块选中 .markdown-preview。代码块的语言名与「复制」按钮、
+   表格的「左右滑动」提示、分帧渲染的占位块、图片与嵌入笔记的状态文案都不是正文：
+   排除出选区后，复制内容里不会混进这些字样，正文中也不会因空占位块留下大片高亮。 */
+.markdown-code-block-header,
+.markdown-table-scroll-hint,
+.markdown-preview-pending,
+.markdown-image-state,
+.markdown-empty-state,
+.wiki-embed-state,
+.note-renderer-loading,
+.note-renderer-error { user-select: none; }
 /* 代码高亮沿用 GitHub Light 令牌配色，未识别语言保持纯文本。 */
 .markdown-preview pre code.hljs { display: block; color: #24292f; }
 .markdown-preview .hljs-comment, .markdown-preview .hljs-quote { color: #6e7781; }
