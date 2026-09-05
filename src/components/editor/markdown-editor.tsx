@@ -10,7 +10,7 @@ import { readClipboardText, writeClipboardText } from "@/services/clipboard/clip
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 import { scrollCursorIntoView } from "./cursor-visibility"
-import { markdownInputEnhancements, wrapSelectionAsLink } from "./markdown-input"
+import { type InlineMarkKind, markdownInputEnhancements, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
 import { markdownLivePreview } from "./live-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import "./markdown-table.css"
@@ -193,15 +193,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           }
           if (key !== "b" && key !== "i") return false
           event.preventDefault()
-          const selection = view.state.selection.main
-          const marker = key === "b" ? "**" : "*"
-          const selected = view.state.sliceDoc(selection.from, selection.to)
-          const inserted = `${marker}${selected || (key === "b" ? "加粗文字" : "斜体文字")}${marker}`
-          view.dispatch({
-            changes: { from: selection.from, to: selection.to, insert: inserted },
-            selection: { anchor: selection.from + inserted.length },
-          })
-          return true
+          return toggleInlineMark(view, key === "b" ? "strong" : "emphasis", key === "b" ? "加粗文字" : "斜体文字")
         },
       }),
     ], [compact, readOnly, storageKey])
@@ -242,6 +234,13 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       insertText(text) {
         const view = editorRef.current?.view
         if (!view || readOnly || !text) return
+
+        // 加粗 / 斜体 / 删除线 / 行内代码走带「再点一次取消」的独立路径，其余模板保持原逻辑。
+        const inlineMark = INLINE_MARK_TEMPLATES[text]
+        if (inlineMark) {
+          toggleInlineMark(view, inlineMark.kind, inlineMark.placeholder)
+          return
+        }
 
         // 格式工具栏优先包装当前选区；没有选区时才插入带占位文案的模板。
         const selection = view.state.selection.main
@@ -424,6 +423,14 @@ function findTextInView(
   // 查找栏需要持续接收键盘输入；这里只移动编辑器选区，不抢回输入框焦点。
   view.dispatch({ selection: { anchor: match.from, head: match.to }, scrollIntoView: true })
   return { current: index + 1, total: matches.length }
+}
+
+// 工具栏的加粗 / 斜体 / 删除线 / 行内代码按钮走 toggleInlineMark，选区已在对应标记里时可以取消。
+const INLINE_MARK_TEMPLATES: Record<string, { kind: InlineMarkKind; placeholder: string }> = {
+  "**加粗文字**": { kind: "strong", placeholder: "加粗文字" },
+  "*斜体文字*": { kind: "emphasis", placeholder: "斜体文字" },
+  "~~删除线文字~~": { kind: "strike", placeholder: "删除线文字" },
+  "`行内代码`": { kind: "code", placeholder: "行内代码" },
 }
 
 // 工具栏模板 → 包裹选中文字用的前后缀。没有选区时按原模板（含占位文案）整段插入。

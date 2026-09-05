@@ -5,12 +5,12 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { EditorState } from "@codemirror/state"
 import { EditorView, keymap } from "@codemirror/view"
 
-import { markdownInputEnhancements } from "./markdown-input"
+import { markdownInputEnhancements, toggleInlineMark } from "./markdown-input"
 
-function createView(doc: string, anchor: number) {
+function createView(doc: string, anchor: number, head = anchor) {
   const state = EditorState.create({
     doc,
-    selection: { anchor },
+    selection: { anchor, head },
     extensions: [markdown({ base: markdownLanguage }), history(), markdownInputEnhancements(), keymap.of(historyKeymap)],
   })
   return new EditorView({ state, parent: document.body })
@@ -84,6 +84,73 @@ describe("moving/copying ordered list items keeps numbering sequential", () => {
     expect(view.state.doc.toString()).toBe("1. 第二项\n2. 第一项\n3. 第三项")
     press(view, "z", { ctrlKey: true })
     expect(view.state.doc.toString()).toBe("1. 第一项\n2. 第二项\n3. 第三项")
+    view.destroy()
+  })
+})
+
+// Cmd+B/Cmd+I 与工具栏的加粗/斜体/删除线/行内代码按钮共用这一路径：选区已经在对应标记
+// 里面时应当「再点一次就取消」，而不是在外面再套一层，否则连续按会越叠越多层。
+describe("toggleInlineMark", () => {
+  it("wraps plain selected text when there is no existing mark", () => {
+    const view = createView("这是 加粗 文字", 3, 5)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("这是 **加粗** 文字")
+    view.destroy()
+  })
+
+  it("unwraps when the selection is exactly the inner text", () => {
+    const view = createView("这是 **加粗** 文字", 5, 7)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("这是 加粗 文字")
+    expect(view.state.selection.main.from).toBe(3)
+    expect(view.state.selection.main.to).toBe(5)
+    view.destroy()
+  })
+
+  it("unwraps with an empty cursor placed inside the bold run", () => {
+    const view = createView("这是 **加粗** 文字", 6)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("这是 加粗 文字")
+    view.destroy()
+  })
+
+  it("unwraps even when the selection swallows the markers themselves", () => {
+    const view = createView("这是 **加粗** 文字", 3, 9)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("这是 加粗 文字")
+    view.destroy()
+  })
+
+  it("does not treat italic as bold", () => {
+    const view = createView("这是 *斜体* 文字", 6)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("这是 *斜体**加粗文字*** 文字")
+    view.destroy()
+  })
+
+  it("toggles the outer bold when the cursor sits in a nested italic run", () => {
+    const view = createView("**外层*内层*外层**", 5)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("外层*内层*外层")
+    view.destroy()
+  })
+
+  it("toggles strikethrough and inline code through the same path", () => {
+    const strike = createView("这是 ~~删除~~ 文字", 6)
+    toggleInlineMark(strike, "strike", "删除线文字")
+    expect(strike.state.doc.toString()).toBe("这是 删除 文字")
+    strike.destroy()
+
+    const code = createView("这是 `代码` 文字", 6)
+    toggleInlineMark(code, "code", "行内代码")
+    expect(code.state.doc.toString()).toBe("这是 代码 文字")
+    code.destroy()
+  })
+
+  it("inserts the placeholder template when there is no selection and no enclosing mark", () => {
+    const view = createView("这是文字", 2)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("这是**加粗文字**文字")
     view.destroy()
   })
 })

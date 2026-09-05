@@ -38,22 +38,22 @@ function shouldHandleIndent(view: EditorView) {
 }
 
 // 只用到语法节点的结构信息，按结构声明以避免为类型引入 @lezer/common 显式依赖。
-type MdListNode = {
-  firstChild: MdListNode | null
+type MdSyntaxNode = {
+  firstChild: MdSyntaxNode | null
   from: number
   name: string
-  nextSibling: MdListNode | null
-  parent: MdListNode | null
+  nextSibling: MdSyntaxNode | null
+  parent: MdSyntaxNode | null
   to: number
 }
 
-function findOrderedList(state: EditorState, position: number): MdListNode | null {
-  let node: MdListNode | null = syntaxTree(state).resolveInner(position, 1)
+function findOrderedList(state: EditorState, position: number): MdSyntaxNode | null {
+  let node: MdSyntaxNode | null = syntaxTree(state).resolveInner(position, 1)
   while (node && node.name !== "OrderedList") node = node.parent
   return node
 }
 
-function firstListItemNumber(list: MdListNode, state: EditorState): number | null {
+function firstListItemNumber(list: MdSyntaxNode, state: EditorState): number | null {
   for (let item = list.firstChild; item; item = item.nextSibling) {
     if (item.name !== "ListItem") continue
     const match = /^(\s*)(\d+)(?=[.)])/.exec(state.doc.sliceString(item.from, item.from + 12))
@@ -131,6 +131,57 @@ const markdownWrapInput = EditorView.inputHandler.of((view, _from, _to, text) =>
 // 把 Markdown 手感相关的按键增强打包：列表续写、结构缩进、选区包裹。
 export function markdownInputEnhancements() {
   return [markdownInputKeymap, markdownWrapInput]
+}
+
+// 加粗 / 斜体 / 删除线 / 行内代码：标记长度固定，节点范围一定包含标记本身（如 StrongEmphasis
+// 首尾就是两个 EmphasisMark），换算「去掉标记后的位置」不用另外找标记子节点。
+const INLINE_MARK_NODE_NAMES = { code: "InlineCode", emphasis: "Emphasis", strike: "Strikethrough", strong: "StrongEmphasis" } as const
+const INLINE_MARK_TOKENS = { code: "`", emphasis: "*", strike: "~~", strong: "**" } as const
+export type InlineMarkKind = keyof typeof INLINE_MARK_TOKENS
+
+function findEnclosingMark(state: EditorState, from: number, to: number, name: string): MdSyntaxNode | null {
+  let node: MdSyntaxNode | null = syntaxTree(state).resolveInner(from, from === to ? -1 : 1)
+  while (node) {
+    if (node.name === name && node.from <= from && node.to >= to) return node
+    node = node.parent
+  }
+  return null
+}
+
+// 选区（或光标）已经落在对应的行内标记节点里时，Cmd+B 等快捷键与工具栏按钮应当「再点一次就取消」，
+// 而不是在外面再套一层标记，否则连续按会越叠越多层。找不到对应节点时退回普通包裹。
+export function toggleInlineMark(view: EditorView, kind: InlineMarkKind, placeholder: string): boolean {
+  const { state } = view
+  if (state.readOnly) return false
+  const selection = state.selection.main
+  const marker = INLINE_MARK_TOKENS[kind]
+  const node = findEnclosingMark(state, selection.from, selection.to, INLINE_MARK_NODE_NAMES[kind])
+
+  if (node) {
+    const inner = state.sliceDoc(node.from + marker.length, node.to - marker.length)
+    // 选区哪怕连标记本身都框进去了，取消后也统一选中还原出来的纯文本，而不是留在标记消失后错位的位置。
+    const unwrap = (position: number) => {
+      const bounded = Math.min(Math.max(position, node.from + marker.length), node.to - marker.length)
+      return bounded - marker.length
+    }
+    view.dispatch({
+      changes: { from: node.from, to: node.to, insert: inner },
+      selection: { anchor: unwrap(selection.from), head: unwrap(selection.to) },
+      scrollIntoView: true,
+    })
+    view.focus()
+    return true
+  }
+
+  const selected = state.sliceDoc(selection.from, selection.to)
+  const inserted = `${marker}${selected || placeholder}${marker}`
+  view.dispatch({
+    changes: { from: selection.from, to: selection.to, insert: inserted },
+    selection: { anchor: selection.from + inserted.length },
+    scrollIntoView: true,
+  })
+  view.focus()
+  return true
 }
 
 // 单个 URL 粘到非空选区上时，包成 [选中文字](URL)。返回 true 表示已接管这次粘贴。
