@@ -39,6 +39,27 @@ export type MarkdownFindResult = {
   total: number
 }
 
+// 工具栏「插入表格」按钮与 formatToolbarText 共用同一份模板字符串，
+// 插入完成后靠它识别出这次插入的是表格，从而自动聚焦到第一个单元格。
+export const TABLE_INSERT_TEMPLATE = "\n| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |\n"
+
+// 一次装饰更新里可能同时挂着好几张表格的 wrapper，用起点行号才能挑出这次刚插入的那一张。
+export function findTableWrapperAtLine(root: ParentNode, lineStart: number): HTMLElement | null {
+  return Array.from(root.querySelectorAll<HTMLElement>(".cm-md-table-wrap"))
+    .find((candidate) => Number(candidate.dataset.tableFrom) === lineStart) ?? null
+}
+
+// 新表格插入后光标停在整段 Markdown 之后，用户还得再点一次单元格才能改表头，
+// 体验上比"插入即可编辑"的其它模板慢一拍。这里等表格 Widget 渲染完，
+// 直接程序化点击第一个表头格，复用它自带的"进入即全选"效果，改名可以直接打字。
+function focusFirstTableHeaderCell(view: EditorView, insertFrom: number) {
+  window.setTimeout(() => {
+    const lineStart = view.state.doc.lineAt(Math.min(insertFrom, view.state.doc.length)).from
+    const wrapper = findTableWrapperAtLine(view.contentDOM, lineStart)
+    wrapper?.querySelector<HTMLElement>("th")?.click()
+  }, 0)
+}
+
 type MarkdownEditorProps = {
   compact?: boolean
   onChange: (value: string) => void
@@ -247,6 +268,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const selection = view.state.selection.main
         const selected = view.state.sliceDoc(selection.from, selection.to)
         const formatted = formatToolbarText(text, selected)
+        const insertFrom = selection.from
         view.dispatch({
           changes: { from: selection.from, to: selection.to, insert: formatted.text },
           selection: formatted.selection
@@ -255,6 +277,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           scrollIntoView: true,
         })
         view.focus()
+        // 模板固定以换行开头，表格真正的第一行从插入点之后一个字符算起。
+        if (text === TABLE_INSERT_TEMPLATE) focusFirstTableHeaderCell(view, insertFrom + 1)
       },
       lineAtViewportTop(clientY) {
         const view = editorRef.current?.view

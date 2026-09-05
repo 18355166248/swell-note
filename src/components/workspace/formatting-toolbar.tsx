@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react"
 import { Bold, CheckCircle2, Code, Code2, Heading3, Image, Italic, Link, List, LoaderCircle, Minus, MoreHorizontal, Quote, Redo2, Strikethrough, Table, Undo2 } from "lucide-react"
 
-import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import { TABLE_INSERT_TEMPLATE, type MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-
-const TABLE_TEMPLATE = "\n| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |\n"
 
 // 手机一行放不下全部按钮，这些低频格式收进“更多”；语法与桌面端共用，避免两处写法漂移。
 // 前 4 项的顺序被下方解构复用，新增项一律往后追加。
@@ -16,7 +14,7 @@ const SECONDARY_FORMATS = [
   { icon: Strikethrough, label: "删除线", syntax: "~~删除线文字~~" },
   { icon: Code, label: "行内代码", syntax: "`行内代码`" },
   { icon: Minus, label: "分割线", syntax: "\n---\n" },
-  { icon: Table, label: "表格", syntax: TABLE_TEMPLATE },
+  { icon: Table, label: "表格", syntax: TABLE_INSERT_TEMPLATE },
 ]
 
 export function FormattingToolbar({ attachmentBusy, canInsertAttachment, editorRef, mobile = false, onFormat, onInsertFiles }: {

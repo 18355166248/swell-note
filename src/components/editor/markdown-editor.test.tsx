@@ -7,7 +7,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { EditorState } from "@codemirror/state"
 
 import type { MarkdownEditorHandle } from "./markdown-editor"
-import MarkdownEditor, { findPlainTextMatches, formatToolbarText, paragraphSeparatorAtEnd } from "./markdown-editor"
+import MarkdownEditor, { findPlainTextMatches, findTableWrapperAtLine, formatToolbarText, paragraphSeparatorAtEnd } from "./markdown-editor"
 
 // React 19 在测试里要求显式打开 act 环境标记。
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -79,6 +79,20 @@ describe("MarkdownEditor", () => {
 
     expect(second).toHaveBeenCalledWith(1, 3)
     expect(first).not.toHaveBeenCalled()
+  })
+
+  // 插入新表格后，光标此前停在整段 Markdown 之后，用户还得再点一次单元格才能改表头，
+  // 比其它模板慢一拍；现在会自动点开第一个表头格。真的挂起完整 CodeMirror 视图再触发
+  // 点击会牵出 jsdom 对文本测量的已知缺口（getClientRects 不完整），所以只单测「按插入
+  // 位置的行首找到对应表格 wrapper」这段容易出错的定位逻辑，点击本身沿用既有的单元格编辑路径。
+  it("按插入位置的行首能在多张表格里定位到刚插入的那一张", () => {
+    const root = document.createElement("div")
+    root.innerHTML = `
+      <div class="cm-md-table-wrap" data-table-from="0"><table><thead><tr><th>旧表格</th></tr></thead></table></div>
+      <div class="cm-md-table-wrap" data-table-from="42"><table><thead><tr><th>列 1</th></tr></thead></table></div>
+    `
+    expect(findTableWrapperAtLine(root, 42)?.querySelector("th")?.textContent).toBe("列 1")
+    expect(findTableWrapperAtLine(root, 999)).toBeNull()
   })
 
   describe("在正文末尾补落点", () => {
