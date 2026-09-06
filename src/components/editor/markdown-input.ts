@@ -233,3 +233,43 @@ export function wrapSelectionAsLink(view: EditorView, url: string) {
   })
   return true
 }
+
+// 块格式作用于完整行，不能从光标中间插入换行把一句话切断；选区恰好结束于下一行行首时不改那一行。
+export function toggleBlockFormat(view: EditorView, template: string) {
+  const prefix = /^\n(#{1,3} |> |- |- \[ \] )$/.exec(template)?.[1]
+  if (!prefix) return false
+  const { state } = view
+  if (state.readOnly) return true
+  const range = state.selection.main
+  const first = state.doc.lineAt(range.from)
+  const last = state.doc.lineAt(range.empty ? range.to : Math.max(range.from, range.to - 1))
+  const lines = []
+  for (let number = first.number; number <= last.number; number += 1) {
+    const line = state.doc.line(number)
+    // 代码与表格内的行首符号是内容，不能当作普通段落批量改写。
+    let node: MdSyntaxNode | null = syntaxTree(state).resolveInner(line.from + line.text.search(/\S|$/), 1)
+    let protectedLine = false
+    for (; node; node = node.parent) {
+      if (["FencedCode", "CodeBlock", "Table"].includes(node.name)) protectedLine = true
+    }
+    if (protectedLine || (!range.empty && !line.text.trim())) continue
+    const indent = /^\s*/.exec(line.text)![0]
+    const body = line.text.slice(indent.length)
+    const mark = prefix.startsWith("#") ? /^#{1,6}\s+/.exec(body)?.[0] ?? ""
+      : prefix === "> " ? /^> ?/.exec(body)?.[0] ?? ""
+      : /^(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/.exec(body)?.[0] ?? ""
+    const active = prefix === "- [ ] " ? /\[[ xX]\]/.test(mark)
+      : prefix === "- " ? Boolean(mark) && !/\[[ xX]\]/.test(mark)
+      : mark.trim() === prefix.trim()
+    lines.push({ from: line.from + indent.length, mark, active })
+  }
+  const remove = lines.length > 0 && lines.every((line) => line.active)
+  const changes = state.changes(lines.map(({ from, mark, active }) => ({
+    from, to: from + mark.length,
+    // 混合选区补齐格式时保留已完成任务的勾选状态和已有列表符号。
+    insert: remove ? "" : active ? mark : prefix,
+  })))
+  view.dispatch({ changes, selection: state.selection.map(changes, 1), scrollIntoView: true, userEvent: "input.format" })
+  view.focus()
+  return true
+}

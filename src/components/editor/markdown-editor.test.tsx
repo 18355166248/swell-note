@@ -64,6 +64,15 @@ describe("MarkdownEditor", () => {
     })
   })
 
+  it("places the caret inside new code blocks and selects a new link URL", () => {
+    expect(formatToolbarText("[链接](https://)", "")).toEqual({
+      text: "[链接](https://)", selection: { from: 5, to: 13 },
+    })
+    expect(formatToolbarText("\n```\n\n```\n", "")).toEqual({
+      text: "\n```\n\n```\n", selection: { from: 5, to: 5 },
+    })
+  })
+
   it("reports the cursor position through the latest callback", () => {
     const handle = createRef<MarkdownEditorHandle>()
     const first = vi.fn()

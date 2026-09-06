@@ -10,7 +10,7 @@ import { readClipboardText, writeClipboardText } from "@/services/clipboard/clip
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 import { scrollCursorIntoView } from "./cursor-visibility"
-import { focusExistingLinkUrl, type InlineMarkKind, markdownInputEnhancements, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
+import { focusExistingLinkUrl, type InlineMarkKind, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
 import { markdownLivePreview } from "./live-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import "./markdown-table.css"
@@ -189,13 +189,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           return true
         },
         keydown(event, view) {
-          if (!(event.metaKey || event.ctrlKey) || event.altKey) return false
+          if (event.isComposing || !(event.metaKey || event.ctrlKey) || event.altKey) return false
           const key = event.key.toLocaleLowerCase()
           if (key === "s") {
             // 文档变化已实时进入本地工作副本；拦截浏览器“保存网页”即可避免误操作。
             event.preventDefault()
             return true
           }
+          if (view.state.readOnly) return false
           if (key === "k") {
             event.preventDefault()
             // 光标没有选区、正落在已有链接文字里时改地址，而不是在原文字中间插一段新链接。
@@ -256,6 +257,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       insertText(text) {
         const view = editorRef.current?.view
         if (!view || readOnly || !text) return
+
+        if (toggleBlockFormat(view, text)) return
+        if (text === "[链接](https://)" && focusExistingLinkUrl(view)) return
 
         // 加粗 / 斜体 / 删除线 / 行内代码走带「再点一次取消」的独立路径，其余模板保持原逻辑。
         const inlineMark = INLINE_MARK_TEMPLATES[text]
@@ -467,15 +471,17 @@ const WRAP_TEMPLATES: Record<string, [string, string]> = {
 }
 
 export function formatToolbarText(template: string, selected: string) {
+  if (template === "[链接](https://)") {
+    const label = selected || "链接"
+    const from = label.length + 3
+    return { text: `[${label}](https://)`, selection: { from, to: from + 8 } }
+  }
+  if (template === "\n```\n\n```\n") {
+    return { text: `\n\`\`\`\n${selected}\n\`\`\`\n`, selection: { from: 5, to: 5 + selected.length } }
+  }
   if (!selected) return { text: template }
   const wrap = WRAP_TEMPLATES[template]
   if (wrap) return { text: `${wrap[0]}${selected}${wrap[1]}` }
-  if (template === "[链接](https://)") {
-    const text = `[${selected}](https://)`
-    const urlStart = selected.length + 3
-    return { selection: { from: urlStart, to: urlStart + 8 }, text }
-  }
-  if (template === "\n```\n\n```\n") return { text: `\n\`\`\`\n${selected}\n\`\`\`\n` }
 
   const prefix = template.match(/^\n(#{1,3} |> |- |- \[ \] )$/)?.[1]
   if (prefix) return { text: selected.split("\n").map((line) => `${prefix}${line}`).join("\n") }

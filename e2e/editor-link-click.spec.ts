@@ -150,3 +150,49 @@ test.describe("编辑态链接点击跳转", () => {
     await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
   })
 })
+
+test.describe("编辑细节", () => {
+  test("标题中文确认不失焦，取消不重命名，回车进入正文", async ({ page }, testInfo) => {
+    await seedCachedVault(page)
+    const mobile = testInfo.project.name === "mobile-chrome"
+    const workspace = page.locator(mobile ? ".mobile-workspace:visible" : ".desktop-workspace:visible")
+    if (mobile) {
+      await workspace.getByText("测试", { exact: true }).first().click()
+      await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    }
+    await workspace.getByRole("button", { name: "编辑模式" }).click()
+    const title = workspace.getByRole("textbox", { name: "笔记标题" })
+    await title.fill("尚未确认的标题")
+    await title.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true })
+    await expect(title).toBeFocused()
+    await title.press("Escape")
+    await expect(title).toHaveValue("第一篇")
+    await title.focus()
+    await title.press("Enter")
+    await expect(workspace.locator(".cm-content")).toBeFocused()
+  })
+
+  test("工具栏整行格式保持选区并支持再次取消", async ({ page }, testInfo) => {
+    await seedCachedVault(page)
+    const mobile = testInfo.project.name === "mobile-chrome"
+    const workspace = page.locator(mobile ? ".mobile-workspace:visible" : ".desktop-workspace:visible")
+    if (mobile) {
+      await workspace.getByText("测试", { exact: true }).first().click()
+      await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    }
+    await workspace.getByRole("button", { name: "编辑模式" }).click()
+    const editor = workspace.locator(".cm-content")
+    await editor.fill("记录今天的想法")
+    await editor.press("ArrowLeft")
+    const heading = workspace.getByRole("button", { name: "二级标题", exact: true })
+    if (mobile) await heading.tap()
+    else await heading.click()
+    await expect(editor).toHaveText("## 记录今天的想法")
+    await expect(editor).toBeFocused()
+    if (mobile) await heading.tap()
+    else await heading.click()
+    await expect(editor).toHaveText("记录今天的想法")
+    await editor.press("X")
+    await expect(editor).toHaveText("记录今天的想X法")
+  })
+})

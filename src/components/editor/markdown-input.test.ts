@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest"
-import { history, historyKeymap } from "@codemirror/commands"
+import { history, historyKeymap, undo } from "@codemirror/commands"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { EditorState } from "@codemirror/state"
 import { EditorView, keymap } from "@codemirror/view"
 
-import { focusExistingLinkUrl, markdownInputEnhancements, toggleInlineMark } from "./markdown-input"
+import { focusExistingLinkUrl, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark } from "./markdown-input"
 
 function createView(doc: string, anchor: number, head = anchor) {
   const state = EditorState.create({
@@ -258,5 +258,53 @@ describe("Enter continues blockquote / list markup", () => {
     press(view, "Enter")
     expect(view.state.doc.toString()).toBe("- 要点一\n- ")
     view.destroy()
+  })
+})
+
+describe("toolbar block formatting", () => {
+  it("formats the whole current line, keeps the cursor, and toggles back", () => {
+    const view = createView("记录今天的想法", 4)
+    toggleBlockFormat(view, "\n## ")
+    expect(view.state.doc.toString()).toBe("## 记录今天的想法")
+    expect(view.state.selection.main.head).toBe(7)
+    toggleBlockFormat(view, "\n## ")
+    expect(view.state.doc.toString()).toBe("记录今天的想法")
+    expect(view.state.selection.main.head).toBe(4)
+    view.destroy()
+  })
+
+  it("changes heading level without stacking markers", () => {
+    const view = createView("### 标题", 5)
+    toggleBlockFormat(view, "\n# ")
+    expect(view.state.doc.toString()).toBe("# 标题")
+    view.destroy()
+  })
+
+  it("excludes the next line at a selection boundary and undoes in one step", () => {
+    const original = "第一行\n第二行\n第三行"
+    const view = createView(original, 0, 8)
+    toggleBlockFormat(view, "\n- ")
+    expect(view.state.doc.toString()).toBe("- 第一行\n- 第二行\n第三行")
+    undo(view)
+    expect(view.state.doc.toString()).toBe(original)
+    view.destroy()
+  })
+
+  it("keeps blank lines, indentation, and completed tasks in a mixed selection", () => {
+    const doc = "  - [x] 完成\n\n  - 待办"
+    const view = createView(doc, doc.length, 0)
+    toggleBlockFormat(view, "\n- [ ] ")
+    expect(view.state.doc.toString()).toBe("  - [x] 完成\n\n  - [ ] 待办")
+    expect(view.state.selection.main.anchor).toBeGreaterThan(view.state.selection.main.head)
+    view.destroy()
+  })
+
+  it("leaves fenced code and table contents intact", () => {
+    for (const doc of ["```js\nconst a = 1\n```", "| A | B |\n| --- | --- |\n| 1 | 2 | "]) {
+      const view = createView(doc, 0, doc.length)
+      toggleBlockFormat(view, "\n## ")
+      expect(view.state.doc.toString()).toBe(doc)
+      view.destroy()
+    }
   })
 })

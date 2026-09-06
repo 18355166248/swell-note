@@ -1724,7 +1724,13 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   const [titleDraft, setTitleDraft] = useState(note.title)
   useEffect(() => { setTitleDraft(note.title) }, [note.id, note.title])
 
+  const cancelTitleCommitRef = useRef(false)
   const commitTitle = () => {
+    // Esc 的失焦发生在 React 草稿更新之前，显式跳过这一次提交才能真正取消重命名。
+    if (cancelTitleCommitRef.current) {
+      cancelTitleCommitRef.current = false
+      return
+    }
     const trimmed = titleDraft.trim()
     if (!isVaultNote) return
     if (!trimmed || trimmed === note.title) {
@@ -1798,7 +1804,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     // 焦点一离开输入框就收不起来了，只能回去点关闭按钮。
     const closeOnEscape = (event: KeyboardEvent) => {
       // 弹窗自己要用 Esc 关闭，别把它的这一下抢过来。
-      if (event.key !== "Escape" || hasOpenModal()) return
+      if (event.isComposing || event.key !== "Escape" || hasOpenModal()) return
       setFindOpen(false)
     }
     document.addEventListener("keydown", closeOnEscape)
@@ -2120,10 +2126,16 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
                 onUpdateNote({ title: event.target.value })
               }}
               onKeyDown={(event) => {
+                // 中文输入法的确认键只提交候选词，不能顺带重命名或让输入框失焦。
+                if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
                 if (event.key !== "Enter" && event.key !== "Escape") return
                 event.preventDefault()
-                if (event.key === "Escape") setTitleDraft(note.title)
-                ;(event.target as HTMLInputElement).blur()
+                if (event.key === "Escape") {
+                  cancelTitleCommitRef.current = true
+                  setTitleDraft(note.title)
+                }
+                event.currentTarget.blur()
+                if (event.key === "Enter") editorRef.current?.focus()
               }}
               placeholder="输入标题"
               value={isVaultNote ? titleDraft : note.title}
