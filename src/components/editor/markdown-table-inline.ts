@@ -100,6 +100,13 @@ export function appendMarkdownImage(
   image.className = "cm-md-table-image"
   image.decoding = "async"
   image.loading = "lazy"
+  image.addEventListener("error", () => {
+    const failure = document.createElement("span")
+    failure.className = "cm-md-table-asset-state"
+    failure.textContent = `无法读取图片：${alt || source}`
+    failure.title = source
+    image.replaceWith(failure)
+  })
   if (/^(?:https?:|data:|blob:)/i.test(source)) {
     image.src = source
     parent.appendChild(image)

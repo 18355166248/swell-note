@@ -1377,3 +1377,39 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
     max-height: 78dvh;
   }
 }
+
+/* 格式按钮的禁用态反映真实历史/编辑目标；标题入口在桌面和手机保持同一组等级。 */
+.formatting-toolbar button:disabled { opacity: .35; cursor: default; }
+.toolbar-heading-select { width: 58px; border: 0; border-radius: 5px; padding: 4px; background: var(--background); color: var(--foreground); font: inherit; font-size: 12px; }
+.toolbar-heading-select:focus-visible { outline: 2px solid var(--primary); }
+.dark .markdown-preview mark { background: #665422; color: #fff1b8; }
+@media (max-width:640px) {
+  .toolbar-heading-select { min-height: 44px; width: 52px; font-size: 12px !important; }
+}
+
+.image-zoom-backdrop { position: fixed; inset: 0; z-index: 100; background: #000b; }
+.image-zoom-content { position: fixed; inset: 5vh 4vw; z-index: 101; display: flex; align-items: center; justify-content: center; outline: none; }
+.image-zoom-content img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.image-zoom-close { position: absolute; right: 0; top: 0; padding: 12px 18px; border-radius: 8px; color: white; background: #222; }
+.markdown-image-state code { display: block; overflow-wrap: anywhere; font-size: 12px; }
+.markdown-image-state button { padding: 10px; text-decoration: underline; }
+.markdown-preview img { max-height: 480px; object-fit: contain; }
+.markdown-diagram { margin: 1em 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.markdown-diagram > div { overflow-x: auto; }
+.markdown-diagram svg { min-width: 280px; max-width: 100%; height: auto; margin: auto; }
+.markdown-diagram summary { cursor: pointer; padding: 8px 0; font-size: 12px; color: var(--muted-foreground); }
+.markdown-preview .katex-display { overflow-x: auto; overflow-y: hidden; padding: 8px 0; }
+.cm-md-frontmatter, .cm-md-frontmatter * { font-size: 12px !important; font-weight: normal !important; color: var(--muted-foreground) !important; }
+.cm-md-highlight { background: #f7df85; color: #392b0e; border-radius: 2px; }
+.dark .cm-md-highlight { background: #665422; color: #fff1b8; }
+.cm-md-footnote { font-size: .8em; color: var(--primary); vertical-align: super; }
+.cm-md-callout { border-left: 3px solid var(--primary); background: color-mix(in srgb, var(--primary) 6%, transparent); }
+.cm-md-image { position: relative; }
+.markdown-editor-shell .cm-md-image-block img { max-height: 480px; object-fit: contain; }
+.cm-md-image-tools { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0; font: 12px/1.4 var(--font-sans); color: var(--muted-foreground); }
+.cm-md-image-tools button, .cm-md-image-tools select { border: 1px solid var(--border); border-radius: 5px; padding: 6px 8px; background: var(--background); color: var(--foreground); cursor: pointer; }
+.cm-md-image-tools input { min-width: 160px; max-width: 100%; padding: 6px; border: 1px solid var(--border); }
+.cm-md-image-tools button:hover { background: var(--muted); }
+@media (max-width: 640px) { .cm-md-image-tools button, .cm-md-image-tools select { min-height: 44px; } }
+
+.cm-md-image-tools button:disabled { opacity: .4; cursor: default; }

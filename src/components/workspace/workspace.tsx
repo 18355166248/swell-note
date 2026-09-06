@@ -1561,7 +1561,7 @@ function alignPreviewToSourceLine(viewport: HTMLElement, article: HTMLElement | 
 // 搜索、切目录、展开侧栏统统与正文无关，但它们每一次都把编辑器整棵子树重画一遍
 // （实测搜索敲 6 个字，编辑器白渲染 11 次）。上面已经把入参固定住，这里收口。
 const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
-  const noteRenderIdentity = stableNoteRenderIdentity(note.id, note.remotePath)
+  const noteRenderIdentity = note.editorSessionKey ?? stableNoteRenderIdentity(note.id, note.remotePath)
   const assetScope = `${activeCacheId ?? "session"}:${noteRenderIdentity}`
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
   const isCanvas = note.format === "canvas"
@@ -1581,6 +1581,8 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   const [renameTitle, setRenameTitle] = useState(note.title)
   const [cursorPosition, setCursorPosition] = useState({ column: 1, line: 1 })
   const [hasSelection, setHasSelection] = useState(false)
+  const [historyState, setHistoryState] = useState({ undo: false, redo: false })
+  const [editingTable, setEditingTable] = useState(false)
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState("")
   const [findReplacement, setFindReplacement] = useState("")
@@ -1721,7 +1723,9 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
 
   // Vault 笔记的标题对应文件名：编辑时先落草稿，失焦或回车再走统一的重命名链路，避免每次按键触发文件操作。
   const isVaultNote = note.source === "local" || note.source === "webdav"
+  const titleInputRef = useRef<HTMLInputElement>(null)
   const [titleDraft, setTitleDraft] = useState(note.title)
+  useEffect(() => { if (note.draft) titleInputRef.current?.focus() }, [noteRenderIdentity])
   useEffect(() => { setTitleDraft(note.title) }, [note.id, note.title])
 
   const cancelTitleCommitRef = useRef(false)
@@ -1752,6 +1756,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   const handleInsertFiles = useCallback(async (files: File[]) => {
     if (files.length === 0 || readOnly || !canInsertAttachment || attachmentBusyRef.current) return
     const uploadNoteId = note.id
+    const insertion = editorRef.current?.captureInsertion()
     attachmentBusyRef.current = true
     setAttachmentError(null)
     setInsertingAttachment(true)
@@ -1759,17 +1764,18 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
       const { errors, markdown } = await onInsertAttachments(files)
       // 部分文件失败时仍插入已写入成功的附件，避免用户重复拖拽整批文件。
       if (markdown) {
-        if (currentNoteIdRef.current === uploadNoteId) handleFormat(markdown)
-        else onFormatNote(uploadNoteId, markdown)
+        // 书签绑定原编辑器，重命名仍可插入；切换笔记/模式导致实例卸载时回退原笔记追加。
+        if (!insertion?.insert(markdown)) onFormatNote(uploadNoteId, markdown)
       }
       setAttachmentError(errors.length > 0 ? errors.join("；") : null)
     } catch (error) {
       setAttachmentError(error instanceof Error ? error.message : "插入附件失败")
     } finally {
+      insertion?.dispose()
       attachmentBusyRef.current = false
       setInsertingAttachment(false)
     }
-  }, [canInsertAttachment, handleFormat, note.id, onFormatNote, onInsertAttachments, readOnly])
+  }, [canInsertAttachment, note.id, onFormatNote, onInsertAttachments, readOnly])
 
   const saveStateLabel = getSaveStateLabel(cloudConnected, note, saveState)
   const getWikiLinkSuggestions = useCallback(() => wikiLinkNotes
@@ -2024,6 +2030,9 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           attachmentBusy={insertingAttachment}
           canInsertAttachment={canInsertAttachment}
           editorRef={editorRef}
+          canUndo={historyState.undo}
+          canRedo={historyState.redo}
+          editingTable={editingTable}
           onFormat={handleFormat}
           onInsertFiles={handleInsertFiles}
         />
@@ -2115,6 +2124,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
             <h1 className="document-title document-title-readonly">{note.title || "未命名笔记"}</h1>
           ) : (
             <input
+              ref={titleInputRef}
               aria-label="笔记标题"
               className="document-title"
               onBlur={commitTitle}
@@ -2179,6 +2189,9 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
                 {/* CodeMirror 会在提交后同步受控 value；按笔记重建实例，避免切换瞬间残留上一份正文。 */}
                 <MarkdownEditor
                   compact={compact}
+                  sessionKey={`${activeCacheId ?? "session"}:${note.editorSessionKey ?? note.id}`}
+                  onHistoryChange={(undo, redo) => setHistoryState((current) => current.undo === undo && current.redo === redo ? current : { undo, redo })}
+                  onEditingTargetChange={setEditingTable}
                   getWikiLinkSuggestions={getWikiLinkSuggestions}
                   key={noteRenderIdentity}
                   onChange={(content) => onUpdateNote({
@@ -2211,6 +2224,9 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           attachmentBusy={insertingAttachment}
           canInsertAttachment={canInsertAttachment}
           editorRef={editorRef}
+          canUndo={historyState.undo}
+          canRedo={historyState.redo}
+          editingTable={editingTable}
           mobile
           onFormat={handleFormat}
           onInsertFiles={handleInsertFiles}
@@ -2449,7 +2465,7 @@ function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
       ? "library"
       : props.mobileScreen === "notes"
         ? `notes:${listRouteKey}`
-        : `editor:${props.activeNote?.id ?? "__empty__"}`,
+        : `editor:${props.activeNote?.editorSessionKey ?? props.activeNote?.id ?? "__empty__"}`,
     node: props.mobileScreen === "library" ? (
         <MobileLibrary
           {...props}

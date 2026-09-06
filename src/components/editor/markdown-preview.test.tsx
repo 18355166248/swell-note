@@ -16,6 +16,15 @@ const baseProps = {
 }
 
 describe("Markdown preview integration", () => {
+  it("preserves table alignment and footnote return anchors", () => {
+    const html = renderToStaticMarkup(<MarkdownPreview {...baseProps} content={"| 名称 | 数量 |\n| --- | ---: |\n| A | 12 |\n\n正文[^1]\n\n[^1]: 脚注内容"} onResolveWikiNote={() => ({ status: "missing" })} />)
+    expect(html).toContain('text-align:right')
+    expect(html).toContain('id="user-content-fnref-1"')
+    expect(html).toContain('id="user-content-fn-1"')
+    expect(html).toContain('aria-label="返回正文"')
+    expect(html).toContain('脚注')
+  })
+
   it("does not remount vault images when parent callbacks change", async () => {
     const container = document.createElement("div")
     const root = createRoot(container)

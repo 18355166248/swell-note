@@ -55,9 +55,12 @@ function stripMarkdownSyntax(body: string) {
     .replace(/^\s{0,3}>\s?/gm, "")
     .replace(/^\s*(?:[-+*]|\d{1,9}[.)])\s+(?:\[[ xX]\]\s+)?/gm, "")
     .replace(/^\s*\|?[\s:|-]{3,}\|?\s*$/gm, " ")
+    .replace(/<br\s*\/?\s*>/gi, " ")
+    .replace(/^\s*\|(.+)\|\s*$/gm, (_row, cells: string) => cells.replace(/(?<!\\)\|/g, " · ").replace(/\\\|/g, "|"))
     .replace(/^\s{0,3}(?:```|~~~).*$/gm, " ")
     .replace(/^\s{0,3}(?:[-*_]\s*){3,}$/gm, " ")
     // 行内强调与代码：只摘掉标记，保留文字。
+    .replace(/==([^=\n]+)==/g, "$1")
     .replace(/~~([^~\n]+)~~/g, "$1")
     .replace(/\*\*([^*\n]+)\*\*/g, "$1")
     .replace(/(?<![\p{L}\p{N}])__([^_\n]+)__(?![\p{L}\p{N}])/gu, "$1")

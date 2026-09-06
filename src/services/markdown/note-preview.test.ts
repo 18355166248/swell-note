@@ -3,6 +3,11 @@ import { describe, expect, it } from "vitest"
 import { buildNotePreview, buildNoteSearchSnippet } from "@/services/markdown/note-preview"
 
 describe("buildNotePreview", () => {
+  it("表格摘要隐藏管道符并还原换行和高亮", () => {
+    expect(buildNotePreview("| 名称 | 说明 |\n| --- | --- |\n| A | 第一行<br>==重点== |"))
+      .toBe("名称 · 说明 A · 第一行 重点")
+  })
+
   it("剥离 YAML frontmatter，不把元数据当正文", () => {
     const content = "---\ntitle: 项目说明\ntags: [文档, 入口]\n---\n\n# Swell Note\n\n本地优先的跨端笔记。"
 

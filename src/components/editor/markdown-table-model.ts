@@ -105,3 +105,39 @@ export function tableColumnWidths(table: MarkdownTable) {
     return Math.min(360, Math.max(96, maxUnits * 7 + 28))
   })
 }
+
+// Excel/Numbers 的制表符内容允许双引号包住换行；解析时保留格内换行，只将行尾换行视为结束。
+export function parseTabularText(text: string): string[][] | null {
+  if (!text.includes("\t")) return null
+  const rows: string[][] = [[]]
+  let value = "", quoted = false
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]
+    if (ch === '"' && (quoted || value === "")) {
+      if (quoted && text[i + 1] === '"') { value += '"'; i += 1 }
+      else quoted = !quoted
+    } else if (!quoted && (ch === "\t" || ch === "\n" || ch === "\r")) {
+      rows[rows.length - 1].push(value); value = ""
+      if (ch !== "\t") {
+        if (ch === "\r" && text[i + 1] === "\n") i += 1
+        rows.push([])
+      }
+    } else value += ch
+  }
+  if (value || rows[rows.length - 1].length) rows[rows.length - 1].push(value)
+  else rows.pop()
+  return rows.length ? rows : null
+}
+
+export function pasteTableCells(table: MarkdownTable, row: number, column: number, cells: string[][]) {
+  const next = cloneMarkdownTable(table)
+  const width = Math.max(next.header.length, column + Math.max(...cells.map((line) => line.length)))
+  while (next.header.length < width) { next.header.push(""); next.aligns.push("left") }
+  next.rows.forEach((line) => { while (line.length < width) line.push("") })
+  while (next.rows.length < row + cells.length - 1) next.rows.push(Array(width).fill(""))
+  cells.forEach((line, offset) => {
+    const target = row + offset === 0 ? next.header : next.rows[row + offset - 1]
+    line.forEach((value, col) => { target[column + col] = value })
+  })
+  return next
+}

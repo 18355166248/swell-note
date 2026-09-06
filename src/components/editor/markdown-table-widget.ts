@@ -1,3 +1,4 @@
+import { isolateHistory } from "@codemirror/commands"
 import { EditorView, WidgetType } from "@codemirror/view"
 
 import {
@@ -8,6 +9,8 @@ import {
   deleteTableColumn,
   deleteTableRow,
   parseMarkdownTable,
+  parseTabularText,
+  pasteTableCells,
   serializeMarkdownTable,
   tableColumnWidths,
   type MarkdownTable,
@@ -23,6 +26,8 @@ import {
   type TableColumnPreference,
   type TableWidthMode,
 } from "./markdown-table-width"
+
+import { activeTableEdit, inlineTableFormat, registerTableEdit } from "./table-edit-target"
 
 type TableVerticalMode = "bottom" | "middle" | "top"
 type CellTarget = { column: number; row: number }
@@ -187,6 +192,7 @@ export class TableWidget extends WidgetType {
     const wrapper = document.createElement("div")
     wrapper.className = "cm-md-table-wrap"
     wrapper.dataset.tableFrom = String(this.from)
+    wrapper.dataset.tableTo = String(this.to)
     if (!table) return wrapper
 
     const preference = this.loadColumnPreference(tableColumnWidths(table))
@@ -411,19 +417,53 @@ export class TableWidget extends WidgetType {
     trigger.addEventListener("mousedown", (event) => event.preventDefault())
     const panel = document.createElement("div")
     panel.className = "cm-md-table-menu-panel"
+    const supportsPopover = typeof panel.showPopover === "function"
+    if (supportsPopover) panel.setAttribute("popover", "manual")
+    else panel.style.display = "none"
     panel.append(...buttons)
     panel.addEventListener("click", (event) => {
       if (event.target instanceof HTMLButtonElement && !event.target.disabled) menu.open = false
     })
-    menu.addEventListener("toggle", () => {
+    const position = () => {
       if (!menu.open) return
+      const rect = trigger.getBoundingClientRect()
+      const viewport = window.visualViewport
+      const bottom = (viewport?.height ?? window.innerHeight) + (viewport?.offsetTop ?? 0)
+      const width = panel.offsetWidth || 140
+      const height = panel.offsetHeight || 190
+      panel.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`
+      panel.style.top = `${Math.max(8, rect.bottom + height + 8 < bottom ? rect.bottom + 5 : rect.top - height - 5)}px`
+    }
+    menu.addEventListener("toggle", () => {
+      if (!supportsPopover) {
+        panel.style.display = menu.open ? "grid" : "none"
+        if (menu.open) document.body.append(panel)
+        else menu.append(panel)
+      }
+      if (!menu.open) { if ((typeof panel.showPopover === "function" && panel.matches(":popover-open"))) panel.hidePopover(); return }
+      // 原生 top layer 可越过所有滚动祖先的裁切；定位按可视视口计算，软键盘升起后同样可用。
+      if (panel.showPopover && !(typeof panel.showPopover === "function" && panel.matches(":popover-open"))) panel.showPopover()
+      position()
       for (const sibling of menu.parentElement?.querySelectorAll<HTMLDetailsElement>(".cm-md-table-menu[open]") ?? []) {
         if (sibling !== menu) sibling.open = false
       }
     })
     const closeOnOutside = (event: PointerEvent) => {
-      if (menu.open && event.target instanceof Node && !menu.contains(event.target)) menu.open = false
+      if (menu.open && event.target instanceof Node && !menu.contains(event.target) && !panel.contains(event.target)) menu.open = false
     }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && menu.open && !event.isComposing) { event.preventDefault(); event.stopPropagation(); menu.open = false; trigger.focus() }
+    }
+    document.addEventListener("keydown", closeOnEscape, true)
+    window.addEventListener("scroll", position, true)
+    window.addEventListener("resize", position)
+    this.cleanupCallbacks.add(() => {
+      document.removeEventListener("keydown", closeOnEscape, true)
+      if (!supportsPopover) panel.remove()
+      window.removeEventListener("scroll", position, true)
+      window.removeEventListener("resize", position)
+      if ((typeof panel.showPopover === "function" && panel.matches(":popover-open"))) panel.hidePopover()
+    })
     document.addEventListener("pointerdown", closeOnOutside)
     this.cleanupCallbacks.add(() => document.removeEventListener("pointerdown", closeOnOutside))
     menu.append(trigger, panel)
@@ -600,7 +640,7 @@ export class TableWidget extends WidgetType {
   private replaceTable(table: MarkdownTable, focus?: CellTarget) {
     // 同步或撤销可能在交互期间替换正文；写回前核验原始范围，避免旧 Widget 覆盖新表格。
     if (this.view.state.sliceDoc(this.from, this.to) !== this.source) return false
-    this.view.dispatch({ changes: { from: this.from, to: this.to, insert: serializeMarkdownTable(table) } })
+    this.view.dispatch({ changes: { from: this.from, to: this.to, insert: serializeMarkdownTable(table) }, userEvent: "input.table", annotations: isolateHistory.of("full") })
     if (focus) this.focusCellAfterUpdate(focus)
     return true
   }
@@ -687,7 +727,9 @@ export class TableWidget extends WidgetType {
     input.select()
 
     let finished = false
+    let unregister = () => {}
     const restoreCell = () => {
+      unregister()
       input.remove()
       contentStack.style.removeProperty("min-height")
       cell.classList.remove("cm-md-table-cell-editing")
@@ -710,12 +752,51 @@ export class TableWidget extends WidgetType {
       if (navigation?.appendRow) next.rows.push(Array(next.header.length).fill(""))
       this.replaceTable(next, navigation)
     }
+    unregister = registerTableEdit(this.view, {
+      input,
+      commit: () => commit(),
+      cancel: () => { finished = true; restoreCell() },
+      format: (template) => {
+        const change = inlineTableFormat(template, input.value, input.selectionStart, input.selectionEnd)
+        if (!change) return
+        input.setRangeText(change.text, change.from, change.to, "select")
+        commit({ row: rowIndex + 1, column: columnIndex })
+      },
+    })
+    input.addEventListener("paste", (event) => {
+      const transfer = event.clipboardData
+      if (!transfer) return
+      const html = transfer.getData("text/html")
+      // 只读取表格文本，不把剪贴板 HTML 的事件、样式或脚本带入笔记。
+      const parsed = html ? new DOMParser().parseFromString(html, "text/html").querySelector("table") : null
+      const cells = parsed ? Array.from(parsed.rows, (row) => Array.from(row.cells, (cell) => cell.textContent ?? ""))
+        : parseTabularText(transfer.getData("text/plain"))
+      if (!cells?.length || cells.every((row) => row.length === 0)) return
+      event.preventDefault()
+      event.stopPropagation()
+      finished = true
+      restoreCell()
+      this.replaceTable(pasteTableCells(table, rowIndex + 1, columnIndex, cells), { row: rowIndex + 1, column: columnIndex })
+    })
     input.addEventListener("blur", () => commit(), { once: true })
     input.addEventListener("keydown", (event) => {
+      // 候选词确认不能被当作单元格提交或下移。
+      if (event.isComposing || event.keyCode === 229) return
+      if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+        const templates: Record<string, string> = { b: "**加粗文字**", i: "*斜体文字*", k: "[链接](https://)" }
+        const template = templates[event.key.toLowerCase()]
+        if (template) {
+          event.preventDefault()
+          event.stopPropagation()
+          activeTableEdit(this.view)?.format(template)
+          return
+        }
+      }
       if (event.key === "Escape") {
         finished = true
         restoreCell()
         cell.focus()
+        this.view.dispatch({ selection: { anchor: this.to } })
         return
       }
       if (event.key === "Enter" && event.shiftKey) {

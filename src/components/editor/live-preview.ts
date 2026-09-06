@@ -1,3 +1,4 @@
+import { isolateHistory } from "@codemirror/commands"
 import { syntaxTree } from "@codemirror/language"
 import type { EditorState, Range } from "@codemirror/state"
 import { Facet, StateEffect, StateField } from "@codemirror/state"
@@ -8,6 +9,7 @@ import { openExternalUrl } from "@/services/open-external-url"
 
 import { parseMarkdownTable } from "./markdown-table-model"
 import { appendMarkdownImage, type TableInlineOptions } from "./markdown-table-inline"
+import { openImageZoom } from "./image-zoom"
 import { TableWidget } from "./markdown-table-widget"
 
 // Markdown 即时预览：
@@ -101,20 +103,83 @@ export class MarkdownImageWidget extends WidgetType {
     readonly source: string,
     readonly block: boolean,
     readonly options: LivePreviewOptions,
+    readonly from?: number,
+    readonly to?: number,
+    readonly title?: string,
   ) {
     super()
   }
 
   eq(other: MarkdownImageWidget) {
-    return other.source === this.source && other.alt === this.alt && other.block === this.block
+    return other.source === this.source && other.alt === this.alt && other.block === this.block && other.from === this.from && other.to === this.to && other.title === this.title
   }
 
-  toDOM() {
+  toDOM(view: EditorView) {
     const host = document.createElement("span")
     host.className = this.block ? "cm-md-image cm-md-image-block" : "cm-md-image"
     host.title = this.alt || this.source
     // tableStorageKey 是当前笔记的标识，拿它当缓存作用域，不同笔记里的同名相对路径不会串。
     appendMarkdownImage(host, this.alt, this.source, this.options, undefined, this.options.tableStorageKey ?? "editor")
+    const size = this.title?.match(/^(\d+)(?:x(\d+))?$/)
+    if (size) { host.style.width = `${size[1]}px`; host.style.maxWidth = "100%" }
+    if (this.from !== undefined && this.to !== undefined) {
+      const sourceText = view.state.sliceDoc(this.from, this.to)
+      const tools = document.createElement("span")
+      tools.className = "cm-md-image-tools"
+      tools.setAttribute("role", "group")
+      tools.setAttribute("aria-label", "图片操作")
+      const button = (label: string, run: () => void) => {
+        const button = document.createElement("button")
+        button.type = "button"; button.textContent = label
+        button.addEventListener("mousedown", (event) => event.preventDefault())
+        button.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); run() })
+        tools.append(button)
+        return button
+      }
+      const replace = (text: string) => {
+        // 浮层操作只作用于创建时的图片；源文本变化时拒绝覆盖新内容。
+        if (view.state.readOnly || view.state.sliceDoc(this.from!, this.to!) !== sourceText) return
+        view.dispatch({ changes: { from: this.from!, to: this.to!, insert: text }, userEvent: "input.image", annotations: isolateHistory.of("full") })
+      }
+      const viewButton = button("查看", () => { const image = host.querySelector("img"); if (image?.src) openImageZoom(image.src, this.alt) })
+      viewButton.disabled = true
+      host.addEventListener("load", () => { viewButton.disabled = false }, true)
+      host.addEventListener("error", () => { viewButton.disabled = true }, true)
+      button("重试", () => {
+        viewButton.disabled = true
+        const imageHost = document.createElement("span")
+        host.querySelectorAll(":scope > img, :scope > .cm-md-table-asset-state, :scope > .cm-md-image-retry").forEach((element) => element.remove())
+        imageHost.className = "cm-md-image-retry"
+        host.prepend(imageHost)
+        appendMarkdownImage(imageHost, this.alt, this.source, this.options, undefined, `${this.options.tableStorageKey ?? "editor"}:retry:${Date.now()}`)
+      })
+      if (!view.state.readOnly) {
+        button("编辑引用", () => { view.dispatch({ selection: { anchor: this.from!, head: this.to! }, scrollIntoView: true }); view.focus() })
+        const sizes = document.createElement("select")
+        sizes.setAttribute("aria-label", "图片宽度")
+        for (const [value, label] of [["", "自适应"], ["240", "小 · 240"], ["480", "中 · 480"], ["720", "大 · 720"]]) {
+          const option = document.createElement("option"); option.value = value; option.textContent = label; sizes.append(option)
+        }
+        sizes.value = size?.[1] ?? ""
+        sizes.addEventListener("change", () => replace(`![${this.alt}](${this.source}${sizes.value ? ` "${sizes.value}"` : ""})`))
+        tools.append(sizes)
+        button("更换", () => {
+          if (tools.querySelector("input")) { tools.querySelector("input")?.focus(); return }
+          const input = document.createElement("input")
+          input.type = "text"; input.value = this.source; input.setAttribute("aria-label", "图片地址或附件路径")
+          const apply = document.createElement("button"); apply.type = "button"; apply.textContent = "应用"
+          const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "取消"
+          const dismiss = () => { input.remove(); apply.remove(); cancel.remove() }
+          cancel.addEventListener("click", dismiss)
+          const save = () => { const path = input.value.trim(); if (!path || /[\n\r<>]/.test(path) || /^[a-z][a-z\d+.-]*:/i.test(path) && !/^https?:/i.test(path)) { input.setCustomValidity("请输入附件路径或 HTTP(S) 地址"); input.reportValidity(); return }; replace(`![${this.alt}](${path.replace(/[ ()]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)}${this.title ? ` "${this.title}"` : ""})`) }
+          apply.addEventListener("click", save)
+          input.addEventListener("keydown", (event) => { if (event.isComposing) return; if (event.key === "Enter") { event.preventDefault(); save() }; if (event.key === "Escape") { dismiss() } })
+          tools.append(input, apply, cancel); input.focus(); input.select()
+        })
+        button("删除", () => replace(""))
+      }
+      host.append(tools)
+    }
     return host
   }
 
@@ -454,6 +519,25 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   for (const { from, to } of decorationRanges) {
     decorateWikiLinks(view.state, from, to, isCursorActive, frontmatter, (decoration) => decorations.push(decoration))
     decorateBareUrls(view.state, from, to, frontmatter, (decoration) => decorations.push(decoration))
+    for (const match of view.state.sliceDoc(from, to).matchAll(/==([^=\n]+)==|\[\^([^\]\n]+)\]/g)) {
+      const start = from + match.index!, end = start + match[0].length
+      if (frontmatter && start < frontmatter.to || isInsideCode(view.state, start)) continue
+      decorations.push(Decoration.mark({ class: match[1] ? "cm-md-highlight" : "cm-md-footnote" }).range(start, end))
+      if (match[1] && !isCursorActive(start, end)) {
+        decorations.push(Decoration.replace({}).range(start, start + 2), Decoration.replace({}).range(end - 2, end))
+      }
+    }
+    const firstLine = view.state.doc.lineAt(from).number
+    const lastLine = view.state.doc.lineAt(to).number
+    for (let number = firstLine; number <= lastLine; number++) {
+      const line = view.state.doc.line(number)
+      const callout = line.text.match(/^(\s*>\s*)\[!(\w+)\]([+-]?)/)
+      if (callout && !isInsideCode(view.state, line.from)) {
+        decorations.push(Decoration.line({ class: "cm-md-callout" }).range(line.from))
+        if (!isCursorActive(line.from, line.to) && line.text.slice(callout[0].length).trim()) decorations.push(Decoration.replace({}).range(line.from + callout[1].length, line.from + callout[0].length))
+      }
+    }
+
 
     syntaxTree(view.state).iterate({
       from,
@@ -611,7 +695,7 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             const line = view.state.doc.lineAt(node.from)
             const alone = line.text.trim() === view.state.sliceDoc(node.from, node.to).trim()
             decorations.push(Decoration.replace({
-              widget: new MarkdownImageWidget(alt, source, alone, view.state.facet(livePreviewOptions)),
+              widget: new MarkdownImageWidget(alt, source, alone, view.state.facet(livePreviewOptions), node.from, node.to, (() => { const title = node.node.getChild("LinkTitle"); return title ? view.state.sliceDoc(title.from + 1, title.to - 1) : undefined })()),
             }).range(node.from, node.to))
             break
           }

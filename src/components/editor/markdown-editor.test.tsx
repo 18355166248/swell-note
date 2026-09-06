@@ -30,6 +30,36 @@ afterEach(() => {
 })
 
 describe("MarkdownEditor", () => {
+  it("keeps an attachment bookmark while the cursor moves and earlier text changes", () => {
+    const handle = createRef<MarkdownEditorHandle>()
+    const onChange = vi.fn()
+    mount(<MarkdownEditor onChange={onChange} ref={handle} value="开头 目标 结尾" />)
+    act(() => { handle.current!.findText("目标") })
+    const insertion = handle.current!.captureInsertion()
+    act(() => {
+      handle.current!.findText("开头", "next", true)
+      handle.current!.insertText("更长的开头")
+      expect(insertion.insert("附件")).toBe(true)
+    })
+    expect(onChange).toHaveBeenLastCalledWith("更长的开头 附件 结尾", expect.anything())
+  })
+
+  it("rejects a late attachment after its editor was unmounted", () => {
+    const handle = createRef<MarkdownEditorHandle>()
+    mount(<MarkdownEditor onChange={() => {}} ref={handle} value="正文" />)
+    const insertion = handle.current!.captureInsertion()
+    act(() => { root!.render(<div />) })
+    expect(insertion.insert("附件")).toBe(false)
+  })
+
+  it("separates an image from a table even with following document content", () => {
+    const handle = createRef<MarkdownEditorHandle>()
+    const onChange = vi.fn()
+    mount(<MarkdownEditor onChange={onChange} ref={handle} value={"| A | B |\n| --- | --- |\n| 1 | 2 |\n\n后续正文"} />)
+    act(() => { handle.current!.revealLine(4); handle.current!.insertText("![图](image.png)\n") })
+    expect(onChange.mock.calls[onChange.mock.calls.length - 1]?.[0]).toContain("| 1 | 2 |\n\n![图](image.png)")
+  })
+
   it("finds plain text without case sensitivity and keeps offsets", () => {
     expect(findPlainTextMatches("Swell note SWELL", "swell")).toEqual([
       { from: 0, to: 5 },

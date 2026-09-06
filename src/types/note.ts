@@ -1,4 +1,6 @@
 export type Note = {
+  // 重命名改变路径与 id，编辑会话仍沿用原标识。
+  editorSessionKey?: string
   id: string
   title: string
   preview: string

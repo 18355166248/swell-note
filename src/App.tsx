@@ -195,6 +195,7 @@ function App() {
   const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([])
   const [trashRetention, setTrashRetention] = useState<TrashRetentionDays>(loadTrashRetention)
   const [activeNoteId, setActiveNoteId] = useState("")
+  const pendingNoteRouteMove = useRef<{ from: string; to: string } | null>(null)
   const [query, setQuery] = useState("")
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
   const [nestedFolderNotesPath, setNestedFolderNotesPath] = useState<string | null>(null)
@@ -544,7 +545,7 @@ function App() {
   const visibleNotes = useMemo(() => sortNotes(filteredNotes, noteSort), [filteredNotes, noteSort])
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? null
   const requestedNoteId = resolveRouteNoteId(noteRouteMatch?.params.noteId, notes.map((note) => note.id))
-  const missingNoteRoute = Boolean(cacheReady && requestedNoteId && !notes.some((note) => note.id === requestedNoteId))
+  const missingNoteRoute = Boolean(cacheReady && requestedNoteId && !notes.some((note) => note.id === requestedNoteId) && pendingNoteRouteMove.current?.from !== requestedNoteId)
   const missingNoteSuggestions = useMemo(
     () => missingNoteRoute ? findMissingNoteSuggestions(requestedNoteId, availableNotes) : [],
     [availableNotes, missingNoteRoute, requestedNoteId],
@@ -2007,6 +2008,10 @@ function App() {
     // 手机端直达失效链接也必须进入详情层，才能展示恢复入口；否则会无提示地停在笔记库首页。
     setMobileScreen("editor")
     const decodedNoteId = resolveRouteNoteId(routeNoteId, notes.map((note) => note.id))
+    // 重命名的笔记状态先于路由 transition 提交；这几帧保留同一编辑器，避免清空详情并丢失焦点。
+    const moving = pendingNoteRouteMove.current
+    if (moving && moving.from === decodedNoteId && notes.some((note) => note.id === moving.to)) return
+    if (moving?.to === decodedNoteId) pendingNoteRouteMove.current = null
     const routeNote = notes.find((note) => note.id === decodedNoteId)
     if (!routeNote) {
       // 详情不存在或缓存尚未包含目标时绝不能继续展示上一篇笔记，避免地址与正文错位。
@@ -2274,17 +2279,19 @@ function App() {
     if (note.pendingOperation === "create") {
       const nextId = `webdav:${storageTargetPath}`
       // 尚未上传的新笔记移动时只改本地目标路径，不会产生任何远端 MOVE 请求。
+      if (navigateAfter) pendingNoteRouteMove.current = { from: note.id, to: nextId }
       setNotes((current) => current.map((candidate) => {
         const repaired = applyWebDavLinkRepairs(candidate, repairsByNoteId)
         return candidate.id === note.id
           ? {
             ...repaired,
+            editorSessionKey: repaired.editorSessionKey ?? repaired.id,
             folder: deriveRemoteFolder(targetPath),
             id: nextId,
             remotePath: storageTargetPath,
             title: normalizedTitle || repaired.title,
             draft: normalizedTitle ? false : repaired.draft,
-            updatedAt: "刚刚移动 · 待同步",
+            updatedAt: normalizedTitle ? "刚刚重命名 · 待同步" : "刚刚移动 · 待同步",
           }
           : repaired
       }))
@@ -2310,11 +2317,13 @@ function App() {
     if (isWebDavNote) {
       const nextId = `webdav:${storageTargetPath}`
       // 已存在的云端笔记先记录原路径；真正 MOVE 仅由显式同步触发并携带 ETag 条件。
+      if (navigateAfter) pendingNoteRouteMove.current = { from: note.id, to: nextId }
       setNotes((current) => current.map((candidate) => {
         const repaired = applyWebDavLinkRepairs(candidate, repairsByNoteId)
         return candidate.id === note.id
           ? {
             ...repaired,
+            editorSessionKey: repaired.editorSessionKey ?? repaired.id,
             folder: deriveRemoteFolder(targetPath),
             id: nextId,
             pendingOperation: "move",
@@ -2325,7 +2334,7 @@ function App() {
             writeContentAfterMove: true,
             title: normalizedTitle || repaired.title,
             draft: normalizedTitle ? false : repaired.draft,
-            updatedAt: "刚刚移动 · 待同步",
+            updatedAt: normalizedTitle ? "刚刚重命名 · 待同步" : "刚刚移动 · 待同步",
           }
           : repaired
       }))
@@ -2378,6 +2387,7 @@ function App() {
             : "笔记已移动，但部分相对链接修复失败")
         }
       }
+      if (navigateAfter) pendingNoteRouteMove.current = { from: note.id, to: nextId }
       setNotes((current) => current.map((candidate) => {
         const written = writtenRepairs.get(candidate.id)
         const repaired = written
@@ -2394,13 +2404,14 @@ function App() {
         return candidate.id === note.id
           ? {
             ...repaired,
+            editorSessionKey: repaired.editorSessionKey ?? repaired.id,
             folder: deriveRemoteFolder(result.path),
             id: nextId,
             remotePath: result.path,
             revision: written?.revision ?? result.revision,
             title: normalizedTitle || repaired.title,
             draft: normalizedTitle ? false : repaired.draft,
-            updatedAt: "刚刚移动",
+            updatedAt: normalizedTitle ? "刚刚重命名" : "刚刚移动",
             modifiedAt: Date.now(),
           }
           : repaired

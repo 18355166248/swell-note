@@ -17,7 +17,10 @@ const SECONDARY_FORMATS = [
   { icon: Table, label: "表格", syntax: TABLE_INSERT_TEMPLATE },
 ]
 
-export function FormattingToolbar({ attachmentBusy, canInsertAttachment, editorRef, mobile = false, onFormat, onInsertFiles }: {
+export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable = false, attachmentBusy, canInsertAttachment, editorRef, mobile = false, onFormat, onInsertFiles }: {
+  canUndo?: boolean
+  canRedo?: boolean
+  editingTable?: boolean
   attachmentBusy: boolean
   canInsertAttachment: boolean
   editorRef: RefObject<MarkdownEditorHandle | null>
@@ -26,31 +29,38 @@ export function FormattingToolbar({ attachmentBusy, canInsertAttachment, editorR
   onInsertFiles: (files: File[]) => Promise<void>
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [heading3, quote, code, link, strike, inlineCode, rule, table] = SECONDARY_FORMATS
+  const [, quote, code, link, strike, inlineCode, rule, table] = SECONDARY_FORMATS
 
   return (
     <div className="formatting-toolbar" data-mobile={mobile}>
-      <FormatButton icon={Undo2} label="撤销（⌘/Ctrl+Z）" onClick={() => editorRef.current?.undo()} />
-      <FormatButton icon={Redo2} label="重做（⌘/Ctrl+Shift+Z）" onClick={() => editorRef.current?.redo()} />
+      <FormatButton disabled={!canUndo && !editingTable} icon={Undo2} label="撤销（⌘/Ctrl+Z）" onClick={() => editorRef.current?.undo()} />
+      <FormatButton disabled={!canRedo} icon={Redo2} label="重做（⌘/Ctrl+Shift+Z）" onClick={() => editorRef.current?.redo()} />
       <span className="toolbar-divider" />
-      {mobile ? null : <FormatButton label="一级标题" onClick={() => onFormat("\n# ")}>H1</FormatButton>}
-      <FormatButton label="二级标题" onClick={() => onFormat("\n## ")}>H2</FormatButton>
-      {mobile ? null : <FormatButton label={heading3.label} onClick={() => onFormat(heading3.syntax)}>H3</FormatButton>}
+      <select aria-label="标题级别" className="toolbar-heading-select" defaultValue="" disabled={editingTable} onChange={(event) => {
+        const prefix = event.currentTarget.value
+        event.currentTarget.value = ""
+        if (prefix) onFormat(`\n${prefix} `)
+      }}>
+        <option value="" disabled>标题</option>
+        <option value="#">一级标题</option>
+        <option value="##">二级标题</option>
+        <option value="###">三级标题</option>
+      </select>
       <span className="toolbar-divider" />
       <FormatButton icon={Bold} label="加粗（⌘/Ctrl+B）" onClick={() => onFormat("**加粗文字**")} />
       <FormatButton icon={Italic} label="斜体（⌘/Ctrl+I）" onClick={() => onFormat("*斜体文字*")} />
       {mobile ? null : <FormatButton icon={strike.icon} label={strike.label} onClick={() => onFormat(strike.syntax)} />}
-      {mobile ? null : <FormatButton icon={quote.icon} label={quote.label} onClick={() => onFormat(quote.syntax)} />}
-      <FormatButton icon={List} label="无序列表" onClick={() => onFormat("\n- ")} />
-      <FormatButton icon={CheckCircle2} label="任务列表" onClick={() => onFormat("\n- [ ] ")} />
+      {mobile ? null : <FormatButton disabled={editingTable} icon={quote.icon} label={quote.label} onClick={() => onFormat(quote.syntax)} />}
+      <FormatButton disabled={editingTable} icon={List} label="无序列表" onClick={() => onFormat("\n- ")} />
+      <FormatButton disabled={editingTable} icon={CheckCircle2} label="任务列表" onClick={() => onFormat("\n- [ ] ")} />
       {mobile ? null : (
         <>
           <FormatButton icon={inlineCode.icon} label={inlineCode.label} onClick={() => onFormat(inlineCode.syntax)} />
-          <FormatButton icon={code.icon} label={code.label} onClick={() => onFormat(code.syntax)} />
+          <FormatButton disabled={editingTable} icon={code.icon} label={code.label} onClick={() => onFormat(code.syntax)} />
           <FormatButton icon={link.icon} label={`${link.label}（⌘/Ctrl+K）`} onClick={() => onFormat(link.syntax)} />
           <span className="toolbar-divider" />
-          <FormatButton icon={table.icon} label={table.label} onClick={() => onFormat(table.syntax)} />
-          <FormatButton icon={rule.icon} label={rule.label} onClick={() => onFormat(rule.syntax)} />
+          <FormatButton disabled={editingTable} icon={table.icon} label={table.label} onClick={() => onFormat(table.syntax)} />
+          <FormatButton disabled={editingTable} icon={rule.icon} label={rule.label} onClick={() => onFormat(rule.syntax)} />
         </>
       )}
       {canInsertAttachment ? (
@@ -64,14 +74,14 @@ export function FormattingToolbar({ attachmentBusy, canInsertAttachment, editorR
           }} ref={fileInputRef} tabIndex={-1} type="file" />
         </>
       ) : null}
-      {mobile ? <SecondaryFormatsMenu onFormat={onFormat} /> : null}
+      {mobile ? <SecondaryFormatsMenu editingTable={editingTable} onFormat={onFormat} /> : null}
     </div>
   )
 }
 
 // 用工具栏内部的浮层而不是通用下拉菜单：菜单一旦接管焦点，手机键盘会收起再弹出，
 // 工具栏也会跟着键盘上下跳一次；自绘浮层可以让焦点始终留在 CodeMirror 里。
-function SecondaryFormatsMenu({ onFormat }: { onFormat: (syntax: string) => void }) {
+function SecondaryFormatsMenu({ onFormat, editingTable }: { editingTable: boolean; onFormat: (syntax: string) => void }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
 
@@ -99,6 +109,7 @@ function SecondaryFormatsMenu({ onFormat }: { onFormat: (syntax: string) => void
           {SECONDARY_FORMATS.map(({ icon: Icon, label, syntax }) => (
             <button
               key={label}
+              disabled={editingTable && syntax.startsWith("\n")}
               onClick={() => {
                 setOpen(false)
                 onFormat(syntax)
@@ -117,7 +128,8 @@ function SecondaryFormatsMenu({ onFormat }: { onFormat: (syntax: string) => void
   )
 }
 
-function FormatButton({ busy = false, children, expanded, icon: Icon, label, onClick }: {
+function FormatButton({ disabled = false, busy = false, children, expanded, icon: Icon, label, onClick }: {
+  disabled?: boolean
   busy?: boolean
   children?: ReactNode
   expanded?: boolean
@@ -131,7 +143,7 @@ function FormatButton({ busy = false, children, expanded, icon: Icon, label, onC
         <button
           aria-expanded={expanded}
           aria-label={label}
-          disabled={busy}
+          disabled={disabled || busy}
           onClick={onClick}
           // 手机键盘打开时，工具栏不能先抢走 CodeMirror 焦点，否则每次加粗/插入列表都会触发键盘收起再弹出。
           onPointerDown={(event) => event.preventDefault()}

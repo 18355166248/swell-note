@@ -7,6 +7,8 @@ import {
   deleteTableColumn,
   deleteTableRow,
   parseMarkdownTable,
+  parseTabularText,
+  pasteTableCells,
   serializeMarkdownTable,
 } from "./markdown-table-model"
 
@@ -43,5 +45,20 @@ describe("markdown table model", () => {
     table.rows[0][0] = "第一行\n第二行"
 
     expect(serializeMarkdownTable(table)).toContain("| 第一行<br>第二行 | 正常 |")
+  })
+})
+
+describe("spreadsheet paste", () => {
+  it("preserves quoted newlines and empty trailing cells", () => {
+    expect(parseTabularText('"第一行\n第二行"\t2\t\r\nA\t"B""C"\tD\r\n')).toEqual([["第一行\n第二行", "2", ""], ["A", 'B"C', "D"]])
+    expect(parseTabularText("普通文本")).toBeNull()
+  })
+  it("expands from the target cell without overwriting adjacent data or mutating input", () => {
+    const original = parseMarkdownTable("| A | B |\n| --- | ---: |\n| keep | old |")!
+    const pasted = pasteTableCells(original, 1, 1, [["1", "2"], ["3", "4"]])
+    expect(pasted.header).toHaveLength(3)
+    expect(pasted.rows).toEqual([["keep", "1", "2"], ["", "3", "4"]])
+    expect(original.rows).toEqual([["keep", "old"]])
+    expect(pasted.aligns).toEqual(["left", "right", "left"])
   })
 })

@@ -33,7 +33,7 @@
 .markdown-editor-shell .cm-md-table-menu > summary { min-height: 26px; border-radius: 5px; padding: 5px 7px; color: var(--muted-foreground); font-size: 11px; cursor: pointer; user-select: none; }
 .markdown-editor-shell .cm-md-table-menu[open] > summary,
 .markdown-editor-shell .cm-md-table-menu > summary:hover { background: var(--blue-soft); color: var(--primary); }
-.markdown-editor-shell .cm-md-table-menu-panel { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; display: grid; min-width: 112px; gap: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--popover); color: var(--popover-foreground); padding: 5px; box-shadow: 0 10px 30px rgb(15 23 42 / 14%); }
+.markdown-editor-shell .cm-md-table-menu-panel { position: fixed; inset: auto; margin: 0; z-index: 100; display: grid; min-width: 112px; gap: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--popover); color: var(--popover-foreground); padding: 5px; box-shadow: 0 10px 30px rgb(15 23 42 / 14%); }
 .markdown-editor-shell .cm-md-table-menu-panel button { min-height: 30px; text-align: left; white-space: nowrap; }
 .markdown-editor-shell .cm-md-table-selection-status { min-width: 0; overflow: hidden; color: var(--muted-foreground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .markdown-editor-shell .cm-md-table { border-collapse: collapse; font-size: .95em; line-height: 1.6; }
@@ -77,4 +77,10 @@
   .markdown-editor-shell .cm-md-table-toolbar::after { display: none; }
   .markdown-editor-shell .cm-md-table-selection-status { margin-left: auto; }
   .markdown-editor-shell .cm-md-table-resize-handle { display: none; }
+}
+
+/* 表格菜单进入 top layer 后仍保留组件样式；隐藏时不能被 display:grid 覆盖。 */
+.cm-md-table-menu-panel[popover]:not(:popover-open) { display: none; }
+@media (max-width: 640px) {
+  .markdown-editor-shell .cm-md-table-menu-panel button { min-height: 44px; font-size: 14px; }
 }

@@ -1,5 +1,5 @@
-import { Component, memo, Suspense, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ErrorInfo, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
-import { createPortal } from "react-dom"
+import { Component, lazy, memo, Suspense, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
+import { ImageZoomOverlay, openImageZoom } from "./image-zoom"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
 import remarkGfm from "remark-gfm"
@@ -43,57 +43,14 @@ type MarkdownPreviewProps = {
   onWikiLink: (target: string) => void
 }
 
+const MathMarkdown = lazy(() => import("./math-markdown"))
+const MermaidDiagram = lazy(() => import("./mermaid-diagram"))
+
 const remarkPlugins = [remarkGfm, remarkObsidian]
 const rehypePlugins = [rehypeHighlight]
 
 // 任务勾选框由 remark-gfm 合成、自身没有源码位置，行号从所属任务列表项（li）经 Context 传入。
 const TaskItemLineContext = createContext<number | null>(null)
-
-// 图片放大预览：图片散落在分块、双链嵌入的深处，用一个模块级小 store 让任意深度的图片都能唤起同一个浮层。
-type ImageZoom = { alt: string; src: string }
-let imageZoom: ImageZoom | null = null
-const imageZoomListeners = new Set<() => void>()
-
-function openImageZoom(src: string, alt: string) {
-  imageZoom = { alt, src }
-  imageZoomListeners.forEach((listener) => listener())
-}
-
-function closeImageZoom() {
-  if (!imageZoom) return
-  imageZoom = null
-  imageZoomListeners.forEach((listener) => listener())
-}
-
-function useImageZoom() {
-  return useSyncExternalStore(
-    (onChange) => {
-      imageZoomListeners.add(onChange)
-      return () => imageZoomListeners.delete(onChange)
-    },
-    () => imageZoom,
-    () => null,
-  )
-}
-
-function ImageZoomOverlay() {
-  const zoom = useImageZoom()
-  useEffect(() => {
-    if (!zoom) return
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") closeImageZoom()
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [zoom])
-  if (!zoom || typeof document === "undefined") return null
-  return createPortal(
-    <div aria-modal="true" className="markdown-image-zoom" onClick={closeImageZoom} role="dialog">
-      <img alt={zoom.alt} src={zoom.src} />
-    </div>,
-    document.body,
-  )
-}
 
 // 切换笔记时这棵子树会连着渲染四次：旧正文两次、新正文两次，每一次都要把整篇
 // Markdown 重新解析成 React 元素。正文没变时没有任何理由重算，这里挡住重复的那两次。
@@ -270,15 +227,19 @@ const MarkdownChunk = memo(function MarkdownChunk({ assetScope, depth, handlers,
     () => buildMarkdownComponents(assetScope, depth, handlers, sourceLineOffset),
     [assetScope, depth, handlers, sourceLineOffset],
   )
+  const Renderer = /\$[^$\n]+\$|\$\$/.test(text) ? MathMarkdown : ReactMarkdown
   return (
-    <ReactMarkdown
+    <Suspense fallback={<pre className="markdown-render-loading">{text}</pre>}>
+    <Renderer
       components={components}
       remarkPlugins={remarkPlugins}
       rehypePlugins={rehypePlugins}
+      remarkRehypeOptions={{ footnoteLabel: "脚注", footnoteBackLabel: "返回正文" }}
       urlTransform={previewUrlTransform}
     >
       {text}
-    </ReactMarkdown>
+    </Renderer>
+    </Suspense>
   )
 })
 
@@ -311,14 +272,14 @@ function buildMarkdownComponents(
         />
       )
     },
-    li({ children, node }: { children?: ReactNode; node?: { position?: { start: { line: number } }; properties?: { className?: unknown } } }) {
+    li({ children, node, id }: { id?: string; children?: ReactNode; node?: { position?: { start: { line: number } }; properties?: { className?: unknown } } }) {
       const classNames = node?.properties?.className
       const isTaskItem = Array.isArray(classNames) && classNames.includes("task-list-item")
       const previewLine = isTaskItem ? node?.position?.start.line : undefined
-      if (!handlersRef.current.onToggleTask || !previewLine) return <li data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}>{children}</li>
-      return <li data-source-line={previewLine + sourceLineOffset}><TaskItemLineContext.Provider value={previewLine}>{children}</TaskItemLineContext.Provider></li>
+      if (!handlersRef.current.onToggleTask || !previewLine) return <li id={id} data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}>{children}</li>
+      return <li id={id} data-source-line={previewLine + sourceLineOffset}><TaskItemLineContext.Provider value={previewLine}>{children}</TaskItemLineContext.Provider></li>
     },
-    a({ children, href }: { children?: ReactNode; href?: string }) {
+    a({ children, href, id, "aria-label": label }: { id?: string; "aria-label"?: string; children?: ReactNode; href?: string }) {
       const embedTarget = parseWikiEmbedHref(href)
       if (embedTarget) return <button className="wiki-link" onClick={() => handlersRef.current.onWikiLink(embedTarget)} type="button">{children}</button>
       const wikiTarget = parseWikiHref(href)
@@ -327,7 +288,7 @@ function buildMarkdownComponents(
       if (markdownNoteTarget) return <button className="wiki-link markdown-note-link" onClick={() => handlersRef.current.onWikiLink(markdownNoteTarget)} type="button">{children}</button>
       const assetSource = parseVaultAssetHref(href) ?? (isRelativeAttachmentHref(href) ? href : null)
       if (assetSource) return <VaultAttachment onResolveAsset={handlersRef.current.onResolveAsset} source={assetSource}>{children}</VaultAttachment>
-      if (href?.startsWith("#")) return <MarkdownAnchorLink href={href}>{children}</MarkdownAnchorLink>
+      if (href?.startsWith("#")) return <MarkdownAnchorLink href={href} id={id} label={label}>{children}</MarkdownAnchorLink>
       // Tauri WebView 默认拒绝 target=_blank 的新窗口请求，点击统一交给 openExternalUrl；
       // href 保留给悬停预览与右键菜单。
       return (
@@ -355,11 +316,11 @@ function buildMarkdownComponents(
     p({ children, node }: { children?: ReactNode; node?: { position?: { start: { line: number } } } }) {
       return <p data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}>{children}</p>
     },
-    td({ children, node }: { children?: ReactNode; node?: { position?: { start: { line: number } } } }) {
-      return <td data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}>{children}</td>
+    td({ children, node, style }: { style?: CSSProperties; children?: ReactNode; node?: { position?: { start: { line: number } } } }) {
+      return <td style={style} data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}>{children}</td>
     },
-    th({ children, node }: { children?: ReactNode; node?: { position?: { start: { line: number } } } }) {
-      return <th data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}>{children}</th>
+    th({ children, node, style }: { style?: CSSProperties; children?: ReactNode; node?: { position?: { start: { line: number } } } }) {
+      return <th style={style} data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}>{children}</th>
     },
     table({ children }: { children?: ReactNode }) {
       return <ScrollableMarkdownTable>{children}</ScrollableMarkdownTable>
@@ -380,12 +341,12 @@ function buildMarkdownComponents(
         />
       )
     },
-    h1({ children, node }: HeadingComponentProps) { return <Heading level={1} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
-    h2({ children, node }: HeadingComponentProps) { return <Heading level={2} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
-    h3({ children, node }: HeadingComponentProps) { return <Heading level={3} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
-    h4({ children, node }: HeadingComponentProps) { return <Heading level={4} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
-    h5({ children, node }: HeadingComponentProps) { return <Heading level={5} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
-    h6({ children, node }: HeadingComponentProps) { return <Heading level={6} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
+    h1({ children, node, id }: HeadingComponentProps) { return <Heading id={id} level={1} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
+    h2({ children, node, id }: HeadingComponentProps) { return <Heading id={id} level={2} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
+    h3({ children, node, id }: HeadingComponentProps) { return <Heading id={id} level={3} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
+    h4({ children, node, id }: HeadingComponentProps) { return <Heading id={id} level={4} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
+    h5({ children, node, id }: HeadingComponentProps) { return <Heading id={id} level={5} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
+    h6({ children, node, id }: HeadingComponentProps) { return <Heading id={id} level={6} sourceLine={sourceLine(node, sourceLineOffset)}>{children}</Heading> },
   }
 }
 
@@ -476,7 +437,7 @@ function MarkdownProperties({ properties }: { properties: [string, string | stri
   )
 }
 
-function MarkdownAnchorLink({ children, href }: { children: ReactNode; href: string }) {
+function MarkdownAnchorLink({ children, href, id, label }: { id?: string; label?: string; children: ReactNode; href: string }) {
   const scrollToAnchor = (event: MouseEvent<HTMLButtonElement>) => {
     const rawTarget = href.slice(1)
     let decodedTarget = rawTarget
@@ -484,21 +445,21 @@ function MarkdownAnchorLink({ children, href }: { children: ReactNode; href: str
     const targetId = obsidianAnchorId(decodedTarget)
     const preview = event.currentTarget.closest(".markdown-preview")
     const target = Array.from(preview?.querySelectorAll<HTMLElement>("[id]") ?? [])
-      .find((element) => element.id === targetId)
+      .find((element) => element.id === decodedTarget || element.id === targetId)
     target?.scrollIntoView({ behavior: "smooth", block: "start" })
   }
 
-  return <button className="wiki-link markdown-anchor-link" onClick={scrollToAnchor} type="button">{children}</button>
+  return <button id={id} aria-label={label} className="wiki-link markdown-anchor-link" onClick={scrollToAnchor} type="button">{children}</button>
 }
 
-type HeadingComponentProps = { children?: ReactNode; node?: { position?: { start: { line: number } } } }
+type HeadingComponentProps = { id?: string; children?: ReactNode; node?: { position?: { start: { line: number } } } }
 
 function sourceLine(node: HeadingComponentProps["node"], offset: number) {
   return node?.position?.start.line ? node.position.start.line + offset : undefined
 }
 
-function Heading({ children, level, sourceLine }: { children: ReactNode; level: 1 | 2 | 3 | 4 | 5 | 6; sourceLine?: number }) {
-  const id = obsidianAnchorId(reactNodeText(children))
+function Heading({ children, level, sourceLine, id: explicitId }: { id?: string; children: ReactNode; level: 1 | 2 | 3 | 4 | 5 | 6; sourceLine?: number }) {
+  const id = explicitId ?? obsidianAnchorId(reactNodeText(children))
   const Tag = `h${level}` as const
   return <Tag data-source-line={sourceLine} id={id || undefined}>{children}</Tag>
 }
@@ -556,6 +517,8 @@ function CodeBlock({ children, node }: { children: ReactNode; node?: HastNode })
       () => {},
     )
   }
+
+  if (codeBlockLanguage(node) === "mermaid") return <Suspense fallback={<pre>{children}</pre>}><MermaidDiagram source={hastElementText(node ?? { type: "root" })} /></Suspense>
 
   return (
     <div className="markdown-code-block">
@@ -682,7 +645,8 @@ function VaultImage({ alt, assetScope, onResolveAsset, source, title }: VaultIma
   const resolveAssetRef = useRef(onResolveAsset)
   resolveAssetRef.current = onResolveAsset
   const resolvedSource = parseVaultAssetHref(source) ?? source
-  const cacheKey = resolvedSource ? imageCacheKey(assetScope, resolvedSource) : ""
+  const [attempt, setAttempt] = useState(0)
+  const cacheKey = resolvedSource ? imageCacheKey(`${assetScope ?? "active-note"}:${attempt}`, resolvedSource) : ""
   const [state, setState] = useState<VaultImageState>(() => {
     if (isRemoteImageSource(resolvedSource)) return { status: "ready", url: resolvedSource }
     return cacheKey ? vaultImageCache.get(cacheKey)?.state ?? { status: "loading" } : { status: "error" }
@@ -737,13 +701,14 @@ function VaultImage({ alt, assetScope, onResolveAsset, source, title }: VaultIma
       entry!.listeners.delete(setState)
       releaseVaultImage(cacheKey, entry!)
     }
-  }, [cacheKey, resolvedSource])
+  }, [cacheKey, resolvedSource, attempt])
 
   if (state.status === "ready" && state.url) {
     const presentation = parseImagePresentation(alt, title)
     const zoomedSrc = state.url
     return (
       <img
+        key={attempt}
         alt={presentation.alt}
         aria-label={`放大查看图片：${presentation.alt}`}
         decoding="async"
@@ -768,6 +733,7 @@ function VaultImage({ alt, assetScope, onResolveAsset, source, title }: VaultIma
   return (
     <span className="markdown-image-state" data-status={state.status}>
       {state.status === "loading" ? "正在读取图片…" : `无法读取图片${alt ? `：${parseImagePresentation(alt, title).alt}` : ""}`}
+      {state.status === "error" ? <><code>{resolvedSource}</code><button type="button" onClick={() => setAttempt((value) => value + 1)}>重新加载</button></> : null}
     </span>
   )
 }
