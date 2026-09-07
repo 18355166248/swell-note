@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { hasOpenModal, isTextEntryElement, selectElementContents } from "./shortcut-scope"
+import { registerDesktopShortcuts, hasOpenModal, isTextEntryElement, selectElementContents } from "./shortcut-scope"
 
 afterEach(() => {
   document.body.innerHTML = ""
@@ -83,5 +83,36 @@ describe("selectElementContents", () => {
 
   it("目标不存在时不动选区", () => {
     expect(selectElementContents(null)).toBe(false)
+  })
+})
+
+
+describe("desktop shortcut ownership", () => {
+  it("keeps editor link handling separate and captures global search before editor deletion", () => {
+    const original = window.matchMedia
+    window.matchMedia = vi.fn().mockReturnValue({ matches: false })
+    const onOpenSearch = vi.fn()
+    const dispose = registerDesktopShortcuts({ canCreateNote: true, isCreatingNote: false, isRefreshingVault: false, onCreateNote: vi.fn(), onRefreshVault: vi.fn(), onOpenSearch })
+    const editor = document.createElement("div")
+    editor.setAttribute("contenteditable", "true")
+    document.body.append(editor)
+    const insertLink = vi.fn(), deleteLine = vi.fn()
+    editor.addEventListener("keydown", (event) => {
+      if (event.defaultPrevented) return
+      if (event.shiftKey) deleteLine()
+      else { insertLink(); event.preventDefault() }
+    })
+    try {
+      editor.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true, cancelable: true }))
+      expect(insertLink).toHaveBeenCalledOnce()
+      expect(onOpenSearch).not.toHaveBeenCalled()
+      editor.dispatchEvent(new KeyboardEvent("keydown", { key: "K", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }))
+      expect(onOpenSearch).toHaveBeenCalledOnce()
+      expect(deleteLine).not.toHaveBeenCalled()
+      editor.dispatchEvent(new KeyboardEvent("keydown", { key: "K", metaKey: true, shiftKey: true, isComposing: true, bubbles: true, cancelable: true }))
+      expect(onOpenSearch).toHaveBeenCalledOnce()
+    } finally {
+      dispose(); window.matchMedia = original
+    }
   })
 })

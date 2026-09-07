@@ -9,7 +9,10 @@ export function collectPreviewMatches(root: HTMLElement, query: string): Range[]
   let previousBlock: Element | null = null
   while (walker.nextNode()) {
     const node = walker.currentNode as Text
-    if (!node.parentElement || node.parentElement.closest(SKIP)) continue
+    if (!node.parentElement) continue
+    const skipped = node.parentElement.closest(SKIP)
+    // 全局搜索弹窗退出动画期间正文祖先仍带 aria-hidden；只排除正文内部的隐藏节点。
+    if (skipped && root.contains(skipped)) continue
     const block = node.parentElement.closest(BLOCKS)
     // 行内加粗 / 链接会拆成多个文本节点，但两个独立段落不能拼成一次匹配。
     if (segments.length && block !== previousBlock) text += "\n"

@@ -1,4 +1,5 @@
-import { memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
+import { useNavigate } from "react-router-dom"
+import { createContext, useContext, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import {
   closestCenter,
   DndContext,
@@ -123,7 +124,7 @@ import { SelectionActionBar } from "@/components/workspace/selection-action-bar"
 import { DocumentContextMenu } from "@/components/workspace/document-context-menu"
 import { PreviewSearch } from "@/components/workspace/preview-search"
 import { isSelectionDismissTap, keepsSelectionAlive, type PointerOrigin } from "@/components/workspace/selection-dismiss"
-import { hasOpenModal, isTextEntryElement, selectElementContents } from "@/components/workspace/shortcut-scope"
+import { registerDesktopShortcuts, hasOpenModal, isTextEntryElement, selectElementContents } from "@/components/workspace/shortcut-scope"
 import {
   ContextMenuRequestDialog,
   NoteListContextMenu,
@@ -250,7 +251,13 @@ type WorkspaceProps = {
   vaultCaches: VaultCacheSummary[]
 }
 
+type SearchNavigation = { noteId: string; query: string }
+const SearchNavigationContext = createContext<{ request: SearchNavigation | null; consume: () => void }>({ request: null, consume: () => {} })
+
 export function Workspace(props: WorkspaceProps) {
+  const [searchRequest, setSearchRequest] = useState<SearchNavigation | null>(null)
+  const consumeSearchRequest = useCallback(() => setSearchRequest(null), [])
+  const searchNavigation = useMemo(() => ({ request: searchRequest, consume: consumeSearchRequest }), [searchRequest, consumeSearchRequest])
   const mobileLayout = useMobileWorkspaceLayout()
   const showSyncProgressToast = shouldShowFloatingSyncProgress(props.syncProgress, mobileLayout)
   const [expandedFolderPaths, setExpandedFolderPaths] = useState<Set<string>>(() => new Set())
@@ -276,30 +283,14 @@ export function Workspace(props: WorkspaceProps) {
   }, [activeNoteUsesSpecialPreview, props.activeNote?.id, props.noteViewMode, props.onNoteViewModeChange])
 
   useEffect(() => {
-    const handleDesktopShortcut = (event: KeyboardEvent) => {
-      if (window.matchMedia("(max-width: 767px)").matches) return
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat) return
-      // 弹窗开着时这些动作都会打断当前操作：抢走焦点、在背后新建笔记或触发同步。
-      if (hasOpenModal()) return
-      const key = event.key.toLocaleLowerCase()
-      if (key === "k") {
-        event.preventDefault()
-        openGlobalSearch()
-        return
-      }
-      if (key === "n" && !event.shiftKey && props.canCreateNote && !props.isCreatingNote) {
-        event.preventDefault()
-        props.onCreateNote()
-        return
-      }
-      if (key === "s" && event.shiftKey && !props.isRefreshingVault) {
-        event.preventDefault()
-        props.onRefreshVault()
-      }
-    }
-    // 桌面端高频动作统一由工作区分发，避免输入框和编辑器各自重复注册全局快捷键。
-    document.addEventListener("keydown", handleDesktopShortcut)
-    return () => document.removeEventListener("keydown", handleDesktopShortcut)
+    return registerDesktopShortcuts({
+      canCreateNote: props.canCreateNote,
+      isCreatingNote: props.isCreatingNote,
+      isRefreshingVault: props.isRefreshingVault,
+      onCreateNote: props.onCreateNote,
+      onRefreshVault: props.onRefreshVault,
+      onOpenSearch: openGlobalSearch,
+    })
   }, [openGlobalSearch, props.canCreateNote, props.isCreatingNote, props.isRefreshingVault, props.onCreateNote, props.onRefreshVault])
 
   useEffect(() => {
@@ -336,6 +327,7 @@ export function Workspace(props: WorkspaceProps) {
   }, [props.folders])
 
   return (
+    <SearchNavigationContext.Provider value={searchNavigation}>
     <main className="workspace-root">
       {mobileLayout ? (
         <MobileWorkspace
@@ -366,11 +358,16 @@ export function Workspace(props: WorkspaceProps) {
         cacheId={props.activeCacheId}
         notes={props.allNotes}
         onOpenChange={setGlobalSearchOpen}
-        onSelectNote={props.onSelectNote}
+        onSelectNote={(note, query) => {
+          // 请求带目标笔记标识，等正文异步加载完成后再消费，避免高亮落在上一篇。
+          setSearchRequest(query ? { noteId: note.id, query } : null)
+          props.onSelectNote(note)
+        }}
         open={globalSearchOpen}
         placement={mobileLayout ? "bottom" : "center"}
       />
     </main>
+    </SearchNavigationContext.Provider>
   )
 }
 
@@ -823,6 +820,7 @@ const LibraryPanel = memo(function LibraryPanel({
   vaultError,
   vaultCaches,
 }: LibraryPanelProps) {
+  const navigate = useNavigate()
   return (
     <aside className="library-panel">
       <div className="pane-header library-titlebar">
@@ -860,6 +858,8 @@ const LibraryPanel = memo(function LibraryPanel({
           <LibraryRow active={selectedFolder === null && libraryView === "all"} count={noteCount} icon={FileText} label="全部笔记" onClick={() => onSelectLibraryView("all")} />
           <LibraryRow active={libraryView === "recent"} count={Math.min(noteCount, 32)} icon={CheckCircle2} label="最近更新" onClick={() => onSelectLibraryView("recent")} />
           <LibraryRow active={libraryView === "starred"} count={starredNoteCount} icon={Star} label="收藏" onClick={() => onSelectLibraryView("starred")} />
+
+          <LibraryRow icon={Trash2} label="回收站" onClick={() => navigate("/settings/trash")} />
 
           <div className="library-section-title">
             <span>文件夹</span>
@@ -1108,7 +1108,7 @@ function NoteListPanel({
             value={query}
           />
         </div>
-        <Button aria-label="全局搜索（⌘K）" onClick={onOpenGlobalSearch} size="icon" title="全局搜索（⌘K）" variant="ghost">
+        <Button aria-label="全局搜索（⌘⇧K）" onClick={onOpenGlobalSearch} size="icon" title="全局搜索（⌘⇧K）" variant="ghost">
           <Globe />
         </Button>
       </div>
@@ -1583,6 +1583,9 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false)
   const [outlineDialogOpen, setOutlineDialogOpen] = useState(false)
+  const [outlinePinned, setOutlinePinned] = useState(false)
+  const [activeOutlineIndex, setActiveOutlineIndex] = useState(-1)
+  const searchNavigation = useContext(SearchNavigationContext)
   const [renameTitle, setRenameTitle] = useState(note.title)
   const [cursorPosition, setCursorPosition] = useState({ column: 1, line: 1 })
   const [hasSelection, setHasSelection] = useState(false)
@@ -1618,8 +1621,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     if (words === 0) return null
     return `${words} 字 · 约 ${estimateReadingMinutes(note.content)} 分钟`
   }, [isSpecialPreview, note.content])
-  // 大纲只在菜单里用，却跟着每一次按键把全文扫一遍：长笔记上这一遍要占掉近四成的按键开销。
-  // 改成停顿下来再算，菜单是手动打开的，拿到的照样是最新内容。
+  // 大纲扫描推迟到输入停顿后，固定侧栏也不能让长文每次按键都重新扫描全文。
   const outlineSource = useSettledContent(note.id, note.content)
   const noteOutline = useMemo(() => isSpecialPreview ? [] : extractNoteOutline(outlineSource), [isSpecialPreview, outlineSource])
   const editorScrollKey = `${activeCacheId ?? "session"}:${note.id}`
@@ -1655,6 +1657,8 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     let settlingFrame = 0
     let anchorFrame = 0
     const restore = () => {
+      // 从搜索进入时由命中定位负责滚动，不能让历史阅读位置在下一帧覆盖它。
+      if (searchNavigation.request?.noteId === note.id) return
       const maximum = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
       viewport.scrollTop = Math.min(target, maximum)
       latestScrollTop = viewport.scrollTop
@@ -1825,6 +1829,34 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   }, [note.id])
 
   useEffect(() => {
+    const request = searchNavigation.request
+    if (!request || request.noteId !== note.id || note.contentLoaded === false) return
+    if (!isSpecialPreview) {
+      setFindQuery(request.query)
+      setFindOpen(true)
+    }
+    searchNavigation.consume()
+  }, [searchNavigation, note.id, note.contentLoaded, isSpecialPreview])
+
+  useEffect(() => {
+    if (!findOpen || previewing || note.contentLoaded === false) return
+    let frame = 0
+    const refresh = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        if (!editorRef.current) return
+        setFindResult(editorRef.current.findText(findQuery, "next", true))
+        observer.disconnect()
+      })
+    }
+    // 编辑器懒加载时 ref 尚未就绪；监听挂载完成再定位，不使用固定超时猜测加载耗时。
+    const observer = new MutationObserver(refresh)
+    if (editorArticleRef.current) observer.observe(editorArticleRef.current, { childList: true, subtree: true })
+    refresh()
+    return () => { observer.disconnect(); cancelAnimationFrame(frame) }
+  }, [findOpen, findQuery, previewing, note.id, note.contentLoaded])
+
+  useEffect(() => {
     if (!findOpen) return
     const frame = window.requestAnimationFrame(() => findInputRef.current?.focus())
     return () => window.cancelAnimationFrame(frame)
@@ -1875,6 +1907,42 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     document.addEventListener("keydown", handleSelectAll)
     return () => document.removeEventListener("keydown", handleSelectAll)
   }, [isSpecialPreview, previewing])
+
+  useEffect(() => {
+    if (!outlinePinned || compact || isSpecialPreview) return
+    const viewport = editorViewportRef.current
+    if (!viewport) return
+    let frame = 0
+    const refresh = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        const line = readTopSourceLine() ?? 1
+        let active = -1
+        if (previewing) {
+          const top = viewport.getBoundingClientRect().top
+          const headings = viewport.querySelectorAll<HTMLElement>(".markdown-preview :is(h1,h2,h3,h4,h5,h6)[data-source-line]")
+          // 锚点跳转会保留 scroll-margin；高亮判定也留出相同距离，避免跳到第四章却选中第三章。
+          for (const heading of headings) {
+            if (heading.closest(".markdown-preview-embedded")) continue
+            const margin = Number.parseFloat(getComputedStyle(heading).scrollMarginTop) || 0
+            if (heading.getBoundingClientRect().top <= top + margin + 2) {
+              const index = noteOutline.findIndex((item) => item.line === Number(heading.dataset.sourceLine))
+              if (index >= 0) active = index
+            }
+          }
+        } else {
+          noteOutline.forEach((heading, index) => { if (heading.line <= line) active = index })
+        }
+        setActiveOutlineIndex(active)
+      })
+    }
+    // 只在固定大纲时追踪可视区，并合并为每帧一次；复用源码行锚点兼容阅读和编辑排版。
+    viewport.addEventListener("scroll", refresh, { passive: true })
+    const observer = new MutationObserver(refresh)
+    observer.observe(viewport, { childList: true, subtree: true })
+    refresh()
+    return () => { viewport.removeEventListener("scroll", refresh); observer.disconnect(); cancelAnimationFrame(frame) }
+  }, [outlinePinned, compact, isSpecialPreview, noteOutline, previewing, readTopSourceLine])
 
   const revealOutlineHeading = (heading: (typeof noteOutline)[number], index: number) => {
     setOutlineDialogOpen(false)
@@ -1960,6 +2028,8 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
                 <Button aria-label="文档大纲" size="icon-sm" variant="ghost"><ListTree /></Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="note-outline-menu">
+                <DropdownMenuItem onSelect={() => setOutlinePinned((pinned) => !pinned)}>{outlinePinned ? "收起固定大纲" : "固定大纲"}</DropdownMenuItem>
+                <DropdownMenuSeparator />
                 {noteOutline.length > 0 ? noteOutline.map((heading, index) => (
                   <DropdownMenuItem
                     className="note-outline-item"
@@ -2072,9 +2142,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
               onChange={(event) => {
                 const query = event.target.value
                 setFindQuery(query)
-                if (!previewing) window.requestAnimationFrame(() => {
-                  setFindResult(editorRef.current?.findText(query, "next", true) ?? { current: 0, total: 0 })
-                })
+
               }}
               onKeyDown={(event) => {
                 // Esc 由查找栏统一接管，输入框这里只管翻匹配项。
@@ -2144,7 +2212,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
             />
           </Suspense>
         </div>
-      ) : <ScrollArea className="editor-scroll" viewportRef={editorViewportRef}>
+      ) : <div className="editor-body"><ScrollArea className="editor-scroll" viewportRef={editorViewportRef}>
         <DocumentContextMenu
           disabled={isCanvas}
           editorRef={editorRef}
@@ -2256,7 +2324,20 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           <BacklinksPanel backlinks={backlinks} onSelectNote={onSelectNote} />
         </div>
         </DocumentContextMenu>
-      </ScrollArea>}
+      </ScrollArea>
+      {outlinePinned && !compact && !isSpecialPreview && <aside className="pinned-note-outline" aria-label="固定文档大纲">
+        <div className="pinned-outline-header"><strong>文档大纲</strong><Button aria-label="收起固定大纲" size="icon-sm" variant="ghost" onClick={() => setOutlinePinned(false)}><X /></Button></div>
+        <nav aria-label="章节导航">
+          {noteOutline.length ? noteOutline.map((heading, index) => <button
+            key={`${heading.line}-${index}`}
+            type="button"
+            aria-current={index === activeOutlineIndex ? "location" : undefined}
+            onClick={() => revealOutlineHeading(heading, index)}
+            style={{ paddingLeft: `${10 + Math.max(0, heading.level - 1) * 12}px` }}
+          >{heading.text}</button>) : <p>当前笔记没有标题</p>}
+        </nav>
+      </aside>}
+      </div>}
 
       {/* 只读笔记同样要能复制，操作条不跟着格式工具栏一起被 readOnly 关掉，只是收起改写类按钮。 */}
       {compact && !previewing && hasSelection ? (

@@ -140,6 +140,24 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       markdownInputEnhancements(),
       wikiLinkCompletion(() => handlers.current.getWikiLinkSuggestions?.() ?? []),
       EditorView.lineWrapping,
+      EditorView.scrollHandler.of((view, range, options) => {
+        const viewport = view.dom.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')
+        if (!viewport) return false
+        // 正文使用外层 ScrollArea，默认 CodeMirror 滚动无法定位屏外命中。
+        // 行块位置在虚拟行尚未挂载时也可用；这里仅滚动，不在测量阶段 dispatch。
+        const block = view.lineBlockAt(range.head)
+        const top = view.documentTop + block.top
+        const bottom = top + block.height
+        const visible = viewport.getBoundingClientRect()
+        let delta = 0
+        if (options.y === "start") delta = top - visible.top - options.yMargin
+        else if (options.y === "end") delta = bottom - visible.bottom + options.yMargin
+        else if (options.y === "center") delta = (top + bottom - visible.top - visible.bottom) / 2
+        else if (top < visible.top + 24) delta = top - visible.top - 24
+        else if (bottom > visible.bottom - 24) delta = bottom - visible.bottom + 24
+        if (delta) viewport.scrollTop += delta
+        return true
+      }),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) for (const mark of insertionMarks.current) {
           mark.from = update.changes.mapPos(mark.from, 1)
@@ -219,7 +237,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
             return true
           }
           if (view.state.readOnly) return false
-          if (key === "k") {
+          if (key === "k" && !event.shiftKey) {
             event.preventDefault()
             // 光标没有选区、正落在已有链接文字里时改地址，而不是在原文字中间插一段新链接。
             if (focusExistingLinkUrl(view)) return true

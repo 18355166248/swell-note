@@ -12,6 +12,15 @@ function preview(html: string) {
 }
 
 describe("reading-mode search", () => {
+  it("searches the body while a closing dialog still hides its outer container", () => {
+    const root = preview('<p>目标命中</p><span aria-hidden="true">目标命中</span>')
+    document.body.setAttribute("aria-hidden", "true")
+    try {
+      expect(collectPreviewMatches(root, "目标命中")).toHaveLength(1)
+    } finally {
+      document.body.removeAttribute("aria-hidden")
+    }
+  })
   it("finds across inline formatting without joining unrelated paragraphs or buttons", () => {
     const root = preview('<p>查<strong>找</strong>内容</p><p>查</p><p>找</p><button>查找</button><span aria-hidden="true">查找</span>')
     const matches = collectPreviewMatches(root, "查找")

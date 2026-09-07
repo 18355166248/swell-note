@@ -24,3 +24,49 @@ export function selectElementContents(element: Element | null) {
   selection.addRange(range)
   return true
 }
+
+// 捕获阶段只保留搜索专用组合，其余快捷键遵循编辑器已经处理的结果。
+export function registerDesktopShortcuts(options: {
+  canCreateNote: boolean
+  isCreatingNote: boolean
+  isRefreshingVault: boolean
+  onCreateNote: () => void
+  onRefreshVault: () => void
+  onOpenSearch: () => void
+}) {
+  const handleDesktopShortcut = (event: KeyboardEvent) => {
+    // 正文已处理的链接快捷键不能再触发全局搜索；组合输入也不执行工作区动作。
+    if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+    if (window.matchMedia("(max-width: 767px)").matches) return
+    if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat) return
+    // 弹窗开着时这些动作都会打断当前操作：抢走焦点、在背后新建笔记或触发同步。
+    if (hasOpenModal()) return
+    const key = event.key.toLocaleLowerCase()
+    if (key === "k") {
+      if (!event.shiftKey && isTextEntryElement(event.target instanceof Element ? event.target : null)) return
+      event.preventDefault()
+      options.onOpenSearch()
+      return
+    }
+    if (key === "n" && !event.shiftKey && options.canCreateNote && !options.isCreatingNote) {
+      event.preventDefault()
+      options.onCreateNote()
+      return
+    }
+    if (key === "s" && event.shiftKey && !options.isRefreshingVault) {
+      event.preventDefault()
+      options.onRefreshVault()
+    }
+  }
+  // 桌面端高频动作统一由工作区分发，避免输入框和编辑器各自重复注册全局快捷键。
+  // CodeMirror 默认把 Mod+Shift+K 绑定为删行；全局搜索专用组合先在捕获阶段接管，避免修改正文。
+  const captureSearchShortcut = (event: KeyboardEvent) => {
+    if (event.shiftKey && event.key.toLocaleLowerCase() === "k") handleDesktopShortcut(event)
+  }
+  document.addEventListener("keydown", captureSearchShortcut, true)
+  document.addEventListener("keydown", handleDesktopShortcut)
+  return () => {
+    document.removeEventListener("keydown", captureSearchShortcut, true)
+    document.removeEventListener("keydown", handleDesktopShortcut)
+  }
+}
