@@ -29,7 +29,10 @@ export async function readClipboardText(): Promise<string | null> {
 // 这样也不必插入临时节点去抢走编辑器的焦点。
 function copyDocumentSelection() {
   const selection = document.getSelection()
-  if (!selection || selection.isCollapsed) return false
+  const input = document.activeElement
+  const inputSelected = (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)
+    && input.selectionStart !== null && input.selectionStart !== input.selectionEnd
+  if ((!selection || selection.isCollapsed) && !inputSelected) return false
   try {
     return document.execCommand("copy")
   } catch {

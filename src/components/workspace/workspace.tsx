@@ -120,10 +120,12 @@ import { stableNoteRenderIdentity } from "@/lib/note-route-resolution"
 import { MobileNoteSearch } from "@/components/workspace/mobile-note-search"
 import { MobileFolderActionSheet, MobileNoteActionSheet } from "@/components/workspace/mobile-action-sheets"
 import { SelectionActionBar } from "@/components/workspace/selection-action-bar"
+import { DocumentContextMenu } from "@/components/workspace/document-context-menu"
 import { isSelectionDismissTap, keepsSelectionAlive, type PointerOrigin } from "@/components/workspace/selection-dismiss"
 import { hasOpenModal, isTextEntryElement, selectElementContents } from "@/components/workspace/shortcut-scope"
 import {
   ContextMenuRequestDialog,
+  NoteListContextMenu,
   FolderRowContextMenu,
   NoteRowContextMenu,
   type ContextMenuRequest,
@@ -1110,6 +1112,7 @@ function NoteListPanel({
         </Button>
       </div>
 
+      <NoteListContextMenu canCreate={canCreateNote} onCreate={onCreateNote} onSearch={onOpenGlobalSearch}>
       <ScrollArea className="note-list-scroll" viewportRef={setViewportRef}>
         <div className="note-groups">
           {viewportReady && (notes.length > 0 || childFolders.length > 0) ? (
@@ -1128,6 +1131,7 @@ function NoteListPanel({
           ) : viewportReady ? <EmptyNoteList canCreateNote={canCreateNote} isLoading={isLoading} onCreateNote={onCreateNote} onOpenSettings={onOpenSettings} selectedFolder={selectedFolder} /> : null}
         </div>
       </ScrollArea>
+      </NoteListContextMenu>
     </section>
   )
 }
@@ -2119,6 +2123,22 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           </Suspense>
         </div>
       ) : <ScrollArea className="editor-scroll" viewportRef={editorViewportRef}>
+        <DocumentContextMenu
+          disabled={isCanvas}
+          editorRef={editorRef}
+          previewing={previewing}
+          readOnly={readOnly}
+          hasSelection={hasSelection}
+          canUndo={historyState.undo}
+          canRedo={historyState.redo}
+          canHistory={Boolean(activeCacheId)}
+          starred={Boolean(note.starred)}
+          onFind={() => { if (previewing) onNoteViewModeChange("edit"); setFindOpen(true) }}
+          onToggleView={() => onNoteViewModeChange(previewing ? "edit" : "preview")}
+          onToggleStar={() => onUpdateNote({ starred: !note.starred })}
+          onExport={onExportNote}
+          onHistory={() => setHistoryDialogOpen(true)}
+        >
         <div className="document-canvas">
           {previewing || note.readOnly === true ? (
             <h1 className="document-title document-title-readonly">{note.title || "未命名笔记"}</h1>
@@ -2213,6 +2233,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           )}
           <BacklinksPanel backlinks={backlinks} onSelectNote={onSelectNote} />
         </div>
+        </DocumentContextMenu>
       </ScrollArea>}
 
       {/* 只读笔记同样要能复制，操作条不跟着格式工具栏一起被 readOnly 关掉，只是收起改写类按钮。 */}

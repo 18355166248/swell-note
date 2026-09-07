@@ -56,7 +56,7 @@ export function findTableWrapperAtLine(root: ParentNode, lineStart: number): HTM
 
 // 新表格插入后光标停在整段 Markdown 之后，用户还得再点一次单元格才能改表头，
 // 体验上比"插入即可编辑"的其它模板慢一拍。这里等表格 Widget 渲染完，
-// 直接程序化点击第一个表头格，复用它自带的"进入即全选"效果，改名可以直接打字。
+// 直接程序化点击第一个表头格，沿用单元格光标编辑路径。
 function focusFirstTableHeaderCell(view: EditorView, insertFrom: number) {
   window.setTimeout(() => {
     const lineStart = view.state.doc.lineAt(Math.min(insertFrom, view.state.doc.length)).from
@@ -297,7 +297,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           target.input.setRangeText("", inputFrom, inputTo, "end")
           target.commit()
         } else {
-          if (view.state !== state || !view.dom.isConnected) return false
+          if (view.state.doc !== state.doc || !view.state.selection.eq(state.selection) || view.state.readOnly || !view.dom.isConnected) return false
           view.dispatch({ changes: { from: range.from, to: range.to }, selection: { anchor: range.from }, userEvent: "delete.cut" })
         }
         view.focus()
@@ -370,7 +370,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           target.input.dispatchEvent(new Event("input", { bubbles: true }))
           return true
         }
-        if (view.state !== state) return false
+        // 菜单关闭 / 焦点恢复也会产生事务；只核验正文与选区，避免把无关状态更新误判为用户改写。
+        if (view.state.doc !== state.doc || !view.state.selection.eq(state.selection) || view.state.readOnly) return false
         const selection = view.state.selection.main
         view.dispatch({
           changes: { from: selection.from, to: selection.to, insert: text },

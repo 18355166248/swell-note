@@ -67,6 +67,23 @@ describe("writeClipboardText", () => {
     await expect(writeClipboardText("")).resolves.toBe(false)
     expect(writeText).not.toHaveBeenCalled()
   })
+
+  it("单元格 textarea 的选区也可走原生复制回退", async () => {
+    stubSelection(true)
+    const execCommand = vi.fn().mockReturnValue(true)
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand })
+    const input = document.createElement("textarea")
+    input.value = "单元格内容"
+    document.body.append(input)
+    try {
+      input.focus()
+      input.setSelectionRange(0, 3)
+      await expect(writeClipboardText("单元格")).resolves.toBe(true)
+      expect(execCommand).toHaveBeenCalledWith("copy")
+    } finally {
+      input.remove()
+    }
+  })
 })
 
 describe("readClipboardText", () => {

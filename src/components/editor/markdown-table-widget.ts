@@ -498,6 +498,7 @@ export class TableWidget extends WidgetType {
     const button = document.createElement("button")
     button.type = "button"
     button.textContent = label
+    button.dataset.tableAction = label === "添加行" ? "add-row" : "add-column"
     button.title = label
     button.addEventListener("mousedown", (event) => event.preventDefault())
     button.addEventListener("click", (event) => {
@@ -778,7 +779,10 @@ export class TableWidget extends WidgetType {
       restoreCell()
       this.replaceTable(pasteTableCells(table, rowIndex + 1, columnIndex, cells), { row: rowIndex + 1, column: columnIndex })
     })
-    input.addEventListener("blur", () => commit(), { once: true })
+    input.addEventListener("blur", () => {
+      // 自定义菜单暂时接过焦点，输入框和选区仍属于当前单元格；菜单关闭后再恢复或提交。
+      if (input.dataset.contextMenuActive !== "true") commit()
+    })
     input.addEventListener("keydown", (event) => {
       // 候选词确认不能被当作单元格提交或下移。
       if (event.isComposing || event.keyCode === 229) return

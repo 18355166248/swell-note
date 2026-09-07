@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react"
-import { Check, FileText, Folder, FolderInput, FolderOpen, FolderPlus, PencilLine, Plus, Star, StarOff, Trash2 } from "lucide-react"
+import { Check, FileText, Folder, FolderInput, FolderOpen, FolderPlus, PencilLine, Plus, Search, Star, StarOff, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -31,6 +31,22 @@ export type NoteContextActions = {
   onOpen: (note: Note) => void
   onRequest: (request: ContextMenuRequest) => void
   onToggleStar: (noteId: string) => void
+}
+
+export function NoteListContextMenu({ children, canCreate, onCreate, onSearch }: {
+  children: ReactNode
+  canCreate: boolean
+  onCreate: () => void
+  onSearch: () => void
+}) {
+  return <ContextMenu>
+    {/* 嵌套行菜单会先 preventDefault；空白菜单只处理尚未被行接管的右键。 */}
+    <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+    <ContextMenuContent>
+      <ContextMenuItem disabled={!canCreate} onSelect={onCreate}><Plus />新建笔记</ContextMenuItem>
+      <ContextMenuItem onSelect={onSearch}><Search />全局搜索</ContextMenuItem>
+    </ContextMenuContent>
+  </ContextMenu>
 }
 
 export function NoteRowContextMenu({ actions, children, note }: {

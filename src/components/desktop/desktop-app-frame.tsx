@@ -4,6 +4,7 @@ import type { ReactNode } from "react"
 
 import swellNoteLogo from "@/assets/brand/swell-note-logo-ribbon-s.svg"
 import { useNativeContextMenuSuppression } from "@/components/desktop/native-context-menu"
+import { TextContextMenu } from "@/components/workspace/text-context-menu"
 
 type DesktopAppFrameProps = { children: ReactNode }
 
@@ -13,14 +14,15 @@ function isDesktopTauri() {
 
 export function DesktopAppFrame({ children }: DesktopAppFrameProps) {
   const desktop = isDesktopTauri()
-  // 桌面外壳里 WebView 自带的系统菜单只会露出“重新加载 / 检查元素”这类调试项，统一屏蔽后由各处自定义菜单接管。
-  useNativeContextMenuSuppression(desktop)
-  if (!desktop) return children
+  // 浏览器和客户端统一使用应用菜单；普通输入框由 TextContextMenu 提供剪贴板操作。
+  useNativeContextMenuSuppression(true)
+  if (!desktop) return <>{children}<TextContextMenu /></>
 
   return (
     <div className="desktop-app-frame">
       <DesktopTitleBar />
       <div className="desktop-app-content">{children}</div>
+      <TextContextMenu />
     </div>
   )
 }

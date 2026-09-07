@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test"
 
-async function seedCachedVault(page: Page, noteContent?: string) {
+async function seedCachedVault(page: Page, noteContent?: string, readOnly = false) {
   await page.goto("/#/notes")
-  await page.evaluate(async (noteContent) => {
+  await page.evaluate(async ({ noteContent, readOnly }) => {
     const cacheId = "e2e-vault"
     const noteA = {
       content: "",
@@ -11,10 +11,10 @@ async function seedCachedVault(page: Page, noteContent?: string) {
       folder: "测试",
       id: "webdav:/Swell/测试/第一篇.md",
       preview: "第一篇摘要",
-      readOnly: false,
+      readOnly,
       remotePath: "/Swell/测试/第一篇.md",
       revision: '"a1"',
-      source: "webdav",
+      source: readOnly ? "local" : "webdav",
       starred: false,
       syncStatus: "synced",
       title: "第一篇",
@@ -88,7 +88,7 @@ async function seedCachedVault(page: Page, noteContent?: string) {
       transaction.onerror = () => reject(transaction.error)
     })
     database.close()
-  }, noteContent)
+  }, { noteContent, readOnly })
   await page.reload()
 }
 
@@ -152,6 +152,108 @@ test.describe("编辑态链接点击跳转", () => {
 })
 
 test.describe("编辑细节", () => {
+  test("右键菜单保留正文选区并支持格式、撤销与粘贴", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedCachedVault(page, "记录今天的想法")
+    await page.getByRole("button", { name: "编辑模式", exact: true }).click()
+    const editor = page.locator(".cm-content")
+    await editor.click()
+    await editor.press("ControlOrMeta+a")
+    await editor.click({ button: "right" })
+    await page.getByRole("menuitem", { name: "加粗", exact: true }).click()
+    await expect(editor).toHaveText("**记录今天的想法**")
+    await editor.click({ button: "right" })
+    await page.getByRole("menuitem", { name: "撤销", exact: true }).click()
+    await expect(editor).toHaveText("记录今天的想法")
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { readText: async () => "新的正文", writeText: async () => {} } })
+    })
+    await editor.click()
+    await editor.press("ControlOrMeta+a")
+    await editor.click({ button: "right" })
+    await page.getByRole("menuitem", { name: "粘贴", exact: true }).click()
+    await expect(editor).toHaveText("新的正文")
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { sessionStorage.setItem("copied", text) } } })
+    })
+    await editor.press("ControlOrMeta+a")
+    await editor.click({ button: "right" })
+    await page.getByRole("menuitem", { name: "剪切", exact: true }).click()
+    await expect(editor.locator(".cm-placeholder")).toBeVisible()
+    expect(await page.evaluate(() => sessionStorage.getItem("copied"))).toBe("新的正文")
+    await editor.click({ button: "right" })
+    await page.getByRole("menuitem", { name: "粘贴", exact: true }).click()
+    await expect(page.getByRole("status").filter({ hasText: "无法读取剪贴板" })).toBeVisible()
+    await expect(editor.locator(".cm-placeholder")).toBeVisible()
+  })
+
+  test("右键只读正文禁止修改但保留复制", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedCachedVault(page, "只读正文", true)
+    await page.getByRole("button", { name: "编辑模式", exact: true }).click()
+    const editor = page.locator(".cm-content")
+    await editor.click({ button: "right" })
+    await expect(page.getByRole("menuitem", { name: "粘贴", exact: true })).toBeDisabled()
+    await expect(page.getByRole("menuitem", { name: "加粗", exact: true })).toBeDisabled()
+    await page.getByRole("menuitem", { name: "全选正文", exact: true }).click()
+    await editor.click({ button: "right" })
+    await expect(page.getByRole("menuitem", { name: "复制", exact: true })).toBeEnabled()
+    await expect(page.getByRole("menuitem", { name: "剪切", exact: true })).toBeDisabled()
+  })
+
+  test("右键输入框替换选区，表格菜单操作命中的行", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedCachedVault(page, "开头\n\n| 名称 | 数值 |\n| --- | --- |\n| 第一行 | 1 |\n| 第二行 | 2 |\n\n结尾")
+    await page.getByRole("button", { name: "编辑模式", exact: true }).click()
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { readText: async () => "替换", writeText: async () => {} } })
+    })
+    const title = page.getByRole("textbox", { name: "笔记标题" })
+    await title.focus()
+    await title.evaluate((el: HTMLInputElement) => el.setSelectionRange(0, 1))
+    await title.click({ button: "right" })
+    await page.getByRole("menuitem", { name: "粘贴", exact: true }).click()
+    await expect(title).toHaveValue("替换一篇")
+    const table = page.locator(".cm-md-table-wrap")
+    await table.locator("td").nth(2).click({ button: "right" })
+    await expect(page.getByRole("menuitem", { name: "删除行", exact: true })).toBeEnabled()
+    await page.getByRole("menuitem", { name: "删除行", exact: true }).click()
+    await expect(table.locator("tbody tr")).toHaveCount(1)
+    await expect(table.locator("tbody")).toContainText("第一行")
+    await table.locator("th").first().click({ button: "right" })
+    await expect(page.getByRole("menuitem", { name: "删除行", exact: true })).toBeDisabled()
+    await page.keyboard.press("Escape")
+    await table.locator("td").first().click()
+    const input = table.locator("textarea")
+    await input.press("ControlOrMeta+a")
+    await input.click({ button: "right" })
+    await page.getByRole("menuitem", { name: "粘贴", exact: true }).click()
+    await expect(input).toHaveValue("替换")
+    await input.press("Tab")
+    await expect(table.locator("td").first()).toHaveText("替换")
+  })
+
+  test("右键列表空白与阅读正文显示各自操作", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedCachedVault(page, "用于阅读的正文")
+    const viewport = page.locator(".note-list-scroll")
+    const bounds = await viewport.boundingBox()
+    await viewport.click({ button: "right", position: { x: 20, y: bounds!.height - 20 } })
+    await expect(page.getByRole("menuitem", { name: "新建笔记", exact: true })).toBeVisible()
+    await page.keyboard.press("Escape")
+    await page.locator(".markdown-preview").click({ button: "right" })
+    await expect(page.getByRole("menuitem", { name: "导出 Markdown 文件", exact: true })).toBeVisible()
+    await page.getByRole("menuitem", { name: "全选正文", exact: true }).click()
+    expect(await page.evaluate(() => window.getSelection()?.toString())).toContain("用于阅读的正文")
+    await expect(page.getByRole("menu")).toHaveCount(0)
+    const prevented = await page.locator(".editor-titlebar").evaluate((el) => {
+      const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true })
+      el.dispatchEvent(event)
+      return event.defaultPrevented
+    })
+    expect(prevented).toBe(true)
+  })
+
   test("单元格默认续写，长表格工具条常驻并吸顶", async ({ page }, testInfo) => {
     const content = "开头\n\n| 名称 | 数值 |\n| --- | --- |\n"
       + Array.from({ length: 60 }, (_, i) => `| 项目${i + 1} | ${i + 1} |`).join("\n")
