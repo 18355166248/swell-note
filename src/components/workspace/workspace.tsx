@@ -121,6 +121,7 @@ import { MobileNoteSearch } from "@/components/workspace/mobile-note-search"
 import { MobileFolderActionSheet, MobileNoteActionSheet } from "@/components/workspace/mobile-action-sheets"
 import { SelectionActionBar } from "@/components/workspace/selection-action-bar"
 import { DocumentContextMenu } from "@/components/workspace/document-context-menu"
+import { PreviewSearch } from "@/components/workspace/preview-search"
 import { isSelectionDismissTap, keepsSelectionAlive, type PointerOrigin } from "@/components/workspace/selection-dismiss"
 import { hasOpenModal, isTextEntryElement, selectElementContents } from "@/components/workspace/shortcut-scope"
 import {
@@ -1592,6 +1593,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   const [findReplacement, setFindReplacement] = useState("")
   const [findResult, setFindResult] = useState({ current: 0, total: 0 })
   const findInputRef = useRef<HTMLInputElement>(null)
+  const previewSearchRef = useRef(new PreviewSearch())
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [insertingAttachment, setInsertingAttachment] = useState(false)
   const attachmentBusyRef = useRef(false)
@@ -1792,8 +1794,28 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     }), [note.remotePath, wikiLinkNotes])
 
   const runFind = useCallback((direction: "next" | "previous" = "next", fromStart = false) => {
-    setFindResult(editorRef.current?.findText(findQuery, direction, fromStart) ?? { current: 0, total: 0 })
-  }, [findQuery])
+    setFindResult(previewing
+      ? previewSearchRef.current.find(editorArticleRef.current?.querySelector(".markdown-preview") ?? null, findQuery, direction, fromStart)
+      : editorRef.current?.findText(findQuery, direction, fromStart) ?? { current: 0, total: 0 })
+  }, [findQuery, previewing])
+
+  useEffect(() => {
+    const search = previewSearchRef.current
+    if (!findOpen || !previewing) { search.clear(); return }
+    const article = editorArticleRef.current
+    if (!article) return
+    let frame = 0
+    const refresh = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => setFindResult(search.find(article.querySelector(".markdown-preview"), findQuery, "next", false, true)))
+    }
+    // 长文和嵌入内容会分批渲染，查找数量跟着补齐，不能只搜首屏已挂载的段落。
+    const observer = new MutationObserver(refresh)
+    const content = article.querySelector(".document-canvas")
+    if (content) observer.observe(content, { childList: true, subtree: true, characterData: true })
+    refresh()
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); search.clear() }
+  }, [findOpen, findQuery, previewing, note.id])
 
   useEffect(() => {
     setFindOpen(false)
@@ -1827,13 +1849,12 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLocaleLowerCase() !== "f") return
       if (hasOpenModal()) return
       event.preventDefault()
-      // 阅读状态下先切到编辑器再打开查找，确保选中结果可以滚动到可见区域。
-      if (previewing) onNoteViewModeChange("edit")
       setFindOpen(true)
+      window.requestAnimationFrame(() => { findInputRef.current?.focus(); findInputRef.current?.select() })
     }
     window.addEventListener("keydown", handleFindShortcut)
     return () => window.removeEventListener("keydown", handleFindShortcut)
-  }, [isSpecialPreview, onNoteViewModeChange, previewing])
+  }, [isSpecialPreview])
 
   useEffect(() => {
     // 画布有自己的全选语义（选中所有图形），不接管。
@@ -2042,7 +2063,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
         />
       ) : null}
 
-      {findOpen && !previewing && !isSpecialPreview ? (
+      {findOpen && !isSpecialPreview ? (
         <div className="editor-find-bar" role="search">
           <div className="editor-find-field">
             <Search />
@@ -2051,7 +2072,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
               onChange={(event) => {
                 const query = event.target.value
                 setFindQuery(query)
-                window.requestAnimationFrame(() => {
+                if (!previewing) window.requestAnimationFrame(() => {
                   setFindResult(editorRef.current?.findText(query, "next", true) ?? { current: 0, total: 0 })
                 })
               }}
@@ -2065,11 +2086,12 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
               ref={findInputRef}
               value={findQuery}
             />
-            <span aria-live="polite">{findQuery ? `${findResult.current}/${findResult.total}` : "0/0"}</span>
+            {findQuery ? <button aria-label="清空查找" onClick={() => { setFindQuery(""); setFindResult({ current: 0, total: 0 }); findInputRef.current?.focus() }} type="button"><X /></button> : null}
+            <span aria-live="polite">{findQuery && !findResult.total ? "无匹配" : `${findResult.current}/${findResult.total}`}</span>
           </div>
           <button aria-label="上一个匹配项" disabled={!findResult.total} onClick={() => runFind("previous")} type="button"><ChevronUp /></button>
           <button aria-label="下一个匹配项" disabled={!findResult.total} onClick={() => runFind("next")} type="button"><ChevronDown /></button>
-          {!readOnly ? (
+          {!readOnly && !previewing ? (
             <>
               <input
                 aria-label="替换为"
@@ -2133,7 +2155,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           canRedo={historyState.redo}
           canHistory={Boolean(activeCacheId)}
           starred={Boolean(note.starred)}
-          onFind={() => { if (previewing) onNoteViewModeChange("edit"); setFindOpen(true) }}
+          onFind={() => setFindOpen(true)}
           onToggleView={() => onNoteViewModeChange(previewing ? "edit" : "preview")}
           onToggleStar={() => onUpdateNote({ starred: !note.starred })}
           onExport={onExportNote}

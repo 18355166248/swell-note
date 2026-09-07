@@ -706,8 +706,11 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .editor-find-field { position: relative; display: flex; min-width: 180px; max-width: 280px; flex: 1; align-items: center; }
 .editor-find-field > svg { position: absolute; left: 9px; width: 14px; height: 14px; color: var(--muted-foreground); pointer-events: none; }
 .editor-find-field input, .editor-replace-input { min-width: 0; height: 30px; border: 1px solid var(--border); border-radius: 6px; background: white; padding: 0 9px; outline: none; font-size: 12px; }
-.editor-find-field input { width: 100%; padding: 0 48px 0 29px; }
-.editor-find-field > span { position: absolute; right: 8px; color: var(--muted-foreground); font-size: 10px; pointer-events: none; }
+.editor-find-field input { width: 100%; padding: 0 90px 0 29px; }
+.editor-find-field > span { position: absolute; right: 34px; color: var(--muted-foreground); font-size: 10px; pointer-events: none; }
+.editor-find-field > button { position: absolute; right: 4px; display: grid; width: 24px; height: 24px; place-items: center; border: 0; border-radius: 4px; background: transparent; color: var(--muted-foreground); cursor: pointer; }
+.editor-find-field > button:hover { background: var(--muted); color: var(--foreground); }
+.editor-find-field > button svg { width: 13px; height: 13px; }
 .editor-replace-input { width: min(22vw,180px); }
 .editor-find-field input:focus, .editor-replace-input:focus { border-color: color-mix(in oklab,var(--primary) 55%,var(--border)); box-shadow: 0 0 0 2px color-mix(in oklab,var(--primary) 12%,transparent); }
 .note-outline-menu { width: min(300px,calc(100vw - 24px)); max-height: min(440px,70dvh); overflow-y: auto; }
@@ -734,7 +737,6 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .note-edit-mode-status[data-status="error"], .note-edit-mode-status[data-status="conflict"] { background: color-mix(in oklab,var(--destructive) 9%,white); color: var(--destructive); }
 .note-editor[data-view-mode="edit"]:not([data-excalidraw="true"]) .editor-scroll { background: color-mix(in oklab,var(--primary) 1.5%,white); }
 .dark .note-editor[data-view-mode="edit"]:not([data-excalidraw="true"]) .editor-scroll { background: color-mix(in oklab,var(--primary) 3%,var(--background)); }
-.note-editor[data-view-mode="edit"]:not([data-excalidraw="true"]) .document-canvas { box-shadow: inset 2px 0 0 color-mix(in oklab,var(--primary) 58%,transparent); }
 .markdown-editor-shell { --editor-min-height: calc(100dvh - 250px); width: 100%; min-height: var(--editor-min-height); color: #28313e; }
 .markdown-editor-shell .cm-editor { min-height: inherit; background: transparent; font-size: 14px; }
 .markdown-editor-shell .cm-editor.cm-focused,
@@ -825,6 +827,16 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-preview h2 { padding-bottom: .28em; border-bottom: 1px solid var(--border); font-size: 1.4em; }
 .markdown-preview h3 { font-size: 1.16em; }
 .markdown-preview p { margin: .85em 0; }
+.markdown-preview ::highlight(swell-find) { background: #ffe9a3; color: #332600; }
+.markdown-preview ::highlight(swell-find-current) { background: #ffbd59; color: #241800; }
+/* 只绘制文字选区，避免 WebKit 在跨段落全选时把正文两侧留白染蓝。 */
+.markdown-preview::selection, .markdown-preview *::selection { background: transparent; color: inherit; }
+.markdown-preview .markdown-selection-text::selection,
+.markdown-preview code::selection, .markdown-preview code *::selection,
+.markdown-preview .katex *::selection,
+.markdown-preview .markdown-properties *::selection,
+.markdown-preview .wiki-embed-title::selection, .markdown-preview .wiki-embed-title *::selection,
+.markdown-preview .wiki-embed-state::selection { background: color-mix(in oklab,var(--primary) 24%,transparent); color: inherit; }
 .markdown-preview ul, .markdown-preview ol { margin: .8em 0; padding-left: 1.65em; }
 .markdown-preview ul { list-style: disc; }
 .markdown-preview ol { list-style: decimal; }

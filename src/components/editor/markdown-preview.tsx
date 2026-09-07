@@ -3,6 +3,7 @@ import { ImageZoomOverlay, openImageZoom } from "./image-zoom"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
 import remarkGfm from "remark-gfm"
+import { rehypeSelectionText } from "./rehype-selection-text"
 
 import {
   extractEmbeddedSection,
@@ -47,7 +48,7 @@ const MathMarkdown = lazy(() => import("./math-markdown"))
 const MermaidDiagram = lazy(() => import("./mermaid-diagram"))
 
 const remarkPlugins = [remarkGfm, remarkObsidian]
-const rehypePlugins = [rehypeHighlight]
+const rehypePlugins = [rehypeHighlight, rehypeSelectionText]
 
 // 任务勾选框由 remark-gfm 合成、自身没有源码位置，行号从所属任务列表项（li）经 Context 传入。
 const TaskItemLineContext = createContext<number | null>(null)

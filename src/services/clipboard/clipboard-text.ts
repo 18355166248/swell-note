@@ -2,7 +2,7 @@
 // navigator.clipboard 可能整个缺席或调用即拒绝。写入因此保留 execCommand 回退，
 // 读取没有等效回退（WebKit 早已禁用 execCommand("paste")），失败时如实返回 null 交给调用方提示。
 
-export async function writeClipboardText(text: string): Promise<boolean> {
+export async function writeClipboardText(text: string, fallback: "selection" | "text" = "selection"): Promise<boolean> {
   if (!text) return false
   if (navigator.clipboard?.writeText) {
     try {
@@ -12,7 +12,31 @@ export async function writeClipboardText(text: string): Promise<boolean> {
       // 交给下面的选区回退再试一次。
     }
   }
-  return copyDocumentSelection()
+  return fallback === "text" ? copyExactText(text) : copyDocumentSelection()
+}
+
+function copyExactText(text: string) {
+  // 链接地址不同于显示文字；原生回退必须复制入参，不能误复制页面上旧的选区。
+  const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  const selection = document.getSelection()
+  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange()) : []
+  const input = document.createElement("textarea")
+  input.value = text
+  input.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0"
+  document.body.append(input)
+  try {
+    input.select()
+    return document.execCommand("copy")
+  } catch {
+    return false
+  } finally {
+    input.remove()
+    if (focused?.isConnected) focused.focus({ preventScroll: true })
+    if (selection && ranges.every((range) => range.startContainer.isConnected && range.endContainer.isConnected)) {
+      selection.removeAllRanges()
+      for (const range of ranges) selection.addRange(range)
+    }
+  }
 }
 
 export async function readClipboardText(): Promise<string | null> {

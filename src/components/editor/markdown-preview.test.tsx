@@ -16,6 +16,19 @@ const baseProps = {
 }
 
 describe("Markdown preview integration", () => {
+  it("keeps selected text and code intact when adding inline selection paint", () => {
+    const html = renderToStaticMarkup(<MarkdownPreview {...baseProps} content={'正文 **加粗** 和 [链接](https://example.com)\n\n```js\nconst value = 1\n```'} onResolveWikiNote={() => ({ status: "missing" })} />)
+    const rendered = document.createElement("div")
+    rendered.innerHTML = html
+    const paragraph = rendered.querySelector("p")!
+    const range = document.createRange()
+    range.selectNodeContents(paragraph)
+    expect(range.toString()).toBe("正文 加粗 和 链接")
+    expect(paragraph.querySelector(".markdown-selection-text")).not.toBeNull()
+    expect(rendered.querySelector("code")?.textContent).toBe("const value = 1\n")
+    expect(rendered.querySelector("code .markdown-selection-text")).toBeNull()
+  })
+
   it("preserves table alignment and footnote return anchors", () => {
     const html = renderToStaticMarkup(<MarkdownPreview {...baseProps} content={"| 名称 | 数量 |\n| --- | ---: |\n| A | 12 |\n\n正文[^1]\n\n[^1]: 脚注内容"} onResolveWikiNote={() => ({ status: "missing" })} />)
     expect(html).toContain('text-align:right')
@@ -264,7 +277,9 @@ describe("Markdown preview integration", () => {
       />,
     )
 
-    expect(output).toContain("<mark>是这里</mark>")
+    const rendered = document.createElement("div")
+    rendered.innerHTML = output
+    expect(rendered.querySelector("mark")?.textContent).toBe("是这里")
     expect(output).not.toContain("内部注释")
     expect(output).not.toContain("整段注释")
   })

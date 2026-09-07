@@ -18,6 +18,34 @@ afterEach(() => {
 })
 
 describe("writeClipboardText", () => {
+  it("复制链接的回退使用真实地址并还原焦点和原选区", async () => {
+    const paragraph = document.createElement("p")
+    paragraph.textContent = "旧选区"
+    const button = document.createElement("button")
+    document.body.append(paragraph, button)
+    button.focus()
+    const range = document.createRange()
+    range.selectNodeContents(paragraph)
+    document.getSelection()!.removeAllRanges()
+    document.getSelection()!.addRange(range)
+    const execCommand = vi.fn(() => {
+      expect(document.querySelector("textarea")?.value).toBe("https://example.com/docs")
+      return true
+    })
+    Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand })
+    try {
+      await expect(writeClipboardText("https://example.com/docs", "text")).resolves.toBe(true)
+      expect(execCommand).toHaveBeenCalledWith("copy")
+      expect(document.querySelector("textarea")).toBeNull()
+      expect(document.activeElement).toBe(button)
+      expect(document.getSelection()?.toString()).toBe("旧选区")
+    } finally {
+      document.getSelection()?.removeAllRanges()
+      paragraph.remove()
+      button.remove()
+    }
+  })
+
   it("走 clipboard API 写入选中的文本", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     stubClipboard({ writeText })
