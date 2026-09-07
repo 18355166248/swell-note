@@ -1,8 +1,8 @@
 import { expect, test, type Page } from "@playwright/test"
 
-async function seedCachedVault(page: Page) {
+async function seedCachedVault(page: Page, noteContent?: string) {
   await page.goto("/#/notes")
-  await page.evaluate(async () => {
+  await page.evaluate(async (noteContent) => {
     const cacheId = "e2e-vault"
     const noteA = {
       content: "",
@@ -58,7 +58,7 @@ async function seedCachedVault(page: Page) {
       sourceKind: "webdav",
     })
     transaction.objectStore("settings").put({ key: "last-cache", value: cacheId })
-    const contentA = [
+    const contentA = noteContent ?? [
       "# 第一篇",
       "",
       "标准笔记链接：[第二篇](./%E7%AC%AC%E4%BA%8C%E7%AF%87.md)",
@@ -88,7 +88,7 @@ async function seedCachedVault(page: Page) {
       transaction.onerror = () => reject(transaction.error)
     })
     database.close()
-  })
+  }, noteContent)
   await page.reload()
 }
 
@@ -152,6 +152,43 @@ test.describe("编辑态链接点击跳转", () => {
 })
 
 test.describe("编辑细节", () => {
+  test("单元格默认续写，长表格工具条常驻并吸顶", async ({ page }, testInfo) => {
+    const content = "开头\n\n| 名称 | 数值 |\n| --- | --- |\n"
+      + Array.from({ length: 60 }, (_, i) => `| 项目${i + 1} | ${i + 1} |`).join("\n")
+      + "\n\n表格后正文"
+    await seedCachedVault(page, content)
+    const mobile = testInfo.project.name === "mobile-chrome"
+    const workspace = page.locator(mobile ? ".mobile-workspace:visible" : ".desktop-workspace:visible")
+    if (mobile) {
+      await workspace.getByText("测试", { exact: true }).first().click()
+      await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    }
+    await workspace.getByRole("button", { name: "编辑模式" }).click()
+    const table = workspace.locator(".cm-md-table-wrap")
+    const toolbar = table.locator(".cm-md-table-toolbar")
+    await expect(toolbar).toBeVisible()
+    const cell = table.locator("td").first()
+    await cell.click()
+    const input = table.locator("textarea")
+    await expect(input).toBeFocused()
+    expect(await input.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd])).toEqual([3, 3])
+    await input.press("End")
+    await input.press("X")
+    await expect(input).toHaveValue("项目1X")
+    await input.press("Tab")
+    await expect(table.locator("td").first()).toHaveText("项目1X")
+    // 在实际滚动容器中移到表格下半部，验证吸顶几何位置和菜单操作，而不只断言 CSS。
+    await table.locator("tr").nth(45).scrollIntoViewIfNeeded()
+    await expect(toolbar).toBeInViewport()
+    const tableBox = await table.boundingBox()
+    const toolbarBox = await toolbar.boundingBox()
+    expect(toolbarBox!.y).toBeGreaterThan(tableBox!.y + 100)
+    await toolbar.getByLabel("行列操作").click()
+    await expect(table.getByRole("button", { name: "添加行", exact: true })).toBeInViewport()
+    await table.getByRole("button", { name: "添加行", exact: true }).click()
+    await expect(table.locator("tbody tr")).toHaveCount(61)
+  })
+
   test("标题中文确认不失焦，取消不重命名，回车进入正文", async ({ page }, testInfo) => {
     await seedCachedVault(page)
     const mobile = testInfo.project.name === "mobile-chrome"

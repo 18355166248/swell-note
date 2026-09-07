@@ -723,8 +723,8 @@ export class TableWidget extends WidgetType {
     input.addEventListener("input", resizeInput)
     // 单元格本身已经在视口内，禁止 focus 再次滚动页面，否则整张表会产生明显位移。
     input.focus({ preventScroll: true })
-    // 进入单元格即全选原内容：Tab/Enter 连续填表时直接输入就能覆盖旧值，不必先手动全选。
-    input.select()
+    // 默认续写原内容，避免点入后直接输入误覆盖整格；仍可手动选区或全选替换。
+    input.setSelectionRange(input.value.length, input.value.length)
 
     let finished = false
     let unregister = () => {}
