@@ -1,6 +1,8 @@
 /* 表格 Widget 的视觉规则跟随实现就近维护，避免编辑器全局样式继续承担组件细节。 */
 .markdown-editor-shell .cm-content.cm-lineWrapping { width: 100%; min-width: 0; }
 .markdown-editor-shell .cm-md-table-wrap { box-sizing: border-box; max-width: 100%; min-width: 0; margin: 8px 0; cursor: text; border: 1px solid var(--border); border-radius: 9px; background: var(--background); }
+/* 选区建立后焦点由 wrapper 承接键盘事件，选中高亮本身即焦点指示，不再描边。 */
+.markdown-editor-shell .cm-md-table-wrap:focus { outline: none; }
 .markdown-editor-shell .cm-md-table-wrap[data-width-mode="content"] { width: fit-content; max-width: 100%; }
 .markdown-editor-shell .cm-md-table-wrap[data-width-mode="full"],
 .markdown-editor-shell .cm-md-table-wrap[data-width-mode="equal"],
@@ -80,4 +82,24 @@
 .cm-md-table-menu-panel[popover]:not(:popover-open) { display: none; }
 @media (max-width: 640px) {
   .markdown-editor-shell .cm-md-table-menu-panel button { min-height: 44px; font-size: 14px; }
+}
+
+/* 矩形选区：拖选/Shift 扩展出的多格选择只用背景标示（不写入文档），
+   与单格目标（仅驱动工具栏、无视觉变化）区分开。 */
+.markdown-editor-shell .cm-md-table .cm-md-table-cell-in-range { background: color-mix(in oklab, var(--primary) 14%, transparent); }
+.markdown-editor-shell .cm-md-table th.cm-md-table-cell-in-range { background: color-mix(in oklab, var(--primary) 20%, var(--panel-soft)); }
+/* 拖选期间禁止原生文字选择，避免选区高亮与文字选择互相打架。 */
+.markdown-editor-shell .cm-md-table-wrap[data-range-selecting="true"] { user-select: none; }
+.markdown-editor-shell .cm-md-table-wrap[data-range-selecting="true"] .cm-md-table { cursor: cell; }
+
+/* 选区浮层：就近提供批量操作。挂在 body 上，层级与表格菜单面板一致。 */
+.cm-md-table-floatbar { position: fixed; z-index: 100; display: flex; align-items: center; gap: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--popover); color: var(--popover-foreground); padding: 4px; box-shadow: 0 10px 30px rgb(15 23 42 / 14%); }
+.cm-md-table-floatbar button { min-height: 28px; border: 0; border-radius: 5px; background: transparent; padding: 3px 8px; color: var(--muted-foreground); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.cm-md-table-floatbar button:hover { background: var(--blue-soft); color: var(--primary); }
+.cm-md-table-floatbar button:disabled { opacity: .4; cursor: not-allowed; }
+.cm-md-table-floatbar button:disabled:hover { background: transparent; color: var(--muted-foreground); }
+.cm-md-table-floatbar [data-float-action^="delete"]:not(:disabled):hover { background: #fff0f0; color: #c93636; }
+.dark .cm-md-table-floatbar [data-float-action^="delete"]:not(:disabled):hover { background: color-mix(in oklab, var(--destructive) 16%, var(--background)); color: var(--destructive); }
+@media (max-width: 640px) {
+  .cm-md-table-floatbar button { min-height: 36px; padding: 3px 10px; font-size: 13px; }
 }

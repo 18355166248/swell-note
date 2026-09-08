@@ -273,3 +273,50 @@ export function toggleBlockFormat(view: EditorView, template: string) {
   view.focus()
   return true
 }
+
+export type EditorFormatState = {
+  code: boolean
+  emphasis: boolean
+  heading: 0 | 1 | 2 | 3
+  strike: boolean
+  strong: boolean
+}
+
+// 工具栏高亮：汇报光标或选区当前的格式。行内格式要求选区被同一标记节点完整覆盖——
+// 混合格式的选区（只有一部分文字加粗）判定为未激活，点击按钮再统一补齐；
+// 标题要求选区覆盖的每个内容行都是同级 ATX 标题，代码块与表格行不参与判定。
+export function detectFormatState(state: EditorState): EditorFormatState {
+  const range = state.selection.main
+  const markActive = (name: string) => findEnclosingMark(state, range.from, range.to, name) !== null
+
+  const first = state.doc.lineAt(range.from)
+  // 选区恰好结束于下一行行首时，该行不算入选区（与 toggleBlockFormat 的行范围一致）。
+  const last = state.doc.lineAt(range.empty ? range.to : Math.max(range.from, range.to - 1))
+  let heading: 0 | 1 | 2 | 3 = 0
+  let checked = false
+  for (let number = first.number; number <= last.number; number += 1) {
+    const line = state.doc.line(number)
+    if (!line.text.trim()) continue
+    let node: MdSyntaxNode | null = syntaxTree(state).resolveInner(line.from + line.text.search(/\S|$/), 1)
+    let protectedLine = false
+    for (; node; node = node.parent) {
+      if (["FencedCode", "CodeBlock", "Table"].includes(node.name)) protectedLine = true
+    }
+    const level = (protectedLine ? 0 : /^(#{1,3})\s/.exec(line.text)?.[1].length ?? 0) as 0 | 1 | 2 | 3
+    if (!checked) {
+      heading = level
+      checked = true
+    } else if (level !== heading) {
+      heading = 0
+      break
+    }
+  }
+
+  return {
+    code: markActive(INLINE_MARK_NODE_NAMES.code),
+    emphasis: markActive(INLINE_MARK_NODE_NAMES.emphasis),
+    heading: checked ? heading : 0,
+    strike: markActive(INLINE_MARK_NODE_NAMES.strike),
+    strong: markActive(INLINE_MARK_NODE_NAMES.strong),
+  }
+}

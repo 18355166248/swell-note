@@ -484,6 +484,10 @@ describe("markdown live preview table cells", () => {
     expect(view.contentDOM.querySelector(".cm-md-table-selection-status")?.textContent).toBe("未选择单元格")
     expect(buttons.map((button) => button.textContent)).toEqual([
       "宽度：适应",
+      "上方插入行",
+      "下方插入行",
+      "左侧插入列",
+      "右侧插入列",
       "添加行",
       "添加列",
       "删除行",
@@ -495,7 +499,8 @@ describe("markdown live preview table cells", () => {
       "垂直居中",
       "底对齐",
     ])
-    buttons[1].click()
+    // 「添加行」现在排在四个指定位置插入按钮之后。
+    buttons[5].click()
     await settle()
     expect(view.state.doc.toString()).toContain("|  |  |")
 

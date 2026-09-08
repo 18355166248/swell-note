@@ -11,7 +11,8 @@ import { readClipboardText, writeClipboardText } from "@/services/clipboard/clip
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 import { scrollCursorIntoView } from "./cursor-visibility"
-import { focusExistingLinkUrl, type InlineMarkKind, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
+import { detectFormatState, focusExistingLinkUrl, type EditorFormatState, type InlineMarkKind, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
+import { htmlToMarkdown, isInlineMarkdownFragment } from "./html-to-markdown"
 import { markdownLivePreview } from "./live-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import { ImageZoomOverlay } from "./image-zoom"
@@ -72,6 +73,8 @@ type MarkdownEditorProps = {
   compact?: boolean
   onChange: (value: string) => void
   onCursorChange?: (line: number, column: number) => void
+  // 光标 / 选区的格式状态（工具栏高亮）；表格单元格编辑时由单元格汇报行内格式。
+  onFormatStateChange?: (state: EditorFormatState | null) => void
   onInsertFiles?: (files: File[]) => void
   onOpenWikiLink?: (target: string) => void
   onResolveAsset?: (source: string) => Promise<VaultAsset | null>
@@ -83,7 +86,7 @@ type MarkdownEditorProps = {
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ sessionKey, onHistoryChange, onEditingTargetChange, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange, readOnly = false, storageKey, value }, ref) {
+  function MarkdownEditor({ sessionKey, onHistoryChange, onEditingTargetChange, onFormatStateChange, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange, readOnly = false, storageKey, value }, ref) {
     const editorRef = useRef<ReactCodeMirrorRef>(null)
     const insertionMarks = useRef(new Set<{ from: number; to: number }>())
     const [initialState] = useState(() => restoreEditorSession(sessionKey, value))
@@ -96,9 +99,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
     // CodeMirror 的扩展数组一旦换引用就会整体重配置（语言也会重新解析）；
     // 调用方传入的回调多为内联函数，用 ref 中转后扩展只在只读状态切换时重建。
-    const handlers = useRef({ getWikiLinkSuggestions, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange, onHistoryChange })
+    const handlers = useRef({ getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange, onHistoryChange })
     useEffect(() => {
-      handlers.current = { getWikiLinkSuggestions, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange, onHistoryChange }
+      handlers.current = { getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange, onHistoryChange }
     })
 
     // 切换笔记会按 key 重建编辑器，卸载时要撤回选区状态，新笔记才不会带着上一篇的选区操作条打开。
@@ -134,6 +137,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       markdownLivePreview({
         onOpenWikiLink: (target) => handlers.current.onOpenWikiLink?.(target),
         onResolveAsset: (source) => handlers.current.onResolveAsset?.(source) ?? Promise.resolve(null),
+        onTableFormatState: (state) => handlers.current.onFormatStateChange?.(state ? { ...state, heading: 0 } : null),
         tableStorageKey: storageKey,
       }),
       // 列表 / 引用回车续写、结构行 Tab 缩进、选中文字敲 * ` ~ 即包裹。
@@ -170,6 +174,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const line = update.state.doc.lineAt(position)
         handlers.current.onCursorChange?.(line.number, position - line.from + 1)
         handlers.current.onSelectionChange?.(!update.state.selection.main.empty)
+        // 工具栏高亮跟随光标与选区；表格单元格编辑时由单元格自己的汇报接管。
+        if (!activeTableEdit(update.view)) handlers.current.onFormatStateChange?.(detectFormatState(update.state))
         // 打字打到可视区边缘、或光标跳到远处时同样要跟过去，否则又落到键盘后面。
         if (compact && update.view.hasFocus) scrollCursorIntoView(update.view)
       }),
@@ -222,11 +228,52 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           // 截图与图片文件的剪贴板不带纯文本；Excel 等来源同时带文本时仍按普通粘贴处理。
           const onInsertFiles = handlers.current.onInsertFiles
           const files = collectTransferFiles(event.clipboardData)
-          if (!onInsertFiles || readOnly || files.length === 0) return false
-          if (text) return false
-          event.preventDefault()
-          onInsertFiles(files)
-          return true
+          if (files.length > 0) {
+            if (!onInsertFiles || readOnly) return false
+            if (text) return false
+            event.preventDefault()
+            onInsertFiles(files)
+            return true
+          }
+          // 富文本（网页 / Word / Excel）粘贴：HTML 转成 Markdown 后插入；
+          // 转换失败或没有可用结构时返回 null，走原生纯文本粘贴，内容不丢。
+          if (!readOnly) {
+            const html = event.clipboardData?.getData("text/html")
+            const markdown = html ? htmlToMarkdown(html) : null
+            if (markdown) {
+              event.preventDefault()
+              const range = view.state.selection.main
+              // 行内片段（单个加粗词、链接等）原位插入，不拆当前段落。
+              // 块级结构（标题/列表/表格等）必须落在独立行上：插入点两侧不在行边界时补空行，
+              // 否则表格尾行会和后面的文字粘成一行，被表格语法吞掉（内容看似丢失）。
+              if (isInlineMarkdownFragment(markdown)) {
+                view.dispatch({
+                  changes: { from: range.from, to: range.to, insert: markdown },
+                  selection: { anchor: range.from + markdown.length },
+                  scrollIntoView: true,
+                  userEvent: "input.paste",
+                })
+                return true
+              }
+              const doc = view.state.doc
+              const prevChar = range.from > 0 ? doc.sliceString(range.from - 1, range.from) : "\n"
+              const prevPrevChar = range.from > 1 ? doc.sliceString(range.from - 2, range.from - 1) : "\n"
+              const nextChar = range.to < doc.length ? doc.sliceString(range.to, range.to + 1) : "\n"
+              const nextNextChar = range.to + 1 < doc.length ? doc.sliceString(range.to + 1, range.to + 2) : "\n"
+              const prefix = prevChar === "\n" ? (prevPrevChar === "\n" ? "" : "\n") : "\n\n"
+              const suffix = nextChar === "\n" ? (nextNextChar === "\n" ? "" : "\n") : "\n\n"
+              const insert = prefix + markdown + suffix
+              view.dispatch({
+                changes: { from: range.from, to: range.to, insert },
+                // 光标落在插入内容之后（含补的空行），后续输入不会粘进表格/标题行。
+                selection: { anchor: range.from + insert.length },
+                scrollIntoView: true,
+                userEvent: "input.paste",
+              })
+              return true
+            }
+          }
+          return false
         },
         keydown(event, view) {
           if (event.isComposing || !(event.metaKey || event.ctrlKey) || event.altKey) return false

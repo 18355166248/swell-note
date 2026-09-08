@@ -697,6 +697,10 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .formatting-toolbar button { display: grid; min-width: 30px; height: 30px; place-items: center; border-radius: 6px; color: #596271; font-size: 11px; font-weight: 650; transition: background-color 120ms ease, color 120ms ease; -webkit-tap-highlight-color: transparent; }
 .formatting-toolbar button:active { background: color-mix(in oklab,var(--muted) 78%,var(--foreground) 8%); transition-duration: 50ms; }
 .formatting-toolbar button:hover { background: var(--muted); color: var(--foreground); }
+/* 光标 / 选区所在格式的按钮高亮（加粗 / 斜体 / 删除线 / 行内代码 / 标题）。 */
+.formatting-toolbar button[data-active="true"] { background: color-mix(in oklab,var(--primary) 14%,transparent); color: var(--primary); }
+.formatting-toolbar button[data-active="true"]:hover { background: color-mix(in oklab,var(--primary) 20%,transparent); color: var(--primary); }
+.toolbar-heading-select[data-active="true"] { color: var(--primary); font-weight: 650; }
 .formatting-toolbar button svg { width: 15px; height: 15px; }
 .editor-find-bar { display: flex; min-height: 42px; align-items: center; justify-content: flex-end; gap: 4px; border-bottom: 1px solid var(--border); background: color-mix(in oklab,var(--panel-soft) 76%,white); padding: 5px 12px; }
 .editor-find-bar > button { height: 30px; min-width: 30px; border-radius: 6px; padding: 0 8px; color: var(--muted-foreground); font-size: 11px; transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease; }

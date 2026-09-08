@@ -327,7 +327,8 @@ test.describe("编辑细节", () => {
     await heading.selectOption("##")
     await expect(editor).toHaveText("## 记录今天的想法")
     await expect(editor).toBeFocused()
-    await heading.selectOption("##")
+    // 受控选择器重选同级不会触发 onChange，取消标题走「正文」选项。
+    await heading.selectOption("")
     await expect(editor).toHaveText("记录今天的想法")
     await editor.press("X")
     await expect(editor).toHaveText("记录今天的想X法")

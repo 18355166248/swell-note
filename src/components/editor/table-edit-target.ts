@@ -19,6 +19,24 @@ export function registerTableEdit(view: EditorView, target: TableEditTarget) {
   return () => { if (targets.get(view) === target) targets.delete(view) }
 }
 
+export type CellInlineMarks = { code: boolean; emphasis: boolean; strike: boolean; strong: boolean }
+
+// 工具栏的格式高亮：判断 textarea 选区是否已被对应标记包裹（选区自身带标记、或选区紧贴着标记）。
+// 加粗标记同时满足斜体的判定形式，斜体必须先排除加粗才不会把 **文字** 误报成斜体。
+export function detectCellInlineMarks(value: string, from: number, to: number): CellInlineMarks {
+  const wrappedBy = (mark: string) => {
+    if (from !== to && value.slice(from, from + mark.length) === mark && value.slice(to - mark.length, to) === mark && to - from >= mark.length * 2) return true
+    return value.slice(Math.max(0, from - mark.length), from) === mark && value.slice(to, to + mark.length) === mark
+  }
+  const strong = wrappedBy("**")
+  return {
+    code: wrappedBy("`"),
+    emphasis: !strong && wrappedBy("*"),
+    strike: wrappedBy("~~"),
+    strong,
+  }
+}
+
 export function inlineTableFormat(template: string, value: string, from: number, to: number) {
   const tokens: Record<string, [string, string]> = {
     "**加粗文字**": ["**", "加粗文字"], "*斜体文字*": ["*", "斜体文字"],

@@ -112,6 +112,7 @@ import { sortNotes, type NoteSort } from "@/services/search/note-sort"
 import { loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
 import { applyFolderOrder, loadFolderOrder, saveFolderOrder } from "@/services/preferences/folder-order-preferences"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import type { EditorFormatState } from "@/components/editor/markdown-input"
 import { FormattingToolbar } from "@/components/workspace/formatting-toolbar"
 import { NoteVersionHistoryDialog } from "@/components/workspace/note-version-history-dialog"
 import { GlobalSearchDialog } from "@/components/workspace/global-search-dialog"
@@ -1591,6 +1592,8 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   const [hasSelection, setHasSelection] = useState(false)
   const [historyState, setHistoryState] = useState({ undo: false, redo: false })
   const [editingTable, setEditingTable] = useState(false)
+  // 光标 / 选区当前格式，供工具栏高亮；正文与表格单元格都会汇报。
+  const [formatState, setFormatState] = useState<EditorFormatState | null>(null)
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState("")
   const [findReplacement, setFindReplacement] = useState("")
@@ -2128,6 +2131,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           canUndo={historyState.undo}
           canRedo={historyState.redo}
           editingTable={editingTable}
+          formatState={formatState}
           onFormat={handleFormat}
           onInsertFiles={handleInsertFiles}
         />
@@ -2302,6 +2306,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
                   sessionKey={`${activeCacheId ?? "session"}:${note.editorSessionKey ?? note.id}`}
                   onHistoryChange={(undo, redo) => setHistoryState((current) => current.undo === undo && current.redo === redo ? current : { undo, redo })}
                   onEditingTargetChange={setEditingTable}
+                  onFormatStateChange={setFormatState}
                   getWikiLinkSuggestions={getWikiLinkSuggestions}
                   key={noteRenderIdentity}
                   onChange={(content) => onUpdateNote({
@@ -2351,6 +2356,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           canUndo={historyState.undo}
           canRedo={historyState.redo}
           editingTable={editingTable}
+          formatState={formatState}
           mobile
           onFormat={handleFormat}
           onInsertFiles={handleInsertFiles}

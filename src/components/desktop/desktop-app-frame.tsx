@@ -4,6 +4,7 @@ import type { ReactNode } from "react"
 
 import swellNoteLogo from "@/assets/brand/swell-note-logo-ribbon-s.svg"
 import { useNativeContextMenuSuppression } from "@/components/desktop/native-context-menu"
+import { TableContextMenu } from "@/components/workspace/table-context-menu"
 import { TextContextMenu } from "@/components/workspace/text-context-menu"
 
 type DesktopAppFrameProps = { children: ReactNode }
@@ -15,13 +16,15 @@ function isDesktopTauri() {
 export function DesktopAppFrame({ children }: DesktopAppFrameProps) {
   const desktop = isDesktopTauri()
   // 浏览器和客户端统一使用应用菜单；普通输入框由 TextContextMenu 提供剪贴板操作。
+  // TableContextMenu 必须挂在前面：表格空白处的右键先在它的捕获监听里接管，不会重复弹菜单。
   useNativeContextMenuSuppression(true)
-  if (!desktop) return <>{children}<TextContextMenu /></>
+  if (!desktop) return <>{children}<TableContextMenu /><TextContextMenu /></>
 
   return (
     <div className="desktop-app-frame">
       <DesktopTitleBar />
       <div className="desktop-app-content">{children}</div>
+      <TableContextMenu />
       <TextContextMenu />
     </div>
   )

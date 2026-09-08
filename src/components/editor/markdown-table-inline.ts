@@ -8,6 +8,8 @@ export type TableInlineOptions = {
   onOpenExternalLink?: (href: string) => void
   onOpenWikiLink?: (target: string) => void
   onResolveAsset?: (source: string) => Promise<VaultAsset | null>
+  // 单元格进入/退出编辑以及编辑中移动选区时，向工具栏汇报行内格式状态；null 表示离开单元格编辑。
+  onTableFormatState?: (state: { code: boolean; emphasis: boolean; strike: boolean; strong: boolean } | null) => void
   tableStorageKey?: string
 }
 
@@ -18,6 +20,45 @@ const WIKI_HINT = "点击打开笔记"
 // 下划线强调要求两侧不是字母数字，避免把 snake_case_name 错误渲染成强调。
 const tableInlinePattern
   = /!\[([^\]\n]*)\]\((\S+?)(?:\s+["'][^"']*["'])?\)|\[([^\]\n]+)\]\((\S+?)(?:\s+["'][^"']*["'])?\)|~~(.+?)~~|\*\*(.+?)\*\*|(?<![\p{L}\p{N}])__(.+?)__(?![\p{L}\p{N}])|\*(.+?)\*|(?<![\p{L}\p{N}])_(.+?)_(?![\p{L}\p{N}])|`([^`]+)`|(https?:\/\/[^\s<>]+)|(<br\s*\/?>)/giu
+
+// 单元格点击定位：展示层渲染后的文字偏移 ↔ 原始 Markdown 偏移。
+// 展示层会吃掉标记字符（**加粗** 只显示「加粗」），直接用 DOM 偏移会落进标记内部，
+// 这里沿同一条行内正则把每个 token 的显示文字映射回它在原文里的起点。
+export function rawOffsetForDisplayOffset(text: string, displayOffset: number): number {
+  let raw = 0
+  let shown = 0
+  for (const match of text.matchAll(tableInlinePattern)) {
+    const index = match.index ?? 0
+    // token 前的普通文本段非空时，落在段内的偏移按 1:1 映射；段为空（offset 0 处就是 token）
+    // 不能在这里截获，否则光标会落到标记起点之前。
+    if (index > raw && displayOffset <= shown + (index - raw)) return raw + Math.max(0, displayOffset - shown)
+    shown += index - raw
+    const inner = inlineTokenDisplaySegment(match)
+    if (!inner) {
+      // 图片与 <br> 在展示层不产生文本偏移。
+      raw = index + match[0].length
+      continue
+    }
+    if (displayOffset <= shown + inner.text.length) return index + inner.start + Math.max(0, displayOffset - shown)
+    shown += inner.text.length
+    raw = index + match[0].length
+  }
+  return Math.min(text.length, raw + Math.max(0, displayOffset - shown))
+}
+
+// 返回 token 的显示文字及其在原文中的相对起点；无显示文字的 token（图片、换行）返回 null。
+function inlineTokenDisplaySegment(match: RegExpMatchArray): { start: number; text: string } | null {
+  if (match[2] !== undefined || match[12] !== undefined) return null
+  if (match[3] !== undefined) return { start: 1, text: match[3] }
+  if (match[11] !== undefined) return { start: 0, text: match[11] }
+  if (match[5] !== undefined) return { start: 2, text: match[5] }
+  if (match[6] !== undefined) return { start: 2, text: match[6] }
+  if (match[7] !== undefined) return { start: 2, text: match[7] }
+  if (match[8] !== undefined) return { start: 1, text: match[8] }
+  if (match[9] !== undefined) return { start: 1, text: match[9] }
+  if (match[10] !== undefined) return { start: 1, text: match[10] }
+  return null
+}
 
 export function renderTableInlineMarkdown(
   parent: HTMLElement,

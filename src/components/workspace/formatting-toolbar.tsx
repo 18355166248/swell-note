@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import { Bold, CheckCircle2, Code, Code2, Heading3, Image, Italic, Link, List, LoaderCircle, Minus, MoreHorizontal, Quote, Redo2, Strikethrough, Table, Undo2 } from "lucide-react"
 
 import { TABLE_INSERT_TEMPLATE, type MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import type { EditorFormatState } from "@/components/editor/markdown-input"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 // 手机一行放不下全部按钮，这些低频格式收进“更多”；语法与桌面端共用，避免两处写法漂移。
@@ -17,45 +18,51 @@ const SECONDARY_FORMATS = [
   { icon: Table, label: "表格", syntax: TABLE_INSERT_TEMPLATE },
 ]
 
-export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable = false, attachmentBusy, canInsertAttachment, editorRef, mobile = false, onFormat, onInsertFiles }: {
+export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable = false, attachmentBusy, canInsertAttachment, editorRef, formatState = null, mobile = false, onFormat, onInsertFiles }: {
   canUndo?: boolean
   canRedo?: boolean
   editingTable?: boolean
   attachmentBusy: boolean
   canInsertAttachment: boolean
   editorRef: RefObject<MarkdownEditorHandle | null>
+  // 光标 / 选区当前的格式，用于按钮高亮；null 表示不在编辑态，不高亮任何按钮。
+  formatState?: EditorFormatState | null
   mobile?: boolean
   onFormat: (syntax: string) => void
   onInsertFiles: (files: File[]) => Promise<void>
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [, quote, code, link, strike, inlineCode, rule, table] = SECONDARY_FORMATS
+  // 标题选择器受控：光标落在哪级标题就显示哪级；切换行为不变（选完即触发 onFormat）。
+  const headingValue = formatState?.heading ? "#".repeat(formatState.heading) : ""
 
   return (
     <div className="formatting-toolbar" data-mobile={mobile}>
       <FormatButton disabled={!canUndo && !editingTable} icon={Undo2} label="撤销（⌘/Ctrl+Z）" onClick={() => editorRef.current?.undo()} />
       <FormatButton disabled={!canRedo} icon={Redo2} label="重做（⌘/Ctrl+Shift+Z）" onClick={() => editorRef.current?.redo()} />
       <span className="toolbar-divider" />
-      <select aria-label="标题级别" className="toolbar-heading-select" defaultValue="" disabled={editingTable} onChange={(event) => {
+      <select aria-label="标题级别" className="toolbar-heading-select" data-active={Boolean(headingValue)} disabled={editingTable} onChange={(event) => {
         const prefix = event.currentTarget.value
-        event.currentTarget.value = ""
-        if (prefix) onFormat(`\n${prefix} `)
-      }}>
-        <option value="" disabled>标题</option>
+        if (prefix) { onFormat(`\n${prefix} `); return }
+        // 恢复正文：受控选择器里重选当前级别不会触发 onChange，
+        // 用当前级别再切换一次，借块格式的反向开关去掉标题。
+        if (formatState?.heading) onFormat(`\n${"#".repeat(formatState.heading)} `)
+      }} value={headingValue}>
+        <option value="">正文</option>
         <option value="#">一级标题</option>
         <option value="##">二级标题</option>
         <option value="###">三级标题</option>
       </select>
       <span className="toolbar-divider" />
-      <FormatButton icon={Bold} label="加粗（⌘/Ctrl+B）" onClick={() => onFormat("**加粗文字**")} />
-      <FormatButton icon={Italic} label="斜体（⌘/Ctrl+I）" onClick={() => onFormat("*斜体文字*")} />
-      {mobile ? null : <FormatButton icon={strike.icon} label={strike.label} onClick={() => onFormat(strike.syntax)} />}
+      <FormatButton active={Boolean(formatState?.strong)} icon={Bold} label="加粗（⌘/Ctrl+B）" onClick={() => onFormat("**加粗文字**")} />
+      <FormatButton active={Boolean(formatState?.emphasis)} icon={Italic} label="斜体（⌘/Ctrl+I）" onClick={() => onFormat("*斜体文字*")} />
+      {mobile ? null : <FormatButton active={Boolean(formatState?.strike)} icon={strike.icon} label={strike.label} onClick={() => onFormat(strike.syntax)} />}
       {mobile ? null : <FormatButton disabled={editingTable} icon={quote.icon} label={quote.label} onClick={() => onFormat(quote.syntax)} />}
       <FormatButton disabled={editingTable} icon={List} label="无序列表" onClick={() => onFormat("\n- ")} />
       <FormatButton disabled={editingTable} icon={CheckCircle2} label="任务列表" onClick={() => onFormat("\n- [ ] ")} />
       {mobile ? null : (
         <>
-          <FormatButton icon={inlineCode.icon} label={inlineCode.label} onClick={() => onFormat(inlineCode.syntax)} />
+          <FormatButton active={Boolean(formatState?.code)} icon={inlineCode.icon} label={inlineCode.label} onClick={() => onFormat(inlineCode.syntax)} />
           <FormatButton disabled={editingTable} icon={code.icon} label={code.label} onClick={() => onFormat(code.syntax)} />
           <FormatButton icon={link.icon} label={`${link.label}（⌘/Ctrl+K）`} onClick={() => onFormat(link.syntax)} />
           <span className="toolbar-divider" />
@@ -128,7 +135,8 @@ function SecondaryFormatsMenu({ onFormat, editingTable }: { editingTable: boolea
   )
 }
 
-function FormatButton({ disabled = false, busy = false, children, expanded, icon: Icon, label, onClick }: {
+function FormatButton({ active = false, disabled = false, busy = false, children, expanded, icon: Icon, label, onClick }: {
+  active?: boolean
   disabled?: boolean
   busy?: boolean
   children?: ReactNode
@@ -143,6 +151,8 @@ function FormatButton({ disabled = false, busy = false, children, expanded, icon
         <button
           aria-expanded={expanded}
           aria-label={label}
+          aria-pressed={active || undefined}
+          data-active={active || undefined}
           disabled={disabled || busy}
           onClick={onClick}
           // 手机键盘打开时，工具栏不能先抢走 CodeMirror 焦点，否则每次加粗/插入列表都会触发键盘收起再弹出。

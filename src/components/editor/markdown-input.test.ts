@@ -5,7 +5,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { EditorState } from "@codemirror/state"
 import { EditorView, keymap } from "@codemirror/view"
 
-import { focusExistingLinkUrl, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark } from "./markdown-input"
+import { detectFormatState, focusExistingLinkUrl, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark } from "./markdown-input"
 
 function createView(doc: string, anchor: number, head = anchor) {
   const state = EditorState.create({
@@ -306,5 +306,65 @@ describe("toolbar block formatting", () => {
       expect(view.state.doc.toString()).toBe(doc)
       view.destroy()
     }
+  })
+})
+
+describe("detectFormatState（工具栏高亮）", () => {
+  it("光标落在加粗里时 strong 激活，且不误报斜体", () => {
+    const view = createView("**加粗** 普通", 3)
+    const state = detectFormatState(view.state)
+    expect(state.strong).toBe(true)
+    expect(state.emphasis).toBe(false)
+    expect(state.strike).toBe(false)
+    view.destroy()
+  })
+
+  it("选区覆盖完整标记（含标记本身）也算激活", () => {
+    const view = createView("**加粗** 普通", 0, 6)
+    expect(detectFormatState(view.state).strong).toBe(true)
+    view.destroy()
+  })
+
+  it("混合格式选区（只有一部分加粗）视为未激活", () => {
+    const doc = "**加粗** 普通"
+    const view = createView(doc, 0, doc.length)
+    expect(detectFormatState(view.state).strong).toBe(false)
+    view.destroy()
+  })
+
+  it("斜体与删除线分别识别", () => {
+    const emphasis = createView("*斜体*", 2)
+    expect(detectFormatState(emphasis.state).emphasis).toBe(true)
+    emphasis.destroy()
+    const strike = createView("~~删除~~", 3)
+    expect(detectFormatState(strike.state).strike).toBe(true)
+    strike.destroy()
+  })
+
+  it("光标所在行的 ATX 标题级别会被报告", () => {
+    const view = createView("## 标题", 4)
+    expect(detectFormatState(view.state).heading).toBe(2)
+    view.destroy()
+    const plain = createView("普通段落", 2)
+    expect(detectFormatState(plain.state).heading).toBe(0)
+    plain.destroy()
+  })
+
+  it("跨行选区要求每一行都是同级标题，否则不报标题", () => {
+    const same = "## 一\n\n## 二"
+    const sameView = createView(same, 0, same.length)
+    expect(detectFormatState(sameView.state).heading).toBe(2)
+    sameView.destroy()
+    const mixed = "# 一\n\n## 二"
+    const mixedView = createView(mixed, 0, mixed.length)
+    expect(detectFormatState(mixedView.state).heading).toBe(0)
+    mixedView.destroy()
+  })
+
+  it("代码块里的 # 行不算标题", () => {
+    const doc = "```\n# 注释\n```"
+    const view = createView(doc, 6)
+    expect(detectFormatState(view.state).heading).toBe(0)
+    view.destroy()
   })
 })
