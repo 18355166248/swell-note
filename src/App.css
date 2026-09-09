@@ -1196,7 +1196,9 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   /* “更多”浮层要能盖到正文上，工具栏本身不能再裁切溢出内容。 */
   .formatting-toolbar[data-mobile="true"] { overflow: visible; }
   .toolbar-more { position: relative; display: flex; flex: 1; }
-  .formatting-toolbar[data-mobile="true"] .toolbar-more-menu { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 5; display: grid; min-width: 172px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--popover); box-shadow: 0 14px 34px rgb(15 23 42 / .18); }
+  /* 菜单向上弹出：9 项 × 46px 会超过小屏可视高度，键盘弹出时再扣掉键盘占用，
+     超高时内部纵向滚动，顶部选项不会被推出屏幕。 */
+  .formatting-toolbar[data-mobile="true"] .toolbar-more-menu { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 5; display: grid; min-width: 172px; max-height: min(414px,calc(100dvh - var(--keyboard-inset,0px) - 84px)); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--border); border-radius: 12px; background: var(--popover); box-shadow: 0 14px 34px rgb(15 23 42 / .18); }
   .formatting-toolbar[data-mobile="true"] .toolbar-more-menu button { display: grid; width: 100%; height: auto; min-height: 46px; flex: none; grid-template-columns: 20px minmax(0,1fr); place-items: center start; gap: 10px; border-radius: 0; padding: 0 14px; color: var(--foreground); font-size: 14px; font-weight: 540; text-align: left; }
   .formatting-toolbar[data-mobile="true"] .toolbar-more-menu button:active { background: var(--muted); }
   .formatting-toolbar[data-mobile="true"] .toolbar-more-menu svg { width: 17px; height: 17px; color: var(--muted-foreground); }

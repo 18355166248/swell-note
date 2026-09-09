@@ -1580,16 +1580,6 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   const editorViewportRef = useRef<HTMLDivElement>(null)
   // 特殊画布始终使用专属预览；普通 Markdown 读取 App 级偏好，切换笔记或路由不会重置。
   const previewing = isSpecialPreview || noteViewMode === "preview"
-  // 预览是懒加载 chunk：切换瞬间如果还没取到，原正文会整块换成加载占位。
-  // 先等同一个模块缓存就绪再翻状态（启动预取已覆盖时只是一个微任务），
-  // 没取到时编辑器多停一拍，也比正文整块消失更容易接受。路径必须与上方 lazyWithRetry 一致。
-  const handleNoteViewModeChange = useCallback((mode: NoteViewMode) => {
-    if (mode !== "preview") {
-      onNoteViewModeChange(mode)
-      return
-    }
-    void import("@/components/editor/markdown-preview").then(() => onNoteViewModeChange(mode))
-  }, [onNoteViewModeChange])
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false)
@@ -1615,6 +1605,33 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   const attachmentBusyRef = useRef(false)
   const currentNoteIdRef = useRef(note.id)
   currentNoteIdRef.current = note.id
+  const [viewSwitchError, setViewSwitchError] = useState<string | null>(null)
+  const previewRequestRef = useRef(0)
+  // 换笔记后上次失败的提示不再适用。
+  useEffect(() => setViewSwitchError(null), [note.id])
+  // 预览是懒加载 chunk：切换瞬间如果还没取到，原正文会整块换成加载占位。
+  // 先等同一个模块缓存就绪再翻状态（启动预取已覆盖时只是一个微任务），
+  // 没取到时编辑器多停一拍，也比正文整块消失更容易接受。路径必须与上方 lazyWithRetry 一致。
+  const handleNoteViewModeChange = useCallback((mode: NoteViewMode) => {
+    // 每次切换意图都递增序号：加载期间用户改回编辑态或换了笔记，旧请求完成后不得再翻状态。
+    const requestId = ++previewRequestRef.current
+    setViewSwitchError(null)
+    if (mode !== "preview") {
+      onNoteViewModeChange(mode)
+      return
+    }
+    const noteId = currentNoteIdRef.current
+    void import("@/components/editor/markdown-preview")
+      .then(() => {
+        if (requestId !== previewRequestRef.current || currentNoteIdRef.current !== noteId) return
+        onNoteViewModeChange(mode)
+      })
+      .catch(() => {
+        // chunk 取不到（弱网等）时保持编辑态并给出反馈，而不是点了没反应。
+        if (requestId !== previewRequestRef.current || currentNoteIdRef.current !== noteId) return
+        setViewSwitchError("阅读模式加载失败，请检查网络后重试")
+      })
+  }, [onNoteViewModeChange])
   // 根目录笔记没有可跳转的目录段；标题单独作为末段，让沉浸画布也能看到当前打开的是哪张图。
   const folderSegments = note.folder ? getNoteBreadcrumbSegments(note.folder) : []
   // Canvas 正文是绘图 JSON，按字符计数没有意义，改用节点数量描述文档规模。
@@ -2203,6 +2220,9 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
 
       {attachmentError ? (
         <p className="attachment-error" role="alert">{attachmentError}</p>
+      ) : null}
+      {viewSwitchError ? (
+        <p className="attachment-error" role="alert">{viewSwitchError}</p>
       ) : null}
 
       {isExcalidraw ? (

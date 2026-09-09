@@ -78,6 +78,13 @@ type InteractionSession = {
 const TABLE_WIDTH_MODE_KEY = "swell-note:editor-table-width"
 const TABLE_VERTICAL_MODE_KEY = "swell-note:editor-table-vertical-align"
 const widthModeOrder: Array<Exclude<TableWidthMode, "manual">> = ["content", "full", "equal"]
+
+// 触屏（主指针为 coarse）没有悬停，点按又会先触发 :hover/:focus-within：
+// 若跟随选中自动展开工具条，展开推移单元格会让同一次点按的落点错位。
+// 触屏因此只认显式展开（点按细条），选中单元格不再带开工具条。
+function prefersExplicitTableToolbar() {
+  return typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches
+}
 const sessionTableColumnPreferences = new WeakMap<EditorView, Map<number, TableColumnPreference>>()
 const tableInteractionSessions = new WeakMap<EditorView, Map<number, InteractionSession>>()
 // 右键菜单等外部入口可能拿到的是旧实例（提交触发重建后），经这张表找到当前存活的 Widget。
@@ -786,8 +793,10 @@ export class TableWidget extends WidgetType {
     // 单个目标格只驱动工具栏操作，不添加边框或背景，避免表格在展示态和编辑态之间产生视觉抖动。
     wrapper.dataset.selectedRow = String(rowIndex)
     wrapper.dataset.selectedColumn = String(columnIndex)
-    // 选中期间保持工具条展开，鼠标移出表格也不收回去。
-    wrapper.dataset.tableActive = "true"
+    // 精确指针下选中期间保持工具条展开，鼠标移出表格也不收回去。
+    // 触屏不跟随选中展开：展开会推移下方单元格，与键盘弹出叠加时点按落点会错，
+    // 触屏改为点按细条显式展开（createToolbar 里的 click 监听同样置这个标记）。
+    if (!prefersExplicitTableToolbar()) wrapper.dataset.tableActive = "true"
     this.session().target = { column: columnIndex, row: rowIndex }
     const selectionStatus = wrapper.querySelector<HTMLElement>(".cm-md-table-selection-status")
     if (selectionStatus) {

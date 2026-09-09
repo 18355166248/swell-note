@@ -424,6 +424,43 @@ describe("markdown live preview table cells", () => {
     view.destroy()
   })
 
+  it("keeps the toolbar collapsed when a coarse pointer selects a cell", async () => {
+    // 触屏点按单元格不再带开工具条：展开会推移下方单元格，同一次点按的落点会错。
+    // 精确指针（鼠标/触控板）维持原行为——选中期间保持展开。
+    const source = ["| A | B |", "| --- | --- |", "| 1 | 2 |"].join("\n")
+    const originalMatchMedia = window.matchMedia
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("coarse"),
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      onchange: null,
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia
+    try {
+      const coarseView = createView({ anchor: 0 }, source)
+      await settle()
+      const coarseWrapper = coarseView.contentDOM.querySelector(".cm-md-table-wrap") as HTMLElement
+      ;(coarseWrapper.querySelector("tbody td") as HTMLTableCellElement)
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      expect(coarseWrapper.dataset.tableActive).toBeUndefined()
+      expect(coarseWrapper.dataset.selectedRow).toBe("0")
+      coarseView.destroy()
+    } finally {
+      window.matchMedia = originalMatchMedia
+    }
+
+    const fineView = createView({ anchor: 0 }, source)
+    await settle()
+    const fineWrapper = fineView.contentDOM.querySelector(".cm-md-table-wrap") as HTMLElement
+    ;(fineWrapper.querySelector("tbody td") as HTMLTableCellElement)
+      .dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    expect(fineWrapper.dataset.tableActive).toBe("true")
+    fineView.destroy()
+  })
+
   it("keeps the rendered cell height when long content enters edit mode", async () => {
     const source = ["| 较长的表头内容 |", "| --- |", "| 较长的正文单元格内容 |"].join("\n")
     const view = createView({ anchor: 0 }, source)

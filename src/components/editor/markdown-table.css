@@ -20,14 +20,19 @@
 .markdown-editor-shell .cm-md-table-toolbar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; min-width: 0; max-height: 10px; align-items: center; gap: 4px; border-bottom: 1px solid transparent; border-radius: 8px 8px 0 0; background: var(--panel-soft); padding: 0 6px; overflow: hidden; cursor: pointer; transition: max-height 140ms ease, padding 140ms ease, border-color 140ms ease; }
 /* 收起态的抓手：提示这里可以展开。 */
 .markdown-editor-shell .cm-md-table-toolbar::before { display: block; width: 40px; height: 3px; margin: 3px auto; border-radius: 2px; background: var(--border); content: ""; flex: none; }
-.markdown-editor-shell .cm-md-table-wrap:hover .cm-md-table-toolbar,
-.markdown-editor-shell .cm-md-table-wrap:focus-within .cm-md-table-toolbar,
 .markdown-editor-shell .cm-md-table-wrap[data-table-active="true"] .cm-md-table-toolbar,
 .markdown-editor-shell .cm-md-table-wrap[data-range-selecting="true"] .cm-md-table-toolbar { max-height: 96px; border-bottom-color: var(--border); padding: 4px 6px; cursor: default; }
-.markdown-editor-shell .cm-md-table-wrap:hover .cm-md-table-toolbar::before,
-.markdown-editor-shell .cm-md-table-wrap:focus-within .cm-md-table-toolbar::before,
 .markdown-editor-shell .cm-md-table-wrap[data-table-active="true"] .cm-md-table-toolbar::before,
 .markdown-editor-shell .cm-md-table-wrap[data-range-selecting="true"] .cm-md-table-toolbar::before { display: none; }
+/* 悬停/聚焦展开只对精确指针启用：触屏点按会先触发 :hover 与 :focus-within，
+   工具条在手指抬起前展开并推移单元格，点击坐标随之落错位置；
+   触屏改为点按细条显式展开（widget 置 data-table-active）。 */
+@media (hover: hover) and (pointer: fine) {
+  .markdown-editor-shell .cm-md-table-wrap:hover .cm-md-table-toolbar,
+  .markdown-editor-shell .cm-md-table-wrap:focus-within .cm-md-table-toolbar { max-height: 96px; border-bottom-color: var(--border); padding: 4px 6px; cursor: default; }
+  .markdown-editor-shell .cm-md-table-wrap:hover .cm-md-table-toolbar::before,
+  .markdown-editor-shell .cm-md-table-wrap:focus-within .cm-md-table-toolbar::before { display: none; }
+}
 /* 菜单展开期间取消高度过渡，面板开合不与收起动画打架。 */
 .markdown-editor-shell .cm-md-table-toolbar:has(.cm-md-table-menu[open]) { transition: none; }
 .markdown-editor-shell .cm-md-table-toolbar::after { content: "Tab 切换 · Enter 下移 · Shift+Enter 换行"; margin-left: auto; padding-left: 14px; color: var(--muted-foreground); font-size: 10px; }

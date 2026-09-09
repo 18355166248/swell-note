@@ -63,4 +63,30 @@ describe("rawOffsetForDisplayOffset（展示层偏移 → 原文偏移）", () =
     expect(rawOffsetForDisplayOffset("", 5)).toBe(0)
     expect(rawOffsetForDisplayOffset("**加粗**", 99)).toBe(6)
   })
+
+  it("剥掉协议头的裸链接按原文偏移还原", () => {
+    // 展示 "example.com"（11 位），点末尾应落到原文 "https://example.com" 的第 19 位。
+    expect(rawOffsetForDisplayOffset("https://example.com", 0)).toBe(8)
+    expect(rawOffsetForDisplayOffset("https://example.com", 11)).toBe(19)
+    // 前面还有普通文本时，段内偏移同样要补上协议头。
+    expect(rawOffsetForDisplayOffset("见 https://example.com 收尾", 13)).toBe(21)
+  })
+
+  it("中段省略的长链接：头部 1:1、省略号落到尾部起点、尾部对应原文末尾", () => {
+    const url = "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/wx-%E8%AE%BE%E8%AE%A1%E7%A8%BF?node-id=1234-5678&t=abcdef"
+    const display = truncateLinkLabel(url)
+    expect(display.length).toBe(40)
+    // 头部 29 位与原文逐位对应（含剥掉的 8 位协议头）。
+    expect(rawOffsetForDisplayOffset(url, 0)).toBe(8)
+    expect(rawOffsetForDisplayOffset(url, 29)).toBe(37)
+    // 省略号右侧是尾部在显示层的起点（第 30 位），应映射到尾部在原文中的起点。
+    expect(rawOffsetForDisplayOffset(url, 30)).toBe(url.length - 10)
+    // 点显示末尾（第 40 位）应落到原文末尾，而不是第 40 位。
+    expect(rawOffsetForDisplayOffset(url, 40)).toBe(url.length)
+  })
+
+  it("带标签的长链接同样在标签段内还原", () => {
+    // 原文 "[https://example.com](https://a.com)"，展示 "example.com"，起始要越过 "[" 一位。
+    expect(rawOffsetForDisplayOffset("[https://example.com](https://a.com)", 11)).toBe(20)
+  })
 })
