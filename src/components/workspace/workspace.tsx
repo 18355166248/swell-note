@@ -1607,8 +1607,12 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   currentNoteIdRef.current = note.id
   const [viewSwitchError, setViewSwitchError] = useState<string | null>(null)
   const previewRequestRef = useRef(0)
-  // 换笔记后上次失败的提示不再适用。
-  useEffect(() => setViewSwitchError(null), [note.id])
+  // 换笔记后上次失败的提示不再适用；同时作废进行中的预览加载——
+  // 否则 A→B→A 往返时，A 的旧请求会因笔记 ID 再次匹配而越过守卫生效。
+  useEffect(() => {
+    previewRequestRef.current += 1
+    setViewSwitchError(null)
+  }, [note.id])
   // 预览是懒加载 chunk：切换瞬间如果还没取到，原正文会整块换成加载占位。
   // 先等同一个模块缓存就绪再翻状态（启动预取已覆盖时只是一个微任务），
   // 没取到时编辑器多停一拍，也比正文整块消失更容易接受。路径必须与上方 lazyWithRetry 一致。
