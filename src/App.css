@@ -679,7 +679,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .editor-actions { display: flex; align-items: center; gap: 3px; margin-left: auto; }
 .editor-sync-button { gap: 5px; }
 .editor-sync-button svg { width: 14px; height: 14px; }
-.saved-state { display: flex; align-items: center; gap: 5px; margin-right: 6px; color: var(--muted-foreground); font-size: 10.5px; }
+.saved-state { display: flex; flex-shrink: 0; align-items: center; gap: 5px; margin-right: 6px; color: var(--muted-foreground); font-size: 10.5px; white-space: nowrap; }
 .saved-state svg { width: 13px; height: 13px; color: #20a968; }
 .saved-state[data-status="saving"] svg { color: var(--primary); }
 .saved-state[data-status="conflict"], .saved-state[data-status="conflict"] svg { color: #b66a00; }
@@ -731,14 +731,10 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .toolbar-divider { width: 1px; height: 17px; margin: 0 4px; background: var(--border); }
 .attachment-file-input { display: none; }
 .attachment-error { margin: 0; border-bottom: 1px solid var(--border); background: color-mix(in oklab,var(--destructive) 9%,white); padding: 8px 16px; color: var(--destructive); font-size: 10.5px; line-height: 1.45; }
-.document-canvas { width: min(100%,830px); min-width: 0; max-width: 100%; margin: 0 auto; padding: 48px 64px 80px; }
+.document-canvas { width: min(100%,960px); min-width: 0; max-width: 100%; margin: 0 auto; padding: 48px 56px 80px; }
 .document-title { width: 100%; border: 0; background: transparent; outline: none; color: #1d2530; font-size: clamp(25px,2.3vw,34px); line-height: 1.2; font-weight: 720; letter-spacing: -.035em; }
 .document-title-readonly { margin: 0; overflow-wrap: anywhere; }
 .document-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 13px 0 30px; color: var(--muted-foreground); font-size: 11px; }
-.note-edit-mode-status { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; border-radius: 999px; background: var(--blue-soft); padding: 3px 8px; color: var(--primary); }
-.note-edit-mode-status svg { width: 12px; height: 12px; }
-.note-edit-mode-status strong { font-weight: 650; }
-.note-edit-mode-status[data-status="error"], .note-edit-mode-status[data-status="conflict"] { background: color-mix(in oklab,var(--destructive) 9%,white); color: var(--destructive); }
 .note-editor[data-view-mode="edit"]:not([data-excalidraw="true"]) .editor-scroll { background: color-mix(in oklab,var(--primary) 1.5%,white); }
 .dark .note-editor[data-view-mode="edit"]:not([data-excalidraw="true"]) .editor-scroll { background: color-mix(in oklab,var(--primary) 3%,var(--background)); }
 .markdown-editor-shell { --editor-min-height: calc(100dvh - 250px); width: 100%; min-height: var(--editor-min-height); color: #28313e; }
@@ -938,7 +934,9 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-table-wrap { width: 100%; margin: 0; overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
 .markdown-table-wrap:focus-visible { outline: 2px solid color-mix(in oklab,var(--primary) 55%,transparent); outline-offset: 2px; }
 .markdown-table-scroll-hint { display: none; }
-.markdown-preview table { width: 100%; min-width: 520px; table-layout: fixed; border-collapse: collapse; }
+/* 列宽由 ScrollableMarkdownTable 按编辑态同一套算法内联下发（偏好 > 内容推导）；
+   不再强制最小宽度，窄容器里两列表格不会被裁出横向滚动。 */
+.markdown-preview table { width: 100%; table-layout: fixed; border-collapse: collapse; }
 .markdown-preview table tr { height: calc(1lh + 15px); }
 .markdown-preview th, .markdown-preview td { overflow-wrap: anywhere; border: 1px solid var(--border); padding: 7px 10px; text-align: left; }
 .markdown-preview tr > :first-child { border-left: 0; }
@@ -988,10 +986,12 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .desktop-pane-resizer { display: none; }
   .library-panel { display: none; }
   .document-canvas { padding-inline: 44px; }
+}
 
-  /* 编辑器面板让给笔记列表后剩下的宽度塞不下完整的面包屑 + 同步文案 + 视图切换，
-     没有这层收紧时 flex 子项会被压缩到逐字换行。跟移动端 data-compact 一样只留图标，
-     文案仍可通过 tooltip / aria-label 获取。 */
+/* 编辑器面板被侧栏挤压后塞不下完整的面包屑 + 同步文案 + 视图切换，
+   没有这层收紧时 flex 子项会被压缩到逐字换行（1100–1279px 之间同样会复现）。
+   跟移动端 data-compact 一样只留图标，文案仍可通过 tooltip / aria-label 获取。 */
+@media (max-width: 1279px) and (min-width: 768px) {
   .saved-state > span,
   .editor-sync-button > span { display: none; }
   .editor-sync-button { width: 32px; padding-inline: 0; }
@@ -1171,7 +1171,6 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .note-editor[data-compact="true"][data-view-mode="edit"] .document-canvas { box-shadow: none; }
   .note-editor[data-compact="true"] .document-title { font-size: 28px; }
   .note-editor[data-compact="true"] .document-meta { margin: 10px 0 25px; }
-  .note-editor[data-compact="true"] .note-edit-mode-status { flex-basis: max-content; margin-left: 0; }
   .note-editor[data-compact="true"] .markdown-editor-shell { --editor-min-height: calc(100dvh - 245px); }
   .note-editor[data-compact="true"] .markdown-preview { min-height: calc(100dvh - 215px); font-size: 15px; }
   .note-editor[data-compact="true"] .markdown-properties { margin-bottom: 22px; }
@@ -1191,8 +1190,9 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .excalidraw-plugin .App-menu_top button.standalone { min-width: 40px; min-height: 40px; }
   /* 键盘打开后工具栏下沿就是键盘，Home Indicator 已被遮住，安全区扣掉键盘高度即可收回这段留白。 */
   .formatting-toolbar[data-mobile="true"] { --mobile-toolbar-bottom-space: max(6px,calc(env(safe-area-inset-bottom) - var(--keyboard-inset,0px))); min-height: calc(48px + var(--mobile-toolbar-bottom-space)); gap: 3px; justify-content: space-around; border-top: 1px solid var(--border); border-bottom: 0; padding: 3px 8px var(--mobile-toolbar-bottom-space); background: white; }
-  /* 按钮均分整行：屏幕越宽触摸目标越大，也不会因为固定宽度而横向溢出、把最后的按钮挤出屏幕。 */
-  .formatting-toolbar[data-mobile="true"] button { flex: 1; min-width: 38px; height: 40px; }
+  /* 按钮均分整行：屏幕越宽触摸目标越大，也不会因为固定宽度而横向溢出、把最后的按钮挤出屏幕。
+     主栏只放 8 个高频控件（重做等低频入口收进“更多”），36px 下限在 320px 窄屏也放得下。 */
+  .formatting-toolbar[data-mobile="true"] button { flex: 1; min-width: 36px; height: 40px; }
   /* “更多”浮层要能盖到正文上，工具栏本身不能再裁切溢出内容。 */
   .formatting-toolbar[data-mobile="true"] { overflow: visible; }
   .toolbar-more { position: relative; display: flex; flex: 1; }
@@ -1209,6 +1209,8 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .selection-action-button svg { width: 17px; height: 17px; }
   .selection-action-button:active { background: color-mix(in oklab,var(--primary) 13%,white); }
   .selection-action-hint { position: absolute; bottom: calc(100% + 6px); left: 50%; margin: 0; border-radius: 8px; padding: 5px 10px; background: rgb(15 23 42 / .86); color: white; font-size: 11px; white-space: nowrap; transform: translateX(-50%); }
+  /* 选区模式：复制/剪切/粘贴并入格式栏同一行，失败提示浮在工具栏上方。 */
+  .formatting-toolbar[data-mobile="true"][data-selection-mode="true"] { position: relative; }
   /* 设置页的 WebDAV 表单在手机上要贴着键盘操作，外壳同样扣掉键盘高度，底部的保存/测试按钮才不会被压住。 */
   .route-page-shell, .settings-route-shell { display: flex; box-sizing: border-box; height: calc(100dvh - var(--keyboard-inset,0px)); flex-direction: column; padding-top: env(safe-area-inset-top,0px); }
   .route-page-shell > .navigation-rail, .settings-route-shell > .navigation-rail, .settings-sidebar { display: none; }

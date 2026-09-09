@@ -13,7 +13,10 @@ import { openImageZoom } from "./image-zoom"
 import { TableWidget } from "./markdown-table-widget"
 
 // Markdown 即时预览：
-// 非光标行隐藏语法标记并直接呈现最终样式，光标进入该行时还原原始 Markdown 文本，源文件始终保持纯文本。
+// 非光标处隐藏语法标记并直接呈现最终样式，源文件始终保持纯文本。
+// 还原分两级：块级结构（表格、图片、代码块、引用等）在光标进入该行时整行还原；
+// 行内标记（加粗、斜体、行内代码、链接等）只在光标真正落在构造范围内时还原，
+// 光标扫过同一行的其他位置不再触发标记重现，行宽也就不会跟着抖动。
 
 // 只用到语法节点的结构信息；这里按结构声明，避免为类型引入 @lezer/common 显式依赖。
 type MdSyntaxNode = {
@@ -189,23 +192,29 @@ export class MarkdownImageWidget extends WidgetType {
   }
 }
 
+// 拖选（含触摸端长按选词）一旦让标记跟着选区显隐，行高行宽会实时变化，拖动中的选区落点、
+// 贴着选区的操作条都会跟着跳，鼠标选区还会出现对不上可见文字的残影。
+// 非空选区因此统一保持渲染态，只有光标本身停留（空选区）的位置才参与还原判断。
+function collectCursorPositions(state: EditorState) {
+  const positions: number[] = []
+  for (const range of state.selection.ranges) {
+    if (range.empty) positions.push(range.head)
+  }
+  return positions
+}
+
 function collectCursorLines(state: EditorState) {
   const lines = new Set<number>()
-  for (const range of state.selection.ranges) {
-    // 拖选（含触摸端长按选词）一旦跨行就会不断把新覆盖的行展开成源码：标记显隐导致行高实时变化，
-    // 拖动中的选区落点、贴着选区的操作条都会跟着跳，鼠标选区还会因此出现对不上可见文字的残影。
-    // 非空选区因此统一保持渲染态，只有光标本身停留（空选区）的那一行才还原原始 Markdown 供编辑。
-    if (!range.empty) continue
-    const line = state.doc.lineAt(range.head)
-    lines.add(line.number)
+  for (const position of collectCursorPositions(state)) {
+    lines.add(state.doc.lineAt(position).number)
   }
   return lines
 }
 
-// 装饰只关心「哪些行处于光标/选区内」；同一行内左右移动光标不会改变任何一条装饰，
-// 拿它当签名就能把长笔记里最常见的光标移动挡在整篇重算之外。
-function cursorLinesKey(state: EditorState) {
-  return [...collectCursorLines(state)].join(",")
+// 光标在同一句内移动现在也可能改变行内标记的显隐，签名从「光标行集合」收窄为光标位置本身。
+// 位置数量极少（通常只有一个），比较代价可以忽略；重算范围仍被可见区加缓冲限制住。
+function cursorPositionsKey(state: EditorState) {
+  return collectCursorPositions(state).join(",")
 }
 
 function cursorLineChecker(state: EditorState) {
@@ -219,6 +228,14 @@ function cursorLineChecker(state: EditorState) {
     }
     return false
   }
+}
+
+// 行内标记（**、*、~~、`、链接括号等）按「相交才还原」收窄：光标落在构造范围内才还原，
+// 只是扫过同一行的其他位置时标记保持隐藏，不再出现整行标记重现导致的行宽抖动。
+// 边界算相交：光标贴着构造边缘继续输入时，标记必须保持可见。
+function cursorRangeChecker(state: EditorState) {
+  const positions = collectCursorPositions(state)
+  return (from: number, to: number) => positions.some((position) => position >= from && position <= to)
 }
 
 type DocRange = { from: number; to: number }
@@ -280,7 +297,8 @@ function decorateWikiLinks(
   state: EditorState,
   from: number,
   to: number,
-  isCursorActive: (from: number, to: number) => boolean,
+  isLineActive: (from: number, to: number) => boolean,
+  isCursorTouching: (from: number, to: number) => boolean,
   frontmatter: DocRange | null,
   push: (decoration: Range<Decoration>) => void,
 ) {
@@ -295,7 +313,7 @@ function decorateWikiLinks(
     if (match[1]) {
       // ![[图.png|300]] 这类图片嵌入按图片渲染；别名部分只是显示尺寸，不参与路径解析。
       const embedTarget = match[2].split("|", 1)[0].trim()
-      if (embedTarget && isImageAssetPath(embedTarget) && !isCursorActive(start, end)) {
+      if (embedTarget && isImageAssetPath(embedTarget) && !isLineActive(start, end)) {
         const line = state.doc.lineAt(start)
         push(Decoration.replace({
           widget: new MarkdownImageWidget(embedTarget, embedTarget, line.text.trim() === match[0], state.facet(livePreviewOptions)),
@@ -311,7 +329,8 @@ function decorateWikiLinks(
     const pipe = value.indexOf("|")
     const target = (pipe < 0 ? value : value.slice(0, pipe)).trim()
     if (!target) continue
-    const active = isCursorActive(start, end)
+    // 双链是行内构造：光标落在链接范围内才还原源码，同一行的其他位置不再触发显隐。
+    const active = isCursorTouching(start, end)
     push(Decoration.mark({ class: "cm-md-wiki-link" }).range(start, end))
 
     const labelStart = pipe < 0 ? start + 2 : start + 2 + pipe + 1
@@ -474,6 +493,7 @@ export function mergeDecorationRanges(ranges: readonly DocRange[], buffer: numbe
 
 function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   const isCursorActive = cursorLineChecker(view.state)
+  const isCursorTouching = cursorRangeChecker(view.state)
   const frontmatter = findFrontmatterRange(view.state)
   // 早期这里按整篇文档计算，33KB 的笔记每敲一个字就要重建整篇装饰集，
   // 连带 CodeMirror 重新套用 RangeSet 与重算行高，实测占掉按键开销的九成。
@@ -517,13 +537,13 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   }
 
   for (const { from, to } of decorationRanges) {
-    decorateWikiLinks(view.state, from, to, isCursorActive, frontmatter, (decoration) => decorations.push(decoration))
+    decorateWikiLinks(view.state, from, to, isCursorActive, isCursorTouching, frontmatter, (decoration) => decorations.push(decoration))
     decorateBareUrls(view.state, from, to, frontmatter, (decoration) => decorations.push(decoration))
     for (const match of view.state.sliceDoc(from, to).matchAll(/==([^=\n]+)==|\[\^([^\]\n]+)\]/g)) {
       const start = from + match.index!, end = start + match[0].length
       if (frontmatter && start < frontmatter.to || isInsideCode(view.state, start)) continue
       decorations.push(Decoration.mark({ class: match[1] ? "cm-md-highlight" : "cm-md-footnote" }).range(start, end))
-      if (match[1] && !isCursorActive(start, end)) {
+      if (match[1] && !isCursorTouching(start, end)) {
         decorations.push(Decoration.replace({}).range(start, start + 2), Decoration.replace({}).range(end - 2, end))
       }
     }
@@ -546,36 +566,43 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
         // frontmatter 内部不再套用正文规则（否则属性行会被当成 SetextHeading2 放大）。
         if (frontmatter && node.from >= frontmatter.from && node.to <= frontmatter.to) return false
         const active = isCursorActive(node.from, node.to)
+        // 行内构造的标记按「光标与节点范围相交」判断，同一行的其他位置不再触发还原。
+        const touching = isCursorTouching(node.from, node.to)
         // 标题节点名带级别后缀（ATXHeading1..6 / SetextHeading1..2）。
         const heading = node.name.match(/^(?:ATX|Setext)Heading([1-6])$/)
         if (heading) {
           decorations.push(Decoration.line({ class: `cm-md-heading cm-md-h${heading[1]}` }).range(node.from))
-          if (!active) {
-            const headerMark = node.node.getChild("HeaderMark")
+          const headerMark = node.node.getChild("HeaderMark")
+          if (headerMark) {
             // 只隐藏 # 会把它后面那个空格留在行首，标题左边缘比正文缩进一格，字号越大越明显。
-            if (headerMark) decorations.push(Decoration.replace({}).range(headerMark.from, skipSpacesAfter(view.state, headerMark.to)))
+            const hiddenEnd = skipSpacesAfter(view.state, headerMark.to)
+            // 光标落在标题文字里时 # 保持隐藏（不再有整行还原的横向跳动）；
+            // 只有移到行首标记处才还原，便于调整标题级别。
+            if (!isCursorTouching(headerMark.from, hiddenEnd)) {
+              decorations.push(Decoration.replace({}).range(headerMark.from, hiddenEnd))
+            }
           }
           return
         }
         switch (node.name) {
           case "StrongEmphasis": {
             decorations.push(Decoration.mark({ class: "cm-md-strong" }).range(node.from, node.to))
-            hideMarkChildren(node.node, active, "EmphasisMark")
+            hideMarkChildren(node.node, touching, "EmphasisMark")
             break
           }
           case "Emphasis": {
             decorations.push(Decoration.mark({ class: "cm-md-em" }).range(node.from, node.to))
-            hideMarkChildren(node.node, active, "EmphasisMark")
+            hideMarkChildren(node.node, touching, "EmphasisMark")
             break
           }
           case "Strikethrough": {
             decorations.push(Decoration.mark({ class: "cm-md-strike" }).range(node.from, node.to))
-            hideMarkChildren(node.node, active, "StrikethroughMark")
+            hideMarkChildren(node.node, touching, "StrikethroughMark")
             break
           }
           case "InlineCode": {
             decorations.push(Decoration.mark({ class: "cm-md-inline-code" }).range(node.from, node.to))
-            hideMarkChildren(node.node, active, "CodeMark")
+            hideMarkChildren(node.node, touching, "CodeMark")
             break
           }
           case "FencedCode": {
@@ -670,9 +697,9 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
                 class: "cm-md-link-actionable",
               }).range(actionFrom, actionTo))
             }
-            if (active) break
+            if (touching) break
             if (node.name === "Autolink") {
-              hideMarkChildren(node.node, active, "LinkMark")
+              hideMarkChildren(node.node, touching, "LinkMark")
               break
             }
             // 链接文本为空时隐藏会让整行看不见内容，保持原样。
@@ -721,10 +748,10 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
     decorations: DecorationSet
     destroyed = false
     tableBlocksKey = ""
-    cursorLinesKey: string
+    cursorKey: string
 
     constructor(view: EditorView) {
-      this.cursorLinesKey = cursorLinesKey(view.state)
+      this.cursorKey = cursorPositionsKey(view.state)
       this.decorations = buildLivePreviewDecorations(view)
       // 初次构建即提交表格装饰（构造期 dispatch 延迟到挂载后执行）。
       this.syncTableDecorations(view)
@@ -737,14 +764,14 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
       // 不把它算进来的话，那一屏就会一直停在没有渲染的 Markdown 源码上。
       const parsed = syntaxTree(update.startState) !== syntaxTree(update.state)
       if (!update.docChanged && !update.viewportChanged && !update.selectionSet && !parsed) return
-      // 文档没变、视口也没动时先比对光标行签名：同一行内移动光标不会改变任何装饰，
-      // 直接沿用上一次的结果，长笔记里按方向键就不必重算。
+      // 文档没变、视口也没动时先比对光标位置签名：装饰只依赖光标落点（块级看行、行内看相交），
+      // 位置没变结果就不会变，直接沿用上一次的结果。
       if (!update.docChanged && !update.viewportChanged && !parsed) {
-        const nextCursorLinesKey = cursorLinesKey(update.state)
-        if (nextCursorLinesKey === this.cursorLinesKey) return
-        this.cursorLinesKey = nextCursorLinesKey
+        const nextCursorKey = cursorPositionsKey(update.state)
+        if (nextCursorKey === this.cursorKey) return
+        this.cursorKey = nextCursorKey
       } else {
-        this.cursorLinesKey = cursorLinesKey(update.state)
+        this.cursorKey = cursorPositionsKey(update.state)
       }
       this.decorations = buildLivePreviewDecorations(update.view)
       // 表格块只在文档变化或语法树推进时才可能增减；滚动不会改变它们，没必要跟着重扫一遍语法树。

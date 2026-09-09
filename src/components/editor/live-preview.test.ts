@@ -178,12 +178,49 @@ describe("markdown live preview", () => {
     expect(hidden).toContainEqual({ from: doc.indexOf("> 引用"), to: doc.indexOf("> 引用") + 2 })
   })
 
-  it("reveals raw syntax on the cursor line", async () => {
+  it("reveals raw syntax when the cursor lands inside the construct", async () => {
     const boldLine = doc.indexOf("**加粗**")
     const view = createView({ anchor: boldLine + 3 })
     const { hidden } = collect(await settleInlineDecorations(view))
 
     expect(hidden).not.toContainEqual({ from: boldLine, to: boldLine + 2 })
+  })
+
+  it("keeps inline marks hidden when the cursor stays elsewhere on the same line", async () => {
+    // 标记级还原：光标落在加粗节点之后的「正文」里，没有碰到构造范围，
+    // ** 不再像整行还原那样重新出现，行宽保持不动。
+    const boldLine = doc.indexOf("**加粗**")
+    const view = createView({ anchor: doc.indexOf("正文") + 1 })
+    const { hidden } = collect(await settleInlineDecorations(view))
+
+    expect(hidden).toContainEqual({ from: boldLine, to: boldLine + 2 })
+    expect(hidden).toContainEqual({ from: boldLine + 4, to: boldLine + 6 })
+  })
+
+  it("reveals inline marks when the cursor touches the construct boundary", async () => {
+    // 光标贴着加粗节点右边界（继续输入的位置）算相交，标记保持可见。
+    const boldLine = doc.indexOf("**加粗**")
+    const view = createView({ anchor: boldLine + "**加粗**".length })
+    const { hidden } = collect(await settleInlineDecorations(view))
+
+    expect(hidden).not.toContainEqual({ from: boldLine, to: boldLine + 2 })
+    expect(hidden).not.toContainEqual({ from: boldLine + 4, to: boldLine + 6 })
+  })
+
+  it("keeps the heading mark hidden while the cursor edits the title text", async () => {
+    // 光标在标题文字中间：# 保持隐藏，标题不再因整行还原横向跳动。
+    const view = createView({ anchor: doc.indexOf("标题") + 1 })
+    const { hidden } = collect(await settleInlineDecorations(view))
+
+    expect(hidden).toContainEqual({ from: 0, to: 2 })
+  })
+
+  it("reveals the heading mark when the cursor reaches the line start", async () => {
+    // 移到行首标记处才还原，方便调整标题级别。
+    const view = createView({ anchor: 0 })
+    const { hidden } = collect(await settleInlineDecorations(view))
+
+    expect(hidden).not.toContainEqual({ from: 0, to: 2 })
   })
 
   it("keeps marks hidden across a non-empty drag selection instead of revealing raw syntax", async () => {
@@ -580,7 +617,8 @@ describe("markdown live preview table cells", () => {
     const dom = await tableDom(content)
 
     expect(dom.querySelector("del")?.textContent).toBe("旧内容")
-    expect([...dom.querySelectorAll("a")].map((link) => link.textContent)).toEqual(["官网", "https://example.com/docs"])
+    // 裸链接显示文本会剥掉协议头（truncateLinkLabel），点击行为不变。
+    expect([...dom.querySelectorAll("a")].map((link) => link.textContent)).toEqual(["官网", "example.com/docs"])
     const image = dom.querySelector("img") as HTMLImageElement
     expect(image.alt).toBe("示意图")
     expect(image.src).toBe("https://example.com/a.png")
@@ -829,7 +867,7 @@ describe("markdown live preview links", () => {
     expect(hidden).not.toContainEqual({ from: embed + 1, to: embed + 3 })
   })
 
-  it("reveals wiki link source on the cursor line", async () => {
+  it("reveals wiki link source when the cursor lands inside the link", async () => {
     const aliased = linkDoc.indexOf("[[产品灵感|灵感]]")
     const view = createView({ anchor: aliased + 3 }, linkDoc)
     const { hidden } = collect(await settleInlineDecorations(view))

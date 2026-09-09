@@ -1580,6 +1580,16 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   const editorViewportRef = useRef<HTMLDivElement>(null)
   // 特殊画布始终使用专属预览；普通 Markdown 读取 App 级偏好，切换笔记或路由不会重置。
   const previewing = isSpecialPreview || noteViewMode === "preview"
+  // 预览是懒加载 chunk：切换瞬间如果还没取到，原正文会整块换成加载占位。
+  // 先等同一个模块缓存就绪再翻状态（启动预取已覆盖时只是一个微任务），
+  // 没取到时编辑器多停一拍，也比正文整块消失更容易接受。路径必须与上方 lazyWithRetry 一致。
+  const handleNoteViewModeChange = useCallback((mode: NoteViewMode) => {
+    if (mode !== "preview") {
+      onNoteViewModeChange(mode)
+      return
+    }
+    void import("@/components/editor/markdown-preview").then(() => onNoteViewModeChange(mode))
+  }, [onNoteViewModeChange])
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false)
@@ -1790,7 +1800,6 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     }
   }, [canInsertAttachment, note.id, onFormatNote, onInsertAttachments, readOnly])
 
-  const saveStateLabel = getSaveStateLabel(cloudConnected, note, saveState)
   const getWikiLinkSuggestions = useCallback(() => wikiLinkNotes
     .filter((candidate) => candidate.pendingOperation !== "delete" && Boolean(candidate.remotePath))
     .map((candidate) => {
@@ -2023,7 +2032,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
             </Tooltip>
           ) : null}
           {!isSpecialPreview ? (
-            <NoteViewModeSwitch mode={noteViewMode} onChange={onNoteViewModeChange} />
+            <NoteViewModeSwitch mode={noteViewMode} onChange={handleNoteViewModeChange} />
           ) : null}
           {!compact && !isSpecialPreview ? (
             <DropdownMenu>
@@ -2228,7 +2237,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           canHistory={Boolean(activeCacheId)}
           starred={Boolean(note.starred)}
           onFind={() => setFindOpen(true)}
-          onToggleView={() => onNoteViewModeChange(previewing ? "edit" : "preview")}
+          onToggleView={() => handleNoteViewModeChange(previewing ? "edit" : "preview")}
           onToggleStar={() => onUpdateNote({ starred: !note.starred })}
           onExport={onExportNote}
           onHistory={() => setHistoryDialogOpen(true)}
@@ -2267,17 +2276,15 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           )}
           <div className="document-meta">
             <span>{note.updatedAt === "刚刚" ? "刚刚编辑" : note.updatedAt}</span>
-            <span>·</span>
-            <span>{documentSize}</span>
+            {/* 桌面端字符数已有底栏状态栏承担，只在没有底栏的移动端保留在标题下。 */}
+            {compact ? (
+              <>
+                <span>·</span>
+                <span>{documentSize}</span>
+              </>
+            ) : null}
             <span>·</span>
             <span>{deriveFolder(note)}</span>
-            {!previewing && !readOnly ? (
-              <span aria-live="polite" className="note-edit-mode-status" data-status={saveState.status} role="status">
-                <PencilLine />
-                <strong>编辑中</strong>
-                <span>· {saveStateLabel}</span>
-              </span>
-            ) : null}
           </div>
           {isCanvas ? (
             <Suspense fallback={<EditorLoadingState label="Canvas 画布" />}>
@@ -2290,6 +2297,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
                 content={note.content}
                 editable={!readOnly}
                 key={noteRenderIdentity}
+                noteId={note.id}
                 onLoadWikiNote={onLoadWikiNote}
                 onResolveAsset={onResolveAsset}
                 onResolveWikiNote={onResolveWikiNote}
@@ -2344,9 +2352,10 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
       </aside>}
       </div>}
 
-      {/* 只读笔记同样要能复制，操作条不跟着格式工具栏一起被 readOnly 关掉，只是收起改写类按钮。 */}
-      {compact && !previewing && hasSelection ? (
-        <SelectionActionBar editorRef={editorRef} readOnly={readOnly} />
+      {/* 只读笔记没有格式工具栏，选区操作仍需要独立一条（复制/全选可用）；
+          可编辑时选区操作并入格式栏同一行，不再额外堆叠 46px。 */}
+      {compact && !previewing && readOnly && hasSelection ? (
+        <SelectionActionBar editorRef={editorRef} readOnly />
       ) : null}
       {compact && !previewing && !readOnly ? (
         <FormattingToolbar
@@ -2357,6 +2366,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           canRedo={historyState.redo}
           editingTable={editingTable}
           formatState={formatState}
+          hasSelection={hasSelection}
           mobile
           onFormat={handleFormat}
           onInsertFiles={handleInsertFiles}

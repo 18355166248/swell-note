@@ -1,4 +1,4 @@
-import { Component, lazy, memo, Suspense, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
+import { Component, isValidElement, lazy, memo, Suspense, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
 import { ImageZoomOverlay, openImageZoom } from "./image-zoom"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
@@ -24,6 +24,10 @@ import { remarkObsidian } from "@/services/markdown/remark-obsidian"
 import { openExternalUrl } from "@/services/open-external-url"
 import { extractFrontmatter } from "@/services/search/note-index"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
+
+import { truncateLinkLabel } from "./markdown-table-inline"
+import { parseMarkdownTable, tableColumnWidths } from "./markdown-table-model"
+import { loadTableColumnPreference, MIN_TABLE_COLUMN_WIDTH, tableColumnPercentages, type TableWidthMode } from "./markdown-table-width"
 
 export type EmbeddedWikiNote = { content: string; title: string }
 export type EmbeddedWikiNoteResult =
@@ -52,6 +56,39 @@ const rehypePlugins = [rehypeHighlight, rehypeSelectionText]
 
 // 任务勾选框由 remark-gfm 合成、自身没有源码位置，行号从所属任务列表项（li）经 Context 传入。
 const TaskItemLineContext = createContext<number | null>(null)
+
+// 表格内的链接显示文本要做截短（完整 URL 会任意断行撑高整行），标记当前是否处于表格里；
+// 与编辑态共用 truncateLinkLabel，两态截断结果一致。
+const PreviewTableContext = createContext(false)
+
+// 阅读态表格的列宽对齐编辑态：同一份内容推导算法 + 同一份 localStorage 列宽偏好。
+// tableStartLines 是正文里各表格起始行（1 起），用来把 hast 里的第几张表换算成
+// 编辑侧 tableIndex；经 Context 下钻，不打断 MarkdownChunk 的 memo（props 全是稳定值）。
+const TableWidthContext = createContext<{ noteId?: string, tableStartLines: number[] }>({ tableStartLines: [] })
+
+const tableDelimiterRowPattern = /^ {0,3}\|?[ :]*-+[ :]*(?:\|[ :]*-+[ :]*)*\|?\s*$/
+const tableFencePattern = /^ {0,3}(`{3,}|~{3})/
+
+// 逐行扫描表格起始行：当前行含竖线、下一行是 GFM 分隔行即算一张表；围栏代码块里的竖线不算。
+// 与编辑侧语法树的计数口径可能有个别出入（引用块/列表内的表格），错位时列数校验会拦下偏好，
+// 退化为内容推导列宽，不会渲染出错误宽度。
+function collectTableStartLines(source: string): number[] {
+  const lines = source.split("\n")
+  const starts: number[] = []
+  let fence: string | null = null
+  for (let index = 0; index < lines.length; index += 1) {
+    const marker = lines[index].match(tableFencePattern)?.[1]
+    if (marker) {
+      if (!fence) fence = marker[0]
+      else if (fence === marker[0]) fence = null
+      continue
+    }
+    if (fence || !lines[index].includes("|")) continue
+    const next = lines[index + 1]
+    if (next !== undefined && tableDelimiterRowPattern.test(next)) starts.push(index + 1)
+  }
+  return starts
+}
 
 // 切换笔记时这棵子树会连着渲染四次：旧正文两次、新正文两次，每一次都要把整篇
 // Markdown 重新解析成 React 元素。正文没变时没有任何理由重算，这里挡住重复的那两次。
@@ -115,7 +152,7 @@ class NoteRendererErrorBoundary extends Component<{
   }
 }
 
-function MarkdownContent({ assetScope, content, depth, editable, onLoadWikiNote, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink }: MarkdownPreviewProps & { depth: number }) {
+function MarkdownContent({ assetScope, content, depth, editable, noteId, onLoadWikiNote, onResolveAsset, onResolveWikiNote, onToggleTask, onWikiLink }: MarkdownPreviewProps & { depth: number }) {
   // 预览正文已剥离 frontmatter，勾选任务时按 hast 行号补回偏移换算源文件行号。
   const sourceLineOffset = frontmatterLineCount(content)
   const body = stripMarkdownFrontmatter(content)
@@ -127,6 +164,8 @@ function MarkdownContent({ assetScope, content, depth, editable, onLoadWikiNote,
     const rewritten = rewriteWikiLinks(body)
     return depth === 0 ? splitMarkdownIntoChunks(rewritten) : [{ startLine: 1, text: rewritten }]
   }, [body, depth])
+  const tableStartLines = useMemo(() => collectTableStartLines(body), [body])
+  const tableWidthContext = useMemo(() => ({ noteId, tableStartLines }), [noteId, tableStartLines])
   return (
     <div className={depth === 0 ? "markdown-preview" : "markdown-preview markdown-preview-embedded"}>
       {properties.length > 0 ? <MarkdownProperties properties={properties} /> : null}
@@ -136,13 +175,15 @@ function MarkdownContent({ assetScope, content, depth, editable, onLoadWikiNote,
           <span>{editable ? "切换到编辑模式开始记录。" : "源文件目前没有可预览的 Markdown 内容。"}</span>
         </div>
       ) : null}
-      <ProgressiveChunks
-        assetScope={assetScope}
-        chunks={chunks}
-        depth={depth}
-        handlers={handlersRef}
-        sourceLineOffset={sourceLineOffset}
-      />
+      <TableWidthContext.Provider value={tableWidthContext}>
+        <ProgressiveChunks
+          assetScope={assetScope}
+          chunks={chunks}
+          depth={depth}
+          handlers={handlersRef}
+          sourceLineOffset={sourceLineOffset}
+        />
+      </TableWidthContext.Provider>
     </div>
   )
 }
@@ -225,8 +266,8 @@ type MarkdownChunkProps = {
 // 已铺好的段落不该因为后面又补了一段而重渲染，回调统一走 ref 中转，props 全是稳定值。
 const MarkdownChunk = memo(function MarkdownChunk({ assetScope, depth, handlers, sourceLineOffset, text }: MarkdownChunkProps) {
   const components = useMemo(
-    () => buildMarkdownComponents(assetScope, depth, handlers, sourceLineOffset),
-    [assetScope, depth, handlers, sourceLineOffset],
+    () => buildMarkdownComponents(assetScope, depth, handlers, sourceLineOffset, text),
+    [assetScope, depth, handlers, sourceLineOffset, text],
   )
   const Renderer = /\$[^$\n]+\$|\$\$/.test(text) ? MathMarkdown : ReactMarkdown
   return (
@@ -253,6 +294,7 @@ function buildMarkdownComponents(
   depth: number,
   handlersRef: { current: MarkdownHandlers },
   sourceLineOffset: number,
+  text: string,
 ) {
   return {
     input({ checked, disabled }: { checked?: boolean; disabled?: boolean }) {
@@ -281,6 +323,7 @@ function buildMarkdownComponents(
       return <li id={id} data-source-line={previewLine + sourceLineOffset}><TaskItemLineContext.Provider value={previewLine}>{children}</TaskItemLineContext.Provider></li>
     },
     a({ children, href, id, "aria-label": label }: { id?: string; "aria-label"?: string; children?: ReactNode; href?: string }) {
+      const inTable = useContext(PreviewTableContext)
       const embedTarget = parseWikiEmbedHref(href)
       if (embedTarget) return <button className="wiki-link" onClick={() => handlersRef.current.onWikiLink(embedTarget)} type="button">{children}</button>
       const wikiTarget = parseWikiHref(href)
@@ -292,6 +335,11 @@ function buildMarkdownComponents(
       if (href?.startsWith("#")) return <MarkdownAnchorLink href={href} id={id} label={label}>{children}</MarkdownAnchorLink>
       // Tauri WebView 默认拒绝 target=_blank 的新窗口请求，点击统一交给 openExternalUrl；
       // href 保留给悬停预览与右键菜单。
+      // rehype-selection-text 会把链接文字包一层 span（正文查找高亮依赖这个 class），
+      // 表格内截短要替换 span 里的文本而不是丢掉这层包裹。
+      const selectionSpan = isValidElement<{ className?: string, children?: ReactNode }>(children) && children.props.className === "markdown-selection-text" ? children : null
+      const rawLabel = typeof children === "string" ? children : selectionSpan && typeof selectionSpan.props.children === "string" ? selectionSpan.props.children : null
+      const truncated = inTable && rawLabel ? truncateLinkLabel(rawLabel) : null
       return (
         <a
           className="markdown-external-link"
@@ -303,8 +351,10 @@ function buildMarkdownComponents(
           }}
           rel="noreferrer noopener"
           target="_blank"
+          // 截短后悬停要能看到完整原文。
+          title={truncated !== null && truncated !== rawLabel ? `${rawLabel ?? ""}\n${href ?? ""}` : undefined}
         >
-          {children}
+          {truncated === null ? children : selectionSpan ? <span className="markdown-selection-text">{truncated}</span> : truncated}
         </a>
       )
     },
@@ -323,8 +373,8 @@ function buildMarkdownComponents(
     th({ children, node, style }: { style?: CSSProperties; children?: ReactNode; node?: { position?: { start: { line: number } } } }) {
       return <th style={style} data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}>{children}</th>
     },
-    table({ children }: { children?: ReactNode }) {
-      return <ScrollableMarkdownTable>{children}</ScrollableMarkdownTable>
+    table({ children, node }: { children?: ReactNode; node?: MarkdownTableNode }) {
+      return <ScrollableMarkdownTable node={node} sourceLineOffset={sourceLineOffset} text={text}>{children}</ScrollableMarkdownTable>
     },
     div({ children, node }: { children?: ReactNode; node?: { properties?: Record<string, unknown> } }) {
       const property = node?.properties?.["data-wiki-embed"] ?? node?.properties?.dataWikiEmbed
@@ -351,9 +401,56 @@ function buildMarkdownComponents(
   }
 }
 
-function ScrollableMarkdownTable({ children }: { children?: ReactNode }) {
+type MarkdownTableNode = {
+  position?: {
+    start: { line: number, offset?: number }
+    end: { offset?: number }
+  }
+}
+
+function ScrollableMarkdownTable({ children, node, sourceLineOffset, text }: {
+  children?: ReactNode
+  node?: MarkdownTableNode
+  sourceLineOffset: number
+  text: string
+}) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const [scrollState, setScrollState] = useState({ atEnd: true, atStart: true, overflowing: false })
+  const { noteId, tableStartLines } = useContext(TableWidthContext)
+  // 列宽与编辑态同源：优先用户在编辑态拖过/切换过的 localStorage 偏好，
+  // 没有偏好就用同一份内容推导算法；拿不到源码位置时退化为浏览器自动布局。
+  const columnLayout = useMemo(() => {
+    const position = node?.position
+    if (!position || position.start.offset === undefined || position.end.offset === undefined) return null
+    const parsed = parseMarkdownTable(text.slice(position.start.offset, position.end.offset))
+    if (!parsed) return null
+    const baseWidths = tableColumnWidths(parsed)
+    const absoluteStart = position.start.line + sourceLineOffset
+    let tableIndex = 0
+    while (tableIndex < tableStartLines.length && tableStartLines[tableIndex] < absoluteStart) tableIndex += 1
+    // 扫描口径与 hast 不一致时（引用块/列表内的表格）不用偏好，避免张冠李戴。
+    const preference = noteId && tableStartLines[tableIndex] === absoluteStart
+      ? loadTableColumnPreference(noteId, tableIndex, baseWidths.length)
+      : null
+    return { mode: preference?.mode ?? ("content" as TableWidthMode), widths: preference?.widths ?? baseWidths }
+  }, [node, noteId, sourceLineOffset, tableStartLines, text])
+  const tableStyle = useMemo(() => {
+    if (!columnLayout) return undefined
+    const { mode, widths } = columnLayout
+    return {
+      tableLayout: "fixed",
+      width: mode === "content" ? `${widths.reduce((total, width) => total + width, 0)}px` : "100%",
+      // 自定义模式保存的是列宽比例；整表只保留可用性下限，避免窄窗口沿用旧像素总宽撑破版面。
+      minWidth: mode === "manual" ? `${widths.length * MIN_TABLE_COLUMN_WIDTH}px` : undefined,
+    } satisfies CSSProperties
+  }, [columnLayout])
+  const columnWidths = useMemo(() => {
+    if (!columnLayout) return null
+    const { mode, widths } = columnLayout
+    if (mode === "equal") return widths.map(() => `${100 / widths.length}%`)
+    if (mode === "full" || mode === "manual") return tableColumnPercentages(widths).map((percentage) => `${percentage}%`)
+    return widths.map((width) => `${width}px`)
+  }, [columnLayout])
   const updateScrollState = useCallback(() => {
     const viewport = viewportRef.current
     if (!viewport) return
@@ -407,7 +504,14 @@ function ScrollableMarkdownTable({ children }: { children?: ReactNode }) {
         role={scrollState.overflowing ? "region" : undefined}
         tabIndex={scrollState.overflowing ? 0 : undefined}
       >
-        <table>{children}</table>
+        <table style={tableStyle}>
+          {columnWidths ? (
+            <colgroup>
+              {columnWidths.map((width, index) => <col key={index} style={{ width }} />)}
+            </colgroup>
+          ) : null}
+          <PreviewTableContext.Provider value={true}>{children}</PreviewTableContext.Provider>
+        </table>
       </div>
       <span aria-hidden="true" className="markdown-table-scroll-hint">左右滑动</span>
     </div>

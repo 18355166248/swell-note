@@ -16,6 +16,17 @@ export type TableInlineOptions = {
 const LINK_HINT = "点击打开链接"
 const WIKI_HINT = "点击打开笔记"
 
+// 表格列宽有限，完整 URL（尤其带大段编码参数的设计稿链接）会任意断行、把整行撑到
+// 十几行高。显示文本超过阈值时先剥协议头，再中段省略；完整地址保留在 title 与点击行为里。
+// 编辑态与阅读态共用这一套规则，两态看到同一截断结果。
+export function truncateLinkLabel(label: string, max = 40): string {
+  const text = label.replace(/^https?:\/\//i, "")
+  if (text.length <= max) return text
+  const tailLength = Math.min(10, Math.floor((max - 1) / 3))
+  const headLength = max - 1 - tailLength
+  return `${text.slice(0, headLength)}…${text.slice(-tailLength)}`
+}
+
 // 行内内容始终使用 DOM API 和 textContent 装配，不解析原始 HTML，避免云端笔记形成注入面。
 // 下划线强调要求两侧不是字母数字，避免把 snake_case_name 错误渲染成强调。
 const tableInlinePattern
@@ -112,11 +123,14 @@ export function renderTableInlineMarkdown(
 function appendLink(parent: HTMLElement, label: string, href: string, options: TableInlineOptions) {
   const link = document.createElement("a")
   link.className = "cm-md-table-link"
-  link.textContent = label
+  const display = truncateLinkLabel(label)
+  link.textContent = display
   const noteTarget = parseMarkdownNoteHref(href)
   if (noteTarget) link.dataset.mdNoteTarget = noteTarget
   else if (/^(?:https?|mailto):/i.test(href)) link.dataset.mdHref = href
-  link.title = noteTarget ? WIKI_HINT : link.dataset.mdHref ? LINK_HINT : href
+  const hint = noteTarget ? WIKI_HINT : link.dataset.mdHref ? LINK_HINT : href
+  // 截短后悬停要能看到完整原文。
+  link.title = display !== label ? `${label}\n${hint}` : hint
   link.addEventListener("click", (event) => {
     event.preventDefault()
     event.stopPropagation()

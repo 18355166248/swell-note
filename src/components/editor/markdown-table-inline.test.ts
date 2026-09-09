@@ -1,6 +1,32 @@
 import { describe, expect, it } from "vitest"
 
-import { rawOffsetForDisplayOffset } from "./markdown-table-inline"
+import { rawOffsetForDisplayOffset, truncateLinkLabel } from "./markdown-table-inline"
+
+describe("truncateLinkLabel（表格内长链接显示文本截短）", () => {
+  it("短文本原样返回", () => {
+    expect(truncateLinkLabel("示例")).toBe("示例")
+    expect(truncateLinkLabel("https://example.com")).toBe("example.com")
+  })
+
+  it("剥掉协议头后仍超长时中段省略", () => {
+    const url = "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/wx-%E8%AE%BE%E8%AE%A1%E7%A8%BF?node-id=1234-5678&t=abcdef"
+    const display = truncateLinkLabel(url)
+    expect(display.length).toBe(40)
+    expect(display).toContain("…")
+    expect(display.startsWith("www.figma.com/design/")).toBe(true)
+  })
+
+  it("剥协议头后已不超长则直接返回", () => {
+    expect(truncateLinkLabel("https://example.com/some/path?a=1&b=2")).toBe("example.com/some/path?a=1&b=2")
+  })
+
+  it("非 URL 的长标签同样中段省略", () => {
+    const label = "这是一段被用户刻意写得很长很长的链接标签文字，已经超过四十个字符的显示限制长度了，还需要继续截短"
+    const display = truncateLinkLabel(label)
+    expect(display.length).toBe(40)
+    expect(display).toContain("…")
+  })
+})
 
 describe("rawOffsetForDisplayOffset（展示层偏移 → 原文偏移）", () => {
   it("没有行内标记时逐字符对应", () => {

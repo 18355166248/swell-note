@@ -14,9 +14,22 @@
 .markdown-editor-shell .cm-md-table-wrap[data-overflow="true"]::after { position: absolute; z-index: 2; top: 1px; bottom: 1px; width: 24px; content: ""; pointer-events: none; }
 .markdown-editor-shell .cm-md-table-wrap[data-overflow="true"][data-at-start="false"]::before { left: 1px; background: linear-gradient(90deg,color-mix(in oklab,var(--background) 78%,transparent),transparent); }
 .markdown-editor-shell .cm-md-table-wrap[data-overflow="true"][data-at-end="false"]::after { right: 1px; background: linear-gradient(270deg,color-mix(in oklab,var(--background) 78%,transparent),transparent); }
-/* 工具条常驻以避免聚焦时挤动表格；放在横向滚动层外，随编辑区纵向滚动吸顶，
+/* 工具条默认收起为一条细 grip，悬停、聚焦进表格、选中单元格或拖选时才展开，
+   不再每张表常驻两行操作区；仍放在横向滚动层外，随编辑区纵向滚动吸顶，
    并由当前表格边界限制停留范围，长表格底部也能直接操作行列。 */
-.markdown-editor-shell .cm-md-table-toolbar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); border-radius: 8px 8px 0 0; background: var(--panel-soft); padding: 4px 6px; }
+.markdown-editor-shell .cm-md-table-toolbar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; min-width: 0; max-height: 10px; align-items: center; gap: 4px; border-bottom: 1px solid transparent; border-radius: 8px 8px 0 0; background: var(--panel-soft); padding: 0 6px; overflow: hidden; cursor: pointer; transition: max-height 140ms ease, padding 140ms ease, border-color 140ms ease; }
+/* 收起态的抓手：提示这里可以展开。 */
+.markdown-editor-shell .cm-md-table-toolbar::before { display: block; width: 40px; height: 3px; margin: 3px auto; border-radius: 2px; background: var(--border); content: ""; flex: none; }
+.markdown-editor-shell .cm-md-table-wrap:hover .cm-md-table-toolbar,
+.markdown-editor-shell .cm-md-table-wrap:focus-within .cm-md-table-toolbar,
+.markdown-editor-shell .cm-md-table-wrap[data-table-active="true"] .cm-md-table-toolbar,
+.markdown-editor-shell .cm-md-table-wrap[data-range-selecting="true"] .cm-md-table-toolbar { max-height: 96px; border-bottom-color: var(--border); padding: 4px 6px; cursor: default; }
+.markdown-editor-shell .cm-md-table-wrap:hover .cm-md-table-toolbar::before,
+.markdown-editor-shell .cm-md-table-wrap:focus-within .cm-md-table-toolbar::before,
+.markdown-editor-shell .cm-md-table-wrap[data-table-active="true"] .cm-md-table-toolbar::before,
+.markdown-editor-shell .cm-md-table-wrap[data-range-selecting="true"] .cm-md-table-toolbar::before { display: none; }
+/* 菜单展开期间取消高度过渡，面板开合不与收起动画打架。 */
+.markdown-editor-shell .cm-md-table-toolbar:has(.cm-md-table-menu[open]) { transition: none; }
 .markdown-editor-shell .cm-md-table-toolbar::after { content: "Tab 切换 · Enter 下移 · Shift+Enter 换行"; margin-left: auto; padding-left: 14px; color: var(--muted-foreground); font-size: 10px; }
 .markdown-editor-shell .cm-md-table-toolbar button { border: 0; border-radius: 5px; background: transparent; padding: 3px 7px; color: var(--muted-foreground); font: inherit; font-size: 11px; cursor: pointer; }
 .markdown-editor-shell .cm-md-table-toolbar button:hover { background: var(--blue-soft); color: var(--primary); }
@@ -76,6 +89,11 @@
   .markdown-editor-shell .cm-md-table-toolbar::after { display: none; }
   .markdown-editor-shell .cm-md-table-selection-status { margin-left: auto; }
   .markdown-editor-shell .cm-md-table-resize-handle { display: none; }
+  /* 触屏没有悬停，收起态的细条加高到可点按的命中区。 */
+  .markdown-editor-shell .cm-md-table-toolbar { max-height: 28px; }
+  /* 触屏上 26px/11px 的入口太难点，触发器与按钮一并放大到可用触摸目标。 */
+  .markdown-editor-shell .cm-md-table-menu > summary { min-height: 36px; padding: 8px 10px; font-size: 13px; }
+  .markdown-editor-shell .cm-md-table-toolbar button { min-height: 36px; padding: 6px 10px; font-size: 13px; }
 }
 
 /* 表格菜单进入 top layer 后仍保留组件样式；隐藏时不能被 display:grid 覆盖。 */

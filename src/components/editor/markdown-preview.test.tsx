@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { describe, expect, it, vi } from "vitest"
 
 import MarkdownPreview from "./markdown-preview"
+import { saveTableColumnPreference } from "./markdown-table-width"
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -137,6 +138,85 @@ describe("Markdown preview integration", () => {
     expect(output).toContain('class="markdown-table-wrap"')
     expect(output).toContain('class="markdown-table-scroll-hint">左右滑动')
     expect(output).not.toContain('href="#目标小节"')
+  })
+
+  it("truncates long link labels inside tables but keeps the full href", () => {
+    const longUrl = "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/wx-%E8%AE%BE%E8%AE%A1%E7%A8%BF?node-id=1234-5678&t=abcdef123456"
+    const escapedUrl = longUrl.replace(/&/g, "&amp;")
+    const output = renderToStaticMarkup(
+      <MarkdownPreview
+        {...baseProps}
+        content={`| 场景 | 链接 |\n| - | - |\n| 设计稿 | ${longUrl} |`}
+        onResolveWikiNote={() => ({ status: "missing" })}
+      />,
+    )
+
+    // 显示文本被中段省略，完整地址仍保留在 href 与 title 里。
+    expect(output).not.toContain(`>${escapedUrl}<`)
+    expect(output).toContain(`href="${escapedUrl}"`)
+    expect(output).toContain("…")
+  })
+
+  it("keeps long link labels intact outside tables", () => {
+    const longUrl = "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/wx-%E8%AE%BE%E8%AE%A1%E7%A8%BF?node-id=1234-5678&t=abcdef123456"
+    const escapedUrl = longUrl.replace(/&/g, "&amp;")
+    const output = renderToStaticMarkup(
+      <MarkdownPreview
+        {...baseProps}
+        content={`正文里的链接：${longUrl}`}
+        onResolveWikiNote={() => ({ status: "missing" })}
+      />,
+    )
+
+    expect(output).toContain(`>${escapedUrl}<`)
+  })
+
+  it("derives preview table column widths from content like the editor does", () => {
+    const output = renderToStaticMarkup(
+      <MarkdownPreview
+        {...baseProps}
+        content={"| 短 | 这是一列明显更长的内容，推导列宽时应该更宽 |\n| - | - |\n| 1 | 2 |"}
+        onResolveWikiNote={() => ({ status: "missing" })}
+      />,
+    )
+
+    // 无编辑态偏好时按内容推导列宽并渲染 colgroup（与编辑态同一算法），不再是各列均分。
+    expect(output).toContain("<colgroup>")
+    const widths = [...output.matchAll(/<col style="width:(\d+)px"/g)].map((match) => Number(match[1]))
+    expect(widths).toHaveLength(2)
+    expect(widths[1]).toBeGreaterThan(widths[0])
+  })
+
+  it("prefers the column widths the user configured in the editor", () => {
+    saveTableColumnPreference("note-with-custom-widths", 0, { mode: "manual", widths: [120, 240] })
+    const output = renderToStaticMarkup(
+      <MarkdownPreview
+        {...baseProps}
+        content={"| A | B |\n| - | - |\n| 1 | 2 |"}
+        noteId="note-with-custom-widths"
+        onResolveWikiNote={() => ({ status: "missing" })}
+      />,
+    )
+
+    // manual 模式按列宽比例分配，比例来自编辑态保存的 120:240。
+    expect(output).toContain('<col style="width:33.33')
+    expect(output).toContain('<col style="width:66.66')
+  })
+
+  it("falls back to content-derived widths when the saved preference column count mismatches", () => {
+    saveTableColumnPreference("note-with-stale-widths", 0, { mode: "manual", widths: [120, 240, 360] })
+    const output = renderToStaticMarkup(
+      <MarkdownPreview
+        {...baseProps}
+        content={"| A | B |\n| - | - |\n| 1 | 2 |"}
+        noteId="note-with-stale-widths"
+        onResolveWikiNote={() => ({ status: "missing" })}
+      />,
+    )
+
+    // 偏好列数对不上（如表格结构已变）时退化为内容推导，两列都是像素宽度。
+    const widths = [...output.matchAll(/<col style="width:(\d+)px"/g)].map((match) => Number(match[1]))
+    expect(widths).toHaveLength(2)
   })
 
   it("exposes overflowing tables as keyboard-scrollable regions", async () => {

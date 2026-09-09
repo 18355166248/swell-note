@@ -5,6 +5,8 @@ import { TABLE_INSERT_TEMPLATE, type MarkdownEditorHandle } from "@/components/e
 import type { EditorFormatState } from "@/components/editor/markdown-input"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
+import { SelectionButtons, useSelectionActions } from "./selection-action-bar"
+
 // 手机一行放不下全部按钮，这些低频格式收进“更多”；语法与桌面端共用，避免两处写法漂移。
 // 前 4 项的顺序被下方解构复用，新增项一律往后追加。
 const SECONDARY_FORMATS = [
@@ -18,7 +20,7 @@ const SECONDARY_FORMATS = [
   { icon: Table, label: "表格", syntax: TABLE_INSERT_TEMPLATE },
 ]
 
-export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable = false, attachmentBusy, canInsertAttachment, editorRef, formatState = null, mobile = false, onFormat, onInsertFiles }: {
+export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable = false, attachmentBusy, canInsertAttachment, editorRef, formatState = null, hasSelection = false, mobile = false, onFormat, onInsertFiles }: {
   canUndo?: boolean
   canRedo?: boolean
   editingTable?: boolean
@@ -27,6 +29,9 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
   editorRef: RefObject<MarkdownEditorHandle | null>
   // 光标 / 选区当前的格式，用于按钮高亮；null 表示不在编辑态，不高亮任何按钮。
   formatState?: EditorFormatState | null
+  // 移动端选区非空时工具栏进入选区模式：复制/剪切/粘贴替换低频入口，与格式按钮共享同一行，
+  // 不再在格式栏上方额外堆一条 46px 的操作条。
+  hasSelection?: boolean
   mobile?: boolean
   onFormat: (syntax: string) => void
   onInsertFiles: (files: File[]) => Promise<void>
@@ -35,11 +40,26 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
   const [, quote, code, link, strike, inlineCode, rule, table] = SECONDARY_FORMATS
   // 标题选择器受控：光标落在哪级标题就显示哪级；切换行为不变（选完即触发 onFormat）。
   const headingValue = formatState?.heading ? "#".repeat(formatState.heading) : ""
+  const selectionMode = mobile && hasSelection
+  const { hint, run } = useSelectionActions(editorRef)
+
+  if (selectionMode) {
+    return (
+      <div className="formatting-toolbar" data-mobile={mobile} data-selection-mode="true">
+        {hint ? <p aria-live="polite" className="selection-action-hint" role="status">{hint}</p> : null}
+        <SelectionButtons run={run} />
+        <FormatButton active={Boolean(formatState?.strong)} icon={Bold} label="加粗（⌘/Ctrl+B）" onClick={() => onFormat("**加粗文字**")} />
+        <FormatButton active={Boolean(formatState?.emphasis)} icon={Italic} label="斜体（⌘/Ctrl+I）" onClick={() => onFormat("*斜体文字*")} />
+        <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} onFormat={onFormat} />
+      </div>
+    )
+  }
 
   return (
     <div className="formatting-toolbar" data-mobile={mobile}>
       <FormatButton disabled={!canUndo && !editingTable} icon={Undo2} label="撤销（⌘/Ctrl+Z）" onClick={() => editorRef.current?.undo()} />
-      <FormatButton disabled={!canRedo} icon={Redo2} label="重做（⌘/Ctrl+Shift+Z）" onClick={() => editorRef.current?.redo()} />
+      {/* 手机屏幕一排放不下全部按钮，重做收进“更多”菜单，主栏只留最高频入口。 */}
+      {mobile ? null : <FormatButton disabled={!canRedo} icon={Redo2} label="重做（⌘/Ctrl+Shift+Z）" onClick={() => editorRef.current?.redo()} />}
       <span className="toolbar-divider" />
       <select aria-label="标题级别" className="toolbar-heading-select" data-active={Boolean(headingValue)} disabled={editingTable} onChange={(event) => {
         const prefix = event.currentTarget.value
@@ -81,14 +101,19 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
           }} ref={fileInputRef} tabIndex={-1} type="file" />
         </>
       ) : null}
-      {mobile ? <SecondaryFormatsMenu editingTable={editingTable} onFormat={onFormat} /> : null}
+      {mobile ? <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} onFormat={onFormat} /> : null}
     </div>
   )
 }
 
 // 用工具栏内部的浮层而不是通用下拉菜单：菜单一旦接管焦点，手机键盘会收起再弹出，
 // 工具栏也会跟着键盘上下跳一次；自绘浮层可以让焦点始终留在 CodeMirror 里。
-function SecondaryFormatsMenu({ onFormat, editingTable }: { editingTable: boolean; onFormat: (syntax: string) => void }) {
+function SecondaryFormatsMenu({ canRedo = true, editorRef, onFormat, editingTable }: {
+  canRedo?: boolean
+  editorRef: RefObject<MarkdownEditorHandle | null>
+  editingTable: boolean
+  onFormat: (syntax: string) => void
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
 
@@ -113,6 +138,19 @@ function SecondaryFormatsMenu({ onFormat, editingTable }: { editingTable: boolea
       <FormatButton expanded={open} icon={MoreHorizontal} label="更多格式" onClick={() => setOpen((current) => !current)} />
       {open ? (
         <div className="toolbar-more-menu" role="menu">
+          <button
+            disabled={!canRedo}
+            onClick={() => {
+              setOpen(false)
+              editorRef.current?.redo()
+            }}
+            onPointerDown={(event) => event.preventDefault()}
+            role="menuitem"
+            type="button"
+          >
+            <Redo2 />
+            <span>重做</span>
+          </button>
           {SECONDARY_FORMATS.map(({ icon: Icon, label, syntax }) => (
             <button
               key={label}

@@ -4,7 +4,9 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import { TooltipProvider } from "@/components/ui/tooltip"
 
+import { FormattingToolbar } from "./formatting-toolbar"
 import { SelectionActionBar } from "./selection-action-bar"
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -134,5 +136,68 @@ describe("SelectionActionBar", () => {
     })
 
     expect(event.defaultPrevented).toBe(true)
+  })
+})
+
+describe("FormattingToolbar 选区模式（移动端选区操作并入格式栏）", () => {
+  function mountToolbar(editor: MarkdownEditorHandle, hasSelection: boolean) {
+    const ref = createRef<MarkdownEditorHandle>()
+    ;(ref as { current: MarkdownEditorHandle | null }).current = editor
+    container = document.createElement("div")
+    document.body.appendChild(container)
+    root = createRoot(container)
+    act(() => {
+      root!.render(
+        <TooltipProvider>
+          <FormattingToolbar
+            attachmentBusy={false}
+            canInsertAttachment={false}
+            editorRef={ref}
+            hasSelection={hasSelection}
+            mobile
+            onFormat={vi.fn()}
+            onInsertFiles={vi.fn().mockResolvedValue(undefined)}
+          />
+        </TooltipProvider>,
+      )
+    })
+    return {
+      button: (label: string) => container!.querySelector<HTMLButtonElement>(`[aria-label^='${label}']`),
+      toolbar: () => container!.querySelector(".formatting-toolbar"),
+    }
+  }
+
+  it("有选区时复制/剪切/粘贴/全选进入格式栏，低频入口让位", () => {
+    const bar = mountToolbar(createEditor(), true)
+
+    expect(bar.toolbar()?.getAttribute("data-selection-mode")).toBe("true")
+    expect(bar.button("复制")).not.toBeNull()
+    expect(bar.button("剪切")).not.toBeNull()
+    expect(bar.button("粘贴")).not.toBeNull()
+    expect(bar.button("全选")).not.toBeNull()
+    // 选中后的下一步高频操作（加粗/斜体）必须留在原地。
+    expect(bar.button("加粗")).not.toBeNull()
+    expect(bar.button("斜体")).not.toBeNull()
+    // 标题选择器与撤销等低频入口在选区模式下让位。
+    expect(container!.querySelector(".toolbar-heading-select")).toBeNull()
+    expect(bar.button("撤销")).toBeNull()
+  })
+
+  it("无选区时保持常规格式栏，不出现选区操作", () => {
+    const bar = mountToolbar(createEditor(), false)
+
+    expect(bar.toolbar()?.getAttribute("data-selection-mode")).toBeNull()
+    expect(bar.button("复制")).toBeNull()
+    expect(container!.querySelector(".toolbar-heading-select")).not.toBeNull()
+    expect(bar.button("撤销")).not.toBeNull()
+  })
+
+  it("选区模式里的复制同样走编辑器方法", async () => {
+    const editor = createEditor()
+    const bar = mountToolbar(editor, true)
+
+    await click(bar.button("复制")!)
+
+    expect(editor.copySelection).toHaveBeenCalledTimes(1)
   })
 })

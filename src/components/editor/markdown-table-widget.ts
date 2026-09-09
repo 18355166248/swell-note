@@ -550,6 +550,17 @@ export class TableWidget extends WidgetType {
       ]),
       selectionStatus,
     )
+    // 工具条默认收起为细条（悬停/聚焦/选中时经 CSS 展开）。触屏没有悬停，
+    // 点击细条本身视为展开请求；点到里面的按钮或菜单则不算。
+    toolbar.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).closest("button, summary")) return
+      wrapper.dataset.tableActive = "true"
+    })
+    const clearActiveOnOutsidePress = (event: PointerEvent) => {
+      if (!wrapper.contains(event.target as Node)) delete wrapper.dataset.tableActive
+    }
+    document.addEventListener("pointerdown", clearActiveOnOutsidePress)
+    this.cleanupCallbacks.add(() => document.removeEventListener("pointerdown", clearActiveOnOutsidePress))
     return toolbar
   }
 
@@ -775,6 +786,8 @@ export class TableWidget extends WidgetType {
     // 单个目标格只驱动工具栏操作，不添加边框或背景，避免表格在展示态和编辑态之间产生视觉抖动。
     wrapper.dataset.selectedRow = String(rowIndex)
     wrapper.dataset.selectedColumn = String(columnIndex)
+    // 选中期间保持工具条展开，鼠标移出表格也不收回去。
+    wrapper.dataset.tableActive = "true"
     this.session().target = { column: columnIndex, row: rowIndex }
     const selectionStatus = wrapper.querySelector<HTMLElement>(".cm-md-table-selection-status")
     if (selectionStatus) {
