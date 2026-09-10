@@ -192,6 +192,422 @@ describe("toggleInlineMark", () => {
   })
 })
 
+// E01：长段中只选中一部分文字取消格式时，不能把选区外的文字一起取消——
+// 左右两侧要保持原格式（「**甲乙丙丁**」选中「乙丙」取消 →「**甲**乙丙**丁**」）。
+describe("toggleInlineMark 局部取消（E01）", () => {
+  it("只取消选中的中间部分，两侧保持加粗", () => {
+    const view = createView("**甲乙丙丁**", 3, 5) // 选中「乙丙」
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**甲**乙丙**丁**")
+    const selection = view.state.selection.main
+    expect(view.state.sliceDoc(selection.from, selection.to)).toBe("乙丙")
+    view.destroy()
+  })
+
+  it("只取消选中的前半部分", () => {
+    const view = createView("**甲乙丙丁**", 2, 4) // 选中「甲乙」
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("甲乙**丙丁**")
+    view.destroy()
+  })
+
+  it("只取消选中的后半部分", () => {
+    const view = createView("**甲乙丙丁**", 4, 6) // 选中「丙丁」
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**甲乙**丙丁")
+    view.destroy()
+  })
+
+  it("反向选区同样只取消选中部分，且保持选区方向", () => {
+    const view = createView("**甲乙丙丁**", 5, 3)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**甲**乙丙**丁**")
+    expect(view.state.selection.main.anchor).toBeGreaterThan(view.state.selection.main.head)
+    view.destroy()
+  })
+
+  it("嵌套粗斜体中取消加粗只拆加粗，斜体保持", () => {
+    const view = createView("***甲乙丙丁***", 4, 6) // 选中「乙丙」
+    toggleInlineMark(view, "strong", "加粗文字")
+    // 「甲」「丁」仍是粗斜体，「乙丙」只剩斜体。
+    expect(view.state.doc.toString()).toBe("***甲**乙丙**丁***")
+    view.destroy()
+  })
+
+  it("局部取消可以一次撤销恢复原文", () => {
+    const view = createView("**甲乙丙丁**", 3, 5)
+    toggleInlineMark(view, "strong", "加粗文字")
+    press(view, "z", { ctrlKey: true })
+    expect(view.state.doc.toString()).toBe("**甲乙丙丁**")
+    view.destroy()
+  })
+})
+
+// E02：跨段落选区不能只在首尾套一组星号（那样空行会打断星号配对，渲染不出加粗），
+// 要按语法树把每个可格式化的块独立包裹；空行、列表编号、代码块围栏不能当正文。
+describe("toggleInlineMark 跨段落（E02）", () => {
+  it("两段文字各自加粗，段落结构保留", () => {
+    const view = createView("第一段\n\n第二段", 0, 8)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**第一段**\n\n**第二段**")
+    view.destroy()
+  })
+
+  it("三段文字各自加粗", () => {
+    const view = createView("一\n\n二\n\n三", 0, 7)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**一**\n\n**二**\n\n**三**")
+    view.destroy()
+  })
+
+  it("段落加列表：列表编号留在标记外", () => {
+    const doc = "段落\n\n- 项目一\n- 项目二"
+    const view = createView(doc, 0, doc.length)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**段落**\n\n- **项目一**\n- **项目二**")
+    view.destroy()
+  })
+
+  it("标题只包裹标题文字", () => {
+    const doc = "## 标题\n\n正文"
+    const view = createView(doc, 0, doc.length)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("## **标题**\n\n**正文**")
+    view.destroy()
+  })
+
+  it("代码块内容原样保留，两侧段落正常加粗", () => {
+    const doc = "开头\n\n```\ncode\n```\n\n结尾"
+    const view = createView(doc, 0, doc.length)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**开头**\n\n```\ncode\n```\n\n**结尾**")
+    view.destroy()
+  })
+
+  it("每段都已是加粗时整体取消", () => {
+    const view = createView("**第一段**\n\n**第二段**", 0, 16)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("第一段\n\n第二段")
+    view.destroy()
+  })
+
+  it("混合选区只给未加粗的段落补标记", () => {
+    const view = createView("**第一段**\n\n第二段", 0, 12)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**第一段**\n\n**第二段**")
+    view.destroy()
+  })
+
+  it("跨段落加粗可以一次撤销恢复原文", () => {
+    const original = "第一段\n\n第二段"
+    const view = createView(original, 0, 8)
+    toggleInlineMark(view, "strong", "加粗文字")
+    press(view, "z", { ctrlKey: true })
+    expect(view.state.doc.toString()).toBe(original)
+    view.destroy()
+  })
+})
+
+// E03：非空选区加格式后要保持选区（落在内容上），连续点第二个按钮仍作用于同一段文字；
+// 空光标插入占位文字时选中占位，直接输入即可覆盖，而不是留下一个孤零零的光标。
+describe("toggleInlineMark 选区保留（E03）", () => {
+  it("加粗后选区保留在内容上，再点斜体叠加为粗斜体", () => {
+    const view = createView("一段文字", 0, 4)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**一段文字**")
+    let selection = view.state.selection.main
+    expect(view.state.sliceDoc(selection.from, selection.to)).toBe("一段文字")
+    toggleInlineMark(view, "emphasis", "斜体文字")
+    expect(view.state.doc.toString()).toBe("***一段文字***")
+    selection = view.state.selection.main
+    expect(view.state.sliceDoc(selection.from, selection.to)).toBe("一段文字")
+    view.destroy()
+  })
+
+  it("加粗后接删除线同样作用于原选区", () => {
+    const view = createView("一段文字", 0, 4)
+    toggleInlineMark(view, "strong", "加粗文字")
+    toggleInlineMark(view, "strike", "删除线文字")
+    expect(view.state.doc.toString()).toBe("**~~一段文字~~**")
+    view.destroy()
+  })
+
+  it("空光标插入占位文字后选中占位，不坍缩成单光标", () => {
+    const view = createView("这是文字", 2)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("这是**加粗文字**文字")
+    const selection = view.state.selection.main
+    expect(view.state.sliceDoc(selection.from, selection.to)).toBe("加粗文字")
+    view.destroy()
+  })
+})
+
+// E04：行内代码的分隔符可以是一对以上的反引号（``a`b``），取消时要按真实的
+// CodeMark 长度移除完整分隔符；新增时按正文里最长的反引号串选择围栏长度。
+describe("toggleInlineMark 行内代码分隔符（E04）", () => {
+  it("取消双反引号代码时移除完整分隔符，正文字符保持", () => {
+    const view = createView("``a`b``", 2, 5)
+    toggleInlineMark(view, "code", "行内代码")
+    expect(view.state.doc.toString()).toBe("a`b")
+    press(view, "z", { ctrlKey: true })
+    expect(view.state.doc.toString()).toBe("``a`b``")
+    view.destroy()
+  })
+
+  it("正文含反引号时新增代码自动加长围栏", () => {
+    const view = createView("代码 a`b 结束", 3, 6)
+    toggleInlineMark(view, "code", "行内代码")
+    expect(view.state.doc.toString()).toBe("代码 ``a`b`` 结束")
+    view.destroy()
+  })
+
+  it("正文以反引号结尾时按规范补空格", () => {
+    const view = createView("x a` y", 2, 4)
+    toggleInlineMark(view, "code", "行内代码")
+    expect(view.state.doc.toString()).toBe("x `` a` `` y")
+    view.destroy()
+  })
+})
+
+// 用真实解析器逐字符核对格式：只断言源码里还有星号，不能保证每个字符的格式正确。
+function expectCharFormats(doc: string, expected: Record<string, string[]>) {
+  const tree = markdownLanguage.parser.parse(doc)
+  const INLINE_NAMES = ["Emphasis", "InlineCode", "Strikethrough", "StrongEmphasis"]
+  for (const [char, marks] of Object.entries(expected)) {
+    const at = doc.indexOf(char)
+    expect(at, `应能在 ${doc} 里找到字符「${char}」`).toBeGreaterThanOrEqual(0)
+    const actual: string[] = []
+    tree.iterate({ enter(node) {
+      if (INLINE_NAMES.includes(node.name) && node.from <= at && node.to > at) actual.push(node.name)
+    } })
+    expect(actual.sort(), `字符「${char}」的格式`).toEqual([...marks].sort())
+  }
+}
+
+// 复核 P1：嵌套格式里做局部取消时，被切断的嵌套节点要在一侧闭合、另一侧重开——
+// 选区外的文字（包括嵌套格式）一个都不能变。语义用真实解析器逐字符核对。
+describe("toggleInlineMark 嵌套局部取消（复核 P1）", () => {
+  it("斜体嵌在加粗里：只取消中间一字的加粗，两侧与嵌套斜体都保留", () => {
+    const view = createView("**甲*乙丙*丁**", 5, 6) // 只选「丙」
+    toggleInlineMark(view, "strong", "加粗文字")
+    expectCharFormats(view.state.doc.toString(), {
+      甲: ["StrongEmphasis"],
+      乙: ["Emphasis", "StrongEmphasis"],
+      丙: ["Emphasis"],
+      丁: ["StrongEmphasis"],
+    })
+    const selection = view.state.selection.main
+    expect(view.state.sliceDoc(selection.from, selection.to)).toBe("丙")
+    view.destroy()
+  })
+
+  it("拆分点落在嵌套内容起点：左侧不会吞掉嵌套的开始标记", () => {
+    const view = createView("**甲乙*丙丁*戊**", 5, 6) // 只选「丙」
+    toggleInlineMark(view, "strong", "加粗文字")
+    expectCharFormats(view.state.doc.toString(), {
+      甲: ["StrongEmphasis"],
+      乙: ["StrongEmphasis"],
+      丙: ["Emphasis"],
+      丁: ["Emphasis", "StrongEmphasis"],
+      戊: ["StrongEmphasis"],
+    })
+    view.destroy()
+  })
+
+  it("选区越过嵌套边界：嵌套部分保持嵌套格式", () => {
+    const view = createView("**甲*乙丙*丁戊**", 4, 8) // 选「乙丙丁」
+    toggleInlineMark(view, "strong", "加粗文字")
+    expectCharFormats(view.state.doc.toString(), {
+      甲: ["StrongEmphasis"],
+      乙: ["Emphasis"],
+      丙: ["Emphasis"],
+      丁: [],
+      戊: ["StrongEmphasis"],
+    })
+    view.destroy()
+  })
+
+  it("加粗嵌在斜体里：只取消中间一字的斜体", () => {
+    const view = createView("*甲**乙丙**丁*", 5, 6) // 只选「丙」
+    toggleInlineMark(view, "emphasis", "斜体文字")
+    expectCharFormats(view.state.doc.toString(), {
+      甲: ["Emphasis"],
+      乙: ["Emphasis", "StrongEmphasis"],
+      丙: ["StrongEmphasis"],
+      丁: ["Emphasis"],
+    })
+    view.destroy()
+  })
+
+  it("粗斜体上只取消中间文字的斜体：加粗保留", () => {
+    const view = createView("***甲乙丙丁***", 4, 6) // 选「乙丙」
+    toggleInlineMark(view, "emphasis", "斜体文字")
+    expectCharFormats(view.state.doc.toString(), {
+      甲: ["Emphasis", "StrongEmphasis"],
+      乙: ["StrongEmphasis"],
+      丙: ["StrongEmphasis"],
+      丁: ["Emphasis", "StrongEmphasis"],
+    })
+    view.destroy()
+  })
+
+  it("粗斜体上选中全部文字取消斜体：不产出空壳标记，干净退成加粗", () => {
+    const view = createView("***加粗文字***", 3, 7) // 选中全部文字
+    toggleInlineMark(view, "emphasis", "斜体文字")
+    expect(view.state.doc.toString()).toBe("**加粗文字**")
+    expectCharFormats(view.state.doc.toString(), {
+      加: ["StrongEmphasis"],
+      粗: ["StrongEmphasis"],
+      文: ["StrongEmphasis"],
+      字: ["StrongEmphasis"],
+    })
+    view.destroy()
+  })
+
+  it("链接标签内局部取消：标记推进标签内部，链接外文字不受影响（复核 R4）", () => {
+    const view = createView("**[链接文字](https://example.com)**", 4, 6) // 只选「接文」
+    toggleInlineMark(view, "strong", "加粗文字")
+    expectCharFormats(view.state.doc.toString(), {
+      链: ["StrongEmphasis"],
+      接: [],
+      文: [],
+      字: ["StrongEmphasis"],
+    })
+    view.destroy()
+  })
+
+  it("链接两侧的正文保持加粗，只有选中的一字取消（复核 R4）", () => {
+    const view = createView("**甲[乙丙](https://example.com)丁**", 5, 6) // 只选「丙」
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**甲**[**乙**丙](https://example.com)**丁**")
+    expectCharFormats(view.state.doc.toString(), {
+      甲: ["StrongEmphasis"],
+      乙: ["StrongEmphasis"],
+      丙: [],
+      丁: ["StrongEmphasis"],
+    })
+    view.destroy()
+  })
+
+  it("拆分点旁的空格留在标记外侧：取消正确生效（复核 R5）", () => {
+    const view = createView("**甲 乙 丙**", 4, 5) // 只选「乙」
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**甲** 乙 **丙**")
+    expectCharFormats(view.state.doc.toString(), {
+      甲: ["StrongEmphasis"],
+      乙: [],
+      丙: ["StrongEmphasis"],
+    })
+    view.destroy()
+  })
+
+  it("标点旁的拆分：边界标点无法合法保持原格式时随中间段取消（CommonMark 限制）", () => {
+    // 闭合标记前是标点、后是文字时不能闭合，「甲，加粗 / 乙取消 / 。丙加粗」在
+    // CommonMark 里没有合法写法，只能把边界标点并进取消范围。
+    const view = createView("**甲，乙。丙**", 4, 5) // 只选「乙」
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**甲**，乙。**丙**")
+    expectCharFormats(view.state.doc.toString(), {
+      甲: ["StrongEmphasis"],
+      "，": [],
+      乙: [],
+      "。": [],
+      丙: ["StrongEmphasis"],
+    })
+    view.destroy()
+  })
+
+  it("反向选区的局部取消与正向一致，且选区方向保留", () => {
+    const view = createView("**甲 乙 丙**", 5, 4) // 反向选中「乙」
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**甲** 乙 **丙**")
+    const selection = view.state.selection.main
+    expect(selection.anchor).toBeGreaterThan(selection.head)
+    expect(view.state.sliceDoc(selection.from, selection.to)).toBe("乙")
+    view.destroy()
+  })
+
+  it("行内代码是原子：选代码中一部分取消加粗，整段代码一起取消", () => {
+    const view = createView("**甲`xy`乙**", 5, 6) // 只选代码里的「x」
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**甲**`xy`**乙**")
+    view.destroy()
+  })
+
+  it("嵌套局部取消可以一次撤销恢复原文", () => {
+    const view = createView("**甲*乙丙*丁**", 5, 6)
+    toggleInlineMark(view, "strong", "加粗文字")
+    press(view, "z", { ctrlKey: true })
+    expect(view.state.doc.toString()).toBe("**甲*乙丙*丁**")
+    view.destroy()
+  })
+})
+
+// 复核 R5/R6/R7：切点旁的分隔字符（空白、软换行、标点、符号）参数化——不变量是
+// 可见文本不丢不增、选中内容取消生效、两侧格式保留；标点/符号旁不存在「保持原
+// 格式」的合法写法时，允许最小扩大（标点并入中间段）。
+describe("toggleInlineMark 分隔字符边界（复核 R5/R6/R7）", () => {
+  const cases: [name: string, doc: string, from: number, to: number, expected: string][] = [
+    ["Tab", "**甲\t乙\t丙**", 4, 5, "**甲**\t乙\t**丙**"],
+    ["软换行", "**甲\n乙\n丙**", 4, 5, "**甲**\n乙\n**丙**"],
+    ["引用内软换行保留 > 前缀", "> **甲\n> 乙\n> 丙**", 8, 9, "> **甲**\n> 乙\n> **丙**"],
+    ["美元符号", "**甲$乙$丙**", 4, 5, "**甲**$乙$**丙**"],
+    ["加号等 ASCII 符号", "**甲+乙+丙**", 4, 5, "**甲**+乙+**丙**"],
+    ["波浪号", "**甲~乙~丙**", 4, 5, "**甲**~乙~**丙**"],
+  ]
+  for (const [name, doc, from, to, expected] of cases) {
+    it(`${name}：只取消选中的一字`, () => {
+      const view = createView(doc, from, to)
+      toggleInlineMark(view, "strong", "加粗文字")
+      const out = view.state.doc.toString()
+      expect(out.replace(/\*/g, "")).toBe(doc.replace(/\*/g, "")) // 可见文本不丢不增
+      expect(out).toBe(expected)
+      expectCharFormats(out, {
+        甲: ["StrongEmphasis"],
+        乙: [],
+        丙: ["StrongEmphasis"],
+      })
+      view.destroy()
+    })
+  }
+})
+
+// 复核 P2：标题的结构标记不能当正文——下划线标题的下划线、ATX 标题的首尾井号
+// 都要留在格式包裹之外。
+describe("toggleInlineMark 标题边界（复核 P2）", () => {
+  it("一级下划线标题：只包裹标题文字，下划线保留", () => {
+    const doc = "标题\n==="
+    const view = createView(doc, 0, doc.length)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**标题**\n===")
+    view.destroy()
+  })
+
+  it("二级下划线标题同样处理", () => {
+    const doc = "标题\n---"
+    const view = createView(doc, 0, doc.length)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("**标题**\n---")
+    view.destroy()
+  })
+
+  it("ATX 标题的闭合井号不被当正文包裹", () => {
+    const doc = "# 标题 #"
+    const view = createView(doc, 0, doc.length)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("# **标题** #")
+    view.destroy()
+  })
+
+  it("无闭合井号的 ATX 标题行为不变", () => {
+    const doc = "## 标题"
+    const view = createView(doc, 0, doc.length)
+    toggleInlineMark(view, "strong", "加粗文字")
+    expect(view.state.doc.toString()).toBe("## **标题**")
+    view.destroy()
+  })
+})
+
 // Cmd+K 在光标（无选区）落在已有链接文字里时，此前会在原文字中间插一段新链接，
 // 拼出嵌套错乱的 Markdown；现在改成直接选中已有链接的 URL 方便就地改地址。
 describe("focusExistingLinkUrl", () => {

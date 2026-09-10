@@ -1,5 +1,7 @@
 import type { EditorView } from "@codemirror/view"
 
+import { detectInlineMarksInText, inlineMarkEditInText, type InlineMarkKind } from "./markdown-input"
+
 export type TableEditTarget = {
   input: HTMLTextAreaElement
   commit: () => void
@@ -23,39 +25,34 @@ export function registerTableEdit(view: EditorView, target: TableEditTarget) {
 
 export type CellInlineMarks = { code: boolean; emphasis: boolean; strike: boolean; strong: boolean }
 
-// 工具栏的格式高亮：判断 textarea 选区是否已被对应标记包裹（选区自身带标记、或选区紧贴着标记）。
-// 加粗标记同时满足斜体的判定形式，斜体必须先排除加粗才不会把 **文字** 误报成斜体。
+// 工具栏的格式高亮：与正文 detectFormatState 共用同一套语义判断（Markdown 语法树），
+// 不再用「左右紧邻字符」猜——加粗的两个星号不会再被误判成斜体标记。
 export function detectCellInlineMarks(value: string, from: number, to: number): CellInlineMarks {
-  const wrappedBy = (mark: string) => {
-    if (from !== to && value.slice(from, from + mark.length) === mark && value.slice(to - mark.length, to) === mark && to - from >= mark.length * 2) return true
-    return value.slice(Math.max(0, from - mark.length), from) === mark && value.slice(to, to + mark.length) === mark
-  }
-  const strong = wrappedBy("**")
-  return {
-    code: wrappedBy("`"),
-    emphasis: !strong && wrappedBy("*"),
-    strike: wrappedBy("~~"),
-    strong,
-  }
+  return detectInlineMarksInText(value, from, to)
 }
 
+// 单元格行内格式与正文 toggleInlineMark 共用同一份规则（局部取消、占位插入、
+// 代码围栏长度都一致）。textarea 的 setRangeText 一次只能替换一个连续区间，
+// 这里取所有改动的包围区间，在字符串上应用后返回。
 export function inlineTableFormat(template: string, value: string, from: number, to: number) {
-  const tokens: Record<string, [string, string]> = {
-    "**加粗文字**": ["**", "加粗文字"], "*斜体文字*": ["*", "斜体文字"],
-    "~~删除线文字~~": ["~~", "删除线文字"], "`行内代码`": ["`", "行内代码"],
+  const inlineMarks: Record<string, [InlineMarkKind, string]> = {
+    "**加粗文字**": ["strong", "加粗文字"], "*斜体文字*": ["emphasis", "斜体文字"],
+    "~~删除线文字~~": ["strike", "删除线文字"], "`行内代码`": ["code", "行内代码"],
+  }
+  const mark = inlineMarks[template]
+  if (mark) {
+    const edit = inlineMarkEditInText(value, from, to, mark[0], mark[1])
+    if (!edit) return null
+    let text = value
+    for (let index = edit.changes.length - 1; index >= 0; index--) {
+      const change = edit.changes[index]
+      text = text.slice(0, change.from) + change.insert + text.slice(change.to)
+    }
+    const first = edit.changes[0]
+    const last = edit.changes[edit.changes.length - 1]
+    return { from: first.from, to: last.to, text: text.slice(first.from, first.from + (last.to - first.from) + (text.length - value.length)) }
   }
   const selected = value.slice(from, to)
-  const pair = tokens[template]
-  if (pair) {
-    const [mark, placeholder] = pair
-    if (selected.startsWith(mark) && selected.endsWith(mark) && selected.length >= mark.length * 2) {
-      return { from, to, text: selected.slice(mark.length, -mark.length) }
-    }
-    if (value.slice(from - mark.length, from) === mark && value.slice(to, to + mark.length) === mark) {
-      return { from: from - mark.length, to: to + mark.length, text: selected }
-    }
-    return { from, to, text: `${mark}${selected || placeholder}${mark}` }
-  }
   if (template === "[链接](https://)") return { from, to, text: `[${selected || "链接"}](https://)` }
   // 单元格不支持块语法；阻止把标题、整张表格等插入正文的旧选区。
   if (/^\n/.test(template)) return null

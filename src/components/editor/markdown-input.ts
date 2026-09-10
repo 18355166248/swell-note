@@ -133,11 +133,31 @@ export function markdownInputEnhancements() {
   return [markdownInputKeymap, markdownWrapInput]
 }
 
-// 加粗 / 斜体 / 删除线 / 行内代码：标记长度固定，节点范围一定包含标记本身（如 StrongEmphasis
-// 首尾就是两个 EmphasisMark），换算「去掉标记后的位置」不用另外找标记子节点。
+// 加粗 / 斜体 / 删除线 / 行内代码共用一套「按语义作用范围」的规则，正文 CodeMirror
+// 与表格单元格 textarea 走同一份实现（单元格走 inlineMarkEditInText，用同一解析器）：
+// · 空光标：落在标记里就整段取消；否则插入占位文字并选中占位，直接输入即可覆盖。
+// · 选区罩住标记内全部内容：整段取消；只选中一部分：把这部分从标记里拆出来，
+//   左右两侧保持原格式（「**甲乙丙丁**」选中「乙丙」取消 →「**甲**乙丙**丁**」）。
+// · 选区跨段落：按语法树把每个可格式化的块（段落、标题文字、列表项正文、引用行）
+//   独立包裹；空行、列表编号、代码块围栏、表格不当普通正文，保证写出的源码仍是合法
+//   Markdown（在首尾只套一组星号会被空行打断配对，渲染不出来）。
+// · 选区碰到半截同种标记：先把旧标记剥掉再整体包裹，避免拼出断裂的星号串。
 const INLINE_MARK_NODE_NAMES = { code: "InlineCode", emphasis: "Emphasis", strike: "Strikethrough", strong: "StrongEmphasis" } as const
 const INLINE_MARK_TOKENS = { code: "`", emphasis: "*", strike: "~~", strong: "**" } as const
 export type InlineMarkKind = keyof typeof INLINE_MARK_TOKENS
+
+// 一次行内格式操作的结果：一组按文档顺序的替换 + 操作后的选区（新文档坐标）。
+export type InlineMarkEdit = {
+  changes: { from: number; to: number; insert: string }[]
+  selection: { anchor: number; head: number }
+}
+
+// 语法树的最小结构约定：正文用 syntaxTree(state)，单元格用 markdownLanguage.parser.parse(text)，
+// 两者都是 lezer 树，节点名与结构一致。
+type MdTree = {
+  resolveInner: (position: number, side?: -1 | 0 | 1) => MdSyntaxNode
+  topNode: MdSyntaxNode
+}
 
 function findEnclosingNode(node: MdSyntaxNode | null, from: number, to: number, name: string): MdSyntaxNode | null {
   while (node) {
@@ -151,54 +171,422 @@ function findEnclosingMark(state: EditorState, from: number, to: number, name: s
   return findEnclosingNode(syntaxTree(state).resolveInner(from, from === to ? -1 : 1), from, to, name)
 }
 
-// 三击选中「一行」时，浏览器给出的选区会带上行首的列表/引用标记和结尾的换行符——
-// 照单包裹的话，标记会插进列表编号内部（"**1. 文字**" 变成 "**1. 文字\n**"，编号被劈开）。
-// 这里把选区收缩到「这一行真正的内容」：掐掉尾随换行，跳过行首的结构前缀。
-function shrinkToLineContent(state: EditorState, from: number, to: number) {
-  while (to > from && state.doc.sliceString(to - 1, to) === "\n") to--
-  const line = state.doc.lineAt(from)
-  if (from === line.from) {
-    const match = STRUCTURE_LINE.exec(line.text)
-    if (match) from = Math.min(line.from + match[0].length, to)
+// 行内代码的围栏长度取自真实的 CodeMark 子节点：合法代码跨度可以用多个反引号
+// （如 ``a`b``），不能用固定常量 1 去切片，否则取消格式时会残留半个分隔符。
+function markLengths(node: MdSyntaxNode, kind: InlineMarkKind): { open: number; close: number } {
+  const marker = INLINE_MARK_TOKENS[kind]
+  if (kind !== "code") return { open: marker.length, close: marker.length }
+  let open = marker.length
+  let close = marker.length
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    if (child.name !== "CodeMark") continue
+    if (child.from === node.from) open = child.to - child.from
+    if (child.to === node.to) close = child.to - child.from
+  }
+  return { open, close }
+}
+
+// 新标记的包裹符：行内代码按正文里最长的反引号串决定围栏长度；正文以反引号开头或
+// 结尾时按 CommonMark 规则补一个空格，保证渲染回去可见内容不变。
+function wrapPair(kind: InlineMarkKind, content: string): { open: string; close: string } {
+  const marker = INLINE_MARK_TOKENS[kind]
+  if (kind !== "code") return { open: marker, close: marker }
+  let longest = 0
+  for (const match of content.matchAll(/`+/g)) longest = Math.max(longest, match[0].length)
+  const fence = "`".repeat(longest + 1)
+  const pad = content.startsWith("`") || content.endsWith("`") ? " " : ""
+  return { open: fence + pad, close: pad + fence }
+}
+
+// 节点的「内容区间」：去掉首尾的标记子节点（EmphasisMark / StrikethroughMark /
+// CodeMark 等，名字都以 Mark 结尾）。
+function contentBounds(node: MdSyntaxNode): { from: number; to: number } {
+  const children: MdSyntaxNode[] = []
+  for (let child = node.firstChild; child; child = child.nextSibling) children.push(child)
+  let from = node.from
+  let to = node.to
+  for (const child of children) {
+    if (child.from === from && child.name.endsWith("Mark")) from = child.to
+    else break
+  }
+  for (let index = children.length - 1; index >= 0; index--) {
+    const child = children[index]
+    if (child.to === to && child.name.endsWith("Mark")) to = child.from
+    else break
   }
   return { from, to }
 }
 
-// 选区（或光标）已经落在对应的行内标记节点里时，Cmd+B 等快捷键与工具栏按钮应当「再点一次就取消」，
-// 而不是在外面再套一层标记，否则连续按会越叠越多层。找不到对应节点时退回普通包裹。
+// 链接/图片的「标签内容区间」：开始标记（[ 或 ![）之后、结束方括号 ] 之前。
+// 链接在语法树上 ]( 、URL 、) 是独立子节点，用 contentBounds 会把 ](url 也算进
+// 标签，格式标记就插进了 URL——标签只能到 ] 为止。
+function labelBounds(node: MdSyntaxNode): { from: number; to: number } {
+  let from = node.from
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    if (child.from === node.from && child.name.endsWith("Mark")) { from = child.to; continue }
+    if (child.name.endsWith("Mark")) return { from, to: child.from }
+  }
+  return { from, to: node.to }
+}
+
+// 可以安全拆开再重开的嵌套节点；行内代码、自动链接等原子的内容是字面量，拆不开。
+const SPLITTABLE_NESTED_NAMES = new Set(["Emphasis", "Strikethrough", "StrongEmphasis"])
+
+// 链接/图片的标签内容可以携带格式，拆分点落在标签里时标记推进标签内部即可，
+// 结构部分（[、](url)、![）由 serializeInlineRange 原样保留。
+const LABEL_CONTAINER_NAMES = new Set(["Link", "Image"])
+
+// 拆分点穿过的「字面量原子」（行内代码、自动链接、转义、实体等）：内容不能只在
+// 一部分上加减格式，切点落在内部时要整颗原子一起参与。链接/图片的标签内容可切，
+// 不算原子。返回 null 表示切点不在任何原子内部。
+function atomAt(node: MdSyntaxNode, position: number): MdSyntaxNode | null {
+  let found: MdSyntaxNode | null = null
+  const visit = (current: MdSyntaxNode) => {
+    if (found) return
+    for (let child = current.firstChild; child; child = child.nextSibling) {
+      if (position <= child.from || position >= child.to) continue
+      if (child.name.endsWith("Mark") || child.name === "CodeText") continue
+      if (LABEL_CONTAINER_NAMES.has(child.name) || SPLITTABLE_NESTED_NAMES.has(child.name)) { visit(child); return }
+      found = child
+      return
+    }
+  }
+  visit(node)
+  return found
+}
+
+// 收集拆分点穿过「内容区」的嵌套格式节点（外层在前），用于在一侧闭合、另一侧重开。
+// 标记节点与代码正文是透明的；链接/图片只穿过标签内容，本身不闭合重开。
+function nestedCutAt(node: MdSyntaxNode, position: number): MdSyntaxNode[] {
+  const nodes: MdSyntaxNode[] = []
+  const visit = (current: MdSyntaxNode) => {
+    for (let child = current.firstChild; child; child = child.nextSibling) {
+      if (position <= child.from || position >= child.to) continue
+      if (child.name.endsWith("Mark") || child.name === "CodeText") continue
+      if (LABEL_CONTAINER_NAMES.has(child.name)) { visit(child); continue }
+      if (!SPLITTABLE_NESTED_NAMES.has(child.name)) continue
+      const inner = contentBounds(child)
+      if (position > inner.from && position < inner.to) nodes.push(child)
+      visit(child)
+    }
+  }
+  visit(node)
+  return nodes
+}
+
+// 把 node 内容区的 [a,b) 重建为可独立存在的文本：open/close 包住每段连续内容，
+// 边界空白留在标记外侧（标记贴空格无法形成合法分隔符，见复核 R5）；链接/图片被
+// 部分覆盖时结构标记保持原文、标记推进标签内容区（见复核 R4）。
+function serializeInlineRange(text: string, node: MdSyntaxNode, a: number, b: number, open: string, close: string): string {
+  const wrapRun = (from: number, to: number): string => {
+    const raw = text.slice(from, to)
+    // 空白含软换行；换行后的引用结构前缀（> ）同样留在标记外侧，不能包进格式
+    // （复核 R7：只处理空格/Tab 会让换行留在标记内侧，分隔符无法配对）。
+    const lead = /^(?:[ \t]+|[ \t]*\n[ \t]*(?:>[ \t]?)*[ \t]*)/.exec(raw)?.[0] ?? ""
+    const rest = raw.slice(lead.length)
+    const trail = /(?:[ \t]+|[ \t]*\n[ \t]*(?:>[ \t]?)*[ \t]*)$/.exec(rest)?.[0] ?? ""
+    const core = rest.slice(0, rest.length - trail.length)
+    if (!core) return raw
+    return lead + open + core + close + trail
+  }
+  const build = (container: MdSyntaxNode, from: number, to: number): string => {
+    let out = ""
+    let runFrom = from
+    const walk = (parent: MdSyntaxNode) => {
+      for (let child = parent.firstChild; child && child.from < to; child = child.nextSibling) {
+        if (child.to <= runFrom) continue
+        const coveredFrom = Math.max(child.from, from)
+        const coveredTo = Math.min(child.to, to)
+        if (coveredFrom <= child.from && coveredTo >= child.to) continue // 完整覆盖：留在原文段里
+        if (LABEL_CONTAINER_NAMES.has(child.name)) {
+          if (runFrom < coveredFrom) out += wrapRun(runFrom, coveredFrom)
+          const label = labelBounds(child)
+          const prefixTo = Math.min(Math.max(label.from, coveredFrom), coveredTo)
+          out += text.slice(coveredFrom, prefixTo)
+          const labelFrom = Math.max(label.from, coveredFrom)
+          const labelTo = Math.min(label.to, coveredTo)
+          if (labelFrom < labelTo) out += build(child, labelFrom, labelTo)
+          const suffixFrom = Math.max(label.to, coveredFrom)
+          if (suffixFrom < coveredTo) out += text.slice(suffixFrom, coveredTo)
+          runFrom = coveredTo
+          if (coveredTo >= to) return
+        } else if (SPLITTABLE_NESTED_NAMES.has(child.name)) {
+          walk(child) // 部分覆盖的可拆嵌套节点：深入找被部分覆盖的链接/图片
+        }
+        // 其余（原子、标记子节点）：留在原文段里
+      }
+    }
+    walk(container)
+    if (runFrom < to) out += wrapRun(runFrom, to)
+    return out
+  }
+  return build(node, a, b)
+}
+
+// 收集 node 后代里所有标记子节点（各层 Mark）的区间。
+function collectMarkRanges(node: MdSyntaxNode, out: { from: number; to: number }[] = []): { from: number; to: number }[] {
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    if (child.name.endsWith("Mark")) out.push({ from: child.from, to: child.to })
+    else collectMarkRanges(child, out)
+  }
+  return out
+}
+
+// [from,to) 这段文字是否完全由标记字符（各层 Mark 子节点）构成、没有真实正文。
+// 比如 ***加粗文字*** 里取消斜体时，中间选区两侧的「文字」其实只剩加粗标记，
+// 这时拆分出来的左右片段只是空壳标记对，整段取消才是干净的结果。
+function onlyMarksBetween(node: MdSyntaxNode, from: number, to: number): boolean {
+  const marks = collectMarkRanges(node)
+  let position = from
+  for (const mark of marks) {
+    if (mark.from <= position && mark.to > position) position = mark.to
+  }
+  return position >= to
+}
+
+// 代码块、表格、水平线等块的内容不是普通正文，行内格式不能穿进去。
+const SKIP_BLOCK_NAMES = new Set(["CodeBlock", "FencedCode", "HTMLBlock", "HorizontalRule", "Table"])
+
+// 把选区拆成一组「可格式化正文段」：段落与标题的正文部分；引用、列表等容器递归到
+// 其中的段落。空行、列表编号、引用符号、标题的 # 前缀都被排除在段外。
+function collectSegments(root: MdSyntaxNode, text: string, from: number, to: number, out: { from: number; to: number }[]) {
+  for (let node = root.firstChild; node; node = node.nextSibling) {
+    if (node.to <= from || node.from >= to) continue
+    if (SKIP_BLOCK_NAMES.has(node.name)) continue
+    if (node.name === "Paragraph" || node.name.startsWith("SetextHeading")) {
+      let contentTo = node.to
+      if (node.name.startsWith("SetextHeading")) {
+        // Setext 标题（实际节点名是 SetextHeading1/2）的下划线行是标记不是正文。
+        const breakAt = text.lastIndexOf("\n", node.to - 1)
+        if (breakAt >= node.from && /^\s*(=+|-+)\s*$/.test(text.slice(breakAt + 1, node.to))) contentTo = breakAt
+      }
+      pushSegment(out, text, Math.max(from, node.from), Math.min(to, contentTo))
+      continue
+    }
+    if (/^ATXHeading/.test(node.name)) {
+      const headingText = text.slice(node.from, node.to)
+      // 起始的 # 前缀是块标记；结尾的闭合 # 序列（前面有空格）同样是标记，都不是正文。
+      const prefix = /^ {0,3}#{1,6}\s+/.exec(headingText)?.[0].length ?? 0
+      const closing = /\s+#+\s*$/.exec(headingText)?.[0].length ?? 0
+      pushSegment(out, text, Math.max(from, node.from + prefix), Math.min(to, node.to - closing))
+      continue
+    }
+    collectSegments(node, text, from, to, out)
+  }
+}
+
+function pushSegment(out: { from: number; to: number }[], text: string, from: number, to: number) {
+  while (from < to && /\s/.test(text[from])) from++
+  while (to > from && /\s/.test(text[to - 1])) to--
+  if (from < to) out.push({ from, to })
+}
+
+// 收集与区间相交的同种标记节点，供「先剥旧标记再整体包裹」使用。
+function collectIntersecting(root: MdSyntaxNode, from: number, to: number, name: string, out: MdSyntaxNode[]) {
+  if (root.name === name && root.from < to && root.to > from) { out.push(root); return }
+  for (let child = root.firstChild; child; child = child.nextSibling) {
+    if (child.to <= from || child.from >= to) continue
+    collectIntersecting(child, from, to, name, out)
+  }
+}
+
+// 手动映射选区端点（单元格 textarea 场景没有 ChangeDesc 可用）。
+// assoc -1 站在替换内容之前，+1 站到替换内容之后。
+function mapPosition(changes: { from: number; to: number; insert: string }[], position: number, assoc: -1 | 1): number {
+  let offset = 0
+  for (const change of changes) {
+    if (position < change.from) break
+    const delta = change.insert.length - (change.to - change.from)
+    if (position > change.to) { offset += delta; continue }
+    if (assoc < 0) return change.from + offset
+    return change.to + offset + delta
+  }
+  return position + offset
+}
+
+// 行内格式操作的核心：输入（文本、语法树、选区、格式种类），输出替换与选区。
+// 返回 null 表示选区内没有任何可格式化的正文段（比如只框住了代码块），不做改动。
+function computeInlineMarkEdit(
+  tree: MdTree,
+  text: string,
+  anchorPos: number,
+  headPos: number,
+  kind: InlineMarkKind,
+  placeholder: string,
+): InlineMarkEdit | null {
+  const nodeName = INLINE_MARK_NODE_NAMES[kind]
+  const from = Math.min(anchorPos, headPos)
+  const to = Math.max(anchorPos, headPos)
+  const backward = anchorPos > headPos
+  const directed = (anchor: number, head: number) => (backward ? { anchor: head, head: anchor } : { anchor, head })
+  const findNode = (segFrom: number, segTo: number) =>
+    findEnclosingNode(tree.resolveInner(segFrom, segFrom === segTo ? -1 : 1), segFrom, segTo, nodeName)
+
+  // 整段取消：选区（或光标）映射到还原出的纯文本上。
+  const fullUnwrap = (node: MdSyntaxNode, selFrom: number, selTo: number): InlineMarkEdit => {
+    const lens = markLengths(node, kind)
+    const innerFrom = node.from + lens.open
+    const innerTo = node.to - lens.close
+    const inner = text.slice(innerFrom, innerTo)
+    const unwrap = (position: number) => Math.min(Math.max(position, innerFrom), innerTo) - lens.open
+    return { changes: [{ from: node.from, to: node.to, insert: inner }], selection: directed(unwrap(selFrom), unwrap(selTo)) }
+  }
+
+  // 空光标：在标记里就整段取消；否则插入占位文字并选中占位，直接输入即可覆盖。
+  if (from === to) {
+    const node = findNode(from, to)
+    if (node) return fullUnwrap(node, from, to)
+    const { open, close } = wrapPair(kind, placeholder)
+    return {
+      changes: [{ from, to, insert: open + placeholder + close }],
+      selection: { anchor: from + open.length, head: from + open.length + placeholder.length },
+    }
+  }
+
+  const segments: { from: number; to: number }[] = []
+  collectSegments(tree.topNode, text, from, to, segments)
+  if (segments.length === 0) return null
+
+  // 包裹一段：选区碰到（但没完全包住）的同种标记先剥掉再整体包裹。
+  // 返回替换范围与新内容里「正文部分」的区间（供选区保留用）。
+  const wrapRange = (segFrom: number, segTo: number) => {
+    const nodes: MdSyntaxNode[] = []
+    collectIntersecting(tree.topNode, segFrom, segTo, nodeName, nodes)
+    let expFrom = segFrom
+    let expTo = segTo
+    for (const node of nodes) {
+      expFrom = Math.min(expFrom, node.from)
+      expTo = Math.max(expTo, node.to)
+    }
+    let inner = ""
+    let cursor = expFrom
+    for (const node of nodes) {
+      const lens = markLengths(node, kind)
+      inner += text.slice(cursor, node.from) + text.slice(node.from + lens.open, node.to - lens.close)
+      cursor = node.to
+    }
+    inner += text.slice(cursor, expTo)
+    const { open, close } = wrapPair(kind, inner)
+    return {
+      change: { from: expFrom, to: expTo, insert: open + inner + close },
+      innerFrom: expFrom + open.length,
+      innerTo: expFrom + open.length + inner.length,
+    }
+  }
+
+  if (segments.length === 1) {
+    const segment = segments[0]
+    const node = findNode(segment.from, segment.to)
+    if (node) {
+      const lens = markLengths(node, kind)
+      const innerFrom = node.from + lens.open
+      const innerTo = node.to - lens.close
+      if (segment.from <= innerFrom && segment.to >= innerTo) return fullUnwrap(node, segment.from, segment.to)
+      // 只选中一部分：把这部分从标记里拆出来，左右两侧保持原格式。
+      let f = Math.max(segment.from, innerFrom)
+      let t = Math.min(segment.to, innerTo)
+      // 切点落在行内代码/自动链接等原子内部时推到原子边界：原子内容是字面量，
+      // 只能整颗参与格式增减（链接/图片的标签内容可切，不在此列）。
+      const atomF = atomAt(node, f)
+      if (atomF) f = atomF.from
+      const atomT = atomAt(node, t)
+      if (atomT) t = atomT.to
+      // CommonMark 分隔符规则：闭合标记「前面是标点、后面是文字」不能闭合，
+      // 开始标记「后面是标点、前面是文字」不能开始（**甲，**乙**。丙** 这类写法
+      // 会让操作静默失效，见复核 R5）。切点落在这种位置时没有合法写法能让边界
+      // 标点保持原格式，只能把标点并进中间段一起取消。标点分类与解析器一致——
+      // @lezer/markdown 用 /[\p{S}|\p{P}]/u，$ + = 等符号同样算标点（复核 R6）；
+      // 格式标记字符（*、] 等）不算——它们相邻时分隔符会自然合并，不需要挪动。
+      const isPunct = (ch: string | undefined) => !!ch && /^[\p{S}\p{P}]$/u.test(ch)
+      const isWord = (ch: string | undefined) => !!ch && !/\s/.test(ch) && !isPunct(ch)
+      const markRanges = collectMarkRanges(node)
+      const inMark = (position: number) => markRanges.some((range) => position >= range.from && position < range.to)
+      while (f > innerFrom && !inMark(f - 1) && isPunct(text[f - 1]) && isWord(text[f])) f--
+      while (t < innerTo && !inMark(t) && isPunct(text[t]) && isWord(text[t - 1])) t++
+      if (f >= t) return fullUnwrap(node, segment.from, segment.to)
+      // 选区两侧剩下的只有其他格式的标记字符、没有真实正文（典型：***加粗文字***
+      // 选中全部文字取消斜体）时，拆分只会产出空壳标记对；整段取消更干净，
+      // 嵌套的加粗等格式原样保留。
+      if (onlyMarksBetween(node, innerFrom, f) && onlyMarksBetween(node, t, innerTo)) {
+        return fullUnwrap(node, segment.from, segment.to)
+      }
+      // 拆分点穿过嵌套格式时，被穿过的嵌套节点在一侧闭合、另一侧重开，选区外的
+      // 嵌套格式原样保留；链接/图片不闭合重开，标记推进标签内容区。
+      const cutAtF = nestedCutAt(node, f)
+      const cutAtT = nestedCutAt(node, t)
+      const nodeOpen = text.slice(node.from, innerFrom)
+      const nodeClose = text.slice(innerTo, node.to)
+      const opens = (nodes: MdSyntaxNode[]) => nodes.map((n) => text.slice(n.from, contentBounds(n).from)).join("")
+      const closes = (nodes: MdSyntaxNode[]) => nodes.map((n) => text.slice(contentBounds(n).to, n.to)).reverse().join("")
+      const left = serializeInlineRange(text, node, innerFrom, f, nodeOpen, closes(cutAtF) + nodeClose)
+      const middle = serializeInlineRange(text, node, f, t, opens(cutAtF), closes(cutAtT))
+      const right = serializeInlineRange(text, node, t, innerTo, nodeOpen + opens(cutAtT), nodeClose)
+      const insert = left + middle + right
+      // 选区映射到中间段的正文上（边界空白与软换行被挪到了标记外侧，要跳过）。
+      const middleText = text.slice(f, t)
+      const middleLead = /^(?:[ \t]+|[ \t]*\n[ \t]*(?:>[ \t]?)*[ \t]*)/.exec(middleText)?.[0].length ?? 0
+      const middleTrail = /(?:[ \t]+|[ \t]*\n[ \t]*(?:>[ \t]?)*[ \t]*)$/.exec(middleText.slice(middleLead))?.[0].length ?? 0
+      const middleFrom = node.from + left.length + opens(cutAtF).length + middleLead
+      const middleLen = Math.max(0, middleText.length - middleLead - middleTrail)
+      return {
+        changes: [{ from: node.from, to: node.to, insert }],
+        selection: directed(middleFrom, middleFrom + middleLen),
+      }
+    }
+    const wrapped = wrapRange(segment.from, segment.to)
+    return { changes: [wrapped.change], selection: directed(wrapped.innerFrom, wrapped.innerTo) }
+  }
+
+  // 跨段落：每段独立处理。每段都已被同种标记完整覆盖 → 全部取消；否则给未覆盖的段补标记。
+  const covered = segments.map((segment) => {
+    const node = findNode(segment.from, segment.to)
+    if (!node) return null
+    const lens = markLengths(node, kind)
+    return segment.from <= node.from + lens.open && segment.to >= node.to - lens.close ? node : null
+  })
+  if (covered.every((node) => node !== null)) {
+    const changes = (covered as MdSyntaxNode[]).map((node) => {
+      const lens = markLengths(node, kind)
+      return { from: node.from, to: node.to, insert: text.slice(node.from + lens.open, node.to - lens.close) }
+    })
+    return { changes, selection: directed(mapPosition(changes, from, -1), mapPosition(changes, to, 1)) }
+  }
+  const changes = segments
+    .map((segment, index) => (covered[index] ? null : wrapRange(segment.from, segment.to).change))
+    .filter((change): change is { from: number; to: number; insert: string } => change !== null)
+  return { changes, selection: directed(mapPosition(changes, from, -1), mapPosition(changes, to, 1)) }
+}
+
+// Cmd+B 等快捷键与工具栏按钮：非空选区操作完成后选区保留在内容上（连续点第二个
+// 按钮仍作用于同一段文字），空光标行为见 computeInlineMarkEdit 的光标分支。
 export function toggleInlineMark(view: EditorView, kind: InlineMarkKind, placeholder: string): boolean {
   const { state } = view
   if (state.readOnly) return false
-  const marker = INLINE_MARK_TOKENS[kind]
-  const rawSelection = state.selection.main
-  const node = findEnclosingMark(state, rawSelection.from, rawSelection.to, INLINE_MARK_NODE_NAMES[kind])
-
-  if (node) {
-    const inner = state.sliceDoc(node.from + marker.length, node.to - marker.length)
-    // 选区哪怕连标记本身都框进去了，取消后也统一选中还原出来的纯文本，而不是留在标记消失后错位的位置。
-    const unwrap = (position: number) => {
-      const bounded = Math.min(Math.max(position, node.from + marker.length), node.to - marker.length)
-      return bounded - marker.length
-    }
-    view.dispatch({
-      changes: { from: node.from, to: node.to, insert: inner },
-      selection: { anchor: unwrap(rawSelection.from), head: unwrap(rawSelection.to) },
-      scrollIntoView: true,
-    })
-    view.focus()
-    return true
-  }
-
-  const { from, to } = rawSelection.empty ? rawSelection : shrinkToLineContent(state, rawSelection.from, rawSelection.to)
-  const selected = state.sliceDoc(from, to)
-  const inserted = `${marker}${selected || placeholder}${marker}`
-  view.dispatch({
-    changes: { from, to, insert: inserted },
-    selection: { anchor: from + inserted.length },
-    scrollIntoView: true,
-  })
+  const selection = state.selection.main
+  const edit = computeInlineMarkEdit(syntaxTree(state), state.doc.toString(), selection.anchor, selection.head, kind, placeholder)
+  if (!edit) return false
+  view.dispatch({ changes: edit.changes, selection: edit.selection, scrollIntoView: true })
   view.focus()
   return true
+}
+
+// 单元格 textarea 是纯文本、没有现成语法树：用同一解析器解析后走同一份规则，
+// 正文与表格对同样的输入、选区和操作给出同样的结果（linkTargetInText 也是这条路）。
+export function inlineMarkEditInText(text: string, from: number, to: number, kind: InlineMarkKind, placeholder: string): InlineMarkEdit | null {
+  return computeInlineMarkEdit(markdownLanguage.parser.parse(text), text, from, to, kind, placeholder)
+}
+
+// 单元格工具栏高亮：与正文 detectFormatState 同一套语义判断，
+// 不再靠「左右紧邻字符」猜——加粗的两个星号不会再被误判成斜体。
+export function detectInlineMarksInText(text: string, from: number, to: number): { code: boolean; emphasis: boolean; strike: boolean; strong: boolean } {
+  const tree = markdownLanguage.parser.parse(text)
+  const active = (name: string) => findEnclosingNode(tree.resolveInner(from, from === to ? -1 : 1), from, to, name) !== null
+  return {
+    code: active(INLINE_MARK_NODE_NAMES.code),
+    emphasis: active(INLINE_MARK_NODE_NAMES.emphasis),
+    strike: active(INLINE_MARK_NODE_NAMES.strike),
+    strong: active(INLINE_MARK_NODE_NAMES.strong),
+  }
 }
 
 // Cmd+K 在空光标（没有选区）落在已有链接文字里时，此前会在光标处硬插一段新的
