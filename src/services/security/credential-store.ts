@@ -6,6 +6,10 @@ export type CredentialStoreStatus = {
   available: boolean
   native: boolean
   store: string
+  // 原生安全存储初始化失败的原因（系统状态码等），仅原生端且失败时存在。
+  unavailableReason?: string | null
+  // 初始化成功后最近一次读写失败的具体错误，操作成功后由原生侧清除。
+  lastError?: string | null
 }
 
 const WEB_STATUS: CredentialStoreStatus = {

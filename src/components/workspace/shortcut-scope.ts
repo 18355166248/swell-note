@@ -2,6 +2,8 @@
 // 焦点落在正文以外（点过侧边栏、按钮，或刚切换完视图）时，⌘/Ctrl+A 会走浏览器的整页全选，
 // 把侧边栏、笔记列表、工具栏文案一起选进去；而弹窗开着时，快捷键更不该去动它背后的笔记。
 
+import { matchesMobileLayout } from "@/services/navigation/mobile-layout"
+
 export function isTextEntryElement(element: Element | null) {
   if (!element) return false
   if (element.tagName === "INPUT" || element.tagName === "TEXTAREA") return true
@@ -37,7 +39,7 @@ export function registerDesktopShortcuts(options: {
   const handleDesktopShortcut = (event: KeyboardEvent) => {
     // 正文已处理的链接快捷键不能再触发全局搜索；组合输入也不执行工作区动作。
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
-    if (window.matchMedia("(max-width: 767px)").matches) return
+    if (matchesMobileLayout()) return
     if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat) return
     // 弹窗开着时这些动作都会打断当前操作：抢走焦点、在背后新建笔记或触发同步。
     if (hasOpenModal()) return

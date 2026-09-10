@@ -571,6 +571,8 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .desktop-app-frame [data-slot="scroll-area-viewport"]::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: color-mix(in oklab,var(--muted-foreground) 34%,transparent); background-clip: padding-box; }
 /* Radix ScrollArea 默认的 table 包裹层会被超长代码撑到最小内容宽度；编辑区必须以视口宽度排版。 */
 .editor-scroll [data-radix-scroll-area-viewport] > div { display: block !important; width: 100%; min-width: 0 !important; }
+/* 原生 scrollIntoView（浏览器查找、聚焦）也要避开底部格式栏，否则末行正好停在条子后面。 */
+.editor-scroll [data-radix-scroll-area-viewport] { scroll-padding-bottom: calc(72px + env(safe-area-inset-bottom,0px)); }
 .library-navigation { padding: 2px 10px 14px; }
 .library-row { display: flex; width: 100%; height: 34px; align-items: center; border-radius: 7px; padding-left: 4px; color: #46505e; font-size: 12.5px; transition: background-color 130ms ease, color 130ms ease; -webkit-tap-highlight-color: transparent; }
 .library-row[data-depth="1"] { padding-left: 18px; }
@@ -751,7 +753,8 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-editor-shell .cm-line { padding: 0; }
 .markdown-editor-shell .cm-selectionBackground,
 .markdown-editor-shell .cm-content ::selection { background: color-mix(in oklab,var(--primary) 18%,transparent) !important; }
-.markdown-editor-shell .cm-cursor { border-left-color: var(--primary); }
+/* 默认 1px 光标在手机屏上太细，加粗到 2px 并用负边距抵消占位，避免行宽随光标闪烁变化。 */
+.markdown-editor-shell .cm-cursor { border-left: 2px solid var(--primary); margin-left: -1px; }
 .markdown-editor-shell .cm-placeholder { color: var(--muted-foreground); font-style: normal; }
 .markdown-editor-shell .cm-wiki-completion { position: absolute; z-index: 40; width: min(320px,calc(100vw - 32px)); max-height: 260px; overflow-y: auto; border: 1px solid var(--border); border-radius: 9px; background: white; box-shadow: 0 12px 30px color-mix(in oklab,#1d2530 16%,transparent); padding: 4px; }
 .markdown-editor-shell .cm-wiki-completion[hidden] { display: none; }
@@ -980,7 +983,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .editor-statusbar { display: flex; min-height: 30px; align-items: center; gap: 16px; border-top: 1px solid var(--border); padding: 0 16px; color: var(--muted-foreground); font-size: 10px; }
 .mobile-drawer-trigger { display: none; }
 
-@media (max-width: 1099px) and (min-width: 768px) {
+@media (max-width: 1099px) and (min-width: 768px) and (not ((pointer: coarse) and (hover: none) and (max-height: 500px))) {
   .desktop-workspace { grid-template-columns: 64px minmax(260px,300px) minmax(0,1fr); }
   .desktop-workspace[data-immersive-excalidraw="true"] { grid-template-columns: 64px minmax(0,1fr); }
   .desktop-pane-resizer { display: none; }
@@ -991,7 +994,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 /* 编辑器面板被侧栏挤压后塞不下完整的面包屑 + 同步文案 + 视图切换，
    没有这层收紧时 flex 子项会被压缩到逐字换行（1100–1279px 之间同样会复现）。
    跟移动端 data-compact 一样只留图标，文案仍可通过 tooltip / aria-label 获取。 */
-@media (max-width: 1279px) and (min-width: 768px) {
+@media (max-width: 1279px) and (min-width: 768px) and (not ((pointer: coarse) and (hover: none) and (max-height: 500px))) {
   .saved-state > span,
   .editor-sync-button > span { display: none; }
   .editor-sync-button { width: 32px; padding-inline: 0; }
@@ -1001,11 +1004,11 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 }
 
 /* 手机端用显式页面状态保留层级感，并保证每一个主要控件达到 44px 触摸面积。 */
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (hover: none) and (max-height: 500px) {
   .desktop-workspace { display: none; }
   /* viewport-fit=cover 会把真机 WebView 延伸到状态栏下方，页面骨架统一消化顶部安全区。 */
   /* 键盘弹出时布局视口不变，工作区按 visualViewport 实测的遮挡高度收缩，底部工具栏才会贴着键盘上沿。 */
-  .mobile-workspace { position: relative; display: block; box-sizing: border-box; width: 100%; max-width: 100vw; height: calc(100% - var(--keyboard-inset,0px)); min-width: 0; overflow: hidden; padding-top: env(safe-area-inset-top,0px); overscroll-behavior-x: none; touch-action: pan-y; background: white; }
+  .mobile-workspace { position: relative; display: block; box-sizing: border-box; width: 100%; max-width: 100vw; height: calc(100% - var(--keyboard-inset,0px)); min-width: 0; overflow: hidden; padding-top: env(safe-area-inset-top,0px); padding-right: env(safe-area-inset-right,0px); padding-left: env(safe-area-inset-left,0px); overscroll-behavior-x: none; touch-action: pan-y; background: white; }
   /* 编辑器中的长代码和表格只能在正文区域滚动，不能反向撑宽整页并把标题栏操作挤出屏幕。 */
   .mobile-screen, .mobile-edge-swipe-current > .note-editor, .mobile-edge-swipe-previous > .note-editor { display: flex; width: 100%; max-width: 100vw; height: 100%; min-width: 0; min-height: 0; overflow: hidden; flex-direction: column; background: white; }
   /* 返回手势保留真实上一页，当前页跟手滑出；上一页从轻微视差中恢复，接近系统 interactive-pop。 */
@@ -1028,7 +1031,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .mobile-drawer-trigger { display: inline-flex; }
   .mobile-drawer-layer { position: fixed; inset: 0; z-index: 80; }
   .mobile-drawer-backdrop { position: absolute; inset: 0; width: 100%; background: rgb(15 23 42 / .34); backdrop-filter: blur(2px); }
-  .mobile-navigation-drawer { position: absolute; inset: 0 auto 0 0; display: flex; box-sizing: border-box; width: min(84vw,320px); flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); padding-top: env(safe-area-inset-top,0px); padding-bottom: env(safe-area-inset-bottom,0px); background: white; box-shadow: 18px 0 48px rgb(15 23 42 / .18); animation: mobile-drawer-in 180ms ease-out; }
+  .mobile-navigation-drawer { position: absolute; inset: 0 auto 0 0; display: flex; box-sizing: border-box; width: min(84vw,320px); flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); padding-top: env(safe-area-inset-top,0px); padding-bottom: env(safe-area-inset-bottom,0px); padding-left: env(safe-area-inset-left,0px); background: white; box-shadow: 18px 0 48px rgb(15 23 42 / .18); animation: mobile-drawer-in 180ms ease-out; }
   @keyframes mobile-drawer-in { from { transform: translateX(-16px); opacity: .72; } to { transform: translateX(0); opacity: 1; } }
   .mobile-drawer-brand { display: grid; min-height: 68px; grid-template-columns: 34px minmax(0,1fr) 44px; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); padding: 0 10px 0 16px; }
   .mobile-drawer-brand img { width: 32px; height: 32px; }
@@ -1119,7 +1122,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .mobile-note-groups .note-list-row { min-height: 92px; padding: 13px 18px; }
   .mobile-library-row-main, .mobile-note-groups .folder-list-row, .mobile-note-groups .note-list-row { -webkit-touch-callout: none; touch-action: pan-y; user-select: none; }
   /* 重命名等面板自带 autoFocus 输入框，一打开就弹键盘；面板贴着视口底边，必须一起抬到键盘上方才看得见正在输入的内容。 */
-  .mobile-action-sheet { position: fixed !important; inset: auto 0 var(--keyboard-inset,0px) !important; box-sizing: border-box; width: 100vw !important; min-width: 100vw; max-width: 100vw !important; max-height: min(78dvh,680px,calc(100dvh - var(--keyboard-inset,0px) - 32px)); margin: 0; translate: none !important; transform: none !important; overflow: hidden; border-radius: 20px 20px 0 0 !important; padding: 18px 16px calc(16px + max(0px,env(safe-area-inset-bottom) - var(--keyboard-inset,0px))); }
+  .mobile-action-sheet { position: fixed !important; inset: auto 0 var(--keyboard-inset,0px) !important; box-sizing: border-box; width: 100vw !important; min-width: 100vw; max-width: 100vw !important; max-height: min(78dvh,680px,calc(100dvh - var(--keyboard-inset,0px) - 32px)); margin: 0; translate: none !important; transform: none !important; overflow: hidden; border-radius: 20px 20px 0 0 !important; padding: 18px calc(16px + env(safe-area-inset-right,0px)) calc(16px + max(0px,env(safe-area-inset-bottom) - var(--keyboard-inset,0px))) calc(16px + env(safe-area-inset-left,0px)); }
   .mobile-action-sheet [data-slot="dialog-header"] { padding-right: 36px; }
   .mobile-action-list, .mobile-move-targets { overflow-y: auto; margin-inline: -16px; border-top: 1px solid var(--border); }
   .mobile-action-list > button, .mobile-move-targets > button { display: grid; width: 100%; min-height: 54px; grid-template-columns: 24px minmax(0,1fr) 20px; align-items: center; gap: 12px; border-bottom: 1px solid var(--border); padding: 8px 18px; outline: none; -webkit-tap-highlight-color: transparent; text-align: left; }
@@ -1131,10 +1134,10 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .mobile-action-list > button:disabled, .mobile-move-targets > button:disabled { color: var(--muted-foreground); opacity: .55; }
   .mobile-action-list > .mobile-action-destructive, .mobile-action-list > .mobile-action-destructive > svg { color: var(--destructive); }
   .mobile-action-sheet [data-slot="dialog-footer"] { margin-top: 2px; }
-  .mobile-fab { position: fixed; right: 20px; bottom: calc(20px + env(safe-area-inset-bottom)); z-index: 4; width: 52px; height: 52px; border-radius: 50%; box-shadow: 0 8px 22px color-mix(in oklab,var(--primary) 34%,transparent); }
-  .workspace-sync-activity { right: 12px; bottom: calc(82px + env(safe-area-inset-bottom)); width: calc(100vw - 24px); border-radius: 13px; padding: 10px 11px; }
+  .mobile-fab { position: fixed; right: calc(20px + env(safe-area-inset-right,0px)); bottom: calc(20px + env(safe-area-inset-bottom)); z-index: 4; width: 52px; height: 52px; border-radius: 50%; box-shadow: 0 8px 22px color-mix(in oklab,var(--primary) 34%,transparent); }
+  .workspace-sync-activity { right: calc(12px + env(safe-area-inset-right,0px)); bottom: calc(82px + env(safe-area-inset-bottom)); width: calc(100vw - 24px - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px)); border-radius: 13px; padding: 10px 11px; }
   .workspace-sync-activity-main small { white-space: normal; line-height: 1.35; }
-  .workspace-sync-failure { right: 12px; bottom: calc(82px + env(safe-area-inset-bottom)); width: calc(100vw - 24px); border-radius: 13px; padding: 10px 11px; }
+  .workspace-sync-failure { right: calc(12px + env(safe-area-inset-right,0px)); bottom: calc(82px + env(safe-area-inset-bottom)); width: calc(100vw - 24px - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px)); border-radius: 13px; padding: 10px 11px; }
   .note-editor[data-compact="true"] .editor-titlebar { min-height: 58px; padding: 0 8px; }
   .note-editor[data-compact="true"][data-excalidraw="true"] .editor-titlebar { min-height: 52px; background: white; color: var(--foreground); border-color: var(--border); }
   .note-editor[data-compact="true"][data-excalidraw="true"] .editor-titlebar button { color: var(--foreground); }
@@ -1198,7 +1201,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .toolbar-more { position: relative; display: flex; flex: 1; }
   /* 菜单向上弹出：9 项 × 46px 会超过小屏可视高度，键盘弹出时再扣掉键盘占用，
      超高时内部纵向滚动，顶部选项不会被推出屏幕。 */
-  .formatting-toolbar[data-mobile="true"] .toolbar-more-menu { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 5; display: grid; min-width: 172px; max-height: min(414px,calc(100dvh - var(--keyboard-inset,0px) - 84px)); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--border); border-radius: 12px; background: var(--popover); box-shadow: 0 14px 34px rgb(15 23 42 / .18); }
+  .formatting-toolbar[data-mobile="true"] .toolbar-more-menu { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 5; display: grid; min-width: 172px; max-height: min(414px,calc(100dvh - var(--keyboard-inset,0px) - env(safe-area-inset-top,0px) - 84px)); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--border); border-radius: 12px; background: var(--popover); box-shadow: 0 14px 34px rgb(15 23 42 / .18); }
   .formatting-toolbar[data-mobile="true"] .toolbar-more-menu button { display: grid; width: 100%; height: auto; min-height: 46px; flex: none; grid-template-columns: 20px minmax(0,1fr); place-items: center start; gap: 10px; border-radius: 0; padding: 0 14px; color: var(--foreground); font-size: 14px; font-weight: 540; text-align: left; }
   .formatting-toolbar[data-mobile="true"] .toolbar-more-menu button:active { background: var(--muted); }
   .formatting-toolbar[data-mobile="true"] .toolbar-more-menu svg { width: 17px; height: 17px; color: var(--muted-foreground); }
@@ -1214,7 +1217,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   /* 选区模式：复制/剪切/粘贴并入格式栏同一行，失败提示浮在工具栏上方。 */
   .formatting-toolbar[data-mobile="true"][data-selection-mode="true"] { position: relative; }
   /* 设置页的 WebDAV 表单在手机上要贴着键盘操作，外壳同样扣掉键盘高度，底部的保存/测试按钮才不会被压住。 */
-  .route-page-shell, .settings-route-shell { display: flex; box-sizing: border-box; height: calc(100dvh - var(--keyboard-inset,0px)); flex-direction: column; padding-top: env(safe-area-inset-top,0px); }
+  .route-page-shell, .settings-route-shell { display: flex; box-sizing: border-box; height: calc(100dvh - var(--keyboard-inset,0px)); flex-direction: column; padding-top: env(safe-area-inset-top,0px); padding-right: env(safe-area-inset-right,0px); padding-left: env(safe-area-inset-left,0px); }
   .route-page-shell > .navigation-rail, .settings-route-shell > .navigation-rail, .settings-sidebar { display: none; }
   .route-main-panel, .settings-detail-panel { flex: 1; }
   .route-page-header, .settings-detail-header { min-height: 58px; padding: 8px; }
@@ -1241,7 +1244,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .settings-form-actions button { flex: 1; }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (hover: none) and (max-height: 500px) {
   .dark .mobile-workspace,
   .dark .mobile-screen,
   .dark .mobile-edge-swipe-current > .note-editor,
@@ -1390,7 +1393,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .global-search-result p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 1; margin: 4px 0 0; color: var(--muted-foreground); font-size: 11.5px; line-height: 1.5; }
 .global-search-result-heading strong mark, .global-search-result p mark { background: var(--blue-soft); color: var(--primary); border-radius: 3px; padding: 0 1px; font-weight: inherit; }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (pointer: coarse) and (hover: none) and (max-height: 500px) {
   .global-search-dialog {
     width: 100vw;
     max-width: none;

@@ -54,6 +54,25 @@ describe("credential store", () => {
     })
   })
 
+  it("原生端透传安全存储的失败原因与最近错误码", async () => {
+    tauriMocks.isTauri.mockReturnValue(true)
+    tauriMocks.invoke.mockResolvedValueOnce({
+      available: false,
+      lastError: "The operation could not be completed (errSecInteractionNotAllowed)",
+      store: "iOS 安全隔区",
+      unavailableReason: "missing keychain-access-groups",
+    })
+
+    await expect(getCredentialStoreStatus()).resolves.toEqual({
+      available: false,
+      lastError: "The operation could not be completed (errSecInteractionNotAllowed)",
+      native: true,
+      store: "iOS 安全隔区",
+      unavailableReason: "missing keychain-access-groups",
+    })
+    expect(tauriMocks.invoke).toHaveBeenCalledWith("credential_store_status")
+  })
+
   it("兼容旧配置中未开启记住密码的原生用户", async () => {
     tauriMocks.isTauri.mockReturnValue(true)
     tauriMocks.invoke.mockResolvedValueOnce("legacy-secret").mockResolvedValueOnce(undefined)

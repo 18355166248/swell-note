@@ -3,6 +3,8 @@ import { EditorView, WidgetType } from "@codemirror/view"
 
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
 
+import { scrollElementIntoVisibleBand } from "./cursor-visibility"
+
 import {
   alignTableColumn,
   appendTableColumn,
@@ -998,8 +1000,10 @@ export class TableWidget extends WidgetType {
 
     let finished = false
     let unregister = () => {}
+    let detachKeyboardFollow = () => {}
     const restoreCell = () => {
       unregister()
+      detachKeyboardFollow()
       input.remove()
       if (this.reportedFormatState) {
         this.reportedFormatState = false
@@ -1036,6 +1040,25 @@ export class TableWidget extends WidgetType {
         commit({ row: rowIndex + 1, column: columnIndex })
       },
     })
+    // 键盘弹起会压掉下半屏：焦点在单元格 textarea 上时 CodeMirror 已失焦，
+    // 编辑器自己的光标跟随不会触发，由这里把正在编辑的单元格送回可视带。
+    // 键盘动画期间 resize 连续触发，合并到同一帧再量，避免来回滚动。
+    let followFrame = 0
+    const scheduleKeyboardFollow = () => {
+      if (followFrame) return
+      followFrame = requestAnimationFrame(() => {
+        followFrame = 0
+        if (finished || document.activeElement !== input) return
+        scrollElementIntoVisibleBand(input)
+      })
+    }
+    scheduleKeyboardFollow()
+    window.visualViewport?.addEventListener("resize", scheduleKeyboardFollow)
+    detachKeyboardFollow = () => {
+      if (followFrame) cancelAnimationFrame(followFrame)
+      followFrame = 0
+      window.visualViewport?.removeEventListener("resize", scheduleKeyboardFollow)
+    }
     input.addEventListener("paste", (event) => {
       const transfer = event.clipboardData
       if (!transfer) return

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { getKeyboardInset } from "@/services/navigation/keyboard-inset"
+import { getKeyboardInset, shouldResetWindowScroll } from "@/services/navigation/keyboard-inset"
 
 describe("getKeyboardInset", () => {
   it("没有键盘时返回 0", () => {
@@ -27,5 +27,43 @@ describe("getKeyboardInset", () => {
     expect(getKeyboardInset({ layoutHeight: 800, visualHeight: 20 })).toBe(720)
     expect(getKeyboardInset({ layoutHeight: 0, visualHeight: 0 })).toBe(0)
     expect(getKeyboardInset({ layoutHeight: Number.NaN, visualHeight: 400 })).toBe(0)
+  })
+})
+
+describe("shouldResetWindowScroll", () => {
+  it("文档未被顶起时不需要复位", () => {
+    expect(shouldResetWindowScroll({ scrollY: 0 })).toBe(false)
+    expect(shouldResetWindowScroll({ scrollY: 0, visualOffsetTop: 0 })).toBe(false)
+  })
+
+  it("文档或可视视口被顶起时需要复位", () => {
+    expect(shouldResetWindowScroll({ scrollY: 120 })).toBe(true)
+    expect(shouldResetWindowScroll({ scrollY: 0, visualOffsetTop: 84 })).toBe(true)
+  })
+
+  it("容忍非法输入", () => {
+    expect(shouldResetWindowScroll({ scrollY: Number.NaN })).toBe(false)
+  })
+})
+
+describe("shouldResetWindowScroll 缩放守卫", () => {
+  it("捏合缩放（scale > 1）下的平移不复位", () => {
+    expect(shouldResetWindowScroll({ scrollY: 120, visualScale: 2 })).toBe(false)
+    expect(shouldResetWindowScroll({ scrollY: 0, visualOffsetTop: 84, visualScale: 1.5 })).toBe(false)
+  })
+
+  it("未缩放（scale = 1）时的键盘顶起仍复位", () => {
+    expect(shouldResetWindowScroll({ scrollY: 120, visualScale: 1 })).toBe(true)
+  })
+})
+
+describe("getKeyboardInset 缩放守卫", () => {
+  it("捏合缩放造成的视口收缩不算键盘", () => {
+    expect(getKeyboardInset({ layoutHeight: 874, visualHeight: 437, visualScale: 2 })).toBe(0)
+    expect(getKeyboardInset({ layoutHeight: 874, visualHeight: 700, visualOffsetTop: 40, visualScale: 1.5 })).toBe(0)
+  })
+
+  it("未缩放时键盘高度照常计算", () => {
+    expect(getKeyboardInset({ layoutHeight: 874, visualHeight: 471, visualScale: 1 })).toBe(403)
   })
 })

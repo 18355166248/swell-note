@@ -28,3 +28,6 @@ dist-ssr
 test-results/
 playwright-report/
 blob-report/
+
+# Tauri iOS 构建复制的前端产物
+/src-tauri/gen/apple/assets/

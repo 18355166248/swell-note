@@ -88,7 +88,7 @@
 .markdown-editor-shell .cm-md-table-cell-display { min-height: 1lh; white-space: pre-wrap; }
 .markdown-editor-shell .cm-md-table-cell-editing .cm-md-table-cell-display { visibility: hidden; }
 /* 展示层与输入层共享同一排版起点和换行规则，切换光标时不再发生基线位移。 */
-.markdown-editor-shell .cm-md-table-cell-input { position: absolute; top: 0; left: 0; z-index: 1; display: block; box-sizing: border-box; width: 100%; border: 0; padding: 0; overflow: hidden; resize: none; background: transparent; outline: none; color: inherit; font: inherit; line-height: inherit; text-align: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.markdown-editor-shell .cm-md-table-cell-input { position: absolute; top: 0; left: 0; z-index: 1; display: block; box-sizing: border-box; width: 100%; border: 0; padding: 0; overflow: hidden; resize: none; background: transparent; outline: none; color: inherit; caret-color: var(--primary); font: inherit; line-height: inherit; text-align: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 640px) {
   .markdown-editor-shell .cm-md-table-toolbar::after { display: none; }

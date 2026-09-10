@@ -18,6 +18,9 @@ const SEARCH_INDEX_SCHEMA_VERSION: i64 = 1;
 struct CredentialStoreState {
     operation_lock: Mutex<()>,
     unavailable_reason: Option<String>,
+    // 初始化成功不代表后续读写一定成功（如 Keychain 访问组变化），
+    // 最近一次操作失败的具体错误留在这里，设置页据此给出系统错误码。
+    last_error: Mutex<Option<String>>,
 }
 
 struct SearchIndexState {
@@ -39,6 +42,10 @@ struct SearchIndexEntry {
 struct CredentialStoreStatus {
     available: bool,
     store: &'static str,
+    // 初始化失败原因透传给前端，正式版再现"读取失败"时不用拉设备日志也能定位。
+    unavailable_reason: Option<String>,
+    // 初始化成功后最近一次读写失败的具体错误（含系统错误码），操作成功后清除。
+    last_error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -56,6 +63,8 @@ fn credential_store_status(state: tauri::State<CredentialStoreState>) -> Credent
     CredentialStoreStatus {
         available: state.unavailable_reason.is_none(),
         store: native_store_name(),
+        unavailable_reason: state.unavailable_reason.clone(),
+        last_error: state.last_error.lock().ok().and_then(|slot| slot.clone()),
     }
 }
 
@@ -66,9 +75,13 @@ fn save_webdav_password(
     password: String,
 ) -> Result<(), String> {
     let _guard = lock_credential_store(&state)?;
-    credential_entry(&account)?
-        .set_password(&password)
-        .map_err(credential_error)
+    match credential_entry(&account)?.set_password(&password) {
+        Ok(()) => {
+            clear_credential_error(&state);
+            Ok(())
+        }
+        Err(error) => Err(record_credential_error(&state, error)),
+    }
 }
 
 #[tauri::command]
@@ -78,9 +91,12 @@ fn load_webdav_password(
 ) -> Result<Option<String>, String> {
     let _guard = lock_credential_store(&state)?;
     match credential_entry(&account)?.get_password() {
-        Ok(password) => Ok(Some(password)),
+        Ok(password) => {
+            clear_credential_error(&state);
+            Ok(Some(password))
+        }
         Err(keyring_core::Error::NoEntry) => Ok(None),
-        Err(error) => Err(credential_error(error)),
+        Err(error) => Err(record_credential_error(&state, error)),
     }
 }
 
@@ -91,8 +107,11 @@ fn delete_webdav_password(
 ) -> Result<(), String> {
     let _guard = lock_credential_store(&state)?;
     match credential_entry(&account)?.delete_credential() {
-        Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
-        Err(error) => Err(credential_error(error)),
+        Ok(()) | Err(keyring_core::Error::NoEntry) => {
+            clear_credential_error(&state);
+            Ok(())
+        }
+        Err(error) => Err(record_credential_error(&state, error)),
     }
 }
 
@@ -115,9 +134,26 @@ fn credential_entry(account: &str) -> Result<keyring_core::Entry, String> {
     keyring_core::Entry::new(CREDENTIAL_SERVICE, &normalized_account).map_err(credential_error)
 }
 
-fn credential_error(_error: keyring_core::Error) -> String {
-    // 不把账号或密码拼入错误信息，避免敏感信息进入前端日志和错误上报。
+fn credential_error(error: keyring_core::Error) -> String {
+    // 详细错误（含系统状态码）只进原生日志与 last_error，不返回给前端：
+    // 前端错误会进日志上报，keyring 错误描述里可能带账号等敏感信息。
+    eprintln!("credential store operation failed: {error:?}");
     "系统安全存储操作失败".to_string()
+}
+
+// 操作失败：进原生日志、记入 last_error 供设置页展示，返回给前端的仍是通用文案。
+fn record_credential_error(state: &CredentialStoreState, error: keyring_core::Error) -> String {
+    if let Ok(mut slot) = state.last_error.lock() {
+        *slot = Some(error.to_string());
+    }
+    credential_error(error)
+}
+
+// 操作成功后清掉上一次失败的记录，避免陈旧错误码误导排查。
+fn clear_credential_error(state: &CredentialStoreState) {
+    if let Ok(mut slot) = state.last_error.lock() {
+        *slot = None;
+    }
 }
 
 #[tauri::command]
@@ -222,7 +258,9 @@ fn rebuild_note_search_index(
         .map_err(search_index_error)?;
     initialize_search_index(&connection).map_err(search_index_error)?;
     // VACUUM 失败不能让索引表处于缺失状态，因此必须在重建成功之后再压缩数据库。
-    connection.execute_batch("VACUUM;").map_err(search_index_error)?;
+    connection
+        .execute_batch("VACUUM;")
+        .map_err(search_index_error)?;
     search_index_status(&connection).map_err(search_index_error)
 }
 
@@ -394,8 +432,10 @@ fn stretch_webview_over_safe_area(app: &tauri::AppHandle) {
         return;
     };
     let _ = window.with_webview(|webview| unsafe {
-        let scroll_view: Retained<UIScrollView> = msg_send![webview.inner() as *mut AnyObject, scrollView];
-        scroll_view.setContentInsetAdjustmentBehavior(UIScrollViewContentInsetAdjustmentBehavior::Never);
+        let scroll_view: Retained<UIScrollView> =
+            msg_send![webview.inner() as *mut AnyObject, scrollView];
+        scroll_view
+            .setContentInsetAdjustmentBehavior(UIScrollViewContentInsetAdjustmentBehavior::Never);
     });
 }
 
@@ -404,6 +444,7 @@ pub fn run() {
     // 安全存储初始化失败不能阻断笔记启动；前端会降级为每次手动输入应用密码。
     let credential_store_state = CredentialStoreState {
         operation_lock: Mutex::new(()),
+        last_error: Mutex::new(None),
         unavailable_reason: initialize_native_credential_store()
             .err()
             .map(|error| error.to_string()),

@@ -10,7 +10,7 @@ import { EditorView } from "@codemirror/view"
 import { readClipboardText, writeClipboardText } from "@/services/clipboard/clipboard-text"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
-import { scrollCursorIntoView } from "./cursor-visibility"
+import { bottomOverlayHeight, scrollCursorIntoView } from "./cursor-visibility"
 import { detectFormatState, focusExistingLinkUrl, type EditorFormatState, type InlineMarkKind, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
 import { htmlToMarkdown, isInlineMarkdownFragment } from "./html-to-markdown"
 import { markdownLivePreview } from "./live-preview"
@@ -153,12 +153,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const top = view.documentTop + block.top
         const bottom = top + block.height
         const visible = viewport.getBoundingClientRect()
+        // 手机上键盘之上有格式栏/选区条压底，固定边距会把文末行留在条子后面。
+        const bottomMargin = compact ? 24 + bottomOverlayHeight(view.dom) : 24
         let delta = 0
         if (options.y === "start") delta = top - visible.top - options.yMargin
         else if (options.y === "end") delta = bottom - visible.bottom + options.yMargin
         else if (options.y === "center") delta = (top + bottom - visible.top - visible.bottom) / 2
         else if (top < visible.top + 24) delta = top - visible.top - 24
-        else if (bottom > visible.bottom - 24) delta = bottom - visible.bottom + 24
+        else if (bottom > visible.bottom - bottomMargin) delta = bottom - visible.bottom + bottomMargin
         if (delta) viewport.scrollTop += delta
         return true
       }),
@@ -481,6 +483,11 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const target = view.state.doc.line(Math.max(1, Math.min(line, view.state.doc.lines)))
         view.dispatch({ selection: { anchor: target.from }, scrollIntoView: true })
         view.focus()
+        // 键盘未升起时格式栏也占着底部，dispatch 的滚动不感知它；下一帧按可视带再校正一次。
+        requestAnimationFrame(() => {
+          const current = editorRef.current?.view
+          if (current?.hasFocus) scrollCursorIntoView(current)
+        })
       },
       scrollLineToTop(line) {
         const view = editorRef.current?.view

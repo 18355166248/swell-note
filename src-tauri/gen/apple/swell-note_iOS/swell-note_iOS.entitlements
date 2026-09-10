@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict/>
+<dict>
+	<!-- iOS 数据保护 Keychain（apple-native-keyring-store protected store）要求显式声明
+	     默认访问组，否则读写返回 errSecMissingEntitlement（-34018，"没有所需的授权"）。 -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.xmly.swell-note</string>
+	</array>
+</dict>
 </plist>

@@ -138,6 +138,7 @@ import {
 import { useLongPress } from "@/components/workspace/use-long-press"
 import { useEdgeSwipeAction } from "@/components/workspace/use-edge-swipe-action"
 import { SyncActivityToast } from "@/components/workspace/sync-activity-toast"
+import { useMobileLayoutQuery } from "@/services/navigation/mobile-layout"
 import { mobileLibraryScrollMemory, mobileNoteListScrollMemory, noteEditorScrollMemory } from "@/services/navigation/mobile-scroll-memory"
 import type { SyncProgress } from "@/services/sync/sync-progress"
 import { shouldShowFloatingSyncProgress } from "@/services/sync/sync-progress"
@@ -373,18 +374,8 @@ export function Workspace(props: WorkspaceProps) {
 }
 
 function useMobileWorkspaceLayout() {
-  const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 767px)").matches)
-
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 767px)")
-    const update = () => setMobile(media.matches)
-    // 只挂载当前断点的工作区，避免隐藏布局继续解析 Markdown、创建编辑器和读取图片。
-    update()
-    media.addEventListener("change", update)
-    return () => media.removeEventListener("change", update)
-  }, [])
-
-  return mobile
+  // 只挂载当前断点的工作区，避免隐藏布局继续解析 Markdown、创建编辑器和读取图片。
+  return useMobileLayoutQuery()
 }
 
 type FolderTreeProps = {

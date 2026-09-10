@@ -52,11 +52,14 @@ export function WebDavSettingsForm({
     if (!credentialStatus?.available || !config.username || passwordTouched) return
     let cancelled = false
     // 仅原生安装版读取系统凭据；读取失败保留空密码，让用户仍可手动连接。
+    // 失败后刷新一次状态，把原生侧记录的具体系统错误码展示出来。
     void loadWebDavPassword(config)
       .then((storedPassword) => {
         if (!cancelled && storedPassword) setPassword(storedPassword)
       })
-      .catch(() => undefined)
+      .catch(() => getCredentialStoreStatus().then((status) => {
+        if (!cancelled) setCredentialStatus(status)
+      }))
     return () => { cancelled = true }
   }, [config.rememberPassword, config.username, credentialStatus?.available, passwordTouched])
 
@@ -142,9 +145,12 @@ export function WebDavSettingsForm({
             </div>
           ) : (
             <p className="settings-security-note"><KeyRound />{credentialStatus?.native
-              ? "系统安全存储暂不可用，密码仅用于当前会话。"
+              ? `系统安全存储暂不可用，密码仅用于当前会话。${credentialStatus.unavailableReason ? `（${credentialStatus.unavailableReason}）` : ""}`
               : "Web 端密码仅用于当前会话，刷新或关闭后需要重新输入。"}</p>
           )}
+          {credentialStatus?.native && credentialStatus.lastError ? (
+            <p className="settings-security-note"><KeyRound />安全存储上次操作失败：{credentialStatus.lastError}</p>
+          ) : null}
         </div>
         <div className="settings-field">
           <Label htmlFor="webdav-path">远端笔记目录</Label>
