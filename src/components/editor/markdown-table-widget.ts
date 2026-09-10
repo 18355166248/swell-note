@@ -1039,6 +1039,10 @@ export class TableWidget extends WidgetType {
         input.setRangeText(change.text, change.from, change.to, "select")
         commit({ row: rowIndex + 1, column: columnIndex })
       },
+      replace: (from, to, text) => {
+        input.setRangeText(text, from, to, "select")
+        commit({ row: rowIndex + 1, column: columnIndex })
+      },
     })
     // 键盘弹起会压掉下半屏：焦点在单元格 textarea 上时 CodeMirror 已失焦，
     // 编辑器自己的光标跟随不会触发，由这里把正在编辑的单元格送回可视带。

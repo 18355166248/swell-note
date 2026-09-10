@@ -5,6 +5,8 @@ export type TableEditTarget = {
   commit: () => void
   cancel: () => void
   format: (template: string) => void
+  // 改写指定区间并提交、留在当前单元格继续编辑（链接面板这类非固定模板的写入用）。
+  replace: (from: number, to: number, text: string) => void
 }
 const targets = new WeakMap<EditorView, TableEditTarget>()
 

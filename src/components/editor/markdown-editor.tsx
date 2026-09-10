@@ -11,16 +11,28 @@ import { readClipboardText, writeClipboardText } from "@/services/clipboard/clip
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 import { bottomOverlayHeight, scrollCursorIntoView } from "./cursor-visibility"
-import { detectFormatState, focusExistingLinkUrl, type EditorFormatState, type InlineMarkKind, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
+import { applyLinkTarget, detectFormatState, focusExistingLinkUrl, linkInsertion, linkTargetAt, linkTargetInText, removeLinkTarget, type EditorFormatState, type EditorLinkTarget, type InlineMarkKind, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
 import { htmlToMarkdown, isInlineMarkdownFragment } from "./html-to-markdown"
-import { markdownLivePreview } from "./live-preview"
+import { markdownLivePreview, type EditorLinkTap } from "./live-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import { ImageZoomOverlay } from "./image-zoom"
-import { activeTableEdit } from "./table-edit-target"
+import { activeTableEdit, type TableEditTarget } from "./table-edit-target"
 import { rememberEditorSession, restoreEditorSession } from "./editor-session"
 import "./markdown-table.css"
 
+// 链接面板在表格单元格编辑中打开时的现场快照：保存前校验单元格内容未变，
+// 取消时据此把焦点与选区还给单元格 textarea。
+export type LinkCellSnapshot = {
+  from: number
+  target: TableEditTarget
+  to: number
+  value: string
+}
+
 export type MarkdownEditorHandle = {
+  // 链接面板：target 为 null 表示新建（applyLink 用当前选区/光标），否则改写该链接；
+  // cell 存在时写入单元格 textarea（面板期间单元格靠 contextMenuActive 标记保持挂载）。
+  applyLink: (target: EditorLinkTarget | null, label: string, url: string, cell?: LinkCellSnapshot | null) => boolean
   captureInsertion: () => { insert: (text: string) => boolean; dispose: () => void }
   collapseSelection: () => void
   copySelection: () => Promise<boolean>
@@ -31,9 +43,15 @@ export type MarkdownEditorHandle = {
   // 与阅读态互换视图时用来对齐阅读位置：一个按屏幕坐标问行号，一个把指定行顶到可视区顶端。
   lineAtViewportTop: (clientY: number) => number | null
   pasteAtSelection: () => Promise<boolean>
+  // 链接面板打开前的上下文：光标处已有链接、当前选中文本、编辑器是否持有焦点（取消后据此恢复）；
+  // 正在编辑单元格时改从单元格 textarea 读取，并附上面板期间需要的现场快照。
+  readLinkContext: () => { cell?: LinkCellSnapshot; hadFocus: boolean; selectedText: string; target: EditorLinkTarget | null } | null
   redo: () => void
+  removeLink: (target: EditorLinkTarget, cell?: LinkCellSnapshot | null) => boolean
   replaceAll: (query: string, replacement: string) => number
   replaceCurrent: (query: string, replacement: string) => MarkdownFindResult
+  // 链接面板取消时调用：焦点与选区还给仍挂载的单元格，返回 false 表示没有可恢复的单元格。
+  restoreCellFocus: (cell?: LinkCellSnapshot | null) => boolean
   revealLine: (line: number) => void
   scrollLineToTop: (line: number) => boolean
   selectAll: () => void
@@ -66,6 +84,17 @@ function focusFirstTableHeaderCell(view: EditorView, insertFrom: number) {
   }, 0)
 }
 
+// 链接面板写单元格：目标仍是当前活动单元格且内容没被改动过才落笔，
+// 任一不满足都返回 false 让面板保留输入，而不是写到已过期的位置上。
+function applyCellLink(view: EditorView, cell: LinkCellSnapshot, target: EditorLinkTarget | null, label: string, url: string): boolean {
+  if (activeTableEdit(view) !== cell.target || cell.target.input.value !== cell.value) return false
+  const inserted = linkInsertion(target, label, url)
+  if (!inserted) return false
+  delete cell.target.input.dataset.contextMenuActive
+  cell.target.replace(target?.from ?? cell.from, target?.to ?? cell.to, inserted)
+  return true
+}
+
 type MarkdownEditorProps = {
   sessionKey?: string
   onHistoryChange?: (undo: boolean, redo: boolean) => void
@@ -76,6 +105,8 @@ type MarkdownEditorProps = {
   // 光标 / 选区的格式状态（工具栏高亮）；表格单元格编辑时由单元格汇报行内格式。
   onFormatStateChange?: (state: EditorFormatState | null) => void
   onInsertFiles?: (files: File[]) => void
+  // 移动端点按已有链接时不直接跳转，交给宿主弹出「打开 / 编辑 / 移除」菜单。
+  onLinkMenu?: (tap: EditorLinkTap) => void
   onOpenWikiLink?: (target: string) => void
   onResolveAsset?: (source: string) => Promise<VaultAsset | null>
   onSelectionChange?: (hasSelection: boolean) => void
@@ -86,7 +117,7 @@ type MarkdownEditorProps = {
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ sessionKey, onHistoryChange, onEditingTargetChange, onFormatStateChange, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange, readOnly = false, storageKey, value }, ref) {
+  function MarkdownEditor({ sessionKey, onHistoryChange, onEditingTargetChange, onFormatStateChange, onLinkMenu, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange, readOnly = false, storageKey, value }, ref) {
     const editorRef = useRef<ReactCodeMirrorRef>(null)
     const insertionMarks = useRef(new Set<{ from: number; to: number }>())
     const [initialState] = useState(() => restoreEditorSession(sessionKey, value))
@@ -99,9 +130,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
     // CodeMirror 的扩展数组一旦换引用就会整体重配置（语言也会重新解析）；
     // 调用方传入的回调多为内联函数，用 ref 中转后扩展只在只读状态切换时重建。
-    const handlers = useRef({ getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange, onHistoryChange })
+    const handlers = useRef({ getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onLinkMenu, onOpenWikiLink, onResolveAsset, onSelectionChange, onHistoryChange })
     useEffect(() => {
-      handlers.current = { getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange, onHistoryChange }
+      handlers.current = { getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onLinkMenu, onOpenWikiLink, onResolveAsset, onSelectionChange, onHistoryChange }
     })
 
     // 切换笔记会按 key 重建编辑器，卸载时要撤回选区状态，新笔记才不会带着上一篇的选区操作条打开。
@@ -136,6 +167,13 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       markdown({ base: markdownLanguage, codeLanguages: languages }),
       markdownLivePreview({
         onOpenWikiLink: (target) => handlers.current.onOpenWikiLink?.(target),
+        // 移动端点按链接交给宿主菜单（打开/编辑/移除），桌面端与只读笔记维持单击直接打开。
+        onLinkTap: compact && !readOnly ? (tap) => {
+          const menu = handlers.current.onLinkMenu
+          if (!menu) return false
+          menu(tap)
+          return true
+        } : undefined,
         onResolveAsset: (source) => handlers.current.onResolveAsset?.(source) ?? Promise.resolve(null),
         onTableFormatState: (state) => handlers.current.onFormatStateChange?.(state ? { ...state, heading: 0 } : null),
         tableStorageKey: storageKey,
@@ -311,6 +349,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     ], [compact, readOnly, storageKey, sessionKey])
 
     useImperativeHandle(ref, () => ({
+      applyLink(target, label, url, cell) {
+        const view = editorRef.current?.view
+        if (!view || readOnly) return false
+        if (cell) return applyCellLink(view, cell, target, label, url)
+        return applyLinkTarget(view, target, label, url)
+      },
       captureInsertion() {
         const view = editorRef.current?.view
         const target = view ? activeTableEdit(view) : undefined
@@ -448,8 +492,55 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         view.focus()
         return true
       },
+      readLinkContext() {
+        const view = editorRef.current?.view
+        if (!view || readOnly) return null
+        // 单元格编辑中 CodeMirror 的选区是进入单元格前的旧位置，链接必须写进单元格
+        // textarea；面板输入框会抢走焦点，先挂 contextMenuActive 标记抑制 blur 时的
+        // 自动提交，让未保存内容与选区在面板期间都留在原单元格里。
+        const table = activeTableEdit(view)
+        if (table) {
+          const { input } = table
+          const from = input.selectionStart ?? 0
+          const to = input.selectionEnd ?? from
+          input.dataset.contextMenuActive = "true"
+          return {
+            cell: { from, target: table, to, value: input.value },
+            hadFocus: false,
+            selectedText: input.value.slice(from, to),
+            target: linkTargetInText(input.value, from, to),
+          }
+        }
+        const range = view.state.selection.main
+        return {
+          hadFocus: view.hasFocus,
+          selectedText: view.state.sliceDoc(range.from, range.to),
+          target: linkTargetAt(view.state, range.from, range.to),
+        }
+      },
       redo() {
         runHistory(editorRef.current?.view, true)
+      },
+      removeLink(target, cell) {
+        const view = editorRef.current?.view
+        if (!view || readOnly) return false
+        if (cell) {
+          if (activeTableEdit(view) !== cell.target || cell.target.input.value !== cell.value) return false
+          delete cell.target.input.dataset.contextMenuActive
+          cell.target.replace(target.from, target.to, target.label)
+          return true
+        }
+        return removeLinkTarget(view, target)
+      },
+      restoreCellFocus(cell) {
+        if (!cell) return false
+        const { input } = cell.target
+        // 无论单元格是否还在，面板期间的抑制标记都要清掉，避免残留影响下一次 blur 提交。
+        delete input.dataset.contextMenuActive
+        if (!input.isConnected) return false
+        input.focus({ preventScroll: true })
+        input.setSelectionRange(cell.from, cell.to)
+        return true
       },
       replaceAll(query, replacement) {
         const view = editorRef.current?.view

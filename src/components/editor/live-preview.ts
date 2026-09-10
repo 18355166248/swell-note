@@ -9,6 +9,7 @@ import { openExternalUrl } from "@/services/open-external-url"
 
 import { parseMarkdownTable } from "./markdown-table-model"
 import { appendMarkdownImage, type TableInlineOptions } from "./markdown-table-inline"
+import { linkTargetAt, type EditorLinkTap } from "./markdown-input"
 import { openImageZoom } from "./image-zoom"
 import { TableWidget } from "./markdown-table-widget"
 
@@ -32,6 +33,8 @@ type MdSyntaxNode = {
 
 // 打开链接是宿主行为：笔记内链交给工作区路由，外部链接默认走浏览器新窗口。
 export type LivePreviewOptions = TableInlineOptions
+
+export type { EditorLinkTap }
 
 export { TableWidget }
 
@@ -238,6 +241,14 @@ function cursorRangeChecker(state: EditorState) {
   return (from: number, to: number) => positions.some((position) => position >= from && position <= to)
 }
 
+// 列表 / 任务标记的还原判断用「左闭右开」：光标只有真正进入标记内部（含标记正前方，准备改标记）
+// 才还原源码；停在标记后面的文字起点——回车续写出的新列表项光标正是落在这里——仍然显示
+// 圆点 / 勾选框，连续记录时左侧不会每新增一行就闪出 `- ` 源码。
+function cursorMarkChecker(state: EditorState) {
+  const positions = collectCursorPositions(state)
+  return (from: number, to: number) => positions.some((position) => position >= from && position < to)
+}
+
 type DocRange = { from: number; to: number }
 
 // 隐藏标记时把紧随其后的空格一起收进去，行首才不会留下一个孤零零的缩进。
@@ -388,6 +399,23 @@ function openExternalLink(href: string, options: LivePreviewOptions) {
 // 桌面端 mousedown 与触屏合成的 click 会先后触发，去重避免一次点按跳转两次。
 let lastLinkActivationAt = 0
 
+// 移动端（宿主注册了 onLinkTap）点按 [文字](地址) 链接时不直接跳转，把链接结构与
+// 跳转目标上抛给宿主弹出「打开 / 编辑 / 移除」菜单。裸 URL、[[双链]] 与图片没有可
+// 编辑的链接节点，维持原有单击打开行为。
+function interceptLinkTap(event: MouseEvent, view: EditorView) {
+  const onLinkTap = view.state.facet(livePreviewOptions).onLinkTap
+  if (!onLinkTap) return false
+  const element = event.target instanceof Element ? event.target : null
+  if (!element) return false
+  const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false)
+  if (position === null) return false
+  const target = linkTargetAt(view.state, position, position)
+  if (!target) return false
+  const href = element.closest("[data-md-href]")?.getAttribute("data-md-href") ?? undefined
+  const noteTarget = element.closest("[data-md-note-target]")?.getAttribute("data-md-note-target") ?? undefined
+  return onLinkTap({ hadFocus: view.hasFocus, href, noteTarget, target })
+}
+
 function activateActionableLink(element: Element, options: LivePreviewOptions) {
   if (!openActionableLink(element, options)) return false
   lastLinkActivationAt = Date.now()
@@ -494,6 +522,7 @@ export function mergeDecorationRanges(ranges: readonly DocRange[], buffer: numbe
 function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   const isCursorActive = cursorLineChecker(view.state)
   const isCursorTouching = cursorRangeChecker(view.state)
+  const isMarkTouched = cursorMarkChecker(view.state)
   const frontmatter = findFrontmatterRange(view.state)
   // 早期这里按整篇文档计算，33KB 的笔记每敲一个字就要重建整篇装饰集，
   // 连带 CodeMirror 重新套用 RangeSet 与重算行高，实测占掉按键开销的九成。
@@ -638,18 +667,31 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             if (node.node.getChild("Task")) break
             const mark = node.node.getChild("ListMark")
             if (!mark) break
-            // ListItem 常常跨行覆盖着嵌套子列表，不能像标题、引用那样按整块判断光标是否在内：
-            // 那样一来，光标停在子项里，父项的标记也会跟着露出来。这里只看标记自己所在的那一行。
-            if (isCursorActive(mark.from, mark.to)) break
             if (node.node.parent?.name === "OrderedList") {
-              decorations.push(Decoration.mark({ class: "cm-md-list-ordinal" }).range(mark.from, mark.to))
-            } else {
-              decorations.push(Decoration.replace({ widget: listBulletWidget }).range(mark.from, skipSpacesAfter(view.state, mark.to)))
+              // 编号就是显示内容，光标进入该行时恢复正文字色即可，从不隐藏。
+              if (!isCursorActive(mark.from, mark.to)) {
+                decorations.push(Decoration.mark({ class: "cm-md-list-ordinal" }).range(mark.from, mark.to))
+              }
+              break
+            }
+            // 光标进入标记内部才还原 `- ` 源码（便于改标记）；只是落在标记后的文字上——
+            // 包括回车续写出的空列表项——继续显示圆点，不再按整行还原。
+            const bulletEnd = skipSpacesAfter(view.state, mark.to)
+            if (!isMarkTouched(mark.from, bulletEnd)) {
+              decorations.push(Decoration.replace({ widget: listBulletWidget }).range(mark.from, bulletEnd))
             }
             break
           }
           case "TaskMarker": {
-            if (active) break
+            // TaskMarker 的前一个语法兄弟并不稳定，直接按当前行定位列表标记；仅隐藏 `- ` 等标记并保留嵌套缩进。
+            const line = view.state.doc.lineAt(node.from)
+            const prefix = view.state.sliceDoc(line.from, node.from)
+            const listMarker = prefix.match(/(?:[-+*]|\d+[.)])\s+$/)
+            const markStart = listMarker?.index !== undefined ? line.from + listMarker.index : node.from
+            // 与无序列表同一套判断：光标进入标记内部才还原 `- [ ] ` 源码，
+            // 停在任务文字上（含续写出的空任务）继续显示勾选框。
+            const markerEnd = skipSpacesAfter(view.state, node.to)
+            if (isMarkTouched(markStart, markerEnd)) break
             const checked = view.state.sliceDoc(node.from, node.to).toLocaleLowerCase().includes("x")
             // 连 `[ ]` 后的空格一起替换，勾选框与任务文字之间才只剩 CSS 给的间距，
             // 不会再多一个源码空格——和无序列表圆点吞掉标记后空格的处理保持一致。
@@ -657,12 +699,8 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             decorations.push(
               Decoration.replace({
                 widget: new TaskCheckboxWidget(checked, node.from, node.to, view),
-              }).range(node.from, skipSpacesAfter(view.state, node.to)),
+              }).range(node.from, markerEnd),
             )
-            // TaskMarker 的前一个语法兄弟并不稳定，直接按当前行定位列表标记；仅隐藏 `- ` 等标记并保留嵌套缩进。
-            const line = view.state.doc.lineAt(node.from)
-            const prefix = view.state.sliceDoc(line.from, node.from)
-            const listMarker = prefix.match(/(?:[-+*]|\d+[.)])\s+$/)
             if (listMarker?.index !== undefined) {
               decorations.push(Decoration.replace({}).range(line.from + listMarker.index, node.from))
             }
@@ -811,6 +849,11 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
       },
       mousedown(event: MouseEvent, view: EditorView) {
         if (event.button !== 0) return false
+        if (interceptLinkTap(event, view)) {
+          event.preventDefault()
+          lastLinkActivationAt = Date.now()
+          return true
+        }
         const element = event.target instanceof Element ? event.target : null
         if (!element) return false
         if (!activateActionableLink(element, view.state.facet(livePreviewOptions))) return false
@@ -824,6 +867,11 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
         if (!element) return false
         if (Date.now() - lastLinkActivationAt < 500) {
           event.preventDefault()
+          return true
+        }
+        if (interceptLinkTap(event, view)) {
+          event.preventDefault()
+          lastLinkActivationAt = Date.now()
           return true
         }
         if (!activateActionableLink(element, view.state.facet(livePreviewOptions))) return false

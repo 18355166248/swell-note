@@ -133,7 +133,7 @@ test.describe("编辑态链接点击跳转", () => {
       .toEqual(["https://example.com/page"])
   })
 
-  test("移动端触屏点按笔记链接", async ({ page }, testInfo) => {
+  test("移动端触屏点按笔记链接先弹出操作菜单", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "mobile-chrome")
     await seedCachedVault(page)
     const workspace = page.locator(".mobile-workspace:visible")
@@ -145,13 +145,180 @@ test.describe("编辑态链接点击跳转", () => {
     await workspace.getByRole("button", { name: "编辑模式" }).click()
     await expect(page.locator(".cm-content")).toBeVisible()
 
-    // iOS WebView 的点按不一定合成 mousedown，靠 click 兜底也要能跳转。
+    // 移动端点按 [文字](地址) 链接不再直接跳转，先给「打开 / 编辑 / 移除」菜单。
     await page.locator(".cm-content .cm-md-link-actionable[data-md-note-target]").first().tap()
+    const sheet = page.locator(".mobile-action-sheet")
+    await expect(sheet.getByRole("button", { name: "打开链接" })).toBeVisible()
+    await expect(sheet.getByRole("button", { name: "编辑链接" })).toBeVisible()
+    await expect(sheet.getByRole("button", { name: "移除链接" })).toBeVisible()
+    await sheet.getByRole("button", { name: "打开链接" }).tap()
     await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
+  })
+
+  async function openMobileEditor(page: Page, noteContent?: string) {
+    await seedCachedVault(page, noteContent)
+    const workspace = page.locator(".mobile-workspace:visible")
+    await workspace.getByText("测试", { exact: true }).first().click()
+    await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    await expect(workspace).toHaveAttribute("data-screen", "editor")
+    await workspace.getByRole("button", { name: "编辑模式" }).click()
+    await expect(page.locator(".cm-content")).toBeVisible()
+    return workspace
+  }
+
+  test("移动端编辑已有链接：改地址并保留正文其他内容", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await openMobileEditor(page)
+
+    await page.locator(".cm-content .cm-md-link-actionable[data-md-href='https://example.com']").first().tap()
+    const sheet = page.locator(".mobile-action-sheet")
+    await sheet.getByRole("button", { name: "编辑链接" }).tap()
+    // 预填原有文字与地址，避免手机上重新输入。
+    await expect(sheet.getByLabel("显示文字")).toHaveValue("示例站")
+    await expect(sheet.getByLabel("链接地址")).toHaveValue("https://example.com")
+    await sheet.getByLabel("链接地址").fill("https://example.com/新地址")
+    await sheet.getByRole("button", { name: "保存" }).tap()
+
+    await expect(page.locator(".cm-content .cm-md-link-actionable[data-md-href='https://example.com/新地址']")).toBeVisible()
+  })
+
+  test("移动端移除链接后保留链接文字", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await openMobileEditor(page)
+
+    await page.locator(".cm-content .cm-md-link-actionable[data-md-href='https://example.com']").first().tap()
+    const sheet = page.locator(".mobile-action-sheet")
+    await sheet.getByRole("button", { name: "移除链接" }).tap()
+
+    await expect(page.locator(".cm-content .cm-md-link-actionable[data-md-href='https://example.com']")).toHaveCount(0)
+    await expect(page.locator(".cm-content")).toContainText("示例站")
+  })
+
+  test("移动端工具栏新增链接：选中文字自动带入显示文字", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await openMobileEditor(page, "给这句话加链接")
+
+    const editor = page.locator(".cm-content")
+    await editor.tap()
+    await page.keyboard.press("ControlOrMeta+a")
+    await page.getByRole("button", { name: "更多格式" }).tap()
+    await page.getByRole("menuitem", { name: "链接" }).tap()
+
+    const sheet = page.locator(".mobile-action-sheet")
+    await expect(sheet.getByLabel("显示文字")).toHaveValue("给这句话加链接")
+    await sheet.getByLabel("链接地址").fill("https://example.com/toolbar")
+    await sheet.getByRole("button", { name: "保存" }).tap()
+
+    await expect(page.locator(".cm-content .cm-md-link-actionable[data-md-href='https://example.com/toolbar']")).toHaveText("给这句话加链接")
+  })
+
+  test("移动端链接面板取消后正文与选区不变", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await openMobileEditor(page, "给这句话加链接")
+
+    const editor = page.locator(".cm-content")
+    await editor.tap()
+    await page.keyboard.press("ControlOrMeta+a")
+    await page.getByRole("button", { name: "更多格式" }).tap()
+    await page.getByRole("menuitem", { name: "链接" }).tap()
+
+    const sheet = page.locator(".mobile-action-sheet")
+    await sheet.getByRole("button", { name: "取消" }).tap()
+    await expect(sheet).toHaveCount(0)
+    await expect(editor).toHaveText("给这句话加链接")
+    // 取消不改动正文，选区映射仍在原文上（格式栏仍处于选区模式）。
+    await expect(page.getByRole("button", { name: "更多格式" })).toBeVisible()
+  })
+
+  test("移动端单元格内新增链接写进单元格而不是正文旧光标", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await openMobileEditor(page, "| 名称 | 链接 |\n| --- | --- |\n| 项目 | 点这里 |")
+
+    const table = page.locator(".cm-md-table-wrap")
+    await table.locator("td").nth(1).click()
+    const input = table.locator("textarea")
+    await expect(input).toBeFocused()
+    await input.press("ControlOrMeta+a")
+
+    await page.getByRole("button", { name: "更多格式" }).tap()
+    await page.getByRole("menuitem", { name: "链接" }).tap()
+    const sheet = page.locator(".mobile-action-sheet")
+    // 选中的单元格文字自动带入显示文字。
+    await expect(sheet.getByLabel("显示文字")).toHaveValue("点这里")
+    await sheet.getByLabel("链接地址").fill("https://cell.example.com")
+    await sheet.getByRole("button", { name: "保存" }).tap()
+
+    // 保存后留在原单元格继续编辑，链接落在单元格内容里。
+    await expect(table.locator("textarea")).toHaveValue("[点这里](https://cell.example.com)")
+  })
+
+  test("移动端单元格内编辑已有链接：预填并原位改写", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await openMobileEditor(page, "| 名称 | 链接 |\n| --- | --- |\n| 项目 | [旧站](https://old.example.com) |")
+
+    const table = page.locator(".cm-md-table-wrap")
+    await table.locator("td").nth(1).click()
+    const input = table.locator("textarea")
+    await expect(input).toBeFocused()
+    await input.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(2, 2))
+
+    await page.getByRole("button", { name: "更多格式" }).tap()
+    await page.getByRole("menuitem", { name: "链接" }).tap()
+    const sheet = page.locator(".mobile-action-sheet")
+    await expect(sheet.getByLabel("显示文字")).toHaveValue("旧站")
+    await expect(sheet.getByLabel("链接地址")).toHaveValue("https://old.example.com")
+    await sheet.getByLabel("链接地址").fill("https://new.example.com")
+    await sheet.getByRole("button", { name: "保存" }).tap()
+
+    await expect(table.locator("textarea")).toHaveValue("[旧站](https://new.example.com)")
+  })
+
+  test("移动端单元格链接面板取消后焦点与未保存内容留在单元格", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await openMobileEditor(page, "| 名称 | 链接 |\n| --- | --- |\n| 项目 | 点这里 |")
+
+    const table = page.locator(".cm-md-table-wrap")
+    await table.locator("td").nth(1).click()
+    const input = table.locator("textarea")
+    await expect(input).toBeFocused()
+    await input.press("ControlOrMeta+a")
+
+    await page.getByRole("button", { name: "更多格式" }).tap()
+    await page.getByRole("menuitem", { name: "链接" }).tap()
+    const sheet = page.locator(".mobile-action-sheet")
+    await sheet.getByRole("button", { name: "取消" }).tap()
+    await expect(sheet).toHaveCount(0)
+
+    // 取消不把单元格提交掉：焦点还给 textarea，选区与内容保持打开面板前的样子。
+    await expect(table.locator("textarea")).toBeFocused()
+    await expect(table.locator("textarea")).toHaveValue("点这里")
   })
 })
 
 test.describe("编辑细节", () => {
+  test("移动端列表回车续写时新行仍显示圆点与勾选框", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await seedCachedVault(page, "- 要点一\n- [ ] 待办")
+    const workspace = page.locator(".mobile-workspace:visible")
+    await workspace.getByText("测试", { exact: true }).first().click()
+    await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    await expect(workspace).toHaveAttribute("data-screen", "editor")
+    await workspace.getByRole("button", { name: "编辑模式" }).click()
+    const editor = page.locator(".cm-content")
+    await expect(editor).toBeVisible()
+
+    // 光标落在列表项文字上：标记不还原成源码，圆点与勾选框保持渲染。
+    await editor.getByText("要点一").tap()
+    await expect(editor.locator(".cm-md-bullet")).toHaveCount(1)
+    await expect(editor.locator(".cm-md-task-checkbox")).toHaveCount(1)
+
+    // 行尾回车续写：新行同样直接显示圆点，不再露出 `- ` 源码。
+    await page.keyboard.press("End")
+    await page.keyboard.press("Enter")
+    await expect(editor.locator(".cm-md-bullet")).toHaveCount(2)
+    expect(await editor.evaluate((element) => element.textContent)).not.toContain("-")
+  })
+
   test("右键菜单保留正文选区并支持格式、撤销与粘贴", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page, "记录今天的想法")

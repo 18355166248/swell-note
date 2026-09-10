@@ -1134,6 +1134,9 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .mobile-action-list > button:disabled, .mobile-move-targets > button:disabled { color: var(--muted-foreground); opacity: .55; }
   .mobile-action-list > .mobile-action-destructive, .mobile-action-list > .mobile-action-destructive > svg { color: var(--destructive); }
   .mobile-action-sheet [data-slot="dialog-footer"] { margin-top: 2px; }
+  /* 链接面板的「显示文字 / 链接地址」两个字段上下排，间距与重命名面板的单输入框对齐。 */
+  .mobile-action-sheet .mobile-link-form { display: grid; gap: 10px; padding-block: 4px 2px; }
+  .mobile-action-sheet .mobile-link-error { color: var(--destructive); font-size: 13px; line-height: 1.4; margin: 8px 0 0; }
   .mobile-fab { position: fixed; right: calc(20px + env(safe-area-inset-right,0px)); bottom: calc(20px + env(safe-area-inset-bottom)); z-index: 4; width: 52px; height: 52px; border-radius: 50%; box-shadow: 0 8px 22px color-mix(in oklab,var(--primary) 34%,transparent); }
   .workspace-sync-activity { right: calc(12px + env(safe-area-inset-right,0px)); bottom: calc(82px + env(safe-area-inset-bottom)); width: calc(100vw - 24px - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px)); border-radius: 13px; padding: 10px 11px; }
   .workspace-sync-activity-main small { white-space: normal; line-height: 1.35; }

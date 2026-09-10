@@ -258,13 +258,52 @@ describe("markdown live preview", () => {
     ])
   })
 
-  it("only reveals the list item whose own marker line has the cursor, not its nested children", async () => {
-    // 光标停在父项「要点一」这一行：父项标记还原成源码，不出现在圆点列表里；
+  it("only reveals the list item whose own marker has the cursor, not its nested children", async () => {
+    // 光标停在父项标记正前方（准备改标记）：父项标记还原成源码，不出现在圆点列表里；
     // 嵌套子项「嵌套项」不受影响，仍然渲染成圆点。
     const view = createView({ anchor: 0 }, listDoc)
     const { bullets } = collect(await settleInlineDecorations(view))
 
     expect(bullets).toEqual([{ from: listDoc.indexOf("- 嵌套项"), to: listDoc.indexOf("嵌套项") }])
+  })
+
+  it("keeps the bullet while the cursor edits the item text", async () => {
+    // 回车续写列表时新行的光标正好落在标记后面：此前按「光标所在行还原源码」，
+    // 每新增一行左侧圆点都会变回 `- `，像列表格式失效。现在只有光标进入标记内部才还原。
+    const textStart = listDoc.indexOf("要点一")
+    const view = createView({ anchor: textStart }, listDoc)
+    const { bullets } = collect(await settleInlineDecorations(view))
+
+    expect(bullets).toContainEqual({ from: listDoc.indexOf("- 要点一"), to: textStart })
+  })
+
+  it("keeps the bullet on the empty item continued by Enter", async () => {
+    // insertNewlineContinueMarkup 续写出的空列表项：光标停在行尾（标记后一个字符），
+    // 此时再回车应退出列表，行内必须仍显示圆点而不是 `- ` 源码。
+    const continued = "- 要点一\n- "
+    const view = createView({ anchor: continued.length }, continued)
+    const { bullets, hidden } = collect(await settleInlineDecorations(view))
+
+    expect(bullets).toContainEqual({ from: continued.indexOf("- "), to: continued.indexOf("要点一") })
+    expect(bullets).toContainEqual({ from: continued.lastIndexOf("- "), to: continued.length })
+    expect(hidden).toHaveLength(0)
+  })
+
+  it("keeps the checkbox while the cursor edits the task text", async () => {
+    const textStart = listDoc.indexOf("待办")
+    const view = createView({ anchor: textStart }, listDoc)
+    const { checkboxes, hidden } = collect(await settleInlineDecorations(view))
+
+    expect(checkboxes).toEqual([{ checked: false, from: listDoc.indexOf("[ ]"), to: textStart }])
+    expect(hidden).toContainEqual({ from: listDoc.indexOf("- [ ]"), to: listDoc.indexOf("[ ]") })
+  })
+
+  it("reveals the task marker source when the cursor enters the marker itself", async () => {
+    // 光标落在 `- ` 与 `[ ]` 之间：用户要改的是标记本身，还原源码。
+    const view = createView({ anchor: listDoc.indexOf("[ ]") }, listDoc)
+    const { checkboxes } = collect(await settleInlineDecorations(view))
+
+    expect(checkboxes).toHaveLength(0)
   })
 
   it("keeps the ordered list number visible but styles it", async () => {

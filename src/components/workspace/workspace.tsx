@@ -103,6 +103,7 @@ import {
   type VaultFolder,
 } from "@/services/search/vault-folders"
 import { buildNotePreview } from "@/services/markdown/note-preview"
+import { openExternalUrl } from "@/services/open-external-url"
 import { HighlightedText, useSearchMatch } from "@/components/workspace/note-search-match"
 import { countWords, estimateReadingMinutes } from "@/services/markdown/note-stats"
 import { extractNoteOutline } from "@/services/markdown/note-outline"
@@ -121,6 +122,7 @@ import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
 import { stableNoteRenderIdentity } from "@/lib/note-route-resolution"
 import { MobileNoteSearch } from "@/components/workspace/mobile-note-search"
 import { MobileFolderActionSheet, MobileNoteActionSheet } from "@/components/workspace/mobile-action-sheets"
+import { MobileLinkSheet, type LinkSheetState } from "@/components/workspace/mobile-link-sheet"
 import { SelectionActionBar } from "@/components/workspace/selection-action-bar"
 import { DocumentContextMenu } from "@/components/workspace/document-context-menu"
 import { PreviewSearch } from "@/components/workspace/preview-search"
@@ -1585,6 +1587,8 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   const [editingTable, setEditingTable] = useState(false)
   // 光标 / 选区当前格式，供工具栏高亮；正文与表格单元格都会汇报。
   const [formatState, setFormatState] = useState<EditorFormatState | null>(null)
+  // 移动端链接面板：非 null 时打开（工具栏「链接」或点按已有链接进入）。
+  const [linkSheet, setLinkSheet] = useState<LinkSheetState | null>(null)
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState("")
   const [findReplacement, setFindReplacement] = useState("")
@@ -1781,12 +1785,47 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
 
   const handleFormat = useCallback((syntax: string) => {
     if (!syntax) return
+    // 手机上手动拼 [文字](地址) 成本太高：工具栏「链接」改为打开面板，分别填文字与地址；
+    // 有选区自动带入文字，光标落在已有链接上则预填并按编辑保存。
+    if (compact && syntax === "[链接](https://)") {
+      const context = editorRef.current?.readLinkContext()
+      if (context) {
+        setLinkSheet({
+          cell: context.cell,
+          hadFocus: context.hadFocus,
+          label: context.target?.label ?? context.selectedText.trim(),
+          menu: false,
+          target: context.target,
+          url: context.target?.url ?? "",
+        })
+        return
+      }
+    }
     if (editorRef.current) {
       editorRef.current.insertText(syntax)
       return
     }
     onFormat(syntax)
-  }, [onFormat])
+  }, [compact, onFormat])
+
+  // 面板自身不写正文：保存/移除都交给编辑器 handle 完成（内部会校验原文、映射选区并恢复焦点），
+  // 这里只负责关掉面板。焦点归还不能在点击事件里同步做（modal 面板的 inert 还没解除，
+  // focus 会静默失败），由面板的 onRestoreFocus 在卸载流程里调：优先还给仍在编辑的单元格，
+  // 否则按打开前的焦点状态归还键盘。
+  const closeLinkSheet = useCallback(() => {
+    setLinkSheet(null)
+  }, [])
+
+  const restoreLinkSheetFocus = useCallback((sheet: LinkSheetState) => {
+    if (editorRef.current?.restoreCellFocus(sheet.cell ?? null)) return
+    if (sheet.hadFocus) editorRef.current?.focus()
+  }, [])
+
+  const openLinkSheetTarget = useCallback((sheet: LinkSheetState) => {
+    setLinkSheet(null)
+    if (sheet.noteTarget) onOpenWikiLink(sheet.noteTarget)
+    else if (sheet.href) void openExternalUrl(sheet.href)
+  }, [onOpenWikiLink])
 
   const handleInsertFiles = useCallback(async (files: File[]) => {
     if (files.length === 0 || readOnly || !canInsertAttachment || attachmentBusyRef.current) return
@@ -2338,6 +2377,15 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
                   })}
                   onCursorChange={(line, column) => setCursorPosition({ column, line })}
                   onInsertFiles={canInsertAttachment && !insertingAttachment ? handleInsertFiles : undefined}
+                  onLinkMenu={(tap) => setLinkSheet({
+                    hadFocus: tap.hadFocus,
+                    href: tap.href,
+                    label: tap.target.label,
+                    menu: true,
+                    noteTarget: tap.noteTarget,
+                    target: tap.target,
+                    url: tap.target.url,
+                  })}
                   onOpenWikiLink={onOpenWikiLink}
                   onResolveAsset={onResolveAsset}
                   onSelectionChange={setHasSelection}
@@ -2404,6 +2452,25 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
         onOpenChange={setHistoryDialogOpen}
         onRestore={onRestoreNoteVersion}
         open={historyDialogOpen}
+      />
+      <MobileLinkSheet
+        sheet={linkSheet}
+        onClose={closeLinkSheet}
+        onOpenLink={() => { if (linkSheet) openLinkSheetTarget(linkSheet) }}
+        onRemoveLink={() => {
+          // 成功才关闭；失败（原文在面板期间被改动）时面板保留，由面板提示用户。
+          if (!linkSheet?.target) return true
+          const removed = editorRef.current?.removeLink(linkSheet.target, linkSheet.cell ?? null) ?? false
+          if (removed) setLinkSheet(null)
+          return removed
+        }}
+        onRestoreFocus={() => { if (linkSheet) restoreLinkSheetFocus(linkSheet) }}
+        onSaveLink={(label, url) => {
+          if (!linkSheet) return false
+          const applied = editorRef.current?.applyLink(linkSheet.target, label, url, linkSheet.cell ?? null) ?? false
+          if (applied) setLinkSheet(null)
+          return applied
+        }}
       />
       <Dialog onOpenChange={setOutlineDialogOpen} open={outlineDialogOpen}>
         <DialogContent className="mobile-outline-dialog">

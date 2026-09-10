@@ -3,8 +3,11 @@ import { openExternalUrl } from "@/services/open-external-url"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 import { resolveCachedImageUrl } from "./markdown-image-cache"
+import type { EditorLinkTap } from "./markdown-input"
 
 export type TableInlineOptions = {
+  // 移动端点按 [文字](地址) 链接时不直接打开，交给宿主弹出操作菜单；返回 true 表示已接管。
+  onLinkTap?: (tap: EditorLinkTap) => boolean
   onOpenExternalLink?: (href: string) => void
   onOpenWikiLink?: (target: string) => void
   onResolveAsset?: (source: string) => Promise<VaultAsset | null>

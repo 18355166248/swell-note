@@ -1,5 +1,5 @@
 import { copyLineDown, copyLineUp, indentLess, indentMore, moveLineDown, moveLineUp } from "@codemirror/commands"
-import { deleteMarkupBackward, insertNewlineContinueMarkup } from "@codemirror/lang-markdown"
+import { deleteMarkupBackward, insertNewlineContinueMarkup, markdownLanguage } from "@codemirror/lang-markdown"
 import { syntaxTree } from "@codemirror/language"
 import { type ChangeSpec, EditorSelection, type EditorState, Prec, type Transaction } from "@codemirror/state"
 import { EditorView, keymap } from "@codemirror/view"
@@ -139,13 +139,16 @@ const INLINE_MARK_NODE_NAMES = { code: "InlineCode", emphasis: "Emphasis", strik
 const INLINE_MARK_TOKENS = { code: "`", emphasis: "*", strike: "~~", strong: "**" } as const
 export type InlineMarkKind = keyof typeof INLINE_MARK_TOKENS
 
-function findEnclosingMark(state: EditorState, from: number, to: number, name: string): MdSyntaxNode | null {
-  let node: MdSyntaxNode | null = syntaxTree(state).resolveInner(from, from === to ? -1 : 1)
+function findEnclosingNode(node: MdSyntaxNode | null, from: number, to: number, name: string): MdSyntaxNode | null {
   while (node) {
     if (node.name === name && node.from <= from && node.to >= to) return node
     node = node.parent
   }
   return null
+}
+
+function findEnclosingMark(state: EditorState, from: number, to: number, name: string): MdSyntaxNode | null {
+  return findEnclosingNode(syntaxTree(state).resolveInner(from, from === to ? -1 : 1), from, to, name)
 }
 
 // 三击选中「一行」时，浏览器给出的选区会带上行首的列表/引用标记和结尾的换行符——
@@ -214,6 +217,132 @@ export function focusExistingLinkUrl(view: EditorView): boolean {
     return true
   }
   return false
+}
+
+// 链接面板读取 / 改写 [文字](地址) 共用的结构提取。source 记录原文，面板打开期间
+// 正文若被改动，保存前先比对、对不上就拒绝覆盖；[[双链]]、引用式链接与图片都没有
+// 可用的 URL 子节点或独立文字区间，统一返回 null 走各自原有路径。
+// bracketed 记住原地址包在 <> 里（这种写法允许空格），title 记住原始提示段（含引号）——
+// 面板不暴露这两个细节，但保存时必须原样补回，否则编辑一次就丢格式。
+export type EditorLinkTarget = {
+  bracketed?: boolean
+  from: number
+  label: string
+  source: string
+  title?: string
+  to: number
+  url: string
+}
+
+// 由 Link 语法节点提取面板所需的结构；slice 抽象掉「正文文档 / 单元格纯文本」两种来源。
+// 图片（Image 节点）、行内代码、[[双链]] 与引用式链接都没有可编辑的 URL 子节点或
+// 独立文字区间，返回 null 走各自原有路径。
+function linkTargetFromNode(link: MdSyntaxNode, slice: (from: number, to: number) => string): EditorLinkTarget | null {
+  let url: MdSyntaxNode | null = null
+  let open: MdSyntaxNode | null = null
+  let close: MdSyntaxNode | null = null
+  let title: MdSyntaxNode | null = null
+  for (let child = link.firstChild; child; child = child.nextSibling) {
+    if (child.name === "URL") { url = child; continue }
+    if (child.name === "LinkTitle") { title = child; continue }
+    if (child.name !== "LinkMark") continue
+    const text = slice(child.from, child.to)
+    if (text === "[" && !open) open = child
+    else if (text === "]") close = child
+  }
+  if (!url || !open || !close || close.from <= open.to) return null
+  const rawUrl = slice(url.from, url.to)
+  const bracketed = rawUrl.startsWith("<") && rawUrl.endsWith(">")
+  return {
+    bracketed: bracketed || undefined,
+    from: link.from,
+    label: slice(open.to, close.from),
+    source: slice(link.from, link.to),
+    title: title ? slice(title.from, title.to) : undefined,
+    to: link.to,
+    url: bracketed ? rawUrl.slice(1, -1) : rawUrl,
+  }
+}
+
+export function linkTargetAt(state: EditorState, from: number, to: number): EditorLinkTarget | null {
+  const link = findEnclosingMark(state, from, to, "Link")
+  return link ? linkTargetFromNode(link, (a, b) => state.sliceDoc(a, b)) : null
+}
+
+// 移动端点按链接时上抛给宿主菜单的信息：target 供编辑/移除，href/noteTarget 供「打开」，
+// hadFocus 记录点按瞬间编辑器是否持有焦点（菜单取消后据此决定是否归还焦点与键盘）。
+export type EditorLinkTap = {
+  hadFocus: boolean
+  href?: string
+  noteTarget?: string
+  target: EditorLinkTarget
+}
+
+// 面板输入的地址原样进 Markdown：换行与尖括号直接破坏语法，空格与括号转义后才能稳定解析
+// （与图片「更换」浮层的地址处理保持一致）。
+export function sanitizeLinkUrl(url: string) {
+  return url.trim().replace(/[ ()]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)
+}
+
+export function isValidLinkLabel(label: string) {
+  return Boolean(label.trim()) && !/[[\]\n\r]/.test(label)
+}
+
+// 由面板输入构造 [文字](地址) 源码：原有 <> 写法与 title 段原样保留；
+// 尖括号内空格合法所以不再转义，普通写法仍把空格/括号转义成稳定可解析的形式。
+// 返回 null 表示输入不合法，调用方保留面板让用户修正。
+export function linkInsertion(target: Pick<EditorLinkTarget, "bracketed" | "title"> | null, label: string, url: string): string | null {
+  if (!isValidLinkLabel(label)) return null
+  const trimmed = url.trim()
+  if (!trimmed || /[\n\r<>]/.test(trimmed)) return null
+  const href = target?.bracketed ? `<${trimmed}>` : sanitizeLinkUrl(trimmed)
+  const title = target?.title ? ` ${target.title}` : ""
+  return `[${label.trim()}](${href}${title})`
+}
+
+// 单元格 textarea 是纯文本、没有现成语法树，但解析规则必须与正文一致——
+// 正则不认平衡括号（a_(b) 合法却解析失败）、分不清图片与行内代码里的链接文本，
+// 所以直接用 Markdown 解析器解析单元格内容，限定真正的 Link 节点，与 linkTargetAt
+// 返回同一种结构（from/to 相对于传入文本）。
+export function linkTargetInText(text: string, from: number, to: number): EditorLinkTarget | null {
+  const tree = markdownLanguage.parser.parse(text)
+  const link = findEnclosingNode(tree.resolveInner(from, from === to ? -1 : 1), from, to, "Link")
+  return link ? linkTargetFromNode(link, (a, b) => text.slice(a, b)) : null
+}
+
+// 保存链接：target 为 null 时在选区（或光标）处新建，否则校验原文未变后原位改写。
+// 原选区（含光标）经变更映射保留下来——手机上从面板返回时不丢位置；
+// 不请求 scrollIntoView：选区本来就在可视区里，多一次滚动请求反而可能让页面跳动。
+export function applyLinkTarget(view: EditorView, target: EditorLinkTarget | null, label: string, url: string): boolean {
+  const { state } = view
+  if (state.readOnly) return false
+  const inserted = linkInsertion(target, label, url)
+  if (!inserted) return false
+  if (target && state.sliceDoc(target.from, target.to) !== target.source) return false
+  const range = target ?? state.selection.main
+  const changes = state.changes({ from: range.from, to: range.to, insert: inserted })
+  view.dispatch({
+    changes,
+    selection: state.selection.map(changes),
+    userEvent: "input.link",
+  })
+  view.focus()
+  return true
+}
+
+// 移除链接、保留文字；同样先校验原文，选区映射保留。
+export function removeLinkTarget(view: EditorView, target: EditorLinkTarget): boolean {
+  const { state } = view
+  if (state.readOnly) return false
+  if (state.sliceDoc(target.from, target.to) !== target.source) return false
+  const changes = state.changes({ from: target.from, to: target.to, insert: target.label })
+  view.dispatch({
+    changes,
+    selection: state.selection.map(changes),
+    userEvent: "input.link",
+  })
+  view.focus()
+  return true
 }
 
 // 单个 URL 粘到非空选区上时，包成 [选中文字](URL)。返回 true 表示已接管这次粘贴。

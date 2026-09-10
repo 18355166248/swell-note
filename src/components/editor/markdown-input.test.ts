@@ -5,7 +5,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { EditorState } from "@codemirror/state"
 import { EditorView, keymap } from "@codemirror/view"
 
-import { detectFormatState, focusExistingLinkUrl, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark } from "./markdown-input"
+import { applyLinkTarget, detectFormatState, focusExistingLinkUrl, linkTargetAt, linkTargetInText, markdownInputEnhancements, removeLinkTarget, sanitizeLinkUrl, toggleBlockFormat, toggleInlineMark } from "./markdown-input"
 
 function createView(doc: string, anchor: number, head = anchor) {
   const state = EditorState.create({
@@ -224,6 +224,177 @@ describe("focusExistingLinkUrl", () => {
     const view = createView(doc, doc.indexOf("笔记"))
     expect(focusExistingLinkUrl(view)).toBe(false)
     view.destroy()
+  })
+})
+
+// 移动端链接面板的读写路径：先按光标/点按位置取出链接结构，保存或移除时校验原文未变，
+// 选区（含光标）随变更映射保留，手机上从面板返回不丢位置。
+describe("linkTargetAt / applyLinkTarget / removeLinkTarget", () => {
+  it("extracts label and url from the link under the cursor", () => {
+    const doc = "这是 [已有链接](https://example.com) 结尾"
+    const view = createView(doc, doc.indexOf("有链接"))
+    const target = linkTargetAt(view.state, view.state.selection.main.head, view.state.selection.main.head)
+    expect(target).toEqual({
+      from: doc.indexOf("[已有链接]"),
+      label: "已有链接",
+      source: "[已有链接](https://example.com)",
+      to: doc.indexOf(") 结尾") + 1,
+      url: "https://example.com",
+    })
+    view.destroy()
+  })
+
+  it("returns null for wiki links, images and plain text", () => {
+    const doc = "[[双链]] ![图](a.png) 普通"
+    const view = createView(doc, 0)
+    expect(linkTargetAt(view.state, 2, 2)).toBeNull()
+    expect(linkTargetAt(view.state, doc.indexOf("图"), doc.indexOf("图"))).toBeNull()
+    expect(linkTargetAt(view.state, doc.indexOf("普通"), doc.indexOf("普通"))).toBeNull()
+    view.destroy()
+  })
+
+  it("creates a link from the current selection and keeps the selection mapped", () => {
+    const doc = "选我 其余"
+    const view = createView(doc, 0, 2)
+    expect(applyLinkTarget(view, null, "选我", " https://example.com/a b ")).toBe(true)
+    expect(view.state.doc.toString()).toBe("[选我](https://example.com/a%20b) 其余")
+    const selection = view.state.selection.main
+    // 原选区映射后罩住整段新链接源码（渲染态下可见部分就是链接文字）。
+    expect(view.state.sliceDoc(selection.from, selection.to)).toBe("[选我](https://example.com/a%20b)")
+    view.destroy()
+  })
+
+  it("rewrites an existing link in place", () => {
+    const doc = "这是 [旧文字](https://old.example.com) 结尾"
+    const view = createView(doc, doc.indexOf("旧文字"))
+    const target = linkTargetAt(view.state, view.state.selection.main.head, view.state.selection.main.head)!
+    expect(applyLinkTarget(view, target, "新文字", "https://new.example.com")).toBe(true)
+    expect(view.state.doc.toString()).toBe("这是 [新文字](https://new.example.com) 结尾")
+    view.destroy()
+  })
+
+  it("refuses to overwrite when the source changed while the panel was open", () => {
+    const doc = "这是 [旧文字](https://old.example.com) 结尾"
+    const view = createView(doc, doc.indexOf("旧文字"))
+    const target = linkTargetAt(view.state, view.state.selection.main.head, view.state.selection.main.head)!
+    view.dispatch({ changes: { from: doc.length, insert: "新内容" } })
+    expect(applyLinkTarget(view, { ...target, source: "被改过的原文" }, "新文字", "https://new.example.com")).toBe(false)
+    expect(removeLinkTarget(view, { ...target, source: "被改过的原文" })).toBe(false)
+    view.destroy()
+  })
+
+  it("removes the link and keeps the label text", () => {
+    const doc = "这是 [已有链接](https://example.com) 结尾"
+    const view = createView(doc, doc.indexOf("有链接"))
+    const target = linkTargetAt(view.state, view.state.selection.main.head, view.state.selection.main.head)!
+    expect(removeLinkTarget(view, target)).toBe(true)
+    expect(view.state.doc.toString()).toBe("这是 已有链接 结尾")
+    view.destroy()
+  })
+
+  it("rejects invalid labels and urls", () => {
+    const view = createView("普通文字", 2)
+    expect(applyLinkTarget(view, null, "带]括号", "https://example.com")).toBe(false)
+    expect(applyLinkTarget(view, null, "文字", "  ")).toBe(false)
+    expect(applyLinkTarget(view, null, "文字", "https://example.com/<x>")).toBe(false)
+    expect(view.state.doc.toString()).toBe("普通文字")
+    view.destroy()
+  })
+
+  it("sanitizes spaces and parentheses in urls", () => {
+    expect(sanitizeLinkUrl(" https://example.com/a (b) ")).toBe("https://example.com/a%20%28b%29")
+  })
+})
+
+// 尖括号写法（[文字](<地址>)，允许地址带空格）与 title 段（[文字](地址 "提示")）是合法 Markdown，
+// 面板不暴露这两个细节，但编辑保存必须原样补回，否则编辑一次链接就丢掉写法或提示。
+describe("bracketed urls and titles survive a panel edit", () => {
+  it("unwraps the angle brackets when reading and restores them when saving", () => {
+    const doc = "这是 [文字](<https://example.com/a b>) 结尾"
+    const view = createView(doc, doc.indexOf("文字"))
+    const target = linkTargetAt(view.state, view.state.selection.main.head, view.state.selection.main.head)!
+    expect(target.url).toBe("https://example.com/a b")
+    expect(target.bracketed).toBe(true)
+    expect(applyLinkTarget(view, target, "新文字", "https://example.com/c d")).toBe(true)
+    expect(view.state.doc.toString()).toBe("这是 [新文字](<https://example.com/c d>) 结尾")
+    view.destroy()
+  })
+
+  it("keeps the title when only the label and url are edited", () => {
+    const doc = "这是 [文字](https://example.com \"提示\") 结尾"
+    const view = createView(doc, doc.indexOf("文字"))
+    const target = linkTargetAt(view.state, view.state.selection.main.head, view.state.selection.main.head)!
+    expect(target.title).toBe("\"提示\"")
+    expect(target.url).toBe("https://example.com")
+    expect(applyLinkTarget(view, target, "新文字", "https://new.example.com")).toBe(true)
+    expect(view.state.doc.toString()).toBe("这是 [新文字](https://new.example.com \"提示\") 结尾")
+    view.destroy()
+  })
+
+  it("keeps both on a bracketed url with a title", () => {
+    const doc = "[文字](<https://example.com/a b> \"提 示\")"
+    const view = createView(doc, 2)
+    const target = linkTargetAt(view.state, 2, 2)!
+    expect(target).toMatchObject({ bracketed: true, title: "\"提 示\"", url: "https://example.com/a b" })
+    expect(applyLinkTarget(view, target, "改名", "https://example.com/x")).toBe(true)
+    expect(view.state.doc.toString()).toBe("[改名](<https://example.com/x> \"提 示\")")
+    view.destroy()
+  })
+
+  it("removeLinkTarget drops the brackets and title along with the link", () => {
+    const doc = "这是 [文字](<https://example.com> \"提示\") 结尾"
+    const view = createView(doc, doc.indexOf("文字"))
+    const target = linkTargetAt(view.state, view.state.selection.main.head, view.state.selection.main.head)!
+    expect(removeLinkTarget(view, target)).toBe(true)
+    expect(view.state.doc.toString()).toBe("这是 文字 结尾")
+    view.destroy()
+  })
+})
+
+// 单元格 textarea 是纯文本、没有语法树，链接结构用正则从文本里取；与 linkTargetAt 同构，
+// 覆盖选区/光标的第一个链接就是目标，覆盖不到就新建。
+describe("linkTargetInText", () => {
+  it("finds the link covering the selection in plain text", () => {
+    const text = "前缀 [文字](https://example.com) 后缀 [二](https://two.example.com)"
+    const from = text.indexOf("文字")
+    expect(linkTargetInText(text, from, from + 2)).toEqual({
+      from: text.indexOf("[文字]"),
+      label: "文字",
+      source: "[文字](https://example.com)",
+      to: text.indexOf(") 后缀") + 1,
+      url: "https://example.com",
+    })
+  })
+
+  it("parses bracketed urls and titles the same way as the syntax-tree path", () => {
+    const text = "[文字](<https://example.com/a b> \"提 示\")"
+    expect(linkTargetInText(text, 2, 2)).toMatchObject({
+      bracketed: true,
+      label: "文字",
+      source: text,
+      title: "\"提 示\"",
+      url: "https://example.com/a b",
+    })
+  })
+
+  it("returns null when the cursor is outside any link", () => {
+    const text = "前缀 [文字](https://example.com) 后缀"
+    expect(linkTargetInText(text, 0, 1)).toBeNull()
+    expect(linkTargetInText(text, text.length, text.length)).toBeNull()
+  })
+
+  // 与正文同一份解析器：URL 里的平衡括号合法，图片与行内代码不是可编辑的链接。
+  it("recognizes urls with balanced parens, and ignores images and inline code", () => {
+    const parens = "[文档](https://example.com/a_(b))"
+    expect(linkTargetInText(parens, 2, 2)).toMatchObject({
+      label: "文档",
+      source: parens,
+      url: "https://example.com/a_(b)",
+    })
+    const image = "![图片](https://example.com/a.png)"
+    expect(linkTargetInText(image, 3, 3)).toBeNull()
+    const code = "`[示例](https://example.com)`"
+    expect(linkTargetInText(code, 4, 4)).toBeNull()
   })
 })
 
