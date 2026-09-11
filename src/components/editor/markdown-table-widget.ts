@@ -1409,6 +1409,12 @@ export class TableWidget extends WidgetType {
     if (!drag?.active) return
     // 拖选落定：紧随的 click 必须吞掉，否则又会进入编辑并清掉选区。
     session.suppressClick = true
+    // 跨格拖选时 click 派发到按下/抬起位置的公共祖先而不是某个单元格，beginEditing
+    // 消费不到这次抑制；若任其残留，用户下一次真正的点击会被误吞。click 先于定时器
+    // 派发，因此在当前手势结束后复位，只吞属于自己手势的那一次。
+    window.setTimeout(() => {
+      this.session().suppressClick = false
+    }, 0)
     const cell = this.cellFromPoint(wrapper, drag.lastX, drag.lastY)
     if (cell) this.setCellRange(wrapper, table, drag.anchor, cell)
     else this.updateFloatingBar(wrapper, table, this.normalizedSessionRange())
