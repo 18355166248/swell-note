@@ -1,0 +1,19 @@
+src/components/editor/markdown-table-widget.ts
+  s_a0c0e6928a3750::t_91769314ed4d67 1412-1417
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "34d6205200e8972778becdc236ec603277973b45",
+  "prompts": {},
+  "sessions": {
+    "s_a0c0e6928a3750": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d178678a-0d4f-4680-8057-c66c5e5fe360",
+        "model": "kimi-k3"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
