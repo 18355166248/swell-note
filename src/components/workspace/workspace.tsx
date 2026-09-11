@@ -1843,7 +1843,8 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
       const { errors, markdown } = await onInsertAttachments(files)
       // 部分文件失败时仍插入已写入成功的附件，避免用户重复拖拽整批文件。
       if (markdown) {
-        // 书签绑定原编辑器，重命名仍可插入；切换笔记/模式导致实例卸载时回退原笔记追加。
+        // 书签绑定原编辑器，重命名仍可插入；切换笔记/模式导致实例卸载时回退原笔记追加，
+        // 此时本组件可能已卸载，「追加到末尾」的提示由执行追加的 formatNoteById 负责。
         if (!insertion?.insert(markdown)) onFormatNote(uploadNoteId, markdown)
       }
       setAttachmentError(errors.length > 0 ? errors.join("；") : null)

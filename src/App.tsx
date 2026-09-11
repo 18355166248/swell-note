@@ -1189,6 +1189,9 @@ function App() {
     } else {
       scheduleLocalSave(note, content)
     }
+    // 走到这里一定是附件回退：原编辑器已卸载，插入位置从书签改成了末尾追加。
+    // 发起上传的编辑器组件可能已卸载，提示放在跨笔记切换存活的库级横幅上，不伪装成原位成功。
+    setVaultError(`「${note.title}」编辑器已切换，附件追加到了笔记末尾`)
   }
 
   const startVaultIndex = (adapter: VaultAdapter, files: VaultFileEntry[]) => {
