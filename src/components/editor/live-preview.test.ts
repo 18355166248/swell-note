@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
+import { history, undo } from "@codemirror/commands"
 import { forceParsing, syntaxTree } from "@codemirror/language"
 import { EditorState } from "@codemirror/state"
 import { DecorationSet, EditorView } from "@codemirror/view"
@@ -157,6 +158,90 @@ describe("markdown live preview", () => {
     // 同一段里的其他图片不受影响，仍然是渲染态。
     expect(images.map((image) => image.source)).toContain("../attachments/icon.png")
   })
+
+  // 图片工具条（查看/重试/编辑引用/尺寸/更换/删除）直接改写当前引用的源码，
+  // 以下用例锁定「只动目标引用、操作可撤销」的约定。jsdom 不加载真实图片，
+  // 工具条不依赖图片加载成功即可出现。
+  describe("图片工具条操作", () => {
+    const imageRefDoc = "正文\n\n![图](a.png)\n\n同图第二处 ![图](a.png) 结尾"
+
+    async function createImageView(content = imageRefDoc) {
+      const view = new EditorView({
+        parent: document.body,
+        state: EditorState.create({
+          doc: content,
+          extensions: [markdown({ base: markdownLanguage }), history(), markdownLivePreview({})],
+          selection: { anchor: 0 },
+        }),
+      })
+      await settle()
+      return view
+    }
+
+    function toolButton(view: EditorView, label: string, hostIndex = 0) {
+      const host = view.dom.querySelectorAll(".cm-md-image")[hostIndex]
+      const button = Array.from(host.querySelectorAll<HTMLButtonElement>(".cm-md-image-tools button"))
+        .find((candidate) => candidate.textContent === label)
+      if (!button) throw new Error(`未找到工具按钮：${label}`)
+      return button
+    }
+
+    it("删除只移除当前引用，同图其他引用保留，一步撤销恢复", async () => {
+      const view = await createImageView()
+      toolButton(view, "删除").click()
+      expect(view.state.doc.toString()).toBe("正文\n\n\n\n同图第二处 ![图](a.png) 结尾")
+      undo(view)
+      expect(view.state.doc.toString()).toBe(imageRefDoc)
+      view.destroy()
+    })
+
+    it("调整尺寸写入宽度标题，一步撤销恢复", async () => {
+      const view = await createImageView()
+      const host = view.dom.querySelector(".cm-md-image")!
+      const sizes = host.querySelector<HTMLSelectElement>(".cm-md-image-tools select")!
+      sizes.value = "480"
+      sizes.dispatchEvent(new Event("change"))
+      expect(view.state.doc.toString()).toBe('正文\n\n![图](a.png "480")\n\n同图第二处 ![图](a.png) 结尾')
+      undo(view)
+      expect(view.state.doc.toString()).toBe(imageRefDoc)
+      view.destroy()
+    })
+
+    it("更换路径只改当前引用，非法协议被拒绝，撤销恢复", async () => {
+      const view = await createImageView()
+      toolButton(view, "更换").click()
+      const host = view.dom.querySelector(".cm-md-image")!
+      const input = host.querySelector<HTMLInputElement>(".cm-md-image-tools input")!
+      input.value = "javascript:alert(1)"
+      toolButton(view, "应用").click()
+      expect(view.state.doc.toString()).toBe(imageRefDoc)
+
+      input.value = "b 图.png"
+      toolButton(view, "应用").click()
+      // 空格与括号按 URL 规则编码，其余字符保持标准 Markdown 相对引用。
+      expect(view.state.doc.toString()).toBe("正文\n\n![图](b%20图.png)\n\n同图第二处 ![图](a.png) 结尾")
+      undo(view)
+      expect(view.state.doc.toString()).toBe(imageRefDoc)
+      view.destroy()
+    })
+
+    it("只读笔记不提供编辑入口，仅保留查看与重试", async () => {
+      const view = new EditorView({
+        parent: document.body,
+        state: EditorState.create({
+          doc: imageRefDoc,
+          extensions: [markdown({ base: markdownLanguage }), history(), markdownLivePreview({}), EditorState.readOnly.of(true)],
+          selection: { anchor: 0 },
+        }),
+      })
+      await settle()
+      const labels = Array.from(view.dom.querySelector<HTMLElement>(".cm-md-image")!.querySelectorAll<HTMLButtonElement>(".cm-md-image-tools button"))
+        .map((button) => button.textContent)
+      expect(labels).toEqual(["查看", "重试"])
+      view.destroy()
+    })
+  })
+
 
   it("styles headings, quotes and hides inline marks away from the cursor", async () => {
     const view = createView({ anchor: 0 })

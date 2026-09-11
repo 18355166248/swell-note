@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import { MAX_ATTACHMENT_BYTES } from "./attachment-path"
 import {
+  appendBlockMarkdown,
   canWriteVaultAttachments,
   writeVaultAttachments,
   type AttachmentSource,
@@ -121,5 +122,29 @@ describe("writeVaultAttachments", () => {
 
     expect(written[0]).toMatch(/^\/SwellNote\/attachments\/图片-\d{14}\.png$/)
     expect(result.markdown).toMatch(/^!\[图片\.png]\(\.\.\/attachments\/图片-\d{14}\.png\)\n$/)
+  })
+})
+
+// 切笔记 / 切阅读模式后迟到的附件插入回退为「追加到原笔记末尾」，
+// 必须与既有正文用空行隔开，否则粘进末行段落、被表格吞并。
+describe("appendBlockMarkdown", () => {
+  const image = "![图](attachments/a.png)\n"
+
+  it("末行是普通段落时补空行分隔", () => {
+    expect(appendBlockMarkdown("第一段\n\n第二段", image)).toBe("第一段\n\n第二段\n\n![图](attachments/a.png)\n")
+  })
+
+  it("末行是表格行时不被并进表格", () => {
+    const table = "| A | B |\n| --- | --- |\n| 1 | 2 |"
+    expect(appendBlockMarkdown(table, image)).toBe(`${table}\n\n${image}`)
+    expect(appendBlockMarkdown(`${table}\n`, image)).toBe(`${table}\n\n${image}`)
+  })
+
+  it("正文已以空行结尾时不再叠加空行", () => {
+    expect(appendBlockMarkdown("第一段\n\n", image)).toBe(`第一段\n\n${image}`)
+  })
+
+  it("空正文直接写入", () => {
+    expect(appendBlockMarkdown("", image)).toBe(image)
   })
 })

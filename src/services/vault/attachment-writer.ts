@@ -32,6 +32,16 @@ export function canWriteVaultAttachments(adapter: VaultAdapter | null | undefine
   return Boolean(adapter?.createBinaryFile && !adapter.readOnly)
 }
 
+// 迟到的附件插入（切笔记/切阅读模式后）回退为追加到笔记末尾：块级 Markdown 与既有正文
+// 之间必须有空行。末行是普通段落时直接拼接会粘进同一段；末行是表格行时少一个空行
+// 会被 GFM 并进表格，图片看似丢失。
+export function appendBlockMarkdown(content: string, markdown: string) {
+  if (!content) return markdown
+  if (content.endsWith("\n\n")) return content + markdown
+  if (content.endsWith("\n")) return `${content}\n${markdown}`
+  return `${content}\n\n${markdown}`
+}
+
 export async function writeVaultAttachments(
   adapter: AttachmentWriter,
   notePath: string,

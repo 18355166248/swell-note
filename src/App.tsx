@@ -38,6 +38,7 @@ import {
 } from "@/services/vault/vault-adapter"
 import { resolveVaultAssetPath } from "@/services/vault/vault-path"
 import {
+  appendBlockMarkdown,
   canWriteVaultAttachments,
   writeVaultAttachments,
 } from "@/services/vault/attachment-writer"
@@ -1159,7 +1160,9 @@ function App() {
   const formatNoteById = (noteId: string, syntax: string) => {
     const note = notesRef.current.find((candidate) => candidate.id === noteId)
     if (!note || !syntax || note.readOnly) return
-    const content = `${note.content}${syntax}`
+    // 追加的是块级内容（图片/附件 Markdown）：与既有正文之间补空行，
+    // 避免粘进末行段落或被末尾表格吞并。
+    const content = appendBlockMarkdown(note.content, syntax)
     if (activeCacheMeta) {
       void saveNoteVersion({ cacheId: activeCacheMeta.id, content: note.content, noteId, reason: "编辑前", title: note.title })
         .catch(() => undefined)

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { EditorState } from "@codemirror/state"
+import { EditorView } from "@codemirror/view"
 
 import type { MarkdownEditorHandle } from "./markdown-editor"
 import MarkdownEditor, { findPlainTextMatches, findTableWrapperAtLine, formatToolbarText, paragraphSeparatorAtEnd } from "./markdown-editor"
@@ -41,7 +42,7 @@ describe("MarkdownEditor", () => {
       handle.current!.insertText("更长的开头")
       expect(insertion.insert("附件")).toBe(true)
     })
-    expect(onChange).toHaveBeenLastCalledWith("更长的开头 附件 结尾", expect.anything())
+    expect(onChange).toHaveBeenLastCalledWith("更长的开头 附件目标 结尾", expect.anything())
   })
 
   it("rejects a late attachment after its editor was unmounted", () => {
@@ -50,6 +51,104 @@ describe("MarkdownEditor", () => {
     const insertion = handle.current!.captureInsertion()
     act(() => { root!.render(<div />) })
     expect(insertion.insert("附件")).toBe(false)
+  })
+
+  // 附件书签（captureInsertion → 异步完成后 insert）的行为约定，逐条对应审计场景。
+  describe("附件插入书签", () => {
+    function editorView() {
+      const view = EditorView.findFromDOM(container!.querySelector<HTMLElement>(".cm-editor")!)
+      if (!view) throw new Error("编辑器未挂载")
+      return view
+    }
+
+    it("有文字选区时插入图片不删除选中文字，插入点在选区起点", () => {
+      const handle = createRef<MarkdownEditorHandle>()
+      const onChange = vi.fn()
+      mount(<MarkdownEditor onChange={onChange} ref={handle} value="甲乙丙丁" />)
+      act(() => { handle.current!.findText("乙丙") })
+      const insertion = handle.current!.captureInsertion()
+      act(() => { expect(insertion.insert("![图](x.png)\n")).toBe(true) })
+      expect(onChange).toHaveBeenLastCalledWith("甲![图](x.png)\n乙丙丁", expect.anything())
+    })
+
+    it("等待期间光标移到别处继续写作，插入完成不打断当前光标", () => {
+      const handle = createRef<MarkdownEditorHandle>()
+      mount(<MarkdownEditor onChange={() => {}} ref={handle} value={"开头 目标 结尾\n\n第二段"} />)
+      act(() => { handle.current!.findText("目标") })
+      const insertion = handle.current!.captureInsertion()
+      act(() => { handle.current!.findText("第二段", "next", true) })
+      const before = editorView().state.selection.main.head
+      act(() => { expect(insertion.insert("![图](x.png)\n")).toBe(true) })
+      const state = editorView().state
+      // 光标留在「第二段」所在行（位置随插入映射前移），不跳回插入点。
+      expect(state.doc.lineAt(state.selection.main.head).text).toBe("第二段")
+      expect(state.selection.main.head).toBeGreaterThan(before)
+    })
+
+    it("光标仍停在插入点时，完成后光标落在图片之后", () => {
+      const handle = createRef<MarkdownEditorHandle>()
+      mount(<MarkdownEditor onChange={() => {}} ref={handle} value="开头 目标 结尾" />)
+      act(() => { handle.current!.findText("目标") })
+      const insertion = handle.current!.captureInsertion()
+      const text = "![图](x.png)\n"
+      act(() => { expect(insertion.insert(text)).toBe(true) })
+      expect(editorView().state.selection.main.head).toBe(3 + text.length)
+    })
+
+    it("等待期间删除原目标段落，插入落在映射后的原位置", () => {
+      const handle = createRef<MarkdownEditorHandle>()
+      const onChange = vi.fn()
+      mount(<MarkdownEditor onChange={onChange} ref={handle} value="开头 目标 结尾" />)
+      act(() => { handle.current!.findText("目标") })
+      const insertion = handle.current!.captureInsertion()
+      act(() => { editorView().dispatch({ changes: { from: 3, to: 6 } }) })
+      act(() => { expect(insertion.insert("![图](x.png)\n")).toBe(true) })
+      expect(onChange).toHaveBeenLastCalledWith("开头 ![图](x.png)\n结尾", expect.anything())
+    })
+
+    it("多张图片一次插入作为一步撤销与重做", () => {
+      const handle = createRef<MarkdownEditorHandle>()
+      mount(<MarkdownEditor onChange={() => {}} ref={handle} value="正文" />)
+      act(() => { handle.current!.findText("正文") })
+      const insertion = handle.current!.captureInsertion()
+      const images = "![甲](a.png)\n\n![乙](b.png)\n"
+      act(() => { expect(insertion.insert(images)).toBe(true) })
+      act(() => { handle.current!.undo() })
+      expect(editorView().state.doc.toString()).toBe("正文")
+      act(() => { handle.current!.redo() })
+      expect(editorView().state.doc.toString()).toBe(`${images}正文`)
+    })
+
+    it("撤销插入不连带撤销插入前的输入", () => {
+      const handle = createRef<MarkdownEditorHandle>()
+      mount(<MarkdownEditor onChange={() => {}} ref={handle} value="正文" />)
+      // 模拟用户在插图前刚敲过一个字（与随后的附件插入落在同一撤销时间窗内）。
+      act(() => { editorView().dispatch({ changes: { from: 2, insert: "新" }, selection: { anchor: 3 }, userEvent: "input.type" }) })
+      const insertion = handle.current!.captureInsertion()
+      act(() => { expect(insertion.insert("![图](x.png)\n")).toBe(true) })
+      act(() => { handle.current!.undo() })
+      expect(editorView().state.doc.toString()).toBe("正文新")
+    })
+
+    it("同一个书签只能落笔一次，迟到的重复回调不会重复插入", () => {
+      const handle = createRef<MarkdownEditorHandle>()
+      const onChange = vi.fn()
+      mount(<MarkdownEditor onChange={onChange} ref={handle} value="正文" />)
+      const insertion = handle.current!.captureInsertion()
+      act(() => { expect(insertion.insert("![图](x.png)\n")).toBe(true) })
+      expect(insertion.insert("![图](x.png)\n")).toBe(false)
+      expect(onChange).toHaveBeenLastCalledWith("![图](x.png)\n正文", expect.anything())
+    })
+
+    it("支持显式插入位置（文件拖入的落点），与旧光标无关", () => {
+      const handle = createRef<MarkdownEditorHandle>()
+      const onChange = vi.fn()
+      mount(<MarkdownEditor onChange={onChange} ref={handle} value={"第一段\n\n第二段"} />)
+      act(() => { handle.current!.findText("第一段") })
+      const insertion = handle.current!.captureInsertion(5)
+      act(() => { expect(insertion.insert("![图](x.png)\n")).toBe(true) })
+      expect(onChange).toHaveBeenLastCalledWith("第一段\n\n![图](x.png)\n第二段", expect.anything())
+    })
   })
 
   it("separates an image from a table even with following document content", () => {

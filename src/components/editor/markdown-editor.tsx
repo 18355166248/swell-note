@@ -33,7 +33,8 @@ export type MarkdownEditorHandle = {
   // 链接面板：target 为 null 表示新建（applyLink 用当前选区/光标），否则改写该链接；
   // cell 存在时写入单元格 textarea（面板期间单元格靠 contextMenuActive 标记保持挂载）。
   applyLink: (target: EditorLinkTarget | null, label: string, url: string, cell?: LinkCellSnapshot | null) => boolean
-  captureInsertion: () => { insert: (text: string) => boolean; dispose: () => void }
+  // position 是文件拖入的落点（文档偏移）；省略时插入点为表格末尾或当前选区起点。
+  captureInsertion: (position?: number) => { insert: (text: string) => boolean; dispose: () => void }
   collapseSelection: () => void
   copySelection: () => Promise<boolean>
   cutSelection: () => Promise<boolean>
@@ -104,7 +105,7 @@ type MarkdownEditorProps = {
   onCursorChange?: (line: number, column: number) => void
   // 光标 / 选区的格式状态（工具栏高亮）；表格单元格编辑时由单元格汇报行内格式。
   onFormatStateChange?: (state: EditorFormatState | null) => void
-  onInsertFiles?: (files: File[]) => void
+  onInsertFiles?: (files: File[], position?: number) => void
   // 移动端点按已有链接时不直接跳转，交给宿主弹出「打开 / 编辑 / 移除」菜单。
   onLinkMenu?: (tap: EditorLinkTap) => void
   onOpenWikiLink?: (target: string) => void
@@ -119,7 +120,7 @@ type MarkdownEditorProps = {
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
   function MarkdownEditor({ sessionKey, onHistoryChange, onEditingTargetChange, onFormatStateChange, onLinkMenu, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange, readOnly = false, storageKey, value }, ref) {
     const editorRef = useRef<ReactCodeMirrorRef>(null)
-    const insertionMarks = useRef(new Set<{ from: number; to: number }>())
+    const insertionMarks = useRef(new Set<{ anchor?: number; from: number; head?: number; to: number }>())
     const [initialState] = useState(() => restoreEditorSession(sessionKey, value))
     const [theme, setTheme] = useState<"dark" | "light">(() => document.documentElement.classList.contains("dark") ? "dark" : "light")
     useEffect(() => {
@@ -206,6 +207,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         if (update.docChanged) for (const mark of insertionMarks.current) {
           mark.from = update.changes.mapPos(mark.from, 1)
           mark.to = Math.max(mark.from, update.changes.mapPos(mark.to, -1))
+          // 「选区是否保持不动」的对照点随同一事务映射，用户在书签前输入不会误判成动过选区。
+          if (mark.anchor !== undefined) mark.anchor = update.changes.mapPos(mark.anchor, 1)
+          if (mark.head !== undefined) mark.head = update.changes.mapPos(mark.head, -1)
         }
         rememberEditorSession(sessionKey, update.state)
         if (update.docChanged) handlers.current.onHistoryChange?.(undoDepth(update.state) > 0, redoDepth(update.state) > 0)
@@ -250,12 +254,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           view.focus()
           return true
         },
-        drop(event) {
+        drop(event, view) {
           const onInsertFiles = handlers.current.onInsertFiles
           const files = collectTransferFiles(event.dataTransfer)
           if (!onInsertFiles || readOnly || files.length === 0) return false
           event.preventDefault()
-          onInsertFiles(files)
+          // 附件落在拖放指向的位置（与 CodeMirror dropCursor 的指示一致），不用旧光标。
+          const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false)
+          onInsertFiles(files, position ?? undefined)
           return true
         },
         paste(event, view) {
@@ -355,7 +361,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         if (cell) return applyCellLink(view, cell, target, label, url)
         return applyLinkTarget(view, target, label, url)
       },
-      captureInsertion() {
+      captureInsertion(position) {
         const view = editorRef.current?.view
         const target = view ? activeTableEdit(view) : undefined
         const tableEnd = target?.input.closest<HTMLElement>(".cm-md-table-wrap")?.dataset.tableTo
@@ -363,18 +369,34 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         target?.commit()
         const range = view?.state.selection.main
         const end = tableEnd ? Number(tableEnd) + (view?.state.doc.length ?? 0) - oldLength : undefined
-        const mark = { from: end ?? range?.from ?? 0, to: end ?? range?.to ?? 0 }
+        // 书签永远是零宽插入点：有选区时取选区起点，选中文字原样保留；
+        // position 是文件拖入的落点坐标换算结果，与当前光标无关。
+        const at = end ?? position ?? range?.from ?? 0
+        const mark = { anchor: end === undefined && position === undefined ? range?.anchor : undefined, from: at, head: end === undefined && position === undefined ? range?.head : undefined, to: at }
         // 上传期间按每次文档变化映射书签，单纯移动光标不会改变上传发起的位置。
         insertionMarks.current.add(mark)
         const dispose = () => { insertionMarks.current.delete(mark) }
+        let settled = false
         return { dispose, insert(text: string) {
           dispose()
+          // 书签只许落笔一次：迟到的重复回调（重试、双回调）不能重复插入。
+          if (settled) return false
+          settled = true
           if (!view?.dom.isConnected || view.state.readOnly) return false
           const { from, to } = mark
           const gap = paragraphSeparatorAt(view.state, from)
           const insert = "\n".repeat(Math.max(0, gap.length - (text.match(/^\n*/)?.[0].length ?? 0))) + text
-          view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: "input.attachment", scrollIntoView: true })
-          view.focus()
+          // 用户没动过选区（粘贴后等待）才把光标带到图片之后并滚动聚焦；
+          // 等待期间已移到别处写作时只做正文变更，选区随事务映射，不打断输入。
+          const selectionUntouched = mark.anchor !== undefined
+            && view.state.selection.main.anchor === mark.anchor
+            && view.state.selection.main.head === mark.head
+          if (selectionUntouched) {
+            view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: "input.attachment", scrollIntoView: true })
+            view.focus()
+          } else {
+            view.dispatch({ changes: { from, to, insert }, userEvent: "input.attachment" })
+          }
           return true
         } }
       },

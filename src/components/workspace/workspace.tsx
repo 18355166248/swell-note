@@ -1827,10 +1827,15 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     else if (sheet.href) void openExternalUrl(sheet.href)
   }, [onOpenWikiLink])
 
-  const handleInsertFiles = useCallback(async (files: File[]) => {
-    if (files.length === 0 || readOnly || !canInsertAttachment || attachmentBusyRef.current) return
+  const handleInsertFiles = useCallback(async (files: File[], position?: number) => {
+    if (files.length === 0 || readOnly || !canInsertAttachment) return
+    // 远端写入要求串行；并发的第二批不排队也不静默吞掉，明确提示后由用户重试。
+    if (attachmentBusyRef.current) {
+      setAttachmentError("上一批附件仍在写入，请完成后再试")
+      return
+    }
     const uploadNoteId = note.id
-    const insertion = editorRef.current?.captureInsertion()
+    const insertion = editorRef.current?.captureInsertion(position)
     attachmentBusyRef.current = true
     setAttachmentError(null)
     setInsertingAttachment(true)
@@ -2376,7 +2381,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
                     preview: buildNotePreview(content, note.format),
                   })}
                   onCursorChange={(line, column) => setCursorPosition({ column, line })}
-                  onInsertFiles={canInsertAttachment && !insertingAttachment ? handleInsertFiles : undefined}
+                  onInsertFiles={canInsertAttachment ? handleInsertFiles : undefined}
                   onLinkMenu={(tap) => setLinkSheet({
                     hadFocus: tap.hadFocus,
                     href: tap.href,
