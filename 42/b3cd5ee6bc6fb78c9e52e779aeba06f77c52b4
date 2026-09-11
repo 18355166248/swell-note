@@ -1,0 +1,46 @@
+src/components/editor/markdown-table-widget.ts
+  s_f1116b8a9a6f8b::t_03bf160bfb462e 1091-1093
+  s_f1116b8a9a6f8b::t_58640fa2db2c86 1423-1437
+  s_f1116b8a9a6f8b::t_5e99107eacc7d1 1
+  s_f1116b8a9a6f8b::t_d5d02bc37fa456 206-227
+  s_f1116b8a9a6f8b::t_f4472a9de8c364 1512-1530,1535,1541
+docs/editor-audit-2026-09-10/table-editing-2026-09-11.md
+  s_f1116b8a9a6f8b::t_ee027c36059f16 1-91
+e2e/table-editing.spec.ts
+  s_f1116b8a9a6f8b::t_05287cdc87ba2f 380
+  s_f1116b8a9a6f8b::t_570557188a601c 162,281,336,353,382
+  s_f1116b8a9a6f8b::t_0b25dcad2a56e5 408-415
+  s_f1116b8a9a6f8b::t_482899e0773dd4 94-107
+  s_f1116b8a9a6f8b::t_8a20427d2ca683 345-352,354-377,383-407,416
+  s_f1116b8a9a6f8b::t_32d6bdbc4d4636 378-379,381
+src/components/editor/markdown-table-widget.test.ts
+  s_f1116b8a9a6f8b::t_41a0537fb68eeb 2
+  s_f1116b8a9a6f8b::t_410028f2ecff6b 10
+  s_f1116b8a9a6f8b::t_1a84d2734e2b9f 236,238-240,249,251-256
+  s_f1116b8a9a6f8b::t_f0d0172870a5c9 243-244
+  s_f1116b8a9a6f8b::t_eea9adb113da8a 258-295
+  s_f1116b8a9a6f8b::t_216e81f7bfa6eb 127-128,135,139,143,149,151,153-154,158,162,164-165
+  s_f1116b8a9a6f8b::t_999bf6132d80ce 1,3-9,11,17-35,37-78,88-126,129-134,136-138,140-142,144-148,150,152,155-157,159-161,163,166-174,178-198,200,203-208,213-220,224-235,237,241-242,245-248,250,257,296-304,307-311,313,317,320-327,329-330,333,347-354,357-359,361-362,367,370-371
+  s_f1116b8a9a6f8b::t_e89d5d7781f171 36
+  s_f1116b8a9a6f8b::t_f683e36a556a8d 175-177
+  s_f1116b8a9a6f8b::t_e31e8487306691 199,201-202,209-212,221-223
+  s_f1116b8a9a6f8b::t_f1f7837b8d3507 305-306,312,314-316,318-319,328,331-332,334-346,355-356,360,363-366,368-369
+  s_f1116b8a9a6f8b::t_523f20c5082ccd 12-16
+  s_f1116b8a9a6f8b::t_e81e8a38ea05ce 79-87
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "42b3cd5ee6bc6fb78c9e52e779aeba06f77c52b4",
+  "prompts": {},
+  "sessions": {
+    "s_f1116b8a9a6f8b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4a4ecf85-ef70-4a3d-aaaf-ce93ea9716b4",
+        "model": "kimi-k3"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
