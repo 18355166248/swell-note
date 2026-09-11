@@ -14,28 +14,56 @@
 .markdown-editor-shell .cm-md-table-wrap[data-overflow="true"]::after { position: absolute; z-index: 2; top: 1px; bottom: 1px; width: 24px; content: ""; pointer-events: none; }
 .markdown-editor-shell .cm-md-table-wrap[data-overflow="true"][data-at-start="false"]::before { left: 1px; background: linear-gradient(90deg,color-mix(in oklab,var(--background) 78%,transparent),transparent); }
 .markdown-editor-shell .cm-md-table-wrap[data-overflow="true"][data-at-end="false"]::after { right: 1px; background: linear-gradient(270deg,color-mix(in oklab,var(--background) 78%,transparent),transparent); }
-/* 工具条默认收起为一条细 grip，悬停、聚焦进表格、选中单元格或拖选时才展开，
-   不再每张表常驻两行操作区；仍放在横向滚动层外，随编辑区纵向滚动吸顶，
-   并由当前表格边界限制停留范围，长表格底部也能直接操作行列。 */
-.markdown-editor-shell .cm-md-table-toolbar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; min-width: 0; max-height: 10px; align-items: center; gap: 4px; border-bottom: 1px solid transparent; border-radius: 8px 8px 0 0; background: var(--panel-soft); padding: 0 6px; overflow: hidden; cursor: pointer; transition: max-height 140ms ease, padding 140ms ease, border-color 140ms ease; }
+/* 工具条细条 grip 恒定占位（吸顶保留），悬停、聚焦进表格、选中单元格或拖选时
+   展开的是脱离文档流的浮层，展开/收起只做透明度与位移动画，没有任何布局推移；
+   浮层由 sticky 细条携带，长表格滚动时跟随吸顶。
+   展开方向默认上飘、盖住表格上方内容：任何悬停/点击路径下表格本身的单元格
+   都不会被浮层按钮截获。仅当上方空间不足（吸顶或贴近滚动区顶部，由 widget
+   置 data-toolbar-no-room-above）才改为下挂，此时悬停/聚焦/选中等被动触发
+   全部抑制，只认悬停细条或点按细条的显式展开——下挂浮层会盖住顶部可见行，
+   被动展开必然截获对这些行的点击。
+   细条用 flex 居中抓手：抓手若用 margin 定位，上外边距会穿透细条塌陷到
+   表格容器（细条不能再以 overflow:hidden 建 BFC，否则浮层被裁切），
+   展开时抓手消失就会产生 3px 的布局抖动。 */
+.markdown-editor-shell .cm-md-table-toolbar { position: sticky; top: 0; z-index: 5; display: flex; height: 10px; align-items: center; justify-content: center; border-radius: 8px 8px 0 0; background: var(--panel-soft); cursor: pointer; }
 /* 收起态的抓手：提示这里可以展开。 */
-.markdown-editor-shell .cm-md-table-toolbar::before { display: block; width: 40px; height: 3px; margin: 3px auto; border-radius: 2px; background: var(--border); content: ""; flex: none; }
-.markdown-editor-shell .cm-md-table-wrap[data-table-active="true"] .cm-md-table-toolbar,
-.markdown-editor-shell .cm-md-table-wrap[data-range-selecting="true"] .cm-md-table-toolbar { max-height: 96px; border-bottom-color: var(--border); padding: 4px 6px; cursor: default; }
+.markdown-editor-shell .cm-md-table-toolbar::before { display: block; width: 40px; height: 3px; border-radius: 2px; background: var(--border); content: ""; flex: none; }
+/* 浮层默认上飘。整体 pointer-events: none，空白处点击穿透到下方内容；
+   按钮与菜单触发器恢复可点。
+   宽度随内容（min-width 兜底与表格同宽）：内容宽的表格容器只有一两百像素，
+   与容器同宽会让按钮换行成三四行。 */
+.markdown-editor-shell .cm-md-table-toolbar-panel { position: absolute; bottom: calc(100% + 2px); left: 0; display: flex; flex-wrap: wrap; box-sizing: border-box; width: max-content; min-width: 100%; max-width: calc(100vw - 48px); align-items: center; gap: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--popover); box-shadow: 0 10px 30px rgb(15 23 42 / 14%); padding: 4px 6px; opacity: 0; visibility: hidden; transform: translateY(2px); transition: opacity 140ms ease, transform 140ms ease, visibility 140ms; pointer-events: none; cursor: default; }
+.markdown-editor-shell .cm-md-table-toolbar-panel :is(button, summary) { pointer-events: auto; }
+/* 上方空间不足时下挂（widget 滚动时测量并置标记）。 */
+.markdown-editor-shell .cm-md-table-wrap[data-toolbar-no-room-above="true"] .cm-md-table-toolbar-panel { top: calc(100% + 2px); bottom: auto; transform: translateY(-2px); }
+/* 下挂态的显式展开：悬停细条/浮层本身（精确指针）或点按细条置的
+   data-table-active。被动触发（悬停表格、聚焦、选中、拖选）在下挂态
+   一律不展开，避免浮层截获对被盖住的顶部行的点击。 */
+.markdown-editor-shell .cm-md-table-wrap:not([data-toolbar-no-room-above="true"])[data-table-active="true"] .cm-md-table-toolbar,
+.markdown-editor-shell .cm-md-table-wrap:not([data-toolbar-no-room-above="true"])[data-range-selecting="true"] .cm-md-table-toolbar { z-index: 7; }
+.markdown-editor-shell .cm-md-table-wrap[data-table-active="true"] .cm-md-table-toolbar-panel,
+.markdown-editor-shell .cm-md-table-wrap:not([data-toolbar-no-room-above="true"])[data-range-selecting="true"] .cm-md-table-toolbar-panel { opacity: 1; visibility: visible; transform: none; }
 .markdown-editor-shell .cm-md-table-wrap[data-table-active="true"] .cm-md-table-toolbar::before,
-.markdown-editor-shell .cm-md-table-wrap[data-range-selecting="true"] .cm-md-table-toolbar::before { display: none; }
+.markdown-editor-shell .cm-md-table-wrap:not([data-toolbar-no-room-above="true"])[data-range-selecting="true"] .cm-md-table-toolbar::before { display: none; }
 /* 悬停/聚焦展开只对精确指针启用：触屏点按会先触发 :hover 与 :focus-within，
-   工具条在手指抬起前展开并推移单元格，点击坐标随之落错位置；
-   触屏改为点按细条显式展开（widget 置 data-table-active）。 */
+   浮层在手指抬起前展开会干扰点按目标；触屏改为点按细条显式展开
+   （widget 置 data-table-active）。下挂态（上方无空间）抑制被动触发。 */
 @media (hover: hover) and (pointer: fine) {
-  .markdown-editor-shell .cm-md-table-wrap:hover .cm-md-table-toolbar,
-  .markdown-editor-shell .cm-md-table-wrap:focus-within .cm-md-table-toolbar { max-height: 96px; border-bottom-color: var(--border); padding: 4px 6px; cursor: default; }
-  .markdown-editor-shell .cm-md-table-wrap:hover .cm-md-table-toolbar::before,
-  .markdown-editor-shell .cm-md-table-wrap:focus-within .cm-md-table-toolbar::before { display: none; }
+  .markdown-editor-shell .cm-md-table-wrap:not([data-toolbar-no-room-above="true"]):hover .cm-md-table-toolbar,
+  .markdown-editor-shell .cm-md-table-wrap:not([data-toolbar-no-room-above="true"]):focus-within .cm-md-table-toolbar,
+  .markdown-editor-shell .cm-md-table-toolbar:hover { z-index: 7; }
+  .markdown-editor-shell .cm-md-table-wrap:not([data-toolbar-no-room-above="true"]):hover .cm-md-table-toolbar-panel,
+  .markdown-editor-shell .cm-md-table-wrap:not([data-toolbar-no-room-above="true"]):focus-within .cm-md-table-toolbar-panel,
+  .markdown-editor-shell .cm-md-table-toolbar:hover .cm-md-table-toolbar-panel { opacity: 1; visibility: visible; transform: none; }
+  .markdown-editor-shell .cm-md-table-wrap:not([data-toolbar-no-room-above="true"]):hover .cm-md-table-toolbar::before,
+  .markdown-editor-shell .cm-md-table-wrap:not([data-toolbar-no-room-above="true"]):focus-within .cm-md-table-toolbar::before,
+  .markdown-editor-shell .cm-md-table-toolbar:hover::before { display: none; }
 }
-/* 菜单展开期间取消高度过渡，面板开合不与收起动画打架。 */
-.markdown-editor-shell .cm-md-table-toolbar:has(.cm-md-table-menu[open]) { transition: none; }
-.markdown-editor-shell .cm-md-table-toolbar::after { content: "Tab 切换 · Enter 下移 · Shift+Enter 换行"; margin-left: auto; padding-left: 14px; color: var(--muted-foreground); font-size: 10px; }
+/* 菜单展开期间保持浮层常显并取消过渡：鼠标移入 fixed 定位的菜单面板后
+   不再满足悬停条件，靠这条防止浮层跟着收起，面板开合也不与浮层动画打架。 */
+.markdown-editor-shell .cm-md-table-toolbar:has(.cm-md-table-menu[open]) { z-index: 7; }
+.markdown-editor-shell .cm-md-table-toolbar:has(.cm-md-table-menu[open]) .cm-md-table-toolbar-panel { opacity: 1; visibility: visible; transform: none; transition: none; }
+.markdown-editor-shell .cm-md-table-toolbar-panel::after { content: "Tab 切换 · Enter 下移 · Shift+Enter 换行"; margin-left: auto; padding-left: 14px; color: var(--muted-foreground); font-size: 10px; }
 .markdown-editor-shell .cm-md-table-toolbar button { border: 0; border-radius: 5px; background: transparent; padding: 3px 7px; color: var(--muted-foreground); font: inherit; font-size: 11px; cursor: pointer; }
 .markdown-editor-shell .cm-md-table-toolbar button:hover { background: var(--blue-soft); color: var(--primary); }
 .markdown-editor-shell .cm-md-table-toolbar button:disabled { opacity: .4; cursor: not-allowed; }
@@ -91,11 +119,11 @@
 .markdown-editor-shell .cm-md-table-cell-input { position: absolute; top: 0; left: 0; z-index: 1; display: block; box-sizing: border-box; width: 100%; border: 0; padding: 0; overflow: hidden; resize: none; background: transparent; outline: none; color: inherit; caret-color: var(--primary); font: inherit; line-height: inherit; text-align: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 640px) {
-  .markdown-editor-shell .cm-md-table-toolbar::after { display: none; }
+  .markdown-editor-shell .cm-md-table-toolbar-panel::after { display: none; }
   .markdown-editor-shell .cm-md-table-selection-status { margin-left: auto; }
   .markdown-editor-shell .cm-md-table-resize-handle { display: none; }
   /* 触屏没有悬停，收起态的细条加高到可点按的命中区。 */
-  .markdown-editor-shell .cm-md-table-toolbar { max-height: 28px; }
+  .markdown-editor-shell .cm-md-table-toolbar { height: 28px; }
   /* 触屏上 26px/11px 的入口太难点，触发器与按钮一并放大到可用触摸目标。 */
   .markdown-editor-shell .cm-md-table-menu > summary { min-height: 36px; padding: 8px 10px; font-size: 13px; }
   .markdown-editor-shell .cm-md-table-toolbar button { min-height: 36px; padding: 6px 10px; font-size: 13px; }

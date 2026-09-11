@@ -82,7 +82,7 @@ const TABLE_VERTICAL_MODE_KEY = "swell-note:editor-table-vertical-align"
 const widthModeOrder: Array<Exclude<TableWidthMode, "manual">> = ["content", "full", "equal"]
 
 // 触屏（主指针为 coarse）没有悬停，点按又会先触发 :hover/:focus-within：
-// 若跟随选中自动展开工具条，展开推移单元格会让同一次点按的落点错位。
+// 若跟随选中自动展开工具条，浮层会突然盖住首行区域，干扰同一次点按的目标。
 // 触屏因此只认显式展开（点按细条），选中单元格不再带开工具条。
 function prefersExplicitTableToolbar() {
   return typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches
@@ -344,7 +344,9 @@ export class TableWidget extends WidgetType {
     this.trackHorizontalOverflow(wrapper, tableScroll)
 
     if (!this.view.state.readOnly) {
-      wrapper.insertBefore(this.createToolbar(wrapper, table), tableScroll)
+      const toolbar = this.createToolbar(wrapper, table)
+      wrapper.insertBefore(toolbar, tableScroll)
+      this.trackToolbarRoom(wrapper, toolbar)
       applyTableWidthMode(wrapper, preference.mode, preference.widths)
       applyTableVerticalMode(wrapper, loadTableVerticalMode())
       this.attachTableInteraction(wrapper, table)
@@ -549,6 +551,43 @@ export class TableWidget extends WidgetType {
     })
   }
 
+  // 浮层默认向细条上方展开；上方可用空间不足（细条吸顶或贴近滚动区顶部）时
+  // 上飘会被滚动祖先裁切，改置 data-toolbar-no-room-above 让 CSS 切换为下挂，
+  // 并抑制悬停/聚焦/选中等被动展开（下挂会盖住顶部可见行，被动展开会截获
+  // 对这些行的点击，selectCell 跟随选中展开也在此处一并闸住）。
+  private trackToolbarRoom(wrapper: HTMLElement, toolbar: HTMLElement) {
+    // toDOM 阶段 wrapper 尚未挂入文档，无法遍历滚动祖先，整个挂载放到首帧；
+    // 首帧时组件可能已销毁（如快速切换阅读/编辑），已离线就不再挂监听。
+    requestAnimationFrame(() => {
+      if (!wrapper.isConnected) return
+      // sticky 的参照系是最近的溢出祖先；找不到（如 jsdom）时保持默认上飘。
+      let scroller = wrapper.parentElement
+      while (scroller && !/(auto|scroll|hidden)/.test(getComputedStyle(scroller).overflowY)) {
+        scroller = scroller.parentElement
+      }
+      if (!scroller) return
+      const clip = scroller
+      const panel = toolbar.querySelector(".cm-md-table-toolbar-panel")
+      const update = () => {
+        const needed = (panel?.getBoundingClientRect().height ?? 0) + 2
+        const room = toolbar.getBoundingClientRect().top - clip.getBoundingClientRect().top
+        if (room < needed) wrapper.dataset.toolbarNoRoomAbove = "true"
+        else delete wrapper.dataset.toolbarNoRoomAbove
+      }
+      update()
+      clip.addEventListener("scroll", update, { passive: true })
+      // 浮层高度（按钮换行）、滚动区尺寸与窗口宽度都可能在首帧后变化。
+      const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update)
+      observer?.observe(toolbar)
+      observer?.observe(clip)
+      if (panel) observer?.observe(panel)
+      this.cleanupCallbacks.add(() => {
+        clip.removeEventListener("scroll", update)
+        observer?.disconnect()
+      })
+    })
+  }
+
   private createToolbar(wrapper: HTMLElement, table: MarkdownTable) {
     const toolbar = document.createElement("div")
     toolbar.className = "cm-md-table-toolbar"
@@ -557,7 +596,12 @@ export class TableWidget extends WidgetType {
     selectionStatus.className = "cm-md-table-selection-status"
     selectionStatus.setAttribute("aria-live", "polite")
     selectionStatus.textContent = "未选择单元格"
-    toolbar.append(
+    // 按钮区装进浮层容器：细条 grip 恒定占位，展开时浮层脱离文档流，
+    // 默认上飘（上方空间不足时经 trackToolbarRoom 置标记改为下挂），
+    // 表格位置不动，悬停展开/收起不再推移单元格。
+    const panel = document.createElement("div")
+    panel.className = "cm-md-table-toolbar-panel"
+    panel.append(
       this.createWidthButton(wrapper, table),
       this.createToolbarMenu("行列", [
         this.createInsertButton("上方插入行", "insert-row-above", "先选择正文单元格", () => this.opInsertRow("above")),
@@ -581,8 +625,10 @@ export class TableWidget extends WidgetType {
       ]),
       selectionStatus,
     )
-    // 工具条默认收起为细条（悬停/聚焦/选中时经 CSS 展开）。触屏没有悬停，
-    // 点击细条本身视为展开请求；点到里面的按钮或菜单则不算。
+    toolbar.appendChild(panel)
+    // 工具条默认收起为细条（悬停/聚焦/选中时经 CSS 展开浮层）。触屏没有悬停，
+    // 点击细条本身视为展开请求；点到里面的按钮或菜单则不算。浮层空白处
+    // pointer-events: none，点击穿透到下方单元格，不会走到这里。
     toolbar.addEventListener("click", (event) => {
       if ((event.target as HTMLElement).closest("button, summary")) return
       wrapper.dataset.tableActive = "true"
@@ -818,9 +864,12 @@ export class TableWidget extends WidgetType {
     wrapper.dataset.selectedRow = String(rowIndex)
     wrapper.dataset.selectedColumn = String(columnIndex)
     // 精确指针下选中期间保持工具条展开，鼠标移出表格也不收回去。
-    // 触屏不跟随选中展开：展开会推移下方单元格，与键盘弹出叠加时点按落点会错，
-    // 触屏改为点按细条显式展开（createToolbar 里的 click 监听同样置这个标记）。
-    if (!prefersExplicitTableToolbar()) wrapper.dataset.tableActive = "true"
+    // 触屏不跟随选中展开：点按会先触发 :hover/:focus-within，浮层突然展开
+    // 会干扰点按目标；触屏改为点按细条显式展开
+    // （createToolbar 里的 click 监听同样置这个标记）。
+    // 下挂态（上方无空间，trackToolbarRoom 置标记）同样不跟随选中展开：
+    // 下挂浮层盖住顶部可见行，被动展开会截获对这些行的点击。
+    if (!prefersExplicitTableToolbar() && !wrapper.dataset.toolbarNoRoomAbove) wrapper.dataset.tableActive = "true"
     this.session().target = { column: columnIndex, row: rowIndex }
     const selectionStatus = wrapper.querySelector<HTMLElement>(".cm-md-table-selection-status")
     if (selectionStatus) {
