@@ -91,6 +91,20 @@ function cellDisplay(page: Page, text: string) {
   return page.locator(".cm-md-table td", { hasText: text }).first()
 }
 
+// 桌面悬停会展开表格工具条（约 140ms 过渡），表格随之下移；先悬停等展开完成再量坐标，
+// 否则预量的落点在拖选途中偏一行。真实用户把鼠标移进表格时展开已完成，这里对齐那个状态。
+async function dragCells(page: Page, fromText: string, toText: string, steps = 12) {
+  const fromCell = cellDisplay(page, fromText)
+  await fromCell.hover()
+  await page.waitForTimeout(220)
+  const from = (await fromCell.boundingBox())!
+  const to = (await cellDisplay(page, toText).boundingBox())!
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps })
+  await page.mouse.up()
+}
+
 test.describe("表格编辑交互", () => {
   test("单击单元格按点击位置定位光标", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
@@ -145,12 +159,7 @@ test.describe("表格编辑交互", () => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedTableNote(page)
 
-    const from = (await cellDisplay(page, "苹果").boundingBox())!
-    const to = (await cellDisplay(page, "一般").boundingBox())!
-    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
-    await page.mouse.down()
-    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 12 })
-    await page.mouse.up()
+    await dragCells(page, "苹果", "一般")
 
     // 2×2 选区高亮，浮层出现；拖选没有把单元格带进编辑态。
     await expect(page.locator(".cm-md-table-cell-in-range")).toHaveCount(4)
@@ -269,12 +278,7 @@ test.describe("表格编辑交互", () => {
     await seedTableNote(page)
 
     // 拖选「苹果…一般」的 2×2 矩形选区。
-    const from = (await cellDisplay(page, "苹果").boundingBox())!
-    const to = (await cellDisplay(page, "一般").boundingBox())!
-    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
-    await page.mouse.down()
-    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 12 })
-    await page.mouse.up()
+    await dragCells(page, "苹果", "一般")
     await expect(page.locator(".cm-md-table-cell-in-range")).toHaveCount(4)
 
     // 行列 → 添加行：选区跨重建保留并重新绘制（此前高亮消失，隐藏选区却仍在响应操作）。
@@ -329,12 +333,7 @@ test.describe("表格编辑交互", () => {
 
     // 先点正文让 CodeMirror 持有焦点，再拖选「苹果…一般」的 2×2 选区。
     await page.locator(".cm-content").click()
-    const from = (await cellDisplay(page, "苹果").boundingBox())!
-    const to = (await cellDisplay(page, "一般").boundingBox())!
-    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
-    await page.mouse.down()
-    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 12 })
-    await page.mouse.up()
+    await dragCells(page, "苹果", "一般")
     await expect(page.locator(".cm-md-table-cell-in-range")).toHaveCount(4)
     // 选区建立后焦点离开正文，否则复制的是正文而不是表格。
     await expect(page.locator(".cm-md-table-wrap")).toBeFocused()
@@ -342,5 +341,77 @@ test.describe("表格编辑交互", () => {
     // 真实键盘复制：系统剪贴板收到表格 TSV。
     await page.keyboard.press("Meta+c")
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("苹果\t新鲜\n香蕉\t一般")
+  })
+
+  test("选区持焦时真实键盘粘贴写入表格，一次撤销恢复", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedTableNote(page)
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"])
+
+    // 正文光标先留在标题段落，再拖选「苹果…一般」的 2×2 选区。
+    await page.locator(".cm-content").getByText("这是", { exact: false }).click()
+    await dragCells(page, "苹果", "一般")
+    await expect(page.locator(".cm-md-table-cell-in-range")).toHaveCount(4)
+
+    await page.evaluate(() => navigator.clipboard.writeText("虎\t狮\n狼\t豹"))
+    await page.keyboard.press("Meta+v")
+    // 粘贴落入选区左上角，范围外单元格与正文都不动；此前粘贴会被静默吞掉。
+    await expect(page.locator(".cm-md-table")).toContainText("虎")
+    await expect(page.locator(".cm-md-table")).toContainText("豹")
+    await expect(page.locator(".cm-md-table")).toContainText("樱桃")
+    await expect(page.locator(".cm-content")).toContainText("这是 加粗 文字段落。")
+
+    await page.getByRole("button", { name: "撤销（⌘/Ctrl+Z）" }).click()
+    await expect(page.locator(".cm-md-table")).toContainText("苹果")
+    await expect(page.locator(".cm-md-table")).toContainText("一般")
+  })
+
+  test("选区持焦时键盘撤销与工具栏一致", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedTableNote(page)
+
+    await cellDisplay(page, "苹果").click()
+    await page.keyboard.type("X")
+    await page.keyboard.press("Tab")
+    await expect(page.locator(".cm-md-table")).toContainText("苹果X")
+
+    // Tab 提交后焦点在「新鲜」的输入框里；先退出编辑态，拖选才能建成矩形选区
+    //（编辑态下按住拖动是框选 textarea 里的文字，与真实表格操作一致）。
+    // 选区把焦点交给 wrapper 后再按 Cmd+Z：此前键盘撤销无响应。
+    await page.keyboard.press("Escape")
+    await dragCells(page, "新鲜", "一般", 8)
+    await expect(page.locator(".cm-md-table-cell-in-range")).toHaveCount(2)
+
+    await page.keyboard.press("Meta+z")
+    await expect(page.locator(".cm-md-table")).not.toContainText("苹果X")
+    await expect(page.locator(".cm-md-table")).toContainText("苹果")
+    await page.keyboard.press("Meta+Shift+z")
+    await expect(page.locator(".cm-md-table")).toContainText("苹果X")
+  })
+
+  test("格内换行的表格粘贴优先按 TSV 解析，换行不粘连", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedTableNote(page)
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"])
+
+    // Excel 同源剪贴板：HTML 用 <br> 表示格内换行，TSV 用引号完整保留。
+    await page.evaluate(async () => {
+      const item = new ClipboardItem({
+        "text/html": new Blob(["<table><tr><td>第一行<br>第二行</td><td>旁</td></tr></table>"], { type: "text/html" }),
+        "text/plain": new Blob(['"第一行\n第二行"\t旁'], { type: "text/plain" }),
+      })
+      await navigator.clipboard.write([item])
+    })
+    await cellDisplay(page, "苹果").click()
+    await expect(page.locator(".cm-md-table-cell-input")).toBeVisible()
+    await page.keyboard.press("Meta+v")
+    // 格内换行序列化为 <br>，展示层渲染成真正的 <br> 元素；textContent 会把两行
+    // 拍平成「第一行第二行」，不能拿它当断言。若错走了 HTML 的 textContent 解析，
+    // 换行丢失，这里就不会有 <br>。
+    const pasted = cellDisplay(page, "第一行")
+    await expect(pasted.locator(".cm-md-table-cell-display br")).toHaveCount(1)
+    // 同行的第二列按 TSV 映射写入，覆盖原「新鲜」。
+    await expect(cellDisplay(page, "旁")).toBeVisible()
+    await expect(page.locator(".cm-md-table")).not.toContainText("新鲜")
   })
 })

@@ -1,4 +1,4 @@
-import { isolateHistory } from "@codemirror/commands"
+import { isolateHistory, redo, undo } from "@codemirror/commands"
 import { EditorView, WidgetType } from "@codemirror/view"
 
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
@@ -201,6 +201,28 @@ function tableRangeToHtml(table: MarkdownTable, range: TableCellRange) {
     rows.push(`<tr>${cells.join("")}</tr>`)
   }
   return `<table>${rows.join("")}</table>`
+}
+
+// 解析剪贴板里的表格数据。TSV 优先于 HTML：Excel 的格内换行在 HTML 里是 <br>，
+// textContent 会把它吃掉让两行粘连，TSV 则用引号完整保留。只读取文本，
+// 不把剪贴板 HTML 的事件、样式或脚本带入笔记。
+function parseClipboardTabular(transfer: DataTransfer): string[][] | null {
+  const tabular = parseTabularText(transfer.getData("text/plain"))
+  if (tabular?.length && !tabular.every((row) => row.length === 0)) return tabular
+  const html = transfer.getData("text/html")
+  const parsed = html ? new DOMParser().parseFromString(html, "text/html").querySelector("table") : null
+  if (!parsed) return null
+  const cells = Array.from(parsed.rows, (row) => Array.from(row.cells, (cell) => cell.textContent ?? ""))
+  return cells.length && !cells.every((row) => row.length === 0) ? cells : null
+}
+
+// 选区粘贴的兜底：剪贴板不是表格结构时，多行纯文本按单列多行、单行按单值写入。
+function parseClipboardPlainCells(transfer: DataTransfer): string[][] | null {
+  const plain = transfer.getData("text/plain")
+  if (!plain) return null
+  const lines = plain.replace(/\r\n?/g, "\n").split("\n")
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop()
+  return lines.map((line) => [line])
 }
 
 // 计算 caretRangeFromPoint 命中的 DOM 位置在 root 纯文本里的偏移；root 之外的节点返回 null。
@@ -1066,12 +1088,9 @@ export class TableWidget extends WidgetType {
     input.addEventListener("paste", (event) => {
       const transfer = event.clipboardData
       if (!transfer) return
-      const html = transfer.getData("text/html")
-      // 只读取表格文本，不把剪贴板 HTML 的事件、样式或脚本带入笔记。
-      const parsed = html ? new DOMParser().parseFromString(html, "text/html").querySelector("table") : null
-      const cells = parsed ? Array.from(parsed.rows, (row) => Array.from(row.cells, (cell) => cell.textContent ?? ""))
-        : parseTabularText(transfer.getData("text/plain"))
-      if (!cells?.length || cells.every((row) => row.length === 0)) return
+      // 表格数据（TSV 优先，HTML 兜底）按网格写入；纯文本交给 textarea 原生粘贴。
+      const cells = parseClipboardTabular(transfer)
+      if (!cells?.length) return
       event.preventDefault()
       event.stopPropagation()
       finished = true
@@ -1401,6 +1420,21 @@ export class TableWidget extends WidgetType {
     if (target?.closest(".cm-md-table-cell-input")) return
     if (event.isComposing || event.keyCode === 229) return
     const session = this.session()
+    // 键盘撤销/重做与工具栏共用同一份 CodeMirror 历史；wrapper 在 contenteditable 内部但
+    // 不可编辑，浏览器与 CodeMirror 都不会响应这里的 Mod+Z，由表格自己接管。
+    if ((event.metaKey || event.ctrlKey) && !event.altKey) {
+      const keyName = event.key.toLowerCase()
+      if (keyName === "z" || keyName === "y") {
+        event.preventDefault()
+        event.stopPropagation()
+        // 选区 pin 住：撤销触发的重建后高亮仍框住原范围，不留下不可见的活动选区。
+        const range = this.normalizedSessionRange()
+        if (range) session.pinnedRange = range
+        const forward = keyName === "y" || event.shiftKey
+        ;(forward ? redo : undo)(this.view)
+        return
+      }
+    }
     if (!session.range) return
     if (event.key === "Escape") {
       event.preventDefault()
@@ -1475,15 +1509,36 @@ export class TableWidget extends WidgetType {
       event.clipboardData.setData("text/html", tableRangeToHtml(model, range))
       if (event.type === "cut") this.opClearContents()
     }
+    const onPaste = (event: ClipboardEvent) => {
+      const current = this.session()
+      if (!current.range || !event.clipboardData || this.view.state.readOnly) return
+      const target = event.target instanceof HTMLElement ? event.target : null
+      // 归属判断与复制/剪切一致：单元格输入框与其他输入控件内保持原生行为。
+      if (target?.closest(".cm-md-table-cell-input")) return
+      if (!wrapper.contains(target) && target?.closest("input, textarea, [contenteditable]")) return
+      if (this.view.hasFocus && !this.view.state.selection.main.empty) return
+      // Widget ignoreEvent 挡住 CodeMirror、自身又不处理时，粘贴会被静默吞掉；
+      // 这里接管：写入选区左上角，覆盖落到的单元格，表格不够时向外扩展。
+      const cells = parseClipboardTabular(event.clipboardData) ?? parseClipboardPlainCells(event.clipboardData)
+      if (!cells?.length) return
+      event.preventDefault()
+      event.stopPropagation()
+      const range = normalizeTableCellRange(current.range.anchor, current.range.focus)
+      // 选区 pin 住跨重建保留：粘贴后高亮仍框住粘贴区域，且整次写入是单个事务，一次撤销即可恢复。
+      current.pinnedRange = range
+      this.replaceTable(pasteTableCells(this.tableWithActiveEdit(wrapper, table), range.rowFrom + 1, range.columnFrom, cells))
+    }
     document.addEventListener("pointerdown", onPointerDown, true)
     document.addEventListener("keydown", onKeyDown, true)
     document.addEventListener("copy", onClipboard)
     document.addEventListener("cut", onClipboard)
+    document.addEventListener("paste", onPaste)
     const dispose = () => {
       document.removeEventListener("pointerdown", onPointerDown, true)
       document.removeEventListener("keydown", onKeyDown, true)
       document.removeEventListener("copy", onClipboard)
       document.removeEventListener("cut", onClipboard)
+      document.removeEventListener("paste", onPaste)
     }
     session.outsideListeners = dispose
     session.outsideListenersOwner = this
