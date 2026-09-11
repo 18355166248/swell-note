@@ -1,0 +1,32 @@
+src/components/editor/markdown-table.css
+  s_6d0d6c44337dc9::t_c7861703df9d25 18,20-24,31-32,34-35,37-43,45,47,49-50,52-60,63
+  s_6d0d6c44337dc9::t_81966e120e63e1 122,126
+  s_6d0d6c44337dc9::t_f7d35271f3a089 17,36,44,62,64-66
+  s_6d0d6c44337dc9::t_5a7c0d76a37649 19,25-28,30,33
+src/components/editor/markdown-table-widget.ts
+  s_6d0d6c44337dc9::t_1a0fd25d171dae 554-558,570,588-590
+  s_6d0d6c44337dc9::t_5625e6f49cb242 599-601
+  s_6d0d6c44337dc9::t_8baf2ce0ff3568 867-868,870-872
+  s_6d0d6c44337dc9::t_88936435f89549 347-349
+  s_6d0d6c44337dc9::t_a4c398521af122 602-604
+  s_6d0d6c44337dc9::t_f04eb72a56a22d 559-569,571-587
+  s_6d0d6c44337dc9::t_c0a502321619a3 85
+  s_6d0d6c44337dc9::t_037ab1bf891041 869
+  s_6d0d6c44337dc9::t_5a1842786340f7 628-631
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "621d5706cc5800d0df3ebdca1a728070f7f2f7b1",
+  "prompts": {},
+  "sessions": {
+    "s_6d0d6c44337dc9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4f1c7913-6218-4bce-a28b-17a5e8267844",
+        "model": "kimi-k3"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
