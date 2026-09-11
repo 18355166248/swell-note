@@ -1,0 +1,46 @@
+src/services/vault/attachment-writer.test.ts
+  s_e017acf227d59a::t_57c247351ed580 127-150
+  s_e017acf227d59a::t_9e1ae7782bbcdf 5
+src/App.tsx
+  s_e017acf227d59a::t_99d822b88c5cbb 41
+  s_e017acf227d59a::t_e4a1e095b264cb 1163-1165
+src/components/editor/markdown-editor.tsx
+  s_e017acf227d59a::t_51fbe6eb52155b 123
+  s_e017acf227d59a::t_7b7fa906ca4e31 36-37
+  s_e017acf227d59a::t_72aeb271095b05 108
+  s_e017acf227d59a::t_096b04cf13ee06 210-212
+  s_e017acf227d59a::t_08ea66306c3549 257,262-264
+  s_e017acf227d59a::t_3bf542d0d8dec5 364,372-375,379,382-384,389-399
+src/components/editor/markdown-editor.test.tsx
+  s_e017acf227d59a::t_2545198b478866 84
+  s_e017acf227d59a::t_28308f5eb2ede6 8
+  s_e017acf227d59a::t_35d7c09273ae74 56-83,85-118,120-153
+  s_e017acf227d59a::t_7b585f40cd1b95 119
+  s_e017acf227d59a::t_66d40d1e467393 45
+src/services/vault/attachment-writer.ts
+  s_e017acf227d59a::t_533b74d5a28376 35-44
+src/components/workspace/workspace.tsx
+  s_e017acf227d59a::t_a42cf3c13fe74d 1830-1836,1838
+  s_e017acf227d59a::t_e04c1036798bcd 2384
+src/components/editor/live-preview.test.ts
+  s_e017acf227d59a::t_45c796d7a34daf 3
+  s_e017acf227d59a::t_a5d14762e34f24 162-221,223-237,239-245
+  s_e017acf227d59a::t_e10ddc352cadea 222
+  s_e017acf227d59a::t_ea6987d417cd30 238
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "b964339cdc16903e14e9af85b48fa4bf15603bc8",
+  "prompts": {},
+  "sessions": {
+    "s_e017acf227d59a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cc49c80f-e37f-4318-8bf9-fa9053456ceb",
+        "model": "kimi-k3"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
