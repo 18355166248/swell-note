@@ -1,0 +1,19 @@
+docs/editor-audit-2026-09-10/release-editor-check-2026-09-11.md
+  s_a0c0e6928a3750::t_b3a033c90b090b 1-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "3c7b5edabad13c7d16d7217a586aa1c34ece76a9",
+  "prompts": {},
+  "sessions": {
+    "s_a0c0e6928a3750": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d178678a-0d4f-4680-8057-c66c5e5fe360",
+        "model": "kimi-k3"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
