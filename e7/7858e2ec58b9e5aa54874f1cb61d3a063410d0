@@ -1,0 +1,104 @@
+src/components/editor/markdown-table-inline.test.ts
+  s_799300ace17a34::t_325bb82d9e52a9 4-10,39-50
+  s_799300ace17a34::t_ae2625598f3a53 1
+  s_799300ace17a34::t_4eb503adea2767 51-82
+src/components/editor/markdown-table-inline.ts
+  s_799300ace17a34::t_be6fd862561b29 132-133,161-163
+  s_799300ace17a34::t_00e2ee504e28e4 164,166-177
+  s_799300ace17a34::t_9e982089cf526f 76
+  s_799300ace17a34::t_5df94c72135273 80
+  s_799300ace17a34::t_806e9a989af12c 77-79
+  s_799300ace17a34::t_0342be3df3431c 53
+  s_799300ace17a34::t_d473f874cf9380 91-103
+  s_799300ace17a34::t_75ed056373152f 117-127,129-131,136,139,143,147
+  s_799300ace17a34::t_124ffe16311981 165
+src/components/workspace/selection-action-bar.test.tsx
+  s_799300ace17a34::t_c97c7826db033d 144-146,148,161,163-164,209-235
+  s_799300ace17a34::t_f6fb6bd542ab13 7,147
+src/components/editor/markdown-editor.test.tsx
+  s_799300ace17a34::t_c1bacef36572e7 11,34-55
+src/components/editor/markdown-input.ts
+  s_799300ace17a34::t_818bac66473d31 802-807,907
+  s_799300ace17a34::t_948c9812a0b543 888-889,891-892
+  s_799300ace17a34::t_efb1f25382c4ac 819,868
+  s_799300ace17a34::t_0bd8429cc7f33c 755-758,761-769,779-788,792-801,809,818,845,865-867,872,876,885-886,909,922,940-944,954-955,958-961,963-968,973,977-978,981
+  s_799300ace17a34::t_b03f719450b79b 873,890,908
+  s_799300ace17a34::t_30a21f700d10fc 816-817,821,828,831-834,846-850,864
+  s_799300ace17a34::t_f82523d325d075 770-773,826
+  s_799300ace17a34::t_7a63ecc478d591 759-760,774-778,789-791,840,874-875,877-884,887,893,895,898,910,912-913
+  s_799300ace17a34::t_c97c7826db033d 919,923-924,927
+  s_799300ace17a34::t_d338f3962fbdf8 820,842-844,894,896-897
+  s_799300ace17a34::t_39e891b68e261d 827,835,900-905
+  s_799300ace17a34::t_0d9908397e333f 836-839
+  s_799300ace17a34::t_d89c2361d889b8 841,863
+  s_799300ace17a34::t_c4120e02638e83 851-861
+  s_799300ace17a34::t_3d73372620a8ed 862,870-871,899
+  s_799300ace17a34::t_35bed8ba119a33 869
+src/components/editor/markdown-editor.tsx
+  s_799300ace17a34::t_c1bacef36572e7 284-286,700-708
+  s_799300ace17a34::t_5fefcde35ea56f 709-710
+src/components/editor/markdown-input.test.ts
+  s_799300ace17a34::t_d89c2361d889b8 921-928
+  s_799300ace17a34::t_dffea1a8135b6d 5,897-904,906-908
+  s_799300ace17a34::t_d338f3962fbdf8 889-896,918-920,929-933
+  s_799300ace17a34::t_c97c7826db033d 1004-1009
+  s_799300ace17a34::t_0f2a9f6145fc53 905,909-917
+  s_799300ace17a34::t_9b47b20b8dba87 937-944,989-995,997-1002
+  s_799300ace17a34::t_39e891b68e261d 945-968
+  s_799300ace17a34::t_30a21f700d10fc 969-977,979-988
+  s_799300ace17a34::t_818bac66473d31 883,886,978,996
+  s_799300ace17a34::t_a6ffcdc8631bec 871-882,884-885,887,934-936,1003,1010-1014,1085-1098
+  s_799300ace17a34::t_948c9812a0b543 888
+  s_799300ace17a34::t_006efad82da0b2 1099
+src/components/editor/html-to-markdown.test.ts
+  s_799300ace17a34::t_8541f1e77e2382 180-206,208-209
+  s_799300ace17a34::t_464c1e1cda5008 8,13-14
+  s_799300ace17a34::t_325bb82d9e52a9 207
+  s_799300ace17a34::t_f774c423555169 4-7,12,15-17,104,138-179
+src/components/editor/live-preview.test.ts
+  s_799300ace17a34::t_685ece6b41c08c 1195-1234
+  s_799300ace17a34::t_31596092b160b6 10,96,108,114
+docs/note-comparison-2026-09-11/README.md
+  s_b88b13c967f6b2::t_48602221b57d36 1-138
+src/components/workspace/formatting-toolbar.tsx
+  s_799300ace17a34::t_a7bce1f4a61319 2,19,26,59,81-83,89-92,114,121,125,165,167-168
+  s_799300ace17a34::t_a6ffcdc8631bec 12-17
+docs/note-comparison-2026-09-11/paste-probe.test.tsx.txt
+  s_b88b13c967f6b2::t_e7e48535504f0c 1-26
+src/components/editor/html-to-markdown.ts
+  s_799300ace17a34::t_a351b56b547456 12,113,160,162,164-165,171-172,180-181,193,197,204-206,208,217,238,248-252,254-265
+  s_799300ace17a34::t_f774c423555169 212,216,280
+  s_799300ace17a34::t_fb87c5dc51b221 143-151,155-159,161,163,167,169,173-178,231-233,253
+  s_799300ace17a34::t_33d4f7966d9667 223-224,237
+  s_799300ace17a34::t_f66ba00911b85c 234-236
+  s_799300ace17a34::t_c067ec0f5428ca 207
+  s_799300ace17a34::t_4e871a602f9376 247
+src/components/editor/live-preview.ts
+  s_799300ace17a34::t_f5cf74856f2f1a 111-127,695-696,714-738
+docs/editor-polish-2026-09-13/README.md
+  s_799300ace17a34::t_109ce5edcd1b23 1-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "e77858e2ec58b9e5aa54874f1cb61d3a063410d0",
+  "prompts": {},
+  "sessions": {
+    "s_799300ace17a34": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09b24-3ed9-7183-adb9-5cde0340ce42",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    },
+    "s_b88b13c967f6b2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a08f5e-f9a5-70c0-ac4c-7ab2a188e9a8",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
