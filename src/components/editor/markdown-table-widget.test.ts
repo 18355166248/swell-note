@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { history, redo, undo } from "@codemirror/commands"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
-import { EditorState } from "@codemirror/state"
+import { Compartment, EditorState } from "@codemirror/state"
 import { EditorView } from "@codemirror/view"
 import { afterEach, describe, expect, it } from "vitest"
 
@@ -114,6 +114,56 @@ afterEach(() => {
 })
 
 describe("单元格编辑与键盘导航", () => {
+  it("同一 CodeMirror 热切只读保留单元格草稿，解锁后恢复并可单步撤销", async () => {
+    const lock = new Compartment()
+    view = new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc,
+        extensions: [history(), markdown({ base: markdownLanguage }), markdownLivePreview({ tableStorageKey: "lock-draft-note" }), lock.of(EditorState.readOnly.of(false))],
+      }),
+    })
+    await settle()
+    clickCell(0, 0)
+    const input = cellInput()!
+    input.setSelectionRange(0, input.value.length)
+    input.setRangeText("锁定草稿", 0, input.value.length, "end")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+
+    view.dispatch({ effects: lock.reconfigure(EditorState.readOnly.of(true)) })
+    for (let attempt = 0; attempt < 30 && cellInput(); attempt += 1) await tick()
+    expect(view.state.readOnly).toBe(true)
+    expect(cellInput()).toBeNull()
+    expect(docText()).toBe(doc)
+
+    view.dispatch({ effects: lock.reconfigure(EditorState.readOnly.of(false)) })
+    for (let attempt = 0; attempt < 30 && cellInput()?.value !== "锁定草稿"; attempt += 1) await tick()
+    expect(cellInput()?.value).toBe("锁定草稿")
+    expect(docText()).toBe(doc)
+
+    keydown(cellInput()!, { key: "Enter" })
+    await tick()
+    expect(docText()).toContain("| 锁定草稿 | 新鲜 | 重点 |")
+    undo(view)
+    expect(docText()).toBe(doc)
+  })
+
+  it("表格源码被外部替换时不从销毁中的输入框回写旧草稿", async () => {
+    view = createView()
+    await settle()
+    clickCell(0, 0)
+    const input = cellInput()!
+    input.setSelectionRange(0, input.value.length)
+    input.setRangeText("不得覆盖", 0, input.value.length, "end")
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+
+    const external = doc.replace("| 香蕉 | 一般 | 普通 |", "| 外部更新 | 一般 | 普通 |")
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: external } })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(docText()).toBe(external)
+    expect(docText()).not.toContain("不得覆盖")
+  })
+
   it("Enter 提交并下移，末行自动补行；Tab 跨列回绕；Escape 放弃输入", async () => {
     view = createView()
     await settle()

@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test"
 
+import { useCompatibilityPreview, useUnifiedCanvas } from "./note-view-mode"
+
 // 编辑器三批修复（行内格式 / 表格 / 图片附件）的收尾验收：组合流程与异步边界。
 // 种子是独立的离线 vault（IndexedDB），附件只写入本机附件队列，不触碰真实笔记与云同步。
 // 「写入进行中」窗口用 File.prototype.arrayBuffer 的可控延迟制造，不用固定延时猜竞态。
@@ -124,8 +126,7 @@ async function seedReleaseVault(page: Page) {
     }))
   }, [CACHE_ID, NOTE_A_ID, NOTE_B_ID, NOTE_A_CONTENT, NOTE_B_CONTENT])
   await page.reload()
-  // 默认阅读模式打开活动笔记；进入编辑由各用例显式点击「编辑模式」。
-  await expect(page.getByRole("button", { name: "编辑模式" })).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator(".note-editor[data-view-mode='unified'] .cm-content")).toBeVisible({ timeout: 15_000 })
 }
 
 async function setAttachmentDelay(page: Page, ms: number) {
@@ -197,7 +198,6 @@ test.describe("编辑器三批修复收尾验收", () => {
   test("流程1：输入→加粗/斜体→插表格→填单元格→插图，逐步撤销与重做", async ({ page }) => {
     test.setTimeout(120_000)
     await seedReleaseVault(page)
-    await page.getByRole("button", { name: "编辑模式" }).click()
 
     const snapshots: string[] = [await readStored(page, NOTE_A_ID)]
     // 有意义的用户操作（输入/格式/表格/单元格/图片）必须在撤销链上逐站经过；
@@ -286,7 +286,6 @@ test.describe("编辑器三批修复收尾验收", () => {
   test("流程2：单元格编辑→多格粘贴→正文续写→插附件→返回表格继续编辑", async ({ page }) => {
     test.setTimeout(60_000)
     await seedReleaseVault(page)
-    await page.getByRole("button", { name: "编辑模式" }).click()
 
     // 单元格编辑：苹果 → 苹果大
     await cellDisplay(page, "苹果").click()
@@ -341,7 +340,6 @@ test.describe("编辑器三批修复收尾验收", () => {
   test("流程3：附件写入中移动光标续写，完成时不抢焦点与选区", async ({ page }) => {
     test.setTimeout(60_000)
     await seedReleaseVault(page)
-    await page.getByRole("button", { name: "编辑模式" }).click()
 
     await setAttachmentDelay(page, 900)
     await clickLine(page, "开头段落。")
@@ -371,7 +369,6 @@ test.describe("编辑器三批修复收尾验收", () => {
   test("流程4：附件写入中切到另一篇笔记，回退追加归属原笔记且有反馈", async ({ page }) => {
     test.setTimeout(60_000)
     await seedReleaseVault(page)
-    await page.getByRole("button", { name: "编辑模式" }).click()
 
     await setAttachmentDelay(page, 900)
     await clickLine(page, "开头段落。")
@@ -394,23 +391,21 @@ test.describe("编辑器三批修复收尾验收", () => {
 
     // 回到原笔记：内容一致，追加不进入撤销栈（撤销按钮不可用，不会撤掉别的东西）。
     await openNoteFromList(page, "验收甲")
-    await page.getByRole("button", { name: "编辑模式" }).click()
     await expect(page.getByRole("button", { name: "撤销（⌘/Ctrl+Z）" })).toBeDisabled()
     expect(countImageRefs(await readStored(page, NOTE_A_ID))).toBe(1)
   })
 
-  test("流程5：附件写入中切阅读模式，回退追加后编辑/阅读内容一致", async ({ page }) => {
+  test("流程5：附件写入中切兼容阅读视图，回退追加后两种画面内容一致", async ({ page }) => {
     test.setTimeout(60_000)
     await seedReleaseVault(page)
-    await page.getByRole("button", { name: "编辑模式" }).click()
 
     await setAttachmentDelay(page, 900)
     await clickLine(page, "开头段落。")
     await page.keyboard.press("End")
     await insertImages(page, ["流程五.png"])
 
-    // 写入进行中切阅读模式：编辑器卸载，落笔回退为追加到末尾。
-    await page.getByRole("button", { name: "阅读模式" }).click()
+    // 兼容阅读会卸载编辑器；锁定仍保留同一实例，不能拿锁定冒充这条回退路径。
+    await useCompatibilityPreview(page)
     await expect(page.locator(".markdown-preview")).toBeVisible()
     await setAttachmentDelay(page, 0)
 
@@ -426,7 +421,7 @@ test.describe("编辑器三批修复收尾验收", () => {
     await expect(preview.locator("img").last()).toHaveAttribute("alt", "流程五.png")
 
     // 切回编辑：内容不变，编辑/阅读两态一致。
-    await page.getByRole("button", { name: "编辑模式" }).click()
+    await useUnifiedCanvas(page)
     await expect(page.locator(".cm-content")).toBeVisible()
     expect(await readStored(page, NOTE_A_ID)).toBe(stored)
   })
@@ -434,7 +429,6 @@ test.describe("编辑器三批修复收尾验收", () => {
   test("流程6：附件写入中删除插入位置所在段落，完成后内容不丢不重", async ({ page }) => {
     test.setTimeout(60_000)
     await seedReleaseVault(page)
-    await page.getByRole("button", { name: "编辑模式" }).click()
 
     await setAttachmentDelay(page, 900)
     await clickLine(page, "开头段落。")
@@ -461,7 +455,6 @@ test.describe("编辑器三批修复收尾验收", () => {
   test("流程7：busy 守卫拒绝第二批并提示，第一批结束后可重试且不重复插入", async ({ page }) => {
     test.setTimeout(60_000)
     await seedReleaseVault(page)
-    await page.getByRole("button", { name: "编辑模式" }).click()
 
     await setAttachmentDelay(page, 900)
     await clickLine(page, "结尾段落。")
@@ -490,7 +483,6 @@ test.describe("编辑器三批修复收尾验收", () => {
   test("流程8：正文、表格、图片修改保存后，刷新完整恢复内容与引用", async ({ page }) => {
     test.setTimeout(60_000)
     await seedReleaseVault(page)
-    await page.getByRole("button", { name: "编辑模式" }).click()
 
     await clickLine(page, "结尾段落。")
     await page.keyboard.press("End")
@@ -509,8 +501,8 @@ test.describe("编辑器三批修复收尾验收", () => {
     const saved = await readStored(page, NOTE_A_ID)
 
     await page.reload()
-    // 显示模式是全局偏好，刷新后保持刷新前的编辑模式；这里显式切回阅读模式再断言。
-    await page.getByRole("button", { name: "阅读模式" }).click()
+    // 刷新后仍是统一画布；显式进入会卸载编辑器的兼容阅读，再核对渲染内容。
+    await useCompatibilityPreview(page)
     const preview = page.locator(".markdown-preview")
     await expect(preview).toBeVisible({ timeout: 15_000 })
     await expect(preview).toContainText("结尾段落。刷新前修改")
@@ -518,8 +510,8 @@ test.describe("编辑器三批修复收尾验收", () => {
     await expect(preview.locator("img").last()).toBeVisible()
     expect(await readStored(page, NOTE_A_ID)).toBe(saved)
 
-    // 切回编辑模式：内容与保存时逐字符一致。
-    await page.getByRole("button", { name: "编辑模式" }).click()
+    // 回到一体化编辑：内容与保存时逐字符一致。
+    await useUnifiedCanvas(page)
     await expect(page.locator(".cm-content")).toBeVisible()
     expect(await readStored(page, NOTE_A_ID)).toBe(saved)
   })

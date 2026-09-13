@@ -1,4 +1,4 @@
-export type NoteViewMode = "edit" | "preview"
+export type NoteViewMode = "locked" | "preview" | "unified"
 export type ColorMode = "dark" | "light" | "system"
 
 export type UiPreferences = {
@@ -13,13 +13,23 @@ const DEFAULT_UI_PREFERENCES: UiPreferences = {
   colorMode: "system",
   libraryPaneWidth: 230,
   noteListPaneWidth: 320,
-  noteViewMode: "preview",
+  noteViewMode: "unified",
 }
 
 const PANE_WIDTH_LIMITS = {
   libraryPaneWidth: { max: 340, min: 205 },
   noteListPaneWidth: { max: 440, min: 280 },
 } as const
+
+const NOTE_VIEW_MODE_ACTIONS = {
+  locked: { label: "解除锁定，继续编辑", nextMode: "unified" },
+  preview: { label: "进入一体化编辑", nextMode: "unified" },
+  unified: { label: "锁定为只读阅读", nextMode: "locked" },
+} satisfies Record<NoteViewMode, { label: string; nextMode: NoteViewMode }>
+
+export function getNoteViewModeAction(mode: NoteViewMode): { label: string; nextMode: NoteViewMode } {
+  return NOTE_VIEW_MODE_ACTIONS[mode]
+}
 
 function paneWidth(value: unknown, key: "libraryPaneWidth" | "noteListPaneWidth") {
   const limits = PANE_WIDTH_LIMITS[key]
@@ -46,7 +56,10 @@ export function loadUiPreferences(): UiPreferences {
     colorMode: stored.colorMode === "dark" || stored.colorMode === "light" ? stored.colorMode : "system",
     libraryPaneWidth: paneWidth(stored.libraryPaneWidth, "libraryPaneWidth"),
     noteListPaneWidth: paneWidth(stored.noteListPaneWidth, "noteListPaneWidth"),
-    noteViewMode: stored.noteViewMode === "edit" ? "edit" : DEFAULT_UI_PREFERENCES.noteViewMode,
+    // 旧版 edit 与新的统一画布语义一致；历史 preview 只可能由用户主动切换写入，必须继续保留。
+    noteViewMode: stored.noteViewMode === "preview" || stored.noteViewMode === "locked" || stored.noteViewMode === "unified"
+      ? stored.noteViewMode
+      : DEFAULT_UI_PREFERENCES.noteViewMode,
   }
 }
 

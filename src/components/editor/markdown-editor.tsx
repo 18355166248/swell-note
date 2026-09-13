@@ -14,6 +14,7 @@ import { bottomOverlayHeight, scrollCursorIntoView } from "./cursor-visibility"
 import { applyLinkTarget, detectFormatState, focusExistingLinkUrl, linkInsertion, linkTargetAt, linkTargetInText, removeLinkTarget, type EditorFormatState, type EditorLinkTarget, type InlineMarkKind, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
 import { htmlToMarkdown, isInlineMarkdownFragment } from "./html-to-markdown"
 import { markdownLivePreview, type EditorLinkTap } from "./live-preview"
+import type { EmbeddedWikiNoteResult } from "./markdown-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import { ImageZoomOverlay } from "./image-zoom"
 import { activeTableEdit, type TableEditTarget } from "./table-edit-target"
@@ -68,6 +69,15 @@ export type MarkdownFindResult = {
 // 插入完成后靠它识别出这次插入的是表格，从而自动聚焦到第一个单元格。
 export const TABLE_INSERT_TEMPLATE = "\n| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |\n"
 
+type SelectionPlatform = Pick<Navigator, "maxTouchPoints" | "platform" | "userAgent">
+
+export function shouldDrawCodeMirrorSelection(platform: SelectionPlatform = navigator) {
+  // iOS WKWebView 在中文输入时仍会合成原生 caret；再叠加 CodeMirror 自绘层会留下两条错位光标。
+  const iosDevice = /iPad|iPhone|iPod/i.test(platform.userAgent)
+    || (/MacIntel/i.test(platform.platform) && platform.maxTouchPoints > 1)
+  return !iosDevice
+}
+
 // 一次装饰更新里可能同时挂着好几张表格的 wrapper，用起点行号才能挑出这次刚插入的那一张。
 export function findTableWrapperAtLine(root: ParentNode, lineStart: number): HTMLElement | null {
   return Array.from(root.querySelectorAll<HTMLElement>(".cm-md-table-wrap"))
@@ -108,8 +118,10 @@ type MarkdownEditorProps = {
   onInsertFiles?: (files: File[], position?: number) => void
   // 移动端点按已有链接时不直接跳转，交给宿主弹出「打开 / 编辑 / 移除」菜单。
   onLinkMenu?: (tap: EditorLinkTap) => void
+  onLoadWikiNote?: (target: string) => void
   onOpenWikiLink?: (target: string) => void
   onResolveAsset?: (source: string) => Promise<VaultAsset | null>
+  onResolveWikiNote?: (target: string) => EmbeddedWikiNoteResult
   onSelectionChange?: (hasSelection: boolean) => void
   getWikiLinkSuggestions?: () => WikiLinkSuggestion[]
   readOnly?: boolean
@@ -118,7 +130,7 @@ type MarkdownEditorProps = {
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ sessionKey, onHistoryChange, onEditingTargetChange, onFormatStateChange, onLinkMenu, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onOpenWikiLink, onResolveAsset, onSelectionChange, readOnly = false, storageKey, value }, ref) {
+  function MarkdownEditor({ sessionKey, onHistoryChange, onEditingTargetChange, onFormatStateChange, onLinkMenu, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onLoadWikiNote, onOpenWikiLink, onResolveAsset, onResolveWikiNote, onSelectionChange, readOnly = false, storageKey, value }, ref) {
     const editorRef = useRef<ReactCodeMirrorRef>(null)
     const insertionMarks = useRef(new Set<{ anchor?: number; from: number; head?: number; to: number }>())
     const [initialState] = useState(() => restoreEditorSession(sessionKey, value))
@@ -131,9 +143,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
     // CodeMirror 的扩展数组一旦换引用就会整体重配置（语言也会重新解析）；
     // 调用方传入的回调多为内联函数，用 ref 中转后扩展只在只读状态切换时重建。
-    const handlers = useRef({ getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onLinkMenu, onOpenWikiLink, onResolveAsset, onSelectionChange, onHistoryChange })
+    const handlers = useRef({ getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onLinkMenu, onLoadWikiNote, onOpenWikiLink, onResolveAsset, onResolveWikiNote, onSelectionChange, onHistoryChange })
     useEffect(() => {
-      handlers.current = { getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onLinkMenu, onOpenWikiLink, onResolveAsset, onSelectionChange, onHistoryChange }
+      handlers.current = { getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onLinkMenu, onLoadWikiNote, onOpenWikiLink, onResolveAsset, onResolveWikiNote, onSelectionChange, onHistoryChange }
     })
 
     // 切换笔记会按 key 重建编辑器，卸载时要撤回选区状态，新笔记才不会带着上一篇的选区操作条打开。
@@ -167,6 +179,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       // 各语言由官方的 language-data 按需动态加载，不写代码块的笔记不会为此付出代价。
       markdown({ base: markdownLanguage, codeLanguages: languages }),
       markdownLivePreview({
+        assetScope: storageKey,
+        onLoadWikiNote: (target) => handlers.current.onLoadWikiNote?.(target),
         onOpenWikiLink: (target) => handlers.current.onOpenWikiLink?.(target),
         // 移动端点按链接交给宿主菜单（打开/编辑/移除），桌面端与只读笔记维持单击直接打开。
         onLinkTap: compact && !readOnly ? (tap) => {
@@ -176,6 +190,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           return true
         } : undefined,
         onResolveAsset: (source) => handlers.current.onResolveAsset?.(source) ?? Promise.resolve(null),
+        onResolveWikiNote: (target) => handlers.current.onResolveWikiNote?.(target) ?? { status: "missing" },
         onTableFormatState: (state) => handlers.current.onFormatStateChange?.(state ? { ...state, heading: 0 } : null),
         tableStorageKey: storageKey,
       }),
@@ -631,6 +646,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         basicSetup={{
           bracketMatching: true,
           closeBrackets: true,
+          drawSelection: shouldDrawCodeMirrorSelection(),
           foldGutter: false,
           highlightActiveLine: false,
           highlightActiveLineGutter: false,

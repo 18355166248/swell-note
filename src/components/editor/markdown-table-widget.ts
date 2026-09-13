@@ -59,9 +59,23 @@ type DragSession = {
   startY: number
 }
 
+type CellEditDraft = {
+  column: number
+  originalValue: string
+  row: number
+  scope?: string
+  selectionEnd: number
+  selectionStart: number
+  tableSource: string
+  value: string
+}
+
 // 矩形选区等交互状态不挂在 Widget 实例上：单元格提交、撤销都会重建 Widget，
 // 状态按「编辑器 + 表格序号」存放，新实例从这里接管未完成的拖选和需要保留的选区。
 type InteractionSession = {
+  // 动态锁定会销毁可编辑 Widget；草稿留在编辑器会话中，解锁后回到同一单元格。
+  // tableSource/scope 同时匹配才恢复，避免切笔记或外部改表后把旧草稿写进新内容。
+  cellDraft?: CellEditDraft | null
   drag?: DragSession | null
   dragListeners?: (() => void) | null
   outsideListeners?: (() => void) | null
@@ -247,6 +261,7 @@ function textOffsetWithin(root: HTMLElement, container: Node, offset: number): n
 export class TableWidget extends WidgetType {
   readonly objectUrls = new Set<string>()
   readonly cleanupCallbacks = new Set<() => void>()
+  readonly readOnly: boolean
   private dragFrame = 0
   private floatingBar: HTMLElement | null = null
   private reportedFormatState = false
@@ -260,6 +275,7 @@ export class TableWidget extends WidgetType {
     readonly tableIndex = 0,
   ) {
     super()
+    this.readOnly = view.state.readOnly
   }
 
   eq(other: TableWidget) {
@@ -268,6 +284,7 @@ export class TableWidget extends WidgetType {
       && other.to === this.to
       && other.tableIndex === this.tableIndex
       && other.options.tableStorageKey === this.options.tableStorageKey
+      && other.readOnly === this.readOnly
   }
 
   // 交互状态按表格序号存续，Widget 重建（提交、撤销、同步合并）后新实例从这里恢复。
@@ -343,7 +360,7 @@ export class TableWidget extends WidgetType {
     applyTableVerticalMode(wrapper, loadTableVerticalMode())
     this.trackHorizontalOverflow(wrapper, tableScroll)
 
-    if (!this.view.state.readOnly) {
+    if (!this.readOnly) {
       const toolbar = this.createToolbar(wrapper, table)
       wrapper.insertBefore(toolbar, tableScroll)
       this.trackToolbarRoom(wrapper, toolbar)
@@ -357,8 +374,24 @@ export class TableWidget extends WidgetType {
       }
       live.set(this.from, this)
       this.cleanupCallbacks.add(registerTableWidgetApi(wrapper, this.createMenuApi()))
+      this.restoreCellDraft(wrapper)
     }
     return wrapper
+  }
+
+  private restoreCellDraft(wrapper: HTMLElement) {
+    const draft = this.session().cellDraft
+    if (!draft) return
+    if (draft.scope !== this.options.tableStorageKey || draft.tableSource !== this.source) {
+      this.session().cellDraft = null
+      return
+    }
+    const timer = window.setTimeout(() => {
+      if (this.view.state.readOnly || liveTableWidgets.get(this.view)?.get(this.from) !== this) return
+      const cell = wrapper.querySelector<HTMLElement>(`[data-row-index="${draft.row}"][data-column-index="${draft.column}"]`)
+      cell?.click()
+    }, 0)
+    this.cleanupCallbacks.add(() => window.clearTimeout(timer))
   }
 
   destroy() {
@@ -910,6 +943,7 @@ export class TableWidget extends WidgetType {
   }
 
   private replaceTable(table: MarkdownTable, focus?: CellTarget) {
+    if (this.view.state.readOnly) return false
     // 同步或撤销可能在交互期间替换正文；写回前核验原始范围，避免旧 Widget 覆盖新表格。
     if (this.view.state.sliceDoc(this.from, this.to) !== this.source) return false
     // 内容没变（切单元格时提交了未改动的输入等）：不能派发事务——与原文相同的替换
@@ -1027,13 +1061,22 @@ export class TableWidget extends WidgetType {
     const contentStack = cell.querySelector<HTMLElement>(":scope > .cm-md-table-cell-stack")
     const display = contentStack?.querySelector<HTMLElement>(":scope > .cm-md-table-cell-display")
     if (!contentStack || !display) return
+    const session = this.session()
+    const preserved = session.cellDraft
+    const draft = preserved && preserved.scope === this.options.tableStorageKey
+      && preserved.tableSource === this.source
+      && preserved.row === rowIndex
+      && preserved.column === columnIndex
+      && preserved.originalValue === originalValue
+      ? preserved
+      : null
     // 光标定位必须在输入层盖上去之前完成：textarea 与展示层重叠后会截获坐标命中，
     // caretRangeFromPoint 打不到展示层的文字，光标只能退回末尾。
     const caret = point ? this.caretIndexFromPoint(display, originalValue, point) : originalValue.length
     const initialContentHeight = display.getBoundingClientRect().height
     const input = document.createElement("textarea")
     input.className = "cm-md-table-cell-input"
-    input.value = originalValue
+    input.value = draft ? draft.value : originalValue
     input.rows = 1
     input.setAttribute("aria-label", cell.getAttribute("aria-label") ?? "编辑表格单元格")
     // 展示层继续留在网格中占位，输入层与其重叠；聚焦不会再替换 DOM 或触发表格重新布局。
@@ -1052,12 +1095,37 @@ export class TableWidget extends WidgetType {
       contentStack.style.minHeight = `${nextHeight}px`
       input.style.overflowY = "hidden"
     }
-    input.addEventListener("input", resizeInput)
     // 单元格本身已经在视口内，禁止 focus 再次滚动页面，否则整张表会产生明显位移。
     input.focus({ preventScroll: true })
     // 鼠标点入时按点击的文字位置定位（中文、英文、换行、空单元格都覆盖）；不全选，
     // 双击选词和方向键导航仍是 textarea 原生行为。键盘（Enter/空格）进入没有坐标，保持末尾续写。
-    input.setSelectionRange(caret, caret)
+    input.setSelectionRange(
+      draft ? draft.selectionStart : caret,
+      draft ? draft.selectionEnd : caret,
+    )
+
+    const syncDraft = () => {
+      session.cellDraft = {
+        column: columnIndex,
+        originalValue,
+        row: rowIndex,
+        scope: this.options.tableStorageKey,
+        selectionEnd: input.selectionEnd ?? input.value.length,
+        selectionStart: input.selectionStart ?? input.value.length,
+        tableSource: this.source,
+        value: input.value,
+      }
+    }
+    const clearDraft = () => {
+      const current = session.cellDraft
+      if (current?.row === rowIndex && current.column === columnIndex && current.tableSource === this.source) session.cellDraft = null
+    }
+    syncDraft()
+    input.addEventListener("input", () => {
+      resizeInput()
+      syncDraft()
+    })
+    for (const type of ["keyup", "mouseup", "select"] as const) input.addEventListener(type, syncDraft)
 
     // 工具栏格式高亮：进入编辑与选区变化时汇报当前单元格的行内格式。
     const reportFormat = () => {
@@ -1085,8 +1153,16 @@ export class TableWidget extends WidgetType {
     }
     const commit = (navigation?: CellTarget & { appendRow?: boolean }) => {
       if (finished) return
+      syncDraft()
       finished = true
+      // 锁定事务已经生效时只卸下输入 DOM，草稿留给解锁后的新 Widget；
+      // 不能从 blur/destroy 逆向写只读正文。
+      if (this.view.state.readOnly) {
+        restoreCell()
+        return
+      }
       if (!navigation && input.value === originalValue) {
+        clearDraft()
         restoreCell()
         return
       }
@@ -1098,12 +1174,16 @@ export class TableWidget extends WidgetType {
       if (rowIndex < 0) next.header[columnIndex] = input.value
       else next.rows[rowIndex][columnIndex] = input.value
       if (navigation?.appendRow) next.rows.push(Array(next.header.length).fill(""))
-      this.replaceTable(next, navigation)
+      // 同步改表冲突时不清草稿、不覆盖新正文；只有原表快照仍匹配才提交。
+      if (this.view.state.sliceDoc(this.from, this.to) === this.source) {
+        clearDraft()
+        this.replaceTable(next, navigation)
+      }
     }
     unregister = registerTableEdit(this.view, {
       input,
       commit: () => commit(),
-      cancel: () => { finished = true; restoreCell() },
+      cancel: () => { finished = true; clearDraft(); restoreCell() },
       format: (template) => {
         const change = inlineTableFormat(template, input.value, input.selectionStart, input.selectionEnd)
         if (!change) return
@@ -1142,9 +1222,13 @@ export class TableWidget extends WidgetType {
       if (!cells?.length) return
       event.preventDefault()
       event.stopPropagation()
+      syncDraft()
       finished = true
       restoreCell()
-      this.replaceTable(pasteTableCells(table, rowIndex + 1, columnIndex, cells), { row: rowIndex + 1, column: columnIndex })
+      if (!this.view.state.readOnly && this.view.state.sliceDoc(this.from, this.to) === this.source) {
+        clearDraft()
+        this.replaceTable(pasteTableCells(table, rowIndex + 1, columnIndex, cells), { row: rowIndex + 1, column: columnIndex })
+      }
     })
     input.addEventListener("blur", () => {
       // 自定义菜单暂时接过焦点，输入框和选区仍属于当前单元格；菜单关闭后再恢复或提交。
@@ -1165,6 +1249,7 @@ export class TableWidget extends WidgetType {
       }
       if (event.key === "Escape") {
         finished = true
+        clearDraft()
         restoreCell()
         cell.focus()
         this.view.dispatch({ selection: { anchor: this.to } })

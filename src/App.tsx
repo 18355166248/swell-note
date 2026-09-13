@@ -37,6 +37,7 @@ import {
   type VaultFileEntry,
 } from "@/services/vault/vault-adapter"
 import { resolveVaultAssetPath } from "@/services/vault/vault-path"
+import { LocalSaveCoordinator } from "@/services/vault/local-save-coordinator"
 import {
   appendBlockMarkdown,
   canWriteVaultAttachments,
@@ -211,9 +212,9 @@ function App() {
     setNoteViewMode(mode)
     saveUiPreferences({ noteViewMode: mode })
   }, [])
-  // 新建笔记必须落在编辑态：空白笔记在阅读态下只有一片空白，既看不到光标也无从下手。
-  // 这里只切当前视图，不写入偏好，用户设定的默认阅读态在下次启动时依然生效。
-  const openNoteViewForEditing = useCallback(() => setNoteViewMode("edit"), [])
+  // 新建笔记必须落在统一画布：空白笔记在兼容阅读视图下无从输入。
+  // 这里只切当前视图，不写入偏好，用户显式选择的只读偏好在下次启动时依然生效。
+  const openNoteViewForEditing = useCallback(() => setNoteViewMode("unified"), [])
   const changeColorMode = useCallback((mode: ColorMode) => {
     setColorMode(mode)
     saveUiPreferences({ colorMode: mode })
@@ -256,7 +257,7 @@ function App() {
   }, [])
   const [nativeSearchResult, setNativeSearchResult] = useState<{ paths: Set<string>; query: string } | null>(null)
   const saveTimersRef = useRef(new Map<string, number>())
-  const saveQueuesRef = useRef(new Map<string, Promise<void>>())
+  const localSaveCoordinatorRef = useRef(new LocalSaveCoordinator())
   const loadingNoteIdsRef = useRef(new Set<string>())
   const revisionByPathRef = useRef(new Map<string, string | undefined>())
   const indexGenerationRef = useRef(0)
@@ -268,6 +269,13 @@ function App() {
   const autoSyncQueueKeyRef = useRef("")
   const pendingWikiAnchorRef = useRef("")
   const passiveWebDavReaderRef = useRef<Promise<VaultAdapter | null> | null>(null)
+
+  const invalidateLocalSaveContext = useCallback(() => {
+    for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer)
+    saveTimersRef.current.clear()
+    // 已进入原生文件 API 的 Promise 无法取消；递增代际后，它们只能完成旧写入，不能回填当前 Vault 状态。
+    localSaveCoordinatorRef.current.invalidate()
+  }, [])
   const restoredCredentialCacheIdRef = useRef<string | null>(null)
   const refreshVaultRef = useRef<(noteIds?: ReadonlySet<string>, options?: { automatic?: boolean }) => Promise<void>>(async () => undefined)
   notesRef.current = notes
@@ -290,9 +298,7 @@ function App() {
 
   const applyCachedSnapshot = useCallback((snapshot: VaultCacheSnapshot) => {
     // 缓存恢复时主动断开运行时适配器，确保离线浏览不会误走本地文件或 WebDAV 写入链路。
-    for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer)
-    saveTimersRef.current.clear()
-    saveQueuesRef.current.clear()
+    invalidateLocalSaveContext()
     revisionByPathRef.current.clear()
     indexGenerationRef.current += 1
 
@@ -336,7 +342,7 @@ function App() {
     setLoadingNoteIds(new Set())
     setNoteLoadErrors({})
     setVaultError(null)
-  }, [])
+  }, [invalidateLocalSaveContext])
 
   useEffect(() => {
     let cancelled = false
@@ -443,8 +449,8 @@ function App() {
   }, [])
 
   useEffect(() => () => {
-    for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer)
-  }, [])
+    invalidateLocalSaveContext()
+  }, [invalidateLocalSaveContext])
 
   useEffect(() => {
     const updateNetworkState = () => setIsOnline(navigator.onLine)
@@ -821,42 +827,48 @@ function App() {
     if (note.source === "webdav") return
     const adapter = vaultSession
     const path = note.remotePath
-    if (!path || note.readOnly || !adapter?.writeTextFile) return
+    const writeTextFile = adapter?.writeTextFile
+    if (!path || note.readOnly || !writeTextFile) return
 
     const previousTimer = saveTimersRef.current.get(note.id)
     if (previousTimer) window.clearTimeout(previousTimer)
+    const coordinator = localSaveCoordinatorRef.current
+    const token = coordinator.begin(note.id)
     setSaveStates((current) => ({ ...current, [note.id]: { status: "saving" } }))
 
     // 同一文件的保存任务串行执行，并在真正写入前读取最新 revision，避免快速输入造成自冲突。
     const timer = window.setTimeout(() => {
-      const previousSave = saveQueuesRef.current.get(path) ?? Promise.resolve()
-      const nextSave = previousSave
-        .catch(() => undefined)
-        .then(async () => {
-          try {
-            const result = await adapter.writeTextFile?.(
-              path,
-              content,
-              revisionByPathRef.current.get(path),
-            )
-            if (!result) return
-            revisionByPathRef.current.set(path, result.revision)
-            setNotes((current) => current.map((currentNote) =>
-              currentNote.id === note.id
-                ? { ...currentNote, modifiedAt: Date.now(), revision: result.revision, updatedAt: "刚刚" }
-                : currentNote,
-            ))
-            setSaveStates((current) => ({ ...current, [note.id]: { status: "saved" } }))
-          } catch (error) {
-            const message = error instanceof Error ? error.message : "保存笔记失败"
-            const status = error instanceof Error && error.name === "VaultConflictError"
-              ? "conflict"
-              : "error"
-            setSaveStates((current) => ({ ...current, [note.id]: { message, status } }))
-            setVaultError(message)
-          }
-        })
-      saveQueuesRef.current.set(path, nextSave)
+      if (saveTimersRef.current.get(note.id) === timer) saveTimersRef.current.delete(note.id)
+      void coordinator.enqueue(path, async () => {
+        // 切库前已排队但尚未进入文件 API 的任务直接作废；在途任务只能等待原生调用自行结束。
+        if (!coordinator.isContextCurrent(token)) return
+        try {
+          const result = await writeTextFile(
+            path,
+            content,
+            revisionByPathRef.current.get(path),
+          )
+          if (!coordinator.isContextCurrent(token)) return
+          // 被新输入取代的旧请求仍须推进 revision，排队中的新请求才能基于真实磁盘版本继续写。
+          revisionByPathRef.current.set(path, result.revision)
+          if (!coordinator.settle(token)) return
+          setNotes((current) => current.map((currentNote) =>
+            currentNote.id === note.id
+              ? { ...currentNote, modifiedAt: Date.now(), revision: result.revision, updatedAt: "刚刚" }
+              : currentNote,
+          ))
+          setSaveStates((current) => ({ ...current, [note.id]: { status: "saved" } }))
+        } catch (error) {
+          // 旧错误不能覆盖较新输入的 saving；切换 Vault 后也不能把旧会话错误带到新库。
+          if (!coordinator.settle(token)) return
+          const message = error instanceof Error ? error.message : "保存笔记失败"
+          const status = error instanceof Error && error.name === "VaultConflictError"
+            ? "conflict"
+            : "error"
+          setSaveStates((current) => ({ ...current, [note.id]: { message, status } }))
+          setVaultError(message)
+        }
+      })
     }, 650)
     saveTimersRef.current.set(note.id, timer)
   }
@@ -1438,12 +1450,14 @@ function App() {
       routeNoteId: noteRouteMatch?.params.noteId,
     })
 
+    const cacheId = await createVaultCacheId(adapter.cacheIdentity)
+    if (activeCacheMeta?.id !== cacheId) invalidateLocalSaveContext()
+
     revisionByPathRef.current.clear()
     for (const note of mergedNotes) {
       if (note.remotePath) revisionByPathRef.current.set(note.remotePath, note.revision)
     }
 
-    const cacheId = await createVaultCacheId(adapter.cacheIdentity)
     const persistedCache = activeCacheMeta?.id === cacheId ? null : await loadVaultCache(cacheId, { hydrate: "active" })
     const nextTrashEntries = activeCacheMeta?.id === cacheId
       ? trashEntries
@@ -1881,9 +1895,7 @@ function App() {
     // latestCacheSnapshotRef 同时服务于 450ms 防抖写入和 visibilitychange 立即 flush，
     // 置空后两者都会跳过；activeCacheMeta 变为 null 后，缓存写入 effect 也会提前返回。
     latestCacheSnapshotRef.current = null
-    for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer)
-    saveTimersRef.current.clear()
-    saveQueuesRef.current.clear()
+    invalidateLocalSaveContext()
     loadingNoteIdsRef.current.clear()
     revisionByPathRef.current.clear()
     // 递增代际让仍在运行的后台索引批次自行退出，不再往已清空的列表里回填正文。
@@ -2042,6 +2054,11 @@ function App() {
     }
     const path = activeNote.remotePath
     if (!path || !vaultSession) return
+
+    if (localSaveCoordinatorRef.current.hasPending(activeNote.id)) {
+      setVaultError("笔记仍在保存，请稍后再重新加载")
+      return
+    }
 
     const pendingTimer = saveTimersRef.current.get(activeNote.id)
     if (pendingTimer) {
@@ -2256,7 +2273,7 @@ function App() {
       setVaultError("当前笔记不能移动，请打开一个可写的本地 Vault")
       return
     }
-    if (saveStates[note.id]?.status === "saving") {
+    if (saveStates[note.id]?.status === "saving" || localSaveCoordinatorRef.current.hasPending(note.id)) {
       setVaultError("笔记仍在保存，请稍后再移动")
       return
     }
@@ -2375,7 +2392,7 @@ function App() {
       const nextId = `${adapter.kind}:${result.path}`
       revisionByPathRef.current.delete(note.remotePath)
       revisionByPathRef.current.set(result.path, result.revision)
-      saveQueuesRef.current.delete(note.remotePath)
+      localSaveCoordinatorRef.current.forgetPath(note.remotePath)
       const writtenRepairs = new Map<string, { content: string; revision?: string }>()
       for (const repair of linkRepairs) {
         try {
@@ -2869,10 +2886,16 @@ function App() {
   const discardEmptyDraft = async (note: Note) => {
     if (!isDiscardableEmptyDraft(note)) return false
 
+    const coordinator = localSaveCoordinatorRef.current
     const pendingTimer = saveTimersRef.current.get(note.id)
     if (pendingTimer) {
       window.clearTimeout(pendingTimer)
       saveTimersRef.current.delete(note.id)
+      coordinator.cancelNote(note.id)
+    } else if (coordinator.hasPending(note.id)) {
+      // 已进入文件 API 的写入不能撤销；先保留草稿，避免删除后旧写入又把文件创建回来。
+      setVaultError("笔记仍在保存，请稍后再离开空白草稿")
+      return false
     }
 
     try {
@@ -2913,7 +2936,7 @@ function App() {
       setVaultError("当前笔记不能删除，请打开一个可写的本地 Vault")
       return
     }
-    if (saveStates[note.id]?.status === "saving") {
+    if (saveStates[note.id]?.status === "saving" || localSaveCoordinatorRef.current.hasPending(note.id)) {
       setVaultError("笔记仍在保存，请稍后再删除")
       return
     }
@@ -3001,7 +3024,7 @@ function App() {
       const nextNote = remainingNotes[Math.min(Math.max(currentIndex, 0), remainingNotes.length - 1)] ?? null
 
       revisionByPathRef.current.delete(note.remotePath)
-      saveQueuesRef.current.delete(note.remotePath)
+      localSaveCoordinatorRef.current.forgetPath(note.remotePath)
       setNotes(remainingNotes)
       setSaveStates((current) => {
         const next = { ...current }

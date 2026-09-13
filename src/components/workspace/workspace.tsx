@@ -48,7 +48,6 @@ import {
   LoaderCircle,
   MoreHorizontal,
   Menu,
-  Eye,
   PencilLine,
   Plus,
   RefreshCw,
@@ -110,7 +109,7 @@ import { extractNoteOutline } from "@/services/markdown/note-outline"
 import { buildMarkdownNoteLink, buildRelativeMarkdownHref } from "@/services/markdown/markdown-link"
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
 import { sortNotes, type NoteSort } from "@/services/search/note-sort"
-import { loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
+import { getNoteViewModeAction, loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
 import { applyFolderOrder, loadFolderOrder, saveFolderOrder } from "@/services/preferences/folder-order-preferences"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { EditorFormatState } from "@/components/editor/markdown-input"
@@ -258,6 +257,26 @@ type WorkspaceProps = {
 type SearchNavigation = { noteId: string; query: string }
 const SearchNavigationContext = createContext<{ request: SearchNavigation | null; consume: () => void }>({ request: null, consume: () => {} })
 
+export function handleNoteViewModeShortcut(event: KeyboardEvent, currentMode: NoteViewMode, onChange: (mode: NoteViewMode) => void) {
+  // 组合输入期间切成只读会截断候选词；进入锁定前主动失焦，同时提交标题草稿并关闭手机键盘。
+  if (event.isComposing || event.keyCode === 229) return
+  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat) return
+  if (event.key.toLocaleLowerCase() !== "e" || hasOpenModal()) return
+  event.preventDefault()
+  const nextMode = getNoteViewModeAction(currentMode).nextMode
+  if (nextMode === "locked" && document.activeElement instanceof HTMLElement) document.activeElement.blur()
+  onChange(nextMode)
+}
+
+export function resolveWriteProtected(fileReadOnly: boolean, source: Note["source"], saveStatus: NoteSaveState["status"]) {
+  // 本地 saving 是后台自动写盘，仍可继续输入；WebDAV saving 是显式同步，期间保留快照写保护。
+  return fileReadOnly || (source === "webdav" && saveStatus === "saving")
+}
+
+export function resolveEditorReadOnly(fileReadOnly: boolean, source: Note["source"], viewMode: NoteViewMode, saveStatus: NoteSaveState["status"]) {
+  return resolveWriteProtected(fileReadOnly, source, saveStatus) || viewMode === "locked"
+}
+
 export function Workspace(props: WorkspaceProps) {
   const [searchRequest, setSearchRequest] = useState<SearchNavigation | null>(null)
   const consumeSearchRequest = useCallback(() => setSearchRequest(null), [])
@@ -275,11 +294,7 @@ export function Workspace(props: WorkspaceProps) {
   useEffect(() => {
     if (!props.activeNote || activeNoteUsesSpecialPreview) return
     const toggleViewMode = (event: KeyboardEvent) => {
-      // 与其他桌面快捷键一致地忽略长按重复：按住不放会连着翻转视图，来回闪。
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.repeat) return
-      if (event.key.toLocaleLowerCase() !== "e" || hasOpenModal()) return
-      event.preventDefault()
-      props.onNoteViewModeChange(props.noteViewMode === "preview" ? "edit" : "preview")
+      handleNoteViewModeShortcut(event, props.noteViewMode, props.onNoteViewModeChange)
     }
     // 桌面与移动布局会同时挂载，快捷键统一放在 Workspace，避免两个编辑器各触发一次相互抵消。
     document.addEventListener("keydown", toggleViewMode)
@@ -1566,13 +1581,18 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   const isCanvas = note.format === "canvas"
   const isExcalidraw = isExcalidrawMarkdown(note.content)
   const isSpecialPreview = isCanvas || isExcalidraw
-  const readOnly = isCanvas || (note.readOnly ?? note.source === "webdav") || saveState.status === "saving"
+  const fileReadOnly = isCanvas || (note.readOnly ?? note.source === "webdav")
+  const writeProtected = resolveWriteProtected(fileReadOnly, note.source, saveState.status)
   const editorRef = useRef<MarkdownEditorHandle>(null)
   const editorArticleRef = useRef<HTMLElement>(null)
   const dismissSelectionOriginRef = useRef<PointerOrigin | null>(null)
   const editorViewportRef = useRef<HTMLDivElement>(null)
-  // 特殊画布始终使用专属预览；普通 Markdown 读取 App 级偏好，切换笔记或路由不会重置。
+  // locked 只切换同一个 CodeMirror 的可写能力，不更换正文组件，滚动、选区与撤销历史因此都能保留。
+  const viewLocked = noteViewMode === "locked"
+  const editorReadOnly = resolveEditorReadOnly(fileReadOnly, note.source, noteViewMode, saveState.status)
+  // 特殊画布始终使用专属预览；preview 仅承接旧偏好和低频兼容阅读入口。
   const previewing = isSpecialPreview || noteViewMode === "preview"
+  const viewAction = getNoteViewModeAction(noteViewMode)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false)
@@ -1764,7 +1784,10 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   const isVaultNote = note.source === "local" || note.source === "webdav"
   const titleInputRef = useRef<HTMLInputElement>(null)
   const [titleDraft, setTitleDraft] = useState(note.title)
-  useEffect(() => { if (note.draft) titleInputRef.current?.focus() }, [noteRenderIdentity])
+  useEffect(() => {
+    // 手机打开新稿时先保持阅读姿态，用户点标题或正文后才唤起软键盘。
+    if (!compact && note.draft) titleInputRef.current?.focus()
+  }, [compact, note.draft, noteRenderIdentity])
   useEffect(() => { setTitleDraft(note.title) }, [note.id, note.title])
 
   const cancelTitleCommitRef = useRef(false)
@@ -1828,7 +1851,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
   }, [onOpenWikiLink])
 
   const handleInsertFiles = useCallback(async (files: File[], position?: number) => {
-    if (files.length === 0 || readOnly || !canInsertAttachment) return
+    if (files.length === 0 || editorReadOnly || !canInsertAttachment) return
     // 远端写入要求串行；并发的第二批不排队也不静默吞掉，明确提示后由用户重试。
     if (attachmentBusyRef.current) {
       setAttachmentError("上一批附件仍在写入，请完成后再试")
@@ -1855,7 +1878,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
       attachmentBusyRef.current = false
       setInsertingAttachment(false)
     }
-  }, [canInsertAttachment, note.id, onFormatNote, onInsertAttachments, readOnly])
+  }, [canInsertAttachment, editorReadOnly, note.id, onFormatNote, onInsertAttachments])
 
   const getWikiLinkSuggestions = useCallback(() => wikiLinkNotes
     .filter((candidate) => candidate.pendingOperation !== "delete" && Boolean(candidate.remotePath))
@@ -2030,7 +2053,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
       className="note-editor"
       data-compact={compact}
       data-excalidraw={isExcalidraw}
-      data-view-mode={previewing ? "preview" : "edit"}
+      data-view-mode={previewing ? "preview" : noteViewMode}
       onPointerDownCapture={compact ? (event) => {
         dismissSelectionOriginRef.current = { at: event.timeStamp, x: event.clientX, y: event.clientY }
       } : undefined}
@@ -2088,9 +2111,6 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
               <TooltipContent>上传本地修改并拉取远端更新</TooltipContent>
             </Tooltip>
           ) : null}
-          {!isSpecialPreview ? (
-            <NoteViewModeSwitch mode={noteViewMode} onChange={handleNoteViewModeChange} />
-          ) : null}
           {!compact && !isSpecialPreview ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -2128,6 +2148,20 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
               <Button aria-label="更多操作" size="icon-sm" variant="ghost"><MoreHorizontal /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              {!isSpecialPreview ? (
+                <>
+                  <DropdownMenuItem onClick={() => handleNoteViewModeChange(viewAction.nextMode)}>
+                    {viewAction.nextMode === "unified" ? <PencilLine /> : <LockKeyhole />}
+                    {viewAction.label}
+                  </DropdownMenuItem>
+                  {noteViewMode !== "preview" ? (
+                    <DropdownMenuItem onClick={() => handleNoteViewModeChange("preview")}>
+                      兼容阅读视图
+                    </DropdownMenuItem>
+                  ) : null}
+                  <DropdownMenuSeparator />
+                </>
+              ) : null}
               {compact && !isSpecialPreview ? (
                 <DropdownMenuItem onClick={() => setOutlineDialogOpen(true)}>
                   <ListTree /> 文档大纲{noteOutline.length > 0 ? `（${noteOutline.length}）` : ""}
@@ -2189,7 +2223,12 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
         </div>
       ) : null}
 
-      {!compact && !previewing && !readOnly ? (
+      {!compact && !previewing ? editorReadOnly ? (
+        <div className="formatting-toolbar formatting-toolbar-locked" role="status">
+          <LockKeyhole />
+          <span>{fileReadOnly ? "源文件只读" : viewLocked ? "只读阅读已锁定" : "正在同步，暂不可编辑"}</span>
+        </div>
+      ) : (
         <FormattingToolbar
           attachmentBusy={insertingAttachment}
           canInsertAttachment={canInsertAttachment}
@@ -2201,6 +2240,13 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           onFormat={handleFormat}
           onInsertFiles={handleInsertFiles}
         />
+      ) : null}
+
+      {noteViewMode === "preview" && !isSpecialPreview ? (
+        <div className="compatibility-preview-banner" role="status">
+          <span>当前使用兼容阅读视图</span>
+          <Button onClick={() => handleNoteViewModeChange("unified")} size="sm" variant="outline">进入一体化编辑</Button>
+        </div>
       ) : null}
 
       {findOpen && !isSpecialPreview ? (
@@ -2229,7 +2275,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           </div>
           <button aria-label="上一个匹配项" disabled={!findResult.total} onClick={() => runFind("previous")} type="button"><ChevronUp /></button>
           <button aria-label="下一个匹配项" disabled={!findResult.total} onClick={() => runFind("next")} type="button"><ChevronDown /></button>
-          {!readOnly && !previewing ? (
+          {!editorReadOnly && !previewing ? (
             <>
               <input
                 aria-label="替换为"
@@ -2271,7 +2317,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
             <MarkdownPreview
               assetScope={assetScope}
               content={note.content}
-              editable={!readOnly}
+              editable={!writeProtected}
               immersive
               noteId={note.id}
               onContentChange={(content) => onUpdateNote({
@@ -2290,20 +2336,21 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
           disabled={isCanvas}
           editorRef={editorRef}
           previewing={previewing}
-          readOnly={readOnly}
+          readOnly={editorReadOnly}
+          viewMode={noteViewMode}
           hasSelection={hasSelection}
           canUndo={historyState.undo}
           canRedo={historyState.redo}
           canHistory={Boolean(activeCacheId)}
           starred={Boolean(note.starred)}
           onFind={() => setFindOpen(true)}
-          onToggleView={() => handleNoteViewModeChange(previewing ? "edit" : "preview")}
+          onViewModeChange={handleNoteViewModeChange}
           onToggleStar={() => onUpdateNote({ starred: !note.starred })}
           onExport={onExportNote}
           onHistory={() => setHistoryDialogOpen(true)}
         >
         <div className="document-canvas">
-          {previewing || note.readOnly === true ? (
+          {previewing || fileReadOnly ? (
             <h1 className="document-title document-title-readonly">{note.title || "未命名笔记"}</h1>
           ) : (
             <input
@@ -2328,9 +2375,10 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
                   setTitleDraft(note.title)
                 }
                 event.currentTarget.blur()
-                if (event.key === "Enter") editorRef.current?.focus()
+                if (event.key === "Enter" && !viewLocked) editorRef.current?.focus()
               }}
               placeholder="输入标题"
+              readOnly={viewLocked}
               value={isVaultNote ? titleDraft : note.title}
             />
           )}
@@ -2355,13 +2403,13 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
               <MarkdownPreview
                 assetScope={assetScope}
                 content={note.content}
-                editable={!readOnly}
+                editable={!writeProtected}
                 key={noteRenderIdentity}
                 noteId={note.id}
                 onLoadWikiNote={onLoadWikiNote}
                 onResolveAsset={onResolveAsset}
                 onResolveWikiNote={onResolveWikiNote}
-                onToggleTask={readOnly ? undefined : onToggleTask}
+                onToggleTask={writeProtected ? undefined : onToggleTask}
                 onWikiLink={onOpenWikiLink}
               />
             </Suspense>
@@ -2392,10 +2440,12 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
                     target: tap.target,
                     url: tap.target.url,
                   })}
+                  onLoadWikiNote={onLoadWikiNote}
                   onOpenWikiLink={onOpenWikiLink}
                   onResolveAsset={onResolveAsset}
+                  onResolveWikiNote={onResolveWikiNote}
                   onSelectionChange={setHasSelection}
-                  readOnly={readOnly}
+                  readOnly={editorReadOnly}
                   ref={editorRef}
                   storageKey={note.id}
                   value={note.content}
@@ -2423,10 +2473,15 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
 
       {/* 只读笔记没有格式工具栏，选区操作仍需要独立一条（复制/全选可用）；
           可编辑时选区操作并入格式栏同一行，不再额外堆叠 46px。 */}
-      {compact && !previewing && readOnly && hasSelection ? (
+      {compact && !previewing && editorReadOnly ? hasSelection ? (
         <SelectionActionBar editorRef={editorRef} readOnly />
+      ) : (
+        <div className="formatting-toolbar formatting-toolbar-locked" data-mobile="true" role="status">
+          <LockKeyhole />
+          <span>{fileReadOnly ? "源文件只读" : viewLocked ? "只读阅读已锁定" : "正在同步"}</span>
+        </div>
       ) : null}
-      {compact && !previewing && !readOnly ? (
+      {compact && !previewing && !editorReadOnly ? (
         <FormattingToolbar
           attachmentBusy={insertingAttachment}
           canInsertAttachment={canInsertAttachment}
@@ -2810,41 +2865,6 @@ function BacklinksPanel({ backlinks, onSelectNote }: { backlinks: Note[]; onSele
         ))}
       </div>
     </section>
-  )
-}
-
-function NoteViewModeSwitch({ mode, onChange }: { mode: NoteViewMode; onChange: (mode: NoteViewMode) => void }) {
-  const options: Array<{ icon: typeof Eye; label: string; mode: NoteViewMode }> = [
-    { icon: Eye, label: "阅读", mode: "preview" },
-    { icon: PencilLine, label: "编辑", mode: "edit" },
-  ]
-
-  return (
-    <div aria-label="笔记显示模式" className="note-view-mode-switch" role="group">
-      {options.map((option) => {
-        const Icon = option.icon
-        const active = mode === option.mode
-        return (
-          <Tooltip key={option.mode}>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label={`${option.label}模式`}
-                aria-pressed={active}
-                className="note-view-mode-button"
-                data-mode={option.mode}
-                onClick={() => onChange(option.mode)}
-                size="sm"
-                variant="ghost"
-              >
-                <Icon />
-                <span>{option.label}</span>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{active ? `当前为${option.label}模式` : `切换到${option.label}模式（⌘/Ctrl+E）`}</TooltipContent>
-          </Tooltip>
-        )
-      })}
-    </div>
   )
 }
 

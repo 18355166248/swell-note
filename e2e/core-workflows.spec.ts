@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test"
 
+import { lockUnifiedCanvas, useCompatibilityPreview, useUnifiedCanvas } from "./note-view-mode"
+
 async function seedCachedVault(page: Page) {
   await page.goto("/#/notes")
   await page.evaluate(async () => {
@@ -81,7 +83,7 @@ async function seedCachedVault(page: Page) {
 }
 
 test.describe("核心笔记流程", () => {
-  test("桌面端缓存启动、切换笔记、显示模式保持和版本历史入口", async ({ page }, testInfo) => {
+  test("桌面端统一画布锁定、解锁、刷新保持和版本历史入口", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page)
     const workspace = page.locator(".desktop-workspace:visible")
@@ -91,12 +93,13 @@ test.describe("核心笔记流程", () => {
     await expect(page).toHaveURL(/#\/notes\/webdav/)
     await expect(workspace.getByRole("article").getByText("正文 B", { exact: true })).toBeVisible()
 
-    await page.getByRole("button", { name: "编辑模式" }).click()
-    await expect(page.getByRole("button", { name: "编辑模式" })).toHaveAttribute("aria-pressed", "true")
+    await expect(workspace.locator(".note-editor")).toHaveAttribute("data-view-mode", "unified")
+    await lockUnifiedCanvas(page)
     await workspace.getByText("第一篇", { exact: true }).first().click()
-    await expect(page.getByRole("button", { name: "编辑模式" })).toHaveAttribute("aria-pressed", "true")
+    await expect(workspace.locator(".note-editor")).toHaveAttribute("data-view-mode", "locked")
     await page.reload()
-    await expect(page.getByRole("button", { name: "编辑模式" })).toHaveAttribute("aria-pressed", "true")
+    await expect(workspace.locator(".note-editor")).toHaveAttribute("data-view-mode", "locked")
+    await useUnifiedCanvas(page)
 
     await page.getByRole("button", { name: "更多操作" }).click()
     await page.getByRole("menuitem", { name: /本地版本历史/ }).click()
@@ -109,7 +112,7 @@ test.describe("核心笔记流程", () => {
     await expect(page.getByRole("button", { name: /恢复 ZIP/ })).toBeVisible()
   })
 
-  test("阅读态下新建笔记直接进入编辑态，且不改写默认显示偏好", async ({ page }, testInfo) => {
+  test("兼容阅读下新建笔记直接进入统一画布，且不改写显式阅读偏好", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page)
     await page.evaluate(() => {
@@ -123,17 +126,18 @@ test.describe("核心笔记流程", () => {
     await page.reload()
     const workspace = page.locator(".desktop-workspace:visible")
 
-    await expect(page.getByRole("button", { name: "阅读模式" })).toHaveAttribute("aria-pressed", "true")
+    await useCompatibilityPreview(page)
+    await expect(workspace.getByText("当前使用兼容阅读视图")).toBeVisible()
     await workspace.getByRole("button", { name: "新建笔记" }).click()
-    await expect(workspace.locator(".note-editor")).toHaveAttribute("data-view-mode", "edit")
-    await expect(page.getByRole("button", { name: "编辑模式" })).toHaveAttribute("aria-pressed", "true")
+    await expect(workspace.locator(".note-editor")).toHaveAttribute("data-view-mode", "unified")
+    await expect(workspace.locator(".cm-content")).toBeVisible()
 
-    // 只切当前视图：本次新建不会把用户的默认阅读态写成编辑态。
+    // 只切当前视图：本次新建不会覆盖用户显式选择的兼容阅读偏好。
     const storedViewMode = await page.evaluate(() => {
       const raw = localStorage.getItem("swell-note:ui-preferences:v1")
       return raw ? (JSON.parse(raw) as { noteViewMode?: string }).noteViewMode ?? null : null
     })
-    expect(storedViewMode).not.toBe("edit")
+    expect(storedViewMode).toBe("preview")
   })
 
   test("桌面端右键笔记与文件夹弹出自定义菜单并接上后续对话框", async ({ page }, testInfo) => {
@@ -333,8 +337,7 @@ test.describe("核心笔记流程", () => {
     await workspace.getByText("测试", { exact: true }).first().click()
     await workspace.locator(".note-list-row").first().click()
     await expect(workspace).toHaveAttribute("data-screen", "editor")
-    const editButton = workspace.locator('.note-view-mode-button[data-mode="edit"]')
-    if (await editButton.getAttribute("aria-pressed") !== "true") await editButton.click()
+    await expect(workspace.locator(".note-editor")).toHaveAttribute("data-view-mode", "unified")
     await expect(workspace.locator(".cm-content")).toBeVisible()
     await page.waitForTimeout(400)
 
@@ -373,7 +376,7 @@ test.describe("核心笔记流程", () => {
     expect(focusedDuringSwipe.filter((name) => name.includes("cm-content"))).toEqual([])
   })
 
-  test("移动端阅读页保留高频操作并从更多菜单打开大纲", async ({ page }, testInfo) => {
+  test("移动端统一画布保留高频操作并从更多菜单打开大纲", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "mobile-chrome")
     await seedCachedVault(page)
     const workspace = page.locator(".mobile-workspace:visible")
@@ -382,11 +385,11 @@ test.describe("核心笔记流程", () => {
     await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
     await expect(workspace).toHaveAttribute("data-screen", "editor")
     await expect(workspace.getByRole("button", { name: "同步坚果云笔记库" })).toBeVisible()
-    await expect(workspace.getByRole("button", { name: "阅读模式" })).toBeVisible()
     await expect(workspace.getByRole("button", { name: "文档大纲" })).toHaveCount(0)
     await expect(workspace.getByRole("button", { name: "收藏" })).toHaveCount(0)
 
     await workspace.getByRole("button", { name: "更多操作" }).click()
+    await expect(page.getByRole("menuitem", { name: "锁定为只读阅读" })).toBeVisible()
     await page.getByRole("menuitem", { name: /文档大纲/ }).click()
     const outline = page.getByRole("dialog", { name: "文档大纲" })
     await expect(outline).toBeVisible()
@@ -397,7 +400,7 @@ test.describe("核心笔记流程", () => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page)
     await page.evaluate(() => {
-      localStorage.setItem("swell-note:ui-preferences:v1", JSON.stringify({ colorMode: "dark", noteViewMode: "read" }))
+      localStorage.setItem("swell-note:ui-preferences:v1", JSON.stringify({ colorMode: "dark", noteViewMode: "unified" }))
     })
     await page.reload()
 
@@ -407,8 +410,7 @@ test.describe("核心笔记流程", () => {
       await expect(page.locator(selector)).not.toHaveCSS("background-color", "rgb(255, 255, 255)")
     }
 
-    await page.getByRole("button", { name: "编辑模式" }).click()
-    await expect(page.locator(".note-editor[data-view-mode='edit'] .editor-scroll"))
+    await expect(page.locator(".note-editor[data-view-mode='unified'] .editor-scroll"))
       .not.toHaveCSS("background-color", "rgb(255, 255, 255)")
 
     await page.goto("/#/settings/storage")

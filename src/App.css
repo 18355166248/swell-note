@@ -447,7 +447,6 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .dark .markdown-editor-shell .cm-md-codeblock,
 .dark .excalidraw-plugin-source pre,
 .dark .markdown-preview pre { background: var(--muted); }
-.dark .note-view-mode-button[aria-pressed="true"] { background: var(--card); }
 .dark .app-crash-icon,
 .dark .app-initialization-state[data-status="error"] .app-initialization-icon,
 .dark .sync-problem-icon { background: color-mix(in oklab,var(--destructive) 16%,var(--background)); color: oklch(0.78 0.14 45); }
@@ -686,16 +685,14 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .saved-state[data-status="saving"] svg { color: var(--primary); }
 .saved-state[data-status="conflict"], .saved-state[data-status="conflict"] svg { color: #b66a00; }
 .saved-state[data-status="error"], .saved-state[data-status="error"] svg { color: var(--destructive); }
-.note-view-mode-switch { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--muted); padding: 2px; }
-.note-view-mode-button { height: 28px; gap: 5px; border-radius: 6px; padding-inline: 8px; color: var(--muted-foreground); font-size: 11px; transition: background-color 140ms ease,color 140ms ease,box-shadow 140ms ease; }
-.note-view-mode-button svg { width: 13px; height: 13px; }
-.note-view-mode-button[aria-pressed="true"] { background: white; color: var(--primary); box-shadow: 0 1px 3px rgb(30 56 90 / 12%); }
-.note-view-mode-button[data-mode="edit"][aria-pressed="true"] { background: var(--blue-soft); }
 .sync-conflict-banner { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid color-mix(in oklab,#b66a00 25%,var(--border)); background: color-mix(in oklab,#f5a623 9%,white); padding: 9px 16px; color: #7d4b00; }
 .sync-conflict-banner > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
 .sync-conflict-banner strong { font-size: 12px; }
 .sync-conflict-banner span { font-size: 10.5px; line-height: 1.35; }
 .formatting-toolbar { display: flex; min-height: 40px; align-items: center; gap: 1px; overflow-x: auto; border-bottom: 1px solid var(--border); padding: 4px 16px; }
+.formatting-toolbar-locked { gap: 8px; color: var(--muted-foreground); font-size: 11px; }
+.formatting-toolbar-locked > svg { width: 14px; height: 14px; }
+.compatibility-preview-banner { display: flex; min-height: 42px; align-items: center; justify-content: center; gap: 12px; border-bottom: 1px solid var(--border); background: var(--panel-soft); padding: 5px 16px; color: var(--muted-foreground); font-size: 11px; }
 .formatting-toolbar button { display: grid; min-width: 30px; height: 30px; place-items: center; border-radius: 6px; color: #596271; font-size: 11px; font-weight: 650; transition: background-color 120ms ease, color 120ms ease; -webkit-tap-highlight-color: transparent; }
 .formatting-toolbar button:active { background: color-mix(in oklab,var(--muted) 78%,var(--foreground) 8%); transition-duration: 50ms; }
 .formatting-toolbar button:hover { background: var(--muted); color: var(--foreground); }
@@ -735,10 +732,11 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .attachment-error { margin: 0; border-bottom: 1px solid var(--border); background: color-mix(in oklab,var(--destructive) 9%,white); padding: 8px 16px; color: var(--destructive); font-size: 10.5px; line-height: 1.45; }
 .document-canvas { width: min(100%,960px); min-width: 0; max-width: 100%; margin: 0 auto; padding: 48px 56px 80px; }
 .document-title { width: 100%; border: 0; background: transparent; outline: none; color: #1d2530; font-size: clamp(25px,2.3vw,34px); line-height: 1.2; font-weight: 720; letter-spacing: -.035em; }
+.document-title[readonly] { cursor: default; }
 .document-title-readonly { margin: 0; overflow-wrap: anywhere; }
 .document-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 13px 0 30px; color: var(--muted-foreground); font-size: 11px; }
-.note-editor[data-view-mode="edit"]:not([data-excalidraw="true"]) .editor-scroll { background: color-mix(in oklab,var(--primary) 1.5%,white); }
-.dark .note-editor[data-view-mode="edit"]:not([data-excalidraw="true"]) .editor-scroll { background: color-mix(in oklab,var(--primary) 3%,var(--background)); }
+.note-editor:is([data-view-mode="unified"],[data-view-mode="locked"]):not([data-excalidraw="true"]) .editor-scroll { background: color-mix(in oklab,var(--primary) 1.5%,white); }
+.dark .note-editor:is([data-view-mode="unified"],[data-view-mode="locked"]):not([data-excalidraw="true"]) .editor-scroll { background: color-mix(in oklab,var(--primary) 3%,var(--background)); }
 .markdown-editor-shell { --editor-min-height: calc(100dvh - 250px); width: 100%; min-height: var(--editor-min-height); color: #28313e; }
 .markdown-editor-shell .cm-editor { min-height: inherit; background: transparent; font-size: 14px; }
 .markdown-editor-shell .cm-editor.cm-focused,
@@ -764,16 +762,18 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-editor-shell .cm-wiki-completion strong { font-size: 12px; font-weight: 650; }
 .markdown-editor-shell .cm-wiki-completion small { color: var(--muted-foreground); font-size: 10px; }
 /* 编辑器即时渲染：非光标行隐藏语法标记并直接呈现最终样式，与阅读预览保持同一套观感。 */
-.markdown-editor-shell .cm-md-heading { font-weight: 700; letter-spacing: -.01em; color: #1d2530; line-height: 1.45; }
-.markdown-editor-shell .cm-md-h1 { font-size: 1.55em; }
-.markdown-editor-shell .cm-md-h2 { font-size: 1.35em; }
-.markdown-editor-shell .cm-md-h3 { font-size: 1.18em; }
+.markdown-editor-shell .cm-md-heading { padding: .5em 0 .12em; font-weight: 700; letter-spacing: -.02em; color: #1d2530; line-height: 1.3; }
+/* CodeMirror 主题会给标题 token 染语法色；统一画布按标题语义继承正文色，链接仍在下方恢复主色。 */
+.markdown-editor-shell .cm-md-heading * { color: inherit; }
+.markdown-editor-shell .cm-md-h1 { font-size: 1.8em; }
+.markdown-editor-shell .cm-md-h2 { border-bottom: 1px solid var(--border); font-size: 1.4em; }
+.markdown-editor-shell .cm-md-h3 { font-size: 1.16em; }
 .markdown-editor-shell .cm-md-h4, .markdown-editor-shell .cm-md-h5, .markdown-editor-shell .cm-md-h6 { font-size: 1.05em; }
 .markdown-editor-shell .cm-md-strong { font-weight: 700; }
 .markdown-editor-shell .cm-md-em { font-style: italic; }
 .markdown-editor-shell .cm-md-strike { color: var(--muted-foreground); text-decoration: line-through; }
 .markdown-editor-shell .cm-md-inline-code { border-radius: 4px; background: var(--muted); padding: .1em .32em; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
-.markdown-editor-shell .cm-md-quote { border-left: 3px solid var(--blue-line); background: var(--panel-soft); color: var(--muted-foreground); }
+.markdown-editor-shell .cm-md-quote { border-left: 3px solid var(--blue-line); padding-left: 1em; color: var(--muted-foreground); }
 .markdown-editor-shell .cm-md-bullet { display: inline-block; width: 1.1em; margin-right: .2em; text-align: center; vertical-align: 1px; }
 .markdown-editor-shell .cm-md-bullet::before { content: "•"; color: var(--muted-foreground); font-weight: 700; }
 .markdown-editor-shell .cm-md-list-ordinal { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
@@ -783,6 +783,8 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-editor-shell .cm-widgetBuffer { display: inline !important; width: 0 !important; }
 .markdown-editor-shell .cm-md-task-checkbox { display: inline-block !important; box-sizing: border-box; width: 15px; height: 15px; margin: 0 .5em 0 0; accent-color: var(--primary); cursor: pointer; vertical-align: -2px; }
 .markdown-editor-shell .cm-md-link, .markdown-editor-shell .cm-md-wiki-link { color: var(--primary); text-decoration-line: underline; text-decoration-color: color-mix(in oklab,var(--primary) 52%,transparent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.markdown-editor-shell .cm-md-heading :is(.cm-md-link,.cm-md-wiki-link),
+.markdown-editor-shell .cm-md-heading :is(.cm-md-link,.cm-md-wiki-link) * { color: var(--primary); }
 .markdown-editor-shell .cm-md-link-actionable { cursor: pointer; }
 .markdown-editor-shell .cm-md-link-actionable:hover, .markdown-editor-shell .cm-md-wiki-link:hover { text-decoration-color: currentColor; text-decoration-thickness: 2px; }
 .markdown-editor-shell .cm-md-wiki-embed { color: color-mix(in oklab,var(--primary) 75%,var(--muted-foreground)); }
@@ -1147,10 +1149,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .mobile-back-label { margin-left: 2px; font-size: 14px; font-weight: 620; }
   .note-editor[data-compact="true"] .saved-state { max-width: 86px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .note-editor[data-compact="true"] .editor-sync-button { padding-inline: 9px; }
-  .note-editor[data-compact="true"] .note-view-mode-switch { gap: 1px; padding: 2px; }
-  .note-editor[data-compact="true"] .note-view-mode-button { width: 30px; padding-inline: 0; }
-  .note-editor[data-compact="true"] .note-view-mode-button > span { display: none; }
-  /* 窄屏标题栏优先保留返回、阅读切换与操作入口；同步状态文案仍可通过 tooltip / aria-label 获取。 */
+  /* 窄屏标题栏优先保留返回与操作入口；同步状态文案仍可通过 tooltip / aria-label 获取。 */
   .note-editor[data-compact="true"] .saved-state { width: 26px; justify-content: center; margin-right: 0; }
   .note-editor[data-compact="true"] .saved-state > span,
   .note-editor[data-compact="true"] .editor-sync-button > span { display: none; }
@@ -1158,7 +1157,6 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .note-editor[data-compact="true"] .editor-actions { gap: 1px; }
   .note-editor[data-compact="true"] .editor-actions > button,
   .note-editor[data-compact="true"] .editor-actions > [data-slot="dropdown-menu-trigger"] { min-width: 36px; height: 36px; }
-  .note-editor[data-compact="true"] .note-view-mode-button { width: 34px; height: 32px; }
   .note-editor[data-compact="true"] .saved-state[data-status="saved"] { display: none; }
   /* 居中弹窗（重命名笔记等）默认按整个布局视口居中，键盘打开后会有一半落在键盘下；按键盘高度的一半上移即可重新居中于可视区。 */
   [data-slot="dialog-content"]:not(.mobile-action-sheet) { top: calc(50% - var(--keyboard-inset,0px) / 2); }
@@ -1173,8 +1171,8 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .note-editor[data-compact="true"] .sync-conflict-banner { align-items: stretch; flex-wrap: wrap; padding: 10px 12px; }
   .note-editor[data-compact="true"] .sync-conflict-banner > div { flex-basis: 100%; }
   .note-editor[data-compact="true"] .document-canvas { padding: 28px 20px 80px; }
-  /* 手机编辑通过工具栏状态和光标反馈即可识别，移除正文外侧蓝线，避免误解为整块内容被选中。 */
-  .note-editor[data-compact="true"][data-view-mode="edit"] .document-canvas { box-shadow: none; }
+  /* 手机统一画布通过工具栏状态和光标反馈即可识别，移除正文外侧蓝线，避免误解为整块内容被选中。 */
+  .note-editor[data-compact="true"] .document-canvas { box-shadow: none; }
   .note-editor[data-compact="true"] .document-title { font-size: 28px; }
   .note-editor[data-compact="true"] .document-meta { margin: 10px 0 25px; }
   .note-editor[data-compact="true"] .markdown-editor-shell { --editor-min-height: calc(100dvh - 245px); }
@@ -1196,6 +1194,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .excalidraw-plugin .App-menu_top button.standalone { min-width: 40px; min-height: 40px; }
   /* 键盘打开后工具栏下沿就是键盘，Home Indicator 已被遮住，安全区扣掉键盘高度即可收回这段留白。 */
   .formatting-toolbar[data-mobile="true"] { --mobile-toolbar-bottom-space: max(6px,calc(env(safe-area-inset-bottom) - var(--keyboard-inset,0px))); min-height: calc(48px + var(--mobile-toolbar-bottom-space)); gap: 3px; justify-content: space-around; border-top: 1px solid var(--border); border-bottom: 0; padding: 3px 8px var(--mobile-toolbar-bottom-space); background: white; }
+  .formatting-toolbar-locked[data-mobile="true"] { justify-content: center; gap: 8px; }
   /* 按钮均分整行：屏幕越宽触摸目标越大，也不会因为固定宽度而横向溢出、把最后的按钮挤出屏幕。
      主栏只放 8 个高频控件（重做等低频入口收进“更多”），36px 下限在 320px 窄屏也放得下。 */
   .formatting-toolbar[data-mobile="true"] button { flex: 1; min-width: 36px; height: 40px; }

@@ -7,11 +7,13 @@ import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate
 import { isImageAssetPath, parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
 import { openExternalUrl } from "@/services/open-external-url"
 
+import { collectCompatibilityBlocks, CompatibilityBlockWidget, type CompatibilityBlock, type CompatibilityBlockOptions } from "./compatibility-blocks"
 import { parseMarkdownTable } from "./markdown-table-model"
 import { appendMarkdownImage, type TableInlineOptions } from "./markdown-table-inline"
 import { linkTargetAt, type EditorLinkTap } from "./markdown-input"
 import { openImageZoom } from "./image-zoom"
 import { TableWidget } from "./markdown-table-widget"
+import { collectInlineMath, collectUnifiedRichBlocks, fencedCodeLanguage, InlineMathWidget, UnifiedRichBlockWidget, type UnifiedRichBlock } from "./unified-rich-block"
 
 // Markdown 即时预览：
 // 非光标处隐藏语法标记并直接呈现最终样式，源文件始终保持纯文本。
@@ -32,7 +34,7 @@ type MdSyntaxNode = {
 }
 
 // 打开链接是宿主行为：笔记内链交给工作区路由，外部链接默认走浏览器新窗口。
-export type LivePreviewOptions = TableInlineOptions
+export type LivePreviewOptions = TableInlineOptions & CompatibilityBlockOptions
 
 export type { EditorLinkTap }
 
@@ -46,6 +48,8 @@ const LINK_HINT = "点击打开链接"
 const WIKI_HINT = "点击打开笔记"
 
 export class TaskCheckboxWidget extends WidgetType {
+  readonly readOnly: boolean
+
   constructor(
     readonly checked: boolean,
     readonly from: number,
@@ -53,10 +57,11 @@ export class TaskCheckboxWidget extends WidgetType {
     readonly view: EditorView,
   ) {
     super()
+    this.readOnly = view.state.readOnly
   }
 
   eq(other: TaskCheckboxWidget) {
-    return other.checked === this.checked && other.from === this.from && other.to === this.to
+    return other.checked === this.checked && other.from === this.from && other.to === this.to && other.readOnly === this.readOnly
   }
 
   toDOM() {
@@ -65,7 +70,7 @@ export class TaskCheckboxWidget extends WidgetType {
     box.checked = this.checked
     box.className = "cm-md-task-checkbox"
     box.setAttribute("aria-label", "切换任务状态")
-    if (this.view.state.readOnly) {
+    if (this.readOnly) {
       box.disabled = true
       return box
     }
@@ -73,6 +78,8 @@ export class TaskCheckboxWidget extends WidgetType {
     box.addEventListener("mousedown", (event) => event.preventDefault())
     box.addEventListener("click", (event) => {
       event.preventDefault()
+      // 同一编辑器热切只读时旧 DOM 可能在本次更新结束前仍存在，事件落笔前再次读取实时状态。
+      if (this.view.state.readOnly) return
       this.view.dispatch({ changes: { from: this.from, to: this.to, insert: this.checked ? "[ ]" : "[x]" } })
     })
     return box
@@ -112,12 +119,13 @@ export class MarkdownImageWidget extends WidgetType {
     readonly from?: number,
     readonly to?: number,
     readonly title?: string,
+    readonly readOnly = false,
   ) {
     super()
   }
 
   eq(other: MarkdownImageWidget) {
-    return other.source === this.source && other.alt === this.alt && other.block === this.block && other.from === this.from && other.to === this.to && other.title === this.title
+    return other.source === this.source && other.alt === this.alt && other.block === this.block && other.from === this.from && other.to === this.to && other.title === this.title && other.readOnly === this.readOnly
   }
 
   toDOM(view: EditorView) {
@@ -159,7 +167,7 @@ export class MarkdownImageWidget extends WidgetType {
         host.prepend(imageHost)
         appendMarkdownImage(imageHost, this.alt, this.source, this.options, undefined, `${this.options.tableStorageKey ?? "editor"}:retry:${Date.now()}`)
       })
-      if (!view.state.readOnly) {
+      if (!this.readOnly) {
         button("编辑引用", () => { view.dispatch({ selection: { anchor: this.from!, head: this.to! }, scrollIntoView: true }); view.focus() })
         const sizes = document.createElement("select")
         sizes.setAttribute("aria-label", "图片宽度")
@@ -327,7 +335,7 @@ function decorateWikiLinks(
       if (embedTarget && isImageAssetPath(embedTarget) && !isLineActive(start, end)) {
         const line = state.doc.lineAt(start)
         push(Decoration.replace({
-          widget: new MarkdownImageWidget(embedTarget, embedTarget, line.text.trim() === match[0], state.facet(livePreviewOptions)),
+          widget: new MarkdownImageWidget(embedTarget, embedTarget, line.text.trim() === match[0], state.facet(livePreviewOptions), undefined, undefined, undefined, state.readOnly),
         }).range(start, end))
         continue
       }
@@ -460,8 +468,8 @@ function collectTableBlocks(state: EditorState): TableBlock[] {
 
 // RangeSet 没有值相等接口，用位置加原文构成轻量 key；只比长度会漏掉同步合并、
 // 撤销等带来的等长改写，导致表格继续渲染旧内容。
-function tableBlocksKey(blocks: TableBlock[]) {
-  return blocks.map((block) => `${block.from}:${block.to}:${block.source.length}:${block.source}`).join("|")
+function tableBlocksKey(blocks: TableBlock[], readOnly: boolean) {
+  return `${readOnly ? "locked" : "editable"}|${blocks.map((block) => `${block.from}:${block.to}:${block.source.length}:${block.source}`).join("|")}`
 }
 
 // 块级替换会把紧贴它两端的插入并进自己的范围：在表格末尾换行或补空行后，
@@ -500,6 +508,67 @@ const tableDecorationsField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 })
 
+type UnifiedBlockDescriptor =
+  | { block: CompatibilityBlock; family: "compatibility" }
+  | { block: UnifiedRichBlock; family: "rich" }
+
+const compatibilityBlockCache = new WeakMap<object, { blocks: CompatibilityBlock[]; tree: object }>()
+
+function compatibilityBlocksFor(state: EditorState) {
+  const tree = syntaxTree(state)
+  const cached = compatibilityBlockCache.get(state.doc)
+  if (cached?.tree === tree) return cached.blocks
+  const blocks = collectCompatibilityBlocks(state)
+  compatibilityBlockCache.set(state.doc, { blocks, tree })
+  return blocks
+}
+
+function collectUnifiedBlocks(state: EditorState): UnifiedBlockDescriptor[] {
+  const candidates: UnifiedBlockDescriptor[] = [
+    ...collectUnifiedRichBlocks(state).map((block): UnifiedBlockDescriptor => ({ block, family: "rich" })),
+    ...compatibilityBlocksFor(state).map((block): UnifiedBlockDescriptor => ({ block, family: "compatibility" })),
+  ].sort((left, right) => left.block.from - right.block.from || right.block.to - left.block.to)
+  const blocks: UnifiedBlockDescriptor[] = []
+  for (const candidate of candidates) {
+    if (!blocks.some((current) => candidate.block.from < current.block.to && candidate.block.to > current.block.from)) blocks.push(candidate)
+  }
+  return blocks
+}
+
+function richBlocksKey(blocks: readonly UnifiedBlockDescriptor[], readOnly: boolean) {
+  return `${readOnly ? "locked" : "editable"}|${blocks.map(({ block, family }) => `${family}:${block.kind}:${block.from}:${block.to}:${block.source}`).join("|")}`
+}
+
+function richBlockDecorationsDrifted(state: EditorState, blocks: readonly UnifiedBlockDescriptor[]) {
+  const ranges: DocRange[] = []
+  state.field(richBlockDecorationsField).between(0, state.doc.length, (from, to) => {
+    ranges.push({ from, to })
+  })
+  if (ranges.length !== blocks.length) return true
+  return blocks.some(({ block }, index) => ranges[index].from !== block.from || ranges[index].to !== block.to)
+}
+
+function richBlocksDecorations(blocks: readonly UnifiedBlockDescriptor[], view: EditorView): DecorationSet {
+  const options = view.state.facet(livePreviewOptions)
+  return Decoration.set(blocks.map(({ block, family }) => Decoration.replace({
+    block: true,
+    widget: family === "rich"
+      ? new UnifiedRichBlockWidget(block as UnifiedRichBlock, view, options.tableStorageKey)
+      : new CompatibilityBlockWidget(block as CompatibilityBlock, options, view),
+  }).range(block.from, block.to)), true)
+}
+
+const setRichBlockDecorations = StateEffect.define<DecorationSet>()
+
+const richBlockDecorationsField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, transaction) {
+    const effect = transaction.effects.find((candidate) => candidate.is(setRichBlockDecorations))
+    return effect ? effect.value : value.map(transaction.changes)
+  },
+  provide: (field) => EditorView.decorations.from(field),
+})
+
 // 装饰只在渲染出来的行上才有意义，但范围贴着视口切会让滚动时露出未渲染的源码。
 // 上下各留一屏左右的缓冲，滚动落到缓冲区内时装饰已经就位，viewportChanged 再补下一批。
 const DECORATION_BUFFER = 4000
@@ -524,6 +593,8 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   const isCursorTouching = cursorRangeChecker(view.state)
   const isMarkTouched = cursorMarkChecker(view.state)
   const frontmatter = findFrontmatterRange(view.state)
+  const richBlocks = collectUnifiedRichBlocks(view.state)
+  const compatibilityBlocks = compatibilityBlocksFor(view.state)
   // 早期这里按整篇文档计算，33KB 的笔记每敲一个字就要重建整篇装饰集，
   // 连带 CodeMirror 重新套用 RangeSet 与重算行高，实测占掉按键开销的九成。
   // 编辑器自身不滚动，但 CodeMirror 会跟着外层 ScrollArea 更新 viewport，
@@ -568,6 +639,14 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   for (const { from, to } of decorationRanges) {
     decorateWikiLinks(view.state, from, to, isCursorActive, isCursorTouching, frontmatter, (decoration) => decorations.push(decoration))
     decorateBareUrls(view.state, from, to, frontmatter, (decoration) => decorations.push(decoration))
+    for (const formula of collectInlineMath(view.state, from, to, [...richBlocks, ...compatibilityBlocks])) {
+      if (frontmatter && formula.from < frontmatter.to && formula.to > frontmatter.from) continue
+      // 公式始终保持结果态，修改只经 Widget 内的明确入口进行；只读切换后即使旧光标仍在
+      // 公式范围内，也不会重新露出 `$...$` 源码。
+      decorations.push(Decoration.replace({
+        widget: new InlineMathWidget(formula.source, formula.expression, formula.from, formula.to, view, view.state.facet(livePreviewOptions).tableStorageKey),
+      }).range(formula.from, formula.to))
+    }
     for (const match of view.state.sliceDoc(from, to).matchAll(/==([^=\n]+)==|\[\^([^\]\n]+)\]/g)) {
       const start = from + match.index!, end = start + match[0].length
       if (frontmatter && start < frontmatter.to || isInsideCode(view.state, start)) continue
@@ -635,6 +714,8 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             break
           }
           case "FencedCode": {
+            // Mermaid 围栏由块级 Widget 接管；普通代码围栏继续沿用源码高亮路径。
+            if (fencedCodeLanguage(view.state, node.from, node.to) === "mermaid") return false
             decorateLines(node.from, node.to, "cm-md-codeblock")
             if (!active) {
               for (let child = node.node.firstChild; child; child = child.nextSibling) {
@@ -760,7 +841,7 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
             const line = view.state.doc.lineAt(node.from)
             const alone = line.text.trim() === view.state.sliceDoc(node.from, node.to).trim()
             decorations.push(Decoration.replace({
-              widget: new MarkdownImageWidget(alt, source, alone, view.state.facet(livePreviewOptions), node.from, node.to, (() => { const title = node.node.getChild("LinkTitle"); return title ? view.state.sliceDoc(title.from + 1, title.to - 1) : undefined })()),
+              widget: new MarkdownImageWidget(alt, source, alone, view.state.facet(livePreviewOptions), node.from, node.to, (() => { const title = node.node.getChild("LinkTitle"); return title ? view.state.sliceDoc(title.from + 1, title.to - 1) : undefined })(), view.state.readOnly),
             }).range(node.from, node.to))
             break
           }
@@ -778,7 +859,14 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
     })
   }
 
-  return Decoration.set(decorations, true)
+  // 兼容块已经由块级 Widget 递归渲染，内部的旧行内/行装饰必须一并去除，避免两个装饰源重叠。
+  const visibleDecorations = decorations.filter((decoration) => !compatibilityBlocks.some((block) => block.kind !== "frontmatter" && (
+    decoration.from === decoration.to
+      ? decoration.from >= block.from && decoration.from < block.to
+      : decoration.from < block.to && decoration.to > block.from
+  ),
+  ))
+  return Decoration.set(visibleDecorations, true)
 }
 
 const markdownLivePreviewPlugin = ViewPlugin.fromClass(
@@ -786,6 +874,7 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
     decorations: DecorationSet
     destroyed = false
     tableBlocksKey = ""
+    richBlocksKey = ""
     cursorKey: string
 
     constructor(view: EditorView) {
@@ -793,6 +882,7 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
       this.decorations = buildLivePreviewDecorations(view)
       // 初次构建即提交表格装饰（构造期 dispatch 延迟到挂载后执行）。
       this.syncTableDecorations(view)
+      this.syncRichBlockDecorations(view)
     }
 
     update(update: ViewUpdate) {
@@ -801,10 +891,11 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
       // 而解析器随后追上来时的更新既没有 docChanged 也没有 viewportChanged，
       // 不把它算进来的话，那一屏就会一直停在没有渲染的 Markdown 源码上。
       const parsed = syntaxTree(update.startState) !== syntaxTree(update.state)
-      if (!update.docChanged && !update.viewportChanged && !update.selectionSet && !parsed) return
+      const readOnlyChanged = update.startState.readOnly !== update.state.readOnly
+      if (!update.docChanged && !update.viewportChanged && !update.selectionSet && !parsed && !readOnlyChanged) return
       // 文档没变、视口也没动时先比对光标位置签名：装饰只依赖光标落点（块级看行、行内看相交），
       // 位置没变结果就不会变，直接沿用上一次的结果。
-      if (!update.docChanged && !update.viewportChanged && !parsed) {
+      if (!update.docChanged && !update.viewportChanged && !parsed && !readOnlyChanged) {
         const nextCursorKey = cursorPositionsKey(update.state)
         if (nextCursorKey === this.cursorKey) return
         this.cursorKey = nextCursorKey
@@ -813,7 +904,8 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
       }
       this.decorations = buildLivePreviewDecorations(update.view)
       // 表格块只在文档变化或语法树推进时才可能增减；滚动不会改变它们，没必要跟着重扫一遍语法树。
-      if (update.docChanged || parsed) this.syncTableDecorations(update.view)
+      if (update.docChanged || parsed || readOnlyChanged) this.syncTableDecorations(update.view)
+      if (update.docChanged || parsed || readOnlyChanged) this.syncRichBlockDecorations(update.view)
     }
 
     destroy() {
@@ -824,14 +916,27 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
     // 插件 update 期间不允许同步 dispatch，延迟到当前更新结束后提交。
     syncTableDecorations(view: EditorView) {
       const current = collectTableBlocks(view.state)
-      if (tableBlocksKey(current) === this.tableBlocksKey && !tableDecorationsDrifted(view.state, current)) return
+      if (tableBlocksKey(current, view.state.readOnly) === this.tableBlocksKey && !tableDecorationsDrifted(view.state, current)) return
       window.setTimeout(() => {
         if (this.destroyed) return
         // 等待期间文档可能已被同步合并或撤销改写，必须按当前状态重算，
         // 否则会把基于旧文档的位置派发到新文档上。
         const blocks = collectTableBlocks(view.state)
-        this.tableBlocksKey = tableBlocksKey(blocks)
+        this.tableBlocksKey = tableBlocksKey(blocks, view.state.readOnly)
         view.dispatch({ effects: setTableDecorations.of(tableBlocksDecorations(blocks, view)) })
+      }, 0)
+    }
+
+    // 块级公式与 Mermaid 和表格一样由 StateField 提供。延迟期间始终重读当前文档，
+    // 避免旧笔记异步任务把过期位置派发到已经切换的新源码。
+    syncRichBlockDecorations(view: EditorView) {
+      const current = collectUnifiedBlocks(view.state)
+      if (richBlocksKey(current, view.state.readOnly) === this.richBlocksKey && !richBlockDecorationsDrifted(view.state, current)) return
+      window.setTimeout(() => {
+        if (this.destroyed || !view.dom.isConnected) return
+        const blocks = collectUnifiedBlocks(view.state)
+        this.richBlocksKey = richBlocksKey(blocks, view.state.readOnly)
+        view.dispatch({ effects: setRichBlockDecorations.of(richBlocksDecorations(blocks, view)) })
       }, 0)
     }
   },
@@ -882,9 +987,9 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
   },
 )
 
-export { markdownLivePreviewPlugin, tableDecorationsField }
+export { markdownLivePreviewPlugin, richBlockDecorationsField, tableDecorationsField }
 
 // 表格块替换必须经 StateField 提供，与行内装饰插件一起注册。
 export function markdownLivePreview(options: LivePreviewOptions = {}) {
-  return [livePreviewOptions.of(options), markdownLivePreviewPlugin, tableDecorationsField]
+  return [livePreviewOptions.of(options), markdownLivePreviewPlugin, tableDecorationsField, richBlockDecorationsField]
 }

@@ -1,8 +1,9 @@
 import { useRef, useState, type ReactNode, type RefObject } from "react"
-import { Bold, ClipboardPaste, Copy, Download, ExternalLink, History, Italic, Link, Redo2, Search, TextSelect, Undo2, Scissors, PencilLine, Eye, Star } from "lucide-react"
+import { Bold, ClipboardPaste, Copy, Download, ExternalLink, History, Italic, Link, LockKeyhole, Redo2, Search, TextSelect, Undo2, Scissors, PencilLine, Star } from "lucide-react"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
+import { getNoteViewModeAction, type NoteViewMode } from "@/services/preferences/ui-preferences"
 
 type Props = {
   disabled?: boolean
@@ -10,13 +11,14 @@ type Props = {
   editorRef: RefObject<MarkdownEditorHandle | null>
   previewing: boolean
   readOnly: boolean
+  viewMode: NoteViewMode
   hasSelection: boolean
   canUndo: boolean
   canRedo: boolean
   canHistory: boolean
   starred: boolean
   onFind: () => void
-  onToggleView: () => void
+  onViewModeChange: (mode: NoteViewMode) => void
   onToggleStar: () => void
   onExport: () => void
   onHistory: () => void
@@ -24,6 +26,7 @@ type Props = {
 
 export function DocumentContextMenu(props: Props) {
   const { children, editorRef, previewing, readOnly } = props
+  const viewAction = getNoteViewModeAction(props.viewMode)
   const [selected, setSelected] = useState(false)
   const [hint, setHint] = useState("")
   const [link, setLink] = useState<{ element: HTMLElement; address: string } | null>(null)
@@ -113,7 +116,9 @@ export function DocumentContextMenu(props: Props) {
         </>}
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={props.onFind}><Search />查找正文</ContextMenuItem>
-        <ContextMenuItem onSelect={props.onToggleView}>{previewing ? <PencilLine /> : <Eye />}{previewing ? "编辑模式" : "阅读模式"}</ContextMenuItem>
+        <ContextMenuItem onSelect={() => props.onViewModeChange(viewAction.nextMode)}>
+          {viewAction.nextMode === "unified" ? <PencilLine /> : <LockKeyhole />}{viewAction.label}
+        </ContextMenuItem>
         <ContextMenuItem onSelect={props.onToggleStar}><Star />{props.starred ? "取消收藏" : "收藏笔记"}</ContextMenuItem>
         <ContextMenuItem onSelect={props.onExport}><Download />导出 Markdown 文件</ContextMenuItem>
         <ContextMenuItem disabled={!props.canHistory} onSelect={props.onHistory}><History />本地版本历史</ContextMenuItem>

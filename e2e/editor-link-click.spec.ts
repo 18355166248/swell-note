@@ -99,7 +99,6 @@ test.describe("编辑态链接点击跳转", () => {
     const workspace = page.locator(".desktop-workspace:visible")
     await expect(workspace.getByText("第一篇", { exact: true }).first()).toBeVisible()
 
-    await page.getByRole("button", { name: "编辑模式" }).click()
     const editor = page.locator(".cm-content")
     await expect(editor).toBeVisible()
     // 点走编辑器，确保链接行不处于光标激活态。
@@ -111,14 +110,12 @@ test.describe("编辑态链接点击跳转", () => {
 
     // wiki 双链：同样单击跳转。
     await workspace.getByText("第一篇", { exact: true }).first().click()
-    await page.getByRole("button", { name: "编辑模式" }).click()
     await page.mouse.click(20, 20)
     await page.locator(".cm-content .cm-md-link-actionable[data-wiki-target]").first().click()
     await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
 
     // 外链：mousedown 与 click 去重后恰好打开一次。
     await workspace.getByText("第一篇", { exact: true }).first().click()
-    await page.getByRole("button", { name: "编辑模式" }).click()
     await page.mouse.click(20, 20)
     await page.evaluate(() => {
       (window as unknown as { __openCalls: string[] }).__openCalls = []
@@ -142,7 +139,6 @@ test.describe("编辑态链接点击跳转", () => {
     await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
     await expect(workspace).toHaveAttribute("data-screen", "editor")
 
-    await workspace.getByRole("button", { name: "编辑模式" }).click()
     await expect(page.locator(".cm-content")).toBeVisible()
 
     // 移动端点按 [文字](地址) 链接不再直接跳转，先给「打开 / 编辑 / 移除」菜单。
@@ -161,7 +157,6 @@ test.describe("编辑态链接点击跳转", () => {
     await workspace.getByText("测试", { exact: true }).first().click()
     await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
     await expect(workspace).toHaveAttribute("data-screen", "editor")
-    await workspace.getByRole("button", { name: "编辑模式" }).click()
     await expect(page.locator(".cm-content")).toBeVisible()
     return workspace
   }
@@ -303,7 +298,6 @@ test.describe("编辑细节", () => {
     await workspace.getByText("测试", { exact: true }).first().click()
     await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
     await expect(workspace).toHaveAttribute("data-screen", "editor")
-    await workspace.getByRole("button", { name: "编辑模式" }).click()
     const editor = page.locator(".cm-content")
     await expect(editor).toBeVisible()
 
@@ -322,7 +316,6 @@ test.describe("编辑细节", () => {
   test("右键菜单保留正文选区并支持格式、撤销与粘贴", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page, "记录今天的想法")
-    await page.getByRole("button", { name: "编辑模式", exact: true }).click()
     const editor = page.locator(".cm-content")
     await editor.click()
     await editor.press("ControlOrMeta+a")
@@ -357,7 +350,6 @@ test.describe("编辑细节", () => {
   test("右键只读正文禁止修改但保留复制", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page, "只读正文", true)
-    await page.getByRole("button", { name: "编辑模式", exact: true }).click()
     const editor = page.locator(".cm-content")
     await editor.click({ button: "right" })
     await expect(page.getByRole("menuitem", { name: "粘贴", exact: true })).toBeDisabled()
@@ -371,7 +363,6 @@ test.describe("编辑细节", () => {
   test("右键输入框替换选区，表格菜单操作命中的行", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page, "开头\n\n| 名称 | 数值 |\n| --- | --- |\n| 第一行 | 1 |\n| 第二行 | 2 |\n\n结尾")
-    await page.getByRole("button", { name: "编辑模式", exact: true }).click()
     await page.evaluate(() => {
       Object.defineProperty(navigator, "clipboard", { configurable: true, value: { readText: async () => "替换", writeText: async () => {} } })
     })
@@ -432,7 +423,6 @@ test.describe("编辑细节", () => {
       await workspace.getByText("测试", { exact: true }).first().click()
       await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
     }
-    await workspace.getByRole("button", { name: "编辑模式" }).click()
     const table = workspace.locator(".cm-md-table-wrap")
     const toolbar = table.locator(".cm-md-table-toolbar")
     await expect(toolbar).toBeVisible()
@@ -466,7 +456,6 @@ test.describe("编辑细节", () => {
       await workspace.getByText("测试", { exact: true }).first().click()
       await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
     }
-    await workspace.getByRole("button", { name: "编辑模式" }).click()
     const title = workspace.getByRole("textbox", { name: "笔记标题" })
     await title.fill("尚未确认的标题")
     await title.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true })
@@ -486,7 +475,6 @@ test.describe("编辑细节", () => {
       await workspace.getByText("测试", { exact: true }).first().click()
       await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
     }
-    await workspace.getByRole("button", { name: "编辑模式" }).click()
     const editor = workspace.locator(".cm-content")
     await editor.fill("记录今天的想法")
     await editor.press("ArrowLeft")

@@ -83,7 +83,6 @@ async function seedTableNote(page: Page) {
     database.close()
   }, NOTE_CONTENT)
   await page.reload()
-  await page.getByRole("button", { name: "编辑模式" }).click()
   await expect(page.locator(".cm-md-table-wrap")).toBeVisible()
 }
 
