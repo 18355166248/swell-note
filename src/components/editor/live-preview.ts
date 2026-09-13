@@ -872,7 +872,8 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
           }
           case "Image": {
             const url = node.node.getChild("URL")
-            if (!url || active) break
+            // 锁定后旧光标只是一段会话位置，不代表用户仍在编辑；图片应始终保持渲染态。
+            if (!url || (active && !view.state.readOnly)) break
             const source = view.state.sliceDoc(url.from, url.to)
             if (!source) break
             const marks: MdSyntaxNode[] = []

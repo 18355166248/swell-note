@@ -161,6 +161,20 @@ describe("markdown live preview", () => {
     expect(images.map((image) => image.source)).toContain("../attachments/icon.png")
   })
 
+  it("locked mode renders an image even when the old cursor remains inside its source", async () => {
+    const content = "![截图](../attachments/screenshot.png)"
+    const view = new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc: content,
+        extensions: [markdown({ base: markdownLanguage }), markdownLivePreview({}), EditorState.readOnly.of(true)],
+        selection: { anchor: 3 },
+      }),
+    })
+    const { images } = collect(await settleInlineDecorations(view))
+    expect(images.map((image) => image.source)).toEqual(["../attachments/screenshot.png"])
+  })
+
   // 图片工具条（查看/重试/编辑引用/尺寸/更换/删除）直接改写当前引用的源码，
   // 以下用例锁定「只动目标引用、操作可撤销」的约定。jsdom 不加载真实图片，
   // 工具条不依赖图片加载成功即可出现。

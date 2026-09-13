@@ -31,6 +31,158 @@ afterEach(() => {
 })
 
 describe("MarkdownEditor", () => {
+  function editorView() {
+    const view = EditorView.findFromDOM(container!.querySelector<HTMLElement>(".cm-editor")!)
+    if (!view) throw new Error("编辑器未挂载")
+    return view
+  }
+
+  function pasteEvent(data: { files?: File[]; html?: string; itemFiles?: File[]; text?: string }) {
+    const event = new Event("paste", { bubbles: true, cancelable: true })
+    Object.defineProperty(event, "clipboardData", { value: {
+      files: data.files ?? [],
+      getData: (type: string) => type === "text/plain" ? data.text ?? "" : type === "text/html" ? data.html ?? "" : "",
+      items: (data.itemFiles ?? []).map((file) => ({ getAsFile: () => file, kind: "file" })),
+    } })
+    return event
+  }
+
+  it("Cmd-V 可从 items.getAsFile 插入截图，files/items 重复时只插入一次", () => {
+    const image = new File(["png"], "截图.png", { type: "image/png" })
+    const onInsertFiles = vi.fn()
+    mount(<MarkdownEditor onChange={() => {}} onInsertFiles={onInsertFiles} value="正文" />)
+    const event = pasteEvent({ files: [image], itemFiles: [image] })
+    act(() => { editorView().contentDOM.dispatchEvent(event) })
+    expect(event.defaultPrevented).toBe(true)
+    expect(onInsertFiles).toHaveBeenCalledWith([image])
+  })
+
+  it("网页混合文字/HTML/图片时保留网页内容，不误选附件", () => {
+    const image = new File(["png"], "网页图片.png", { type: "image/png" })
+    const onInsertFiles = vi.fn()
+    const onChange = vi.fn()
+    mount(<MarkdownEditor onChange={onChange} onInsertFiles={onInsertFiles} value="正文" />)
+    act(() => { editorView().contentDOM.dispatchEvent(pasteEvent({ files: [image], html: "<strong>网页文字</strong>", text: "网页文字" })) })
+    expect(onInsertFiles).not.toHaveBeenCalled()
+    expect(onChange).toHaveBeenLastCalledWith("**网页文字**正文", expect.anything())
+  })
+
+  it("只读状态不接管图片粘贴", () => {
+    const image = new File(["png"], "截图.png", { type: "image/png" })
+    const onInsertFiles = vi.fn()
+    mount(<MarkdownEditor onChange={() => {}} onInsertFiles={onInsertFiles} readOnly value="正文" />)
+    const event = pasteEvent({ itemFiles: [image] })
+    act(() => { editorView().contentDOM.dispatchEvent(event) })
+    expect(onInsertFiles).not.toHaveBeenCalled()
+  })
+
+  it("菜单粘贴可读取浏览器图片，并绑定触发时的插入位置", async () => {
+    const handle = createRef<MarkdownEditorHandle>()
+    const image = new Blob(["png"], { type: "image/png" })
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      read: vi.fn().mockResolvedValue([{ getType: vi.fn().mockResolvedValue(image), types: ["image/png"] }]),
+    } })
+    const onInsertFiles = vi.fn()
+    mount(<MarkdownEditor onChange={() => {}} onInsertFiles={onInsertFiles} ref={handle} value="正文" />)
+    act(() => { handle.current!.findText("正文") })
+    await act(async () => { expect(await handle.current!.pasteAtSelection()).toBe(true) })
+    expect(onInsertFiles).toHaveBeenCalledWith([expect.objectContaining({ type: "image/png" })])
+    Reflect.deleteProperty(navigator, "clipboard")
+  })
+
+  it("菜单读取到网页文字与图片时优先粘贴文字", async () => {
+    const handle = createRef<MarkdownEditorHandle>()
+    const blobs = {
+      "image/png": new Blob(["png"], { type: "image/png" }),
+      "text/plain": { text: vi.fn().mockResolvedValue("网页正文") },
+    }
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      read: vi.fn().mockResolvedValue([{
+        getType: vi.fn((type: keyof typeof blobs) => Promise.resolve(blobs[type] as Blob)),
+        types: ["text/plain", "image/png"],
+      }]),
+    } })
+    const onChange = vi.fn()
+    const onInsertFiles = vi.fn()
+    mount(<MarkdownEditor onChange={onChange} onInsertFiles={onInsertFiles} ref={handle} value="原文" />)
+    await act(async () => { expect(await handle.current!.pasteAtSelection()).toBe(true) })
+    expect(onChange).toHaveBeenLastCalledWith("网页正文原文", expect.anything())
+    expect(onInsertFiles).not.toHaveBeenCalled()
+    Reflect.deleteProperty(navigator, "clipboard")
+  })
+
+  it("菜单图片使用默认书签，附件完成后光标落到图片引用之后", async () => {
+    const handle = createRef<MarkdownEditorHandle>()
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      read: vi.fn().mockResolvedValue([{
+        getType: vi.fn().mockResolvedValue(new Blob(["png"], { type: "image/png" })),
+        types: ["image/png"],
+      }]),
+    } })
+    const markdown = "![截图](../attachments/截图.png)\n"
+    const onInsertFiles = vi.fn(() => {
+      const insertion = handle.current!.captureInsertion()
+      insertion.insert(markdown)
+    })
+    mount(<MarkdownEditor onChange={() => {}} onInsertFiles={onInsertFiles} ref={handle} value="正文" />)
+    act(() => { handle.current!.findText("正文") })
+    await act(async () => { expect(await handle.current!.pasteAtSelection()).toBe(true) })
+    expect(onInsertFiles).toHaveBeenCalledWith([expect.objectContaining({ type: "image/png" })])
+    expect(editorView().state.selection.main.head).toBe(markdown.length)
+    Reflect.deleteProperty(navigator, "clipboard")
+  })
+
+  it("菜单异步读取期间选区变化会取消图片插入", async () => {
+    const handle = createRef<MarkdownEditorHandle>()
+    let resolveRead!: (value: ClipboardItem[]) => void
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      read: vi.fn(() => new Promise<ClipboardItem[]>((resolve) => { resolveRead = resolve })),
+    } })
+    const onInsertFiles = vi.fn()
+    mount(<MarkdownEditor onChange={() => {}} onInsertFiles={onInsertFiles} ref={handle} value="甲乙" />)
+    const pending = handle.current!.pasteAtSelection()
+    act(() => { handle.current!.findText("乙") })
+    resolveRead([{ getType: vi.fn().mockResolvedValue(new Blob(["png"], { type: "image/png" })), types: ["image/png"] } as unknown as ClipboardItem])
+    await act(async () => { expect(await pending).toBe(false) })
+    expect(onInsertFiles).not.toHaveBeenCalled()
+    Reflect.deleteProperty(navigator, "clipboard")
+  })
+
+  it("菜单图片与快捷粘贴一致，不把附件插进代码范围", async () => {
+    const handle = createRef<MarkdownEditorHandle>()
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      read: vi.fn().mockResolvedValue([{
+        getType: vi.fn().mockResolvedValue(new Blob(["png"], { type: "image/png" })),
+        types: ["image/png"],
+      }]),
+    } })
+    const onInsertFiles = vi.fn()
+    const onPasteError = vi.fn()
+    mount(<MarkdownEditor onChange={() => {}} onInsertFiles={onInsertFiles} onPasteError={onPasteError} ref={handle} value="正文 `code`" />)
+    act(() => { handle.current!.findText("code") })
+    await act(async () => { expect(await handle.current!.pasteAtSelection()).toBe(false) })
+    expect(onInsertFiles).not.toHaveBeenCalled()
+    expect(onPasteError).toHaveBeenCalledWith("代码范围内不能插入图片")
+    Reflect.deleteProperty(navigator, "clipboard")
+  })
+
+  it("DOM 空事件异步兜底期间切换会话和附件处理器会取消迟到图片", async () => {
+    let resolveRead!: (value: ClipboardItem[]) => void
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      read: vi.fn(() => new Promise<ClipboardItem[]>((resolve) => { resolveRead = resolve })),
+    } })
+    const first = vi.fn()
+    const second = vi.fn()
+    mount(<MarkdownEditor onChange={() => {}} onInsertFiles={first} sessionKey="note-a" value="相同正文" />)
+    act(() => { editorView().contentDOM.dispatchEvent(pasteEvent({})) })
+    act(() => { root!.render(<MarkdownEditor onChange={() => {}} onInsertFiles={second} sessionKey="note-b" value="相同正文" />) })
+    resolveRead([{ getType: vi.fn().mockResolvedValue(new Blob(["png"], { type: "image/png" })), types: ["image/png"] } as unknown as ClipboardItem])
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(first).not.toHaveBeenCalled()
+    expect(second).not.toHaveBeenCalled()
+    Reflect.deleteProperty(navigator, "clipboard")
+  })
+
   it("代码范围粘贴始终走纯文本路径，不把 URL 或 HTML 转成 Markdown", () => {
     const fenced = EditorState.create({
       doc: "```ts\nconst url = old\n```",
@@ -77,12 +229,6 @@ describe("MarkdownEditor", () => {
 
   // 附件书签（captureInsertion → 异步完成后 insert）的行为约定，逐条对应审计场景。
   describe("附件插入书签", () => {
-    function editorView() {
-      const view = EditorView.findFromDOM(container!.querySelector<HTMLElement>(".cm-editor")!)
-      if (!view) throw new Error("编辑器未挂载")
-      return view
-    }
-
     it("有文字选区时插入图片不删除选中文字，插入点在选区起点", () => {
       const handle = createRef<MarkdownEditorHandle>()
       const onChange = vi.fn()

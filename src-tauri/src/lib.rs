@@ -7,6 +7,18 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
+#[cfg(target_os = "macos")]
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+#[cfg(target_os = "macos")]
+use objc2::rc::autoreleasepool;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::{
+    NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard, NSPasteboardTypePNG,
+    NSPasteboardTypeString, NSPasteboardTypeTIFF,
+};
+#[cfg(target_os = "macos")]
+use objc2_foundation::{NSDictionary, NSString};
+
 #[cfg(target_os = "ios")]
 use objc2::{msg_send, rc::Retained, runtime::AnyObject};
 #[cfg(target_os = "ios")]
@@ -14,6 +26,10 @@ use objc2_ui_kit::{UIScrollView, UIScrollViewContentInsetAdjustmentBehavior};
 
 const CREDENTIAL_SERVICE: &str = "com.xmly.swell-note.webdav";
 const SEARCH_INDEX_SCHEMA_VERSION: i64 = 1;
+#[cfg(target_os = "macos")]
+const MAX_CLIPBOARD_IMAGE_PIXELS: usize = 40_000_000;
+#[cfg(target_os = "macos")]
+const MAX_CLIPBOARD_PNG_BYTES: usize = 20 * 1024 * 1024;
 
 struct CredentialStoreState {
     operation_lock: Mutex<()>,
@@ -56,6 +72,107 @@ struct SearchIndexStatus {
     healthy: bool,
     indexed_notes: u64,
     schema_version: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipboardContent {
+    text: Option<String>,
+    png_base64: Option<String>,
+}
+
+#[tauri::command]
+async fn read_clipboard_content() -> Result<ClipboardContent, String> {
+    #[cfg(target_os = "macos")]
+    {
+        // 剪贴板后端可能同步等待系统服务；仅在用户粘贴时调用，并移出 WebView 命令线程。
+        return tauri::async_runtime::spawn_blocking(|| {
+            // 线程池工作线程没有 AppKit 事件循环，每次调用单独回收 TIFF/PNG 解码产生的临时对象。
+            autoreleasepool(|_| read_macos_clipboard_content())
+        })
+        .await
+        .map_err(|_| "读取系统剪贴板失败".to_string())?;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    Ok(ClipboardContent {
+        text: None,
+        png_base64: None,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn read_macos_clipboard_content() -> Result<ClipboardContent, String> {
+    let clipboard = NSPasteboard::generalPasteboard();
+    // 这些类型常量由 AppKit 在进程生命周期内提供，静态地址有效且不可变。
+    let text_type = unsafe { NSPasteboardTypeString };
+    let png_type = unsafe { NSPasteboardTypePNG };
+    let tiff_type = unsafe { NSPasteboardTypeTIFF };
+    if let Some(value) = clipboard.stringForType(text_type) {
+        let text = value.to_string();
+        if !text.is_empty() {
+            return Ok(ClipboardContent {
+                text: Some(text),
+                png_base64: None,
+            });
+        }
+    }
+
+    // 部分应用只提供 public.png，系统截图则常提供 TIFF；两种来源统一解码后再规范化输出。
+    let Some(source_data) = clipboard
+        .dataForType(png_type)
+        .or_else(|| clipboard.dataForType(tiff_type))
+    else {
+        // 文本和图片格式均不可用是正常的空剪贴板状态，不应让一次粘贴变成错误提示。
+        return Ok(ClipboardContent {
+            text: None,
+            png_base64: None,
+        });
+    };
+    let png = normalize_clipboard_image(&source_data)?;
+
+    Ok(ClipboardContent {
+        text: None,
+        png_base64: Some(BASE64_STANDARD.encode(png)),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn normalize_clipboard_image(source_data: &objc2_foundation::NSData) -> Result<Vec<u8>, String> {
+    normalize_clipboard_image_with_limits(
+        source_data,
+        MAX_CLIPBOARD_IMAGE_PIXELS,
+        MAX_CLIPBOARD_PNG_BYTES,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn normalize_clipboard_image_with_limits(
+    source_data: &objc2_foundation::NSData,
+    max_pixels: usize,
+    max_png_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let image = NSBitmapImageRep::imageRepWithData(source_data)
+        .ok_or_else(|| "剪贴板图片格式无法识别".to_string())?;
+    let width =
+        usize::try_from(image.pixelsWide()).map_err(|_| "剪贴板图片尺寸无效".to_string())?;
+    let height =
+        usize::try_from(image.pixelsHigh()).map_err(|_| "剪贴板图片尺寸无效".to_string())?;
+    let pixel_count = width
+        .checked_mul(height)
+        .ok_or_else(|| "剪贴板图片尺寸无效".to_string())?;
+    if width == 0 || height == 0 || pixel_count > max_pixels {
+        return Err("剪贴板图片过大，无法粘贴".to_string());
+    }
+    let properties = NSDictionary::<NSString, objc2::runtime::AnyObject>::new();
+    let png = unsafe {
+        image.representationUsingType_properties(NSBitmapImageFileType::PNG, &properties)
+    }
+    .ok_or_else(|| "剪贴板图片转为 PNG 失败".to_string())?;
+    if png.length() > max_png_bytes {
+        return Err("剪贴板图片超过 20 MiB，无法粘贴".to_string());
+    }
+    Ok(png.to_vec())
 }
 
 #[tauri::command]
@@ -471,6 +588,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            read_clipboard_content,
             credential_store_status,
             save_webdav_password,
             load_webdav_password,
@@ -488,6 +606,67 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    const ONE_PIXEL_PNG_BASE64: &str =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+    #[cfg(target_os = "macos")]
+    fn one_pixel_png_data() -> objc2::rc::Retained<objc2_foundation::NSData> {
+        let bytes = BASE64_STANDARD
+            .decode(ONE_PIXEL_PNG_BASE64)
+            .expect("decode embedded PNG fixture");
+        objc2_foundation::NSData::with_bytes(&bytes)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn assert_one_pixel_png(bytes: &[u8]) {
+        let data = objc2_foundation::NSData::with_bytes(bytes);
+        let image = NSBitmapImageRep::imageRepWithData(&data).expect("decode normalized PNG");
+        assert_eq!(image.pixelsWide(), 1);
+        assert_eq!(image.pixelsHigh(), 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn clipboard_image_normalizer_accepts_png_and_tiff() {
+        autoreleasepool(|_| {
+            let png_fixture = one_pixel_png_data();
+            let normalized_png = normalize_clipboard_image(&png_fixture).expect("normalize PNG");
+            assert_one_pixel_png(&normalized_png);
+
+            let image = NSBitmapImageRep::imageRepWithData(&png_fixture).expect("decode fixture");
+            let properties = NSDictionary::<NSString, objc2::runtime::AnyObject>::new();
+            let tiff_fixture = unsafe {
+                image.representationUsingType_properties(NSBitmapImageFileType::TIFF, &properties)
+            }
+            .expect("encode TIFF fixture");
+            let normalized_tiff = normalize_clipboard_image(&tiff_fixture).expect("normalize TIFF");
+            assert_one_pixel_png(&normalized_tiff);
+        });
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn clipboard_image_normalizer_rejects_invalid_data_and_limits() {
+        autoreleasepool(|_| {
+            let invalid = objc2_foundation::NSData::with_bytes(b"not an image");
+            assert_eq!(
+                normalize_clipboard_image(&invalid).unwrap_err(),
+                "剪贴板图片格式无法识别"
+            );
+
+            let png_fixture = one_pixel_png_data();
+            assert_eq!(
+                normalize_clipboard_image_with_limits(&png_fixture, 0, usize::MAX).unwrap_err(),
+                "剪贴板图片过大，无法粘贴"
+            );
+            assert_eq!(
+                normalize_clipboard_image_with_limits(&png_fixture, 1, 0).unwrap_err(),
+                "剪贴板图片超过 20 MiB，无法粘贴"
+            );
+        });
+    }
 
     #[test]
     fn sqlite_fts_index_supports_cache_isolation_and_prefix_search() {

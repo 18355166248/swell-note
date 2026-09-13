@@ -2431,6 +2431,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
                   })}
                   onCursorChange={(line, column) => setCursorPosition({ column, line })}
                   onInsertFiles={canInsertAttachment ? handleInsertFiles : undefined}
+                  onPasteError={setAttachmentError}
                   onLinkMenu={(tap) => setLinkSheet({
                     hadFocus: tap.hadFocus,
                     href: tap.href,

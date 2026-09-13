@@ -7,7 +7,8 @@ import { undo, redo, undoDepth, redoDepth } from "@codemirror/commands"
 import type { EditorState } from "@codemirror/state"
 import { EditorView } from "@codemirror/view"
 
-import { readClipboardText, writeClipboardText } from "@/services/clipboard/clipboard-text"
+import { writeClipboardText } from "@/services/clipboard/clipboard-text"
+import { collectClipboardFiles, readClipboardContent, readClipboardEvent, validateClipboardFiles } from "@/services/clipboard/clipboard-content"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 import { bottomOverlayHeight, scrollCursorIntoView } from "./cursor-visibility"
@@ -116,6 +117,7 @@ type MarkdownEditorProps = {
   // 光标 / 选区的格式状态（工具栏高亮）；表格单元格编辑时由单元格汇报行内格式。
   onFormatStateChange?: (state: EditorFormatState | null) => void
   onInsertFiles?: (files: File[], position?: number) => void
+  onPasteError?: (message: string) => void
   // 移动端点按已有链接时不直接跳转，交给宿主弹出「打开 / 编辑 / 移除」菜单。
   onLinkMenu?: (tap: EditorLinkTap) => void
   onLoadWikiNote?: (target: string) => void
@@ -130,8 +132,10 @@ type MarkdownEditorProps = {
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ sessionKey, onHistoryChange, onEditingTargetChange, onFormatStateChange, onLinkMenu, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onLoadWikiNote, onOpenWikiLink, onResolveAsset, onResolveWikiNote, onSelectionChange, readOnly = false, storageKey, value }, ref) {
+  function MarkdownEditor({ sessionKey, onHistoryChange, onEditingTargetChange, onFormatStateChange, onLinkMenu, onPasteError, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onLoadWikiNote, onOpenWikiLink, onResolveAsset, onResolveWikiNote, onSelectionChange, readOnly = false, storageKey, value }, ref) {
     const editorRef = useRef<ReactCodeMirrorRef>(null)
+    const sessionKeyRef = useRef(sessionKey)
+    sessionKeyRef.current = sessionKey
     const insertionMarks = useRef(new Set<{ anchor?: number; from: number; head?: number; to: number }>())
     const [initialState] = useState(() => restoreEditorSession(sessionKey, value))
     const [theme, setTheme] = useState<"dark" | "light">(() => document.documentElement.classList.contains("dark") ? "dark" : "light")
@@ -143,9 +147,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
     // CodeMirror 的扩展数组一旦换引用就会整体重配置（语言也会重新解析）；
     // 调用方传入的回调多为内联函数，用 ref 中转后扩展只在只读状态切换时重建。
-    const handlers = useRef({ getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onLinkMenu, onLoadWikiNote, onOpenWikiLink, onResolveAsset, onResolveWikiNote, onSelectionChange, onHistoryChange })
+    const handlers = useRef({ getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onLinkMenu, onLoadWikiNote, onOpenWikiLink, onPasteError, onResolveAsset, onResolveWikiNote, onSelectionChange, onHistoryChange })
     useEffect(() => {
-      handlers.current = { getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onLinkMenu, onLoadWikiNote, onOpenWikiLink, onResolveAsset, onResolveWikiNote, onSelectionChange, onHistoryChange }
+      handlers.current = { getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onLinkMenu, onLoadWikiNote, onOpenWikiLink, onPasteError, onResolveAsset, onResolveWikiNote, onSelectionChange, onHistoryChange }
     })
 
     // 切换笔记会按 key 重建编辑器，卸载时要撤回选区状态，新笔记才不会带着上一篇的选区操作条打开。
@@ -271,7 +275,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         },
         drop(event, view) {
           const onInsertFiles = handlers.current.onInsertFiles
-          const files = collectTransferFiles(event.dataTransfer)
+          const files = collectClipboardFiles(event.dataTransfer)
           if (!onInsertFiles || readOnly || files.length === 0) return false
           event.preventDefault()
           // 附件落在拖放指向的位置（与 CodeMirror dropCursor 的指示一致），不用旧光标。
@@ -280,7 +284,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           return true
         },
         paste(event, view) {
-          const text = event.clipboardData?.getData("text/plain")
+          const clipboard = readClipboardEvent(event.clipboardData)
+          const text = clipboard.text
           // 代码范围中的粘贴必须保持字面内容：URL 不能包成链接，HTML 也不能转换成强调/列表。
           // 返回 false 交给 CodeMirror 原生粘贴，可保留一次撤销且不改动选区之外的文本。
           if (!readOnly && shouldPasteAsPlainText(view.state)) return false
@@ -291,18 +296,24 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           }
           // 截图与图片文件的剪贴板不带纯文本；Excel 等来源同时带文本时仍按普通粘贴处理。
           const onInsertFiles = handlers.current.onInsertFiles
-          const files = collectTransferFiles(event.clipboardData)
-          if (files.length > 0) {
+          const files = clipboard.files
+          if (files.length > 0 && ((!text && !clipboard.html) || isImageClipboardWithIncidentalName(files, text, clipboard.html))) {
             if (!onInsertFiles || readOnly) return false
-            if (text) return false
+            try { validateClipboardFiles(files) }
+            catch (error) {
+              event.preventDefault()
+              handlers.current.onPasteError?.(error instanceof Error ? error.message : "剪贴板文件无法插入")
+              return true
+            }
             event.preventDefault()
             onInsertFiles(files)
             return true
           }
+          // 网页/Office 的混合剪贴板继续进入 HTML 转 Markdown；其中附带的资源文件不是用户要插入的附件。
           // 富文本（网页 / Word / Excel）粘贴：HTML 转成 Markdown 后插入；
           // 转换失败或没有可用结构时返回 null，走原生纯文本粘贴，内容不丢。
           if (!readOnly) {
-            const html = event.clipboardData?.getData("text/html")
+            const html = clipboard.html
             const markdown = html ? htmlToMarkdown(html) : null
             if (markdown) {
               event.preventDefault()
@@ -336,6 +347,27 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
               })
               return true
             }
+          }
+          // macOS WebView 的 paste 事件可能完全不暴露图片；仅在事件确实为空时才显式读原生剪贴板，
+          // 普通文字粘贴不会触发权限调用。异步结果会在落笔前核验原文、选区和编辑器实例。
+          if (!readOnly && !text && !clipboard.html && handlers.current.onInsertFiles) {
+            event.preventDefault()
+            const onInsertFiles = handlers.current.onInsertFiles
+            const pasteSessionKey = sessionKey
+            const pasteState = view.state
+            void pasteClipboardAtSnapshot(
+              view,
+              onInsertFiles,
+              handlers.current.onPasteError,
+              () => editorRef.current?.view === view
+                && sessionKeyRef.current === pasteSessionKey
+                && handlers.current.onInsertFiles === onInsertFiles
+                && view.dom.isConnected
+                && !view.state.readOnly
+                && view.state.doc === pasteState.doc
+                && view.state.selection.eq(pasteState.selection),
+            )
+            return true
           }
           return false
         },
@@ -512,17 +544,52 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         if (!view || readOnly) return false
         const target = activeTableEdit(view)
         const state = view.state
+        const onInsertFiles = handlers.current.onInsertFiles
+        const pasteSessionKey = sessionKey
         const inputSnapshot = target ? { value: target.input.value, from: target.input.selectionStart, to: target.input.selectionEnd } : undefined
-        const text = await readClipboardText()
-        if (!text || !view.dom.isConnected) return false
+        const isCurrentPaste = () => editorRef.current?.view === view
+          && sessionKeyRef.current === pasteSessionKey
+          && handlers.current.onInsertFiles === onInsertFiles
+          && view.dom.isConnected
+          && !view.state.readOnly
+          && view.state.doc === state.doc
+          && view.state.selection.eq(state.selection)
+          && (!target || (activeTableEdit(view) === target
+            && target.input.value === inputSnapshot?.value
+            && target.input.selectionStart === inputSnapshot.from
+            && target.input.selectionEnd === inputSnapshot.to))
+        let content
+        try { content = await readClipboardContent() }
+        catch (error) {
+          if (isCurrentPaste()) handlers.current.onPasteError?.(error instanceof Error ? error.message : "读取剪贴板失败")
+          return false
+        }
+        if (!isCurrentPaste()) return false
+        const text = content.text
+        if ((!text && content.files.length === 0) || !view.dom.isConnected) {
+          if (view.dom.isConnected) handlers.current.onPasteError?.("剪贴板中没有可粘贴的内容")
+          return false
+        }
+        if (!text && content.files.length > 0) {
+          if (!onInsertFiles) return false
+          if (shouldPasteAsPlainText(state)) {
+            handlers.current.onPasteError?.("代码范围内不能插入图片")
+            return false
+          }
+          // 回调也绑定在用户点击粘贴的那一刻；父级即使复用了编辑器实例并换了笔记，
+          // 迟到结果也不会借用新笔记的附件写入函数。
+          // 已确认选区未变化，交给 captureInsertion 记录 anchor/head；附件完成后光标才能跟到图片后，
+          // live preview 随即把引用渲染成图片。显式 position 只留给真正的鼠标拖放落点。
+          onInsertFiles(content.files)
+          return true
+        }
+        if (!text) return false
         if (target) {
-          if (activeTableEdit(view) !== target || target.input.value !== inputSnapshot?.value || target.input.selectionStart !== inputSnapshot.from || target.input.selectionEnd !== inputSnapshot.to) return false
           target.input.setRangeText(text, target.input.selectionStart, target.input.selectionEnd, "end")
           target.input.dispatchEvent(new Event("input", { bubbles: true }))
           return true
         }
         // 菜单关闭 / 焦点恢复也会产生事务；只核验正文与选区，避免把无关状态更新误判为用户改写。
-        if (view.state.doc !== state.doc || !view.state.selection.eq(state.selection) || view.state.readOnly) return false
         const selection = view.state.selection.main
         view.dispatch({
           changes: { from: selection.from, to: selection.to, insert: text },
@@ -677,8 +744,32 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   },
 )
 
-function collectTransferFiles(transfer: DataTransfer | null) {
-  return Array.from(transfer?.files ?? [])
+function isImageClipboardWithIncidentalName(files: File[], text: string | null, html: string | null) {
+  if (html || files.some((file) => !file.type.startsWith("image/"))) return false
+  if (!text) return true
+  const normalized = text.trim().replace(/^file:\/\//, "").split(/[\\/]/).pop()?.toLocaleLowerCase()
+  return files.some((file) => normalized === file.name.toLocaleLowerCase())
+}
+
+async function pasteClipboardAtSnapshot(view: EditorView, onInsertFiles: (files: File[], position?: number) => void, onError?: (message: string) => void, isCurrent: () => boolean = () => true) {
+  const state = view.state
+  try {
+    const content = await readClipboardContent()
+    if (!isCurrent() || !view.dom.isConnected || view.state.doc !== state.doc || !view.state.selection.eq(state.selection) || view.state.readOnly) return false
+    if (content.text) {
+      const range = state.selection.main
+      view.dispatch({ changes: { from: range.from, to: range.to, insert: content.text }, selection: { anchor: range.from + content.text.length }, scrollIntoView: true, userEvent: "input.paste" })
+      return true
+    }
+    if (content.files.length > 0) {
+      onInsertFiles(content.files)
+      return true
+    }
+    if (isCurrent()) onError?.("剪贴板中没有可粘贴的内容")
+  } catch (error) {
+    if (isCurrent()) onError?.(error instanceof Error ? error.message : "读取剪贴板失败")
+  }
+  return false
 }
 
 function readSelectedText(view: EditorView | undefined) {
