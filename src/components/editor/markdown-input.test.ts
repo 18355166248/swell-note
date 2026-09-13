@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest"
 import { history, historyKeymap, undo } from "@codemirror/commands"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
+import { syntaxTree } from "@codemirror/language"
 import { EditorState } from "@codemirror/state"
 import { EditorView, keymap } from "@codemirror/view"
 
@@ -867,6 +868,150 @@ describe("toolbar block formatting", () => {
     view.destroy()
   })
 
+  it("converts list types, numbers siblings continuously, and toggles the selected type off", () => {
+    const view = createView("- 第一项\n- 第二项", 0, 11)
+    toggleBlockFormat(view, "\n1. ")
+    expect(view.state.doc.toString()).toBe("1. 第一项\n2. 第二项")
+    toggleBlockFormat(view, "\n- ")
+    expect(view.state.doc.toString()).toBe("- 第一项\n- 第二项")
+    toggleBlockFormat(view, "\n- ")
+    expect(view.state.doc.toString()).toBe("第一项\n第二项")
+    view.destroy()
+  })
+
+  it("keeps quote containers, nested levels, and completed task state while converting lists", () => {
+    const doc = "> - [x] 完成\n>   - [ ] 子项\n> - 普通"
+    const view = createView(doc, 0, doc.length)
+    toggleBlockFormat(view, "\n- [ ] ")
+    expect(view.state.doc.toString()).toBe("> - [x] 完成\n>   - [ ] 子项\n> - [ ] 普通")
+    toggleBlockFormat(view, "\n1. ")
+    expect(view.state.doc.toString()).toBe("> 1. 完成\n>    1. 子项\n> 2. 普通")
+    view.destroy()
+  })
+
+  it("adjusts child indentation when a bullet parent becomes wider ordered markup", () => {
+    const doc = "- 父项\n  - 子项\n- 同级"
+    const view = createView(doc, 0, doc.length)
+    toggleBlockFormat(view, "\n1. ")
+    expect(view.state.doc.toString()).toBe("1. 父项\n   1. 子项\n2. 同级")
+    view.destroy()
+  })
+
+  it("keeps nested task lists nested because checkbox width is not structural indentation", () => {
+    const doc = "- 父项\n  - 子项"
+    const view = createView(doc, 0, doc.length)
+    toggleBlockFormat(view, "\n- [ ] ")
+    expect(view.state.doc.toString()).toBe("- [ ] 父项\n  - [ ] 子项")
+    let node: ReturnType<typeof syntaxTree>["topNode"] | null = syntaxTree(view.state).resolveInner(view.state.doc.toString().indexOf("子项"), 1)
+    let listItemDepth = 0
+    for (; node; node = node.parent) if (node.name === "ListItem") listItemDepth += 1
+    expect(listItemDepth).toBe(2)
+    view.destroy()
+  })
+
+  it("moves fenced-code descendants with their converted parent without rewriting code", () => {
+    const doc = "- 父项\n\n  ```\n  const value = 1\n  ```"
+    const view = createView(doc, 2)
+    toggleBlockFormat(view, "\n1. ")
+    expect(view.state.doc.toString()).toBe("1. 父项\n\n   ```\n   const value = 1\n   ```")
+    expect(syntaxTree(view.state).toString()).toContain("FencedCode")
+    view.destroy()
+  })
+
+  it("moves protected descendants even when the selection includes the whole parent item", () => {
+    const doc = "- 父项\n\n  ```\n  # 原样\n  ```"
+    const view = createView(doc, 0, doc.length)
+    toggleBlockFormat(view, "\n1. ")
+    expect(view.state.doc.toString()).toBe("1. 父项\n\n   ```\n   # 原样\n   ```")
+    view.destroy()
+  })
+
+  it("restarts numbering after an empty paragraph", () => {
+    const doc = "甲\n乙\n\n丙\n丁"
+    const view = createView(doc, 0, doc.length)
+    toggleBlockFormat(view, "\n1. ")
+    expect(view.state.doc.toString()).toBe("1. 甲\n2. 乙\n\n1. 丙\n2. 丁")
+    view.destroy()
+  })
+
+  it("keeps continuation lines inside their parent item", () => {
+    const doc = "- 父项\n  续行\n- 同级"
+    const view = createView(doc, 0, doc.length)
+    toggleBlockFormat(view, "\n1. ")
+    expect(view.state.doc.toString()).toBe("1. 父项\n   续行\n2. 同级")
+    view.destroy()
+  })
+
+  it("keeps loose-list continuation paragraphs attached and numbering continuous", () => {
+    const doc = "- 父项\n\n  续段\n- 同级"
+    const view = createView(doc, 0, doc.length)
+    toggleBlockFormat(view, "\n1. ")
+    expect(view.state.doc.toString()).toBe("1. 父项\n\n   续段\n2. 同级")
+    view.destroy()
+  })
+
+  it("numbers child lists independently under different parents", () => {
+    const doc = "- 父一\n  - 子一\n- 父二\n  - 子二"
+    const view = createView(doc, 0, doc.length)
+    toggleBlockFormat(view, "\n1. ")
+    expect(view.state.doc.toString()).toBe("1. 父一\n   1. 子一\n2. 父二\n   1. 子二")
+    view.destroy()
+  })
+
+  it("does not let a continuation line consume an ordered-list number", () => {
+    const doc = "- 父项\n  续行\n  - 子项\n- 同级"
+    const view = createView(doc, 0, doc.length)
+    toggleBlockFormat(view, "\n1. ")
+    expect(view.state.doc.toString()).toBe("1. 父项\n   续行\n   1. 子项\n2. 同级")
+    view.destroy()
+  })
+
+  it("moves unselected descendants when converting only their parent item", () => {
+    const view = createView("- 父项\n  - 子项", 2)
+    toggleBlockFormat(view, "\n1. ")
+    expect(view.state.doc.toString()).toBe("1. 父项\n   - 子项")
+    expect(view.state.selection.main.head).toBe(3)
+    view.destroy()
+  })
+
+  it("shrinks unselected descendants with a task parent and undoes as one action", () => {
+    const original = "- [x] 父项\n  1. 子项"
+    const view = createView(original, 0, 7)
+    toggleBlockFormat(view, "\n- ")
+    expect(view.state.doc.toString()).toBe("- 父项\n  1. 子项")
+    expect(view.state.selection.main).toMatchObject({ anchor: 0, head: 3 })
+    undo(view)
+    expect(view.state.doc.toString()).toBe(original)
+    expect(view.state.selection.main).toMatchObject({ anchor: 0, head: 7 })
+    view.destroy()
+  })
+
+  it("removes excess child indentation when quoted ordered and task lists use narrower markup", () => {
+    const ordered = "> 1. 父项\n>    1. 子项"
+    const orderedView = createView(ordered, 0, ordered.length)
+    toggleBlockFormat(orderedView, "\n- ")
+    expect(orderedView.state.doc.toString()).toBe("> - 父项\n>   - 子项")
+    orderedView.destroy()
+
+    const task = "> - [x] 父项\n>   - 子项"
+    const taskView = createView(task, 0, task.length)
+    toggleBlockFormat(taskView, "\n- ")
+    expect(taskView.state.doc.toString()).toBe("> - 父项\n>   - 子项")
+    taskView.destroy()
+  })
+
+  it("does not edit read-only content", () => {
+    const state = EditorState.create({
+      doc: "- 只读",
+      selection: { anchor: 3 },
+      extensions: [markdown({ base: markdownLanguage }), EditorState.readOnly.of(true)],
+    })
+    const view = new EditorView({ state, parent: document.body })
+    expect(toggleBlockFormat(view, "\n1. ")).toBe(true)
+    expect(view.state.doc.toString()).toBe("- 只读")
+    view.destroy()
+  })
+
   it("excludes the next line at a selection boundary and undoes in one step", () => {
     const original = "第一行\n第二行\n第三行"
     const view = createView(original, 0, 8)
@@ -935,6 +1080,21 @@ describe("detectFormatState（工具栏高亮）", () => {
     const plain = createView("普通段落", 2)
     expect(detectFormatState(plain.state).heading).toBe(0)
     plain.destroy()
+  })
+
+  it("报告 H4-H6 与无序、有序、任务、引用块状态", () => {
+    const cases = [
+      ["#### 深层标题", "heading", 4],
+      ["- 项目", "bulletList", true],
+      ["3. 项目", "orderedList", true],
+      ["- [x] 项目", "taskList", true],
+      ["> 3. 引用项目", "quote", true],
+    ] as const
+    for (const [doc, key, expected] of cases) {
+      const view = createView(doc, doc.length)
+      expect(detectFormatState(view.state)[key]).toBe(expected)
+      view.destroy()
+    }
   })
 
   it("跨行选区要求每一行都是同级标题，否则不报标题", () => {

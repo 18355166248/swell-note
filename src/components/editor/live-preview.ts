@@ -108,6 +108,23 @@ export class ListBulletWidget extends WidgetType {
 
 const listBulletWidget = new ListBulletWidget()
 
+// 实体在源码中可能是多个字符，但结果态只显示解码后的纯文本。Widget 只写 textContent，
+// 即使实体解码结果形似 HTML，也不会被浏览器当成标签或事件属性执行。
+export class MarkdownTextWidget extends WidgetType {
+  constructor(readonly text: string) { super() }
+
+  eq(other: MarkdownTextWidget) { return other.text === this.text }
+
+  toDOM() {
+    const span = document.createElement("span")
+    span.className = "cm-md-decoded-text"
+    span.textContent = this.text
+    return span
+  }
+
+  ignoreEvent() { return true }
+}
+
 // 编辑态原本把 ![alt](src) 原样摊成源码，图多的笔记等于在看源文件。
 // 光标不在这一行时换成真实图片，光标一进来立刻还原成可编辑的原文，源文件始终不变。
 export class MarkdownImageWidget extends WidgetType {
@@ -675,7 +692,8 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
         if (frontmatter && node.from >= frontmatter.from && node.to <= frontmatter.to) return false
         const active = isCursorActive(node.from, node.to)
         // 行内构造的标记按「光标与节点范围相交」判断，同一行的其他位置不再触发还原。
-        const touching = isCursorTouching(node.from, node.to)
+        // 锁定态没有可编辑光标，旧选区不能让 Markdown 源码重新露出。
+        const touching = !view.state.readOnly && isCursorTouching(node.from, node.to)
         // 标题节点名带级别后缀（ATXHeading1..6 / SetextHeading1..2）。
         const heading = node.name.match(/^(?:ATX|Setext)Heading([1-6])$/)
         if (heading) {
@@ -693,6 +711,31 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
           return
         }
         switch (node.name) {
+          case "Escape": {
+            // 只隐藏转义反斜杠，后面的字面字符仍由 CodeMirror 正常绘制；光标触及时
+            // 恢复完整源码，用户可以删除或修改转义。
+            if (!touching && view.state.sliceDoc(node.from, node.to).startsWith("\\")) {
+              decorations.push(Decoration.replace({}).range(node.from, node.from + 1))
+            }
+            break
+          }
+          case "Entity": {
+            if (!touching) {
+              const source = view.state.sliceDoc(node.from, node.to)
+              const parsed = new DOMParser().parseFromString(`<body>${source}</body>`, "text/html").body.textContent ?? source
+              decorations.push(Decoration.replace({ widget: new MarkdownTextWidget(parsed) }).range(node.from, node.to))
+            }
+            break
+          }
+          case "HardBreak": {
+            if (!touching) {
+              const source = view.state.sliceDoc(node.from, node.to)
+              // 换行本身必须留给编辑器维持行结构，只隐藏它前面的反斜杠或两个空格。
+              const markerLength = source.startsWith("\\") ? 1 : Math.min(2, source.match(/^ +/)?.[0].length ?? 0)
+              if (markerLength > 0) decorations.push(Decoration.replace({}).range(node.from, node.from + markerLength))
+            }
+            break
+          }
           case "StrongEmphasis": {
             decorations.push(Decoration.mark({ class: "cm-md-strong" }).range(node.from, node.to))
             hideMarkChildren(node.node, touching, "EmphasisMark")

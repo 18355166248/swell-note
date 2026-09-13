@@ -50,7 +50,7 @@ function rawOffsetInLinkLabel(label: string, displayOffset: number): number {
 // 行内内容始终使用 DOM API 和 textContent 装配，不解析原始 HTML，避免云端笔记形成注入面。
 // 下划线强调要求两侧不是字母数字，避免把 snake_case_name 错误渲染成强调。
 const tableInlinePattern
-  = /!\[([^\]\n]*)\]\((\S+?)(?:\s+["'][^"']*["'])?\)|\[([^\]\n]+)\]\((\S+?)(?:\s+["'][^"']*["'])?\)|~~(.+?)~~|\*\*(.+?)\*\*|(?<![\p{L}\p{N}])__(.+?)__(?![\p{L}\p{N}])|\*(.+?)\*|(?<![\p{L}\p{N}])_(.+?)_(?![\p{L}\p{N}])|`([^`]+)`|(https?:\/\/[^\s<>]+)|(<br\s*\/?>)/giu
+  = /(?<escape>\\[!"#$%&'()*+,\-.\/:;<=>?@[\]^_`{|}~])|(?<entity>&(?:#\d+|#x[\da-f]+|[a-z][\da-z]+);)|!\[(?<imageAlt>(?:\\.|[^\]\\\n])*)\]\((?<imageSource>\S+?)(?:\s+["'][^"']*["'])?\)|\[(?<linkLabel>(?:\\.|[^\]\\\n])+)\]\((?<linkHref>\S+?)(?:\s+["'][^"']*["'])?\)|~~(?<strike>(?:\\.|(?!~~).)+?)~~|\*\*(?<strongStar>(?:\\.|(?!\*\*).)+?)\*\*|(?<![\p{L}\p{N}])__(?<strongUnder>(?:\\.|(?!__).)+?)__(?![\p{L}\p{N}])|\*(?<emStar>(?:\\.|[^*])+?)\*|(?<![\p{L}\p{N}])_(?<emUnder>(?:\\.|[^_])+?)_(?![\p{L}\p{N}])|(?<codeFence>`+)(?<codeText>.+?)\k<codeFence>|(?<bareHref>https?:\/\/[^\s<>]+)|(?<break><br\s*\/?>)/gisu
 
 // 单元格点击定位：展示层渲染后的文字偏移 ↔ 原始 Markdown 偏移。
 // 展示层会吃掉标记字符（**加粗** 只显示「加粗」），直接用 DOM 偏移会落进标记内部，
@@ -73,6 +73,11 @@ export function rawOffsetForDisplayOffset(text: string, displayOffset: number): 
     if (displayOffset <= shown + inner.text.length) {
       const within = Math.max(0, displayOffset - shown)
       // 链接显示文本经过截短，段内偏移要按截断规则还原；其余标记只是吃掉两侧符号，1:1 即可。
+      if (inner.rawEnd !== undefined) return index + (within > 0 ? inner.rawEnd : 0)
+      if (inner.innerRaw !== undefined) {
+        const decodedOffset = inner.label !== undefined ? rawOffsetInLinkLabel(inner.label, within) : within
+        return index + inner.start + rawOffsetForDisplayOffset(inner.innerRaw, decodedOffset)
+      }
       return index + inner.start + (inner.label !== undefined ? rawOffsetInLinkLabel(inner.label, within) : within)
     }
     shown += inner.text.length
@@ -83,16 +88,19 @@ export function rawOffsetForDisplayOffset(text: string, displayOffset: number): 
 
 // 返回 token 的显示文字及其在原文中的相对起点；无显示文字的 token（图片、换行）返回 null。
 // 链接附带原始 label：显示文字是 truncateLinkLabel 的截断结果，点击定位需要原文才能还原偏移。
-function inlineTokenDisplaySegment(match: RegExpMatchArray): { label?: string; start: number; text: string } | null {
-  if (match[2] !== undefined || match[12] !== undefined) return null
-  if (match[3] !== undefined) return { label: match[3], start: 1, text: truncateLinkLabel(match[3]) }
-  if (match[11] !== undefined) return { label: match[11], start: 0, text: truncateLinkLabel(match[11]) }
-  if (match[5] !== undefined) return { start: 2, text: match[5] }
-  if (match[6] !== undefined) return { start: 2, text: match[6] }
-  if (match[7] !== undefined) return { start: 2, text: match[7] }
-  if (match[8] !== undefined) return { start: 1, text: match[8] }
-  if (match[9] !== undefined) return { start: 1, text: match[9] }
-  if (match[10] !== undefined) return { start: 1, text: match[10] }
+function inlineTokenDisplaySegment(match: RegExpMatchArray): { innerRaw?: string; label?: string; rawEnd?: number; start: number; text: string } | null {
+  const groups = match.groups ?? {}
+  if (groups.escape !== undefined) return { start: 1, text: groups.escape.slice(1) }
+  if (groups.entity !== undefined) return { rawEnd: match[0].length, start: 0, text: decodeMarkdownEntity(match[0]) }
+  if (groups.imageSource !== undefined || groups.break !== undefined) return null
+  if (groups.linkLabel !== undefined) {
+    const label = tableInlineDisplayText(groups.linkLabel)
+    return { innerRaw: groups.linkLabel, label, start: 1, text: truncateLinkLabel(label) }
+  }
+  if (groups.bareHref !== undefined) return { label: groups.bareHref, start: 0, text: truncateLinkLabel(groups.bareHref) }
+  const marked = groups.strike ?? groups.strongStar ?? groups.strongUnder ?? groups.emStar ?? groups.emUnder
+  if (marked !== undefined) return { innerRaw: marked, start: groups.strike !== undefined || groups.strongStar !== undefined || groups.strongUnder !== undefined ? 2 : 1, text: tableInlineDisplayText(marked) }
+  if (groups.codeText !== undefined) return { start: groups.codeFence.length, text: groups.codeText }
   return null
 }
 
@@ -106,32 +114,37 @@ export function renderTableInlineMarkdown(
   for (const match of text.matchAll(tableInlinePattern)) {
     const index = match.index ?? 0
     if (index > cursor) parent.appendChild(document.createTextNode(text.slice(cursor, index)))
-    const imageAlt = match[1]
-    const imageSource = match[2]
-    const linkLabel = match[3]
-    const linkHref = match[4]
-    const strikeText = match[5]
-    const strongText = match[6] ?? match[7]
-    const emphasisText = match[8] ?? match[9]
-    const codeText = match[10]
-    const bareHref = match[11]
-    const lineBreak = match[12]
+    const groups = match.groups ?? {}
+    const imageAlt = groups.imageAlt
+    const imageSource = groups.imageSource
+    const linkLabel = groups.linkLabel
+    const linkHref = groups.linkHref
+    const strikeText = groups.strike
+    const strongText = groups.strongStar ?? groups.strongUnder
+    const emphasisText = groups.emStar ?? groups.emUnder
+    const codeText = groups.codeText
+    const bareHref = groups.bareHref
+    const lineBreak = groups.break
 
-    if (imageSource !== undefined) {
+    if (groups.escape !== undefined) {
+      parent.appendChild(document.createTextNode(groups.escape.slice(1)))
+    } else if (groups.entity !== undefined) {
+      parent.appendChild(document.createTextNode(decodeMarkdownEntity(match[0])))
+    } else if (imageSource !== undefined) {
       appendMarkdownImage(parent, imageAlt ?? "", imageSource, options, registerObjectUrl)
     } else if (linkHref !== undefined || bareHref !== undefined) {
-      appendLink(parent, linkLabel ?? bareHref ?? "", linkHref ?? bareHref ?? "", options)
+      appendLink(parent, linkLabel !== undefined ? tableInlineDisplayText(linkLabel) : bareHref ?? "", linkHref ?? bareHref ?? "", options)
     } else if (strikeText !== undefined) {
       const del = document.createElement("del")
-      del.textContent = strikeText
+      renderTableInlineMarkdown(del, strikeText, options, registerObjectUrl)
       parent.appendChild(del)
     } else if (strongText !== undefined) {
       const strong = document.createElement("strong")
-      strong.textContent = strongText
+      renderTableInlineMarkdown(strong, strongText, options, registerObjectUrl)
       parent.appendChild(strong)
     } else if (emphasisText !== undefined) {
       const em = document.createElement("em")
-      em.textContent = emphasisText
+      renderTableInlineMarkdown(em, emphasisText, options, registerObjectUrl)
       parent.appendChild(em)
     } else if (codeText !== undefined) {
       const code = document.createElement("code")
@@ -143,6 +156,23 @@ export function renderTableInlineMarkdown(
     cursor = index + match[0].length
   }
   if (cursor < text.length) parent.appendChild(document.createTextNode(text.slice(cursor)))
+}
+
+function decodeMarkdownEntity(source: string) {
+  // 只取解析后的 textContent，不把实体结果作为 HTML 插回表格 DOM。
+  return new DOMParser().parseFromString(`<body>${source}</body>`, "text/html").body.textContent ?? source
+}
+
+function tableInlineDisplayText(source: string): string {
+  let cursor = 0
+  let result = ""
+  for (const match of source.matchAll(tableInlinePattern)) {
+    const index = match.index ?? 0
+    result += source.slice(cursor, index)
+    result += inlineTokenDisplaySegment(match)?.text ?? ""
+    cursor = index + match[0].length
+  }
+  return result + source.slice(cursor)
 }
 
 function appendLink(parent: HTMLElement, label: string, href: string, options: TableInlineOptions) {

@@ -1,0 +1,26 @@
+// @vitest-environment jsdom
+// 诊断样本：复制到 src/components/editor 后可运行，.txt 后缀使它不进入默认测试。
+// 前五项检查文本保真；第六项描述当前不支持的内嵌图片转换，不要求直接输出 data URL。
+import { it, expect } from 'vitest'
+import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import ReactMarkdown from 'react-markdown'
+import { htmlToMarkdown } from './html-to-markdown'
+
+const cases = [
+  ['literal', '<p>请原样输入 **关键词** 和 [说明](地址)</p>'],
+  ['link-label', '<p><a href="https://example.com">数组[0]</a></p>'],
+  ['spaces', '<p>Hello<strong> world </strong>again</p>'],
+  ['inline-code', '<p><code>a``b</code></p>'],
+  ['code-fence', '<pre>before\n````\nafter</pre>'],
+  ['embedded-image', '<p>前<img src="data:image/png;base64,xx">后</p>'],
+]
+for (const [name, input] of cases) it(name, () => {
+  const markdown = htmlToMarkdown(input) ?? ''
+  const rendered = renderToStaticMarkup(<ReactMarkdown>{markdown}</ReactMarkdown>)
+  const source = new DOMParser().parseFromString(input, 'text/html').body
+  const result = new DOMParser().parseFromString(rendered, 'text/html').body
+  console.log(JSON.stringify({ name, input, markdown, rendered, expectedText: source.textContent, actualText: result.textContent?.trim() }))
+  expect(result.textContent?.trim()).toBe(source.textContent?.trim())
+  if (name === 'embedded-image') expect(result.querySelectorAll('img')).toHaveLength(1)
+})

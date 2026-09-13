@@ -9,6 +9,7 @@ const STRUCTURE_SELECTOR = "h1,h2,h3,h4,h5,h6,p,ul,ol,blockquote,pre,table,hr,a,
 
 const SAFE_LINK_PATTERN = /^(?:https?:|mailto:|\/|#|\.\/|\.\.\/)/i
 const SAFE_IMAGE_PATTERN = /^https?:/i
+const HARD_BREAK = "\uE000"
 
 // 块级容器：遇到时产生段落边界，而不是把文字直接拼接在一起。
 const BLOCK_TAGS = new Set(["ADDRESS", "ARTICLE", "ASIDE", "DD", "DIV", "DL", "DT", "FIELDSET", "FIGCAPTION", "FIGURE", "FOOTER", "FORM", "H1", "H2", "H3", "H4", "H5", "H6", "HEADER", "HR", "MAIN", "NAV", "P", "PRE", "SECTION", "TABLE"])
@@ -109,7 +110,7 @@ function renderBlockElement(element: Element, indent: string): string | null {
   }
   if (tag === "PRE") {
     const code = (element.textContent ?? "").replace(/\n$/, "")
-    const fence = code.includes("```") ? "````" : "```"
+    const fence = "`".repeat(Math.max(3, longestBacktickRun(code) + 1))
     return `${fence}\n${code}\n${fence}`
   }
   if (tag === "UL" || tag === "OL") return renderList(element, indent)
@@ -139,23 +140,45 @@ function renderList(list: Element, indent: string): string {
     // 有序标记 "10. " 比 "- " 宽，固定两格缩进会让子列表被解析成顶层列表。
     const marker = ordered ? `${start + index}. ` : "- "
     const contentIndent = `${indent}${" ".repeat(marker.length)}`
-    // 条目本身可能直接包含块级子元素（嵌套列表、段落），先抽出行内首段，再递归其余块。
-    const inlineParts: string[] = []
-    // indented 标记该块已自带缩进（嵌套列表按 contentIndent 渲染），追加时不再重复缩进。
-    const nestedBlocks: Array<{ indented: boolean; text: string }> = []
+    // 按 DOM 顺序组装条目。行内文本与 p/pre/子列表分桶会把
+    // <p>首</p>中间<p>尾</p> 错排成「中间、首、尾」。
+    const itemBlocks: Array<{ indented: boolean; text: string }> = []
+    let inline = ""
+    const flushInline = () => {
+      const text = normalizeInlineWhitespace(inline)
+      inline = ""
+      if (text) itemBlocks.push({ indented: false, text })
+    }
     for (const node of Array.from(item.childNodes)) {
       if (node instanceof Element) {
         if (node instanceof HTMLInputElement && node.type === "checkbox") continue
-        if (node.tagName === "UL" || node.tagName === "OL") { nestedBlocks.push({ indented: true, text: renderList(node, contentIndent) }); continue }
-        if (BLOCK_TAGS.has(node.tagName)) { for (const text of renderBlockChildren(node, contentIndent)) nestedBlocks.push({ indented: false, text }); continue }
+        if (node.tagName === "UL" || node.tagName === "OL") {
+          flushInline()
+          itemBlocks.push({ indented: true, text: renderList(node, contentIndent) })
+          continue
+        }
+        if (BLOCK_TAGS.has(node.tagName)) {
+          flushInline()
+          const rendered = renderBlockElement(node, contentIndent)
+          if (rendered) itemBlocks.push({ indented: false, text: rendered })
+          continue
+        }
       }
-      inlineParts.push(renderInline(node))
+      inline += renderInline(node)
     }
+    flushInline()
     // 任务勾选框追加在列表标记之后（- [x] 项），单独输出 "[x]" 会被当成普通段落。
-    lines.push(`${indent}${marker}${task}${normalizeInlineWhitespace(inlineParts.join(""))}`)
-    for (const block of nestedBlocks) {
+    // 富文本列表常用 <li><p>首段</p><p>续段</p></li>。首个段落接在列表标记后，
+    // 后续段落用空行和内容缩进保留为同一条目的续段，避免预览时被拆成顶层正文。
+    const firstBlock = itemBlocks[0] && !itemBlocks[0].indented ? itemBlocks.shift() : null
+    const firstText = firstBlock?.text ?? ""
+    const firstLines = firstText.split("\n")
+    lines.push(`${indent}${marker}${task}${firstLines[0] ?? ""}`)
+    if (firstLines.length > 1) lines.push(firstLines.slice(1).map((line) => `${contentIndent}${line}`).join("\n"))
+    for (const block of itemBlocks) {
       if (!block.text.trim()) continue
-      lines.push(block.indented ? block.text : block.text.split("\n").map((line) => (line ? `${contentIndent}${line}` : line)).join("\n"))
+      const continuation = block.text.split("\n").map((line) => (line ? `${contentIndent}${line}` : line)).join("\n")
+      lines.push(block.indented ? block.text : `\n${continuation}`)
     }
     index += 1
   }
@@ -167,43 +190,52 @@ function renderInlineChildren(element: Element): string {
 }
 
 function renderInline(node: Node): string {
-  if (node.nodeType === Node.TEXT_NODE) return collapseWhitespace(node.textContent ?? "")
+  if (node.nodeType === Node.TEXT_NODE) return escapeMarkdownText(collapseWhitespace(node.textContent ?? ""))
   if (!(node instanceof Element)) return ""
   const tag = node.tagName
   if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT" || tag === "TEMPLATE" || tag === "IFRAME" || tag === "OBJECT") return ""
-  if (tag === "BR") return "\n"
+  if (tag === "BR") return HARD_BREAK
   if (tag === "STRONG" || tag === "B") return wrapInline("**", renderInlineChildren(node))
   if (tag === "EM" || tag === "I") return wrapInline("*", renderInlineChildren(node))
   if (tag === "DEL" || tag === "S" || tag === "STRIKE") return wrapInline("~~", renderInlineChildren(node))
   if (tag === "CODE" && node.parentElement?.tagName !== "PRE") {
     const text = node.textContent ?? ""
     if (!text.trim()) return collapseWhitespace(text)
-    // 内容本身带反引号时换用双反引号包裹，避免标记被内容截断。
-    return text.includes("`") ? `\`\` ${text} \`\`` : `\`${text}\``
+    // 围栏必须长于内容中最长的连续反引号；内容首尾是反引号时加一格内衬，
+    // CommonMark 会移除这层内衬，同时完整保留用户看见的代码文字。
+    const fence = "`".repeat(longestBacktickRun(text) + 1)
+    const padding = text.startsWith("`") || text.endsWith("`") || (/^\s/.test(text) && /\s$/.test(text) && text.trim()) ? " " : ""
+    return `${fence}${padding}${text}${padding}${fence}`
   }
   if (tag === "A") {
     const label = normalizeInlineWhitespace(renderInlineChildren(node)) || (node.textContent ?? "").trim()
+    const visibleLabel = normalizeInlineWhitespace(node.textContent ?? "")
     const href = (node.getAttribute("href") ?? "").trim()
     if (!label) return ""
     if (!href || !SAFE_LINK_PATTERN.test(href)) return label
-    if (label === href) return href
-    return `[${label.replace(/[[\]]/g, "")}](${href.replace(/[()]/g, (character) => encodeURIComponent(character))})`
+    if (visibleLabel === href) return href
+    return `[${label}](${serializeLinkDestination(href)})`
   }
   if (tag === "IMG") {
     const source = (node.getAttribute("src") ?? "").trim()
     const alt = (node.getAttribute("alt") ?? "").trim()
     // 非 http(s) 图片（data:、file: 等）不引入笔记，只保留 alt 文字以免静默丢内容。
-    if (!SAFE_IMAGE_PATTERN.test(source)) return alt
-    return `![${alt}](${source})`
+    if (!SAFE_IMAGE_PATTERN.test(source)) return escapeMarkdownText(alt)
+    return `![${escapeMarkdownText(alt)}](${serializeLinkDestination(source)})`
   }
   // 其余行内标签（span、font、mark 等）不对应 Markdown 结构，剥掉标签保留文字。
   return renderInlineChildren(node)
 }
 
 function wrapInline(mark: string, content: string): string {
-  const text = normalizeInlineWhitespace(content)
-  if (!text) return ""
-  return `${mark}${text}${mark}`
+  // HARD_BREAK 要保留到整个行内片段完成后再展开；若在格式标签内部提前变成两个空格，
+  // 外层 normalize 会把它们折叠，最终只剩普通换行。
+  const text = content.replace(/ *\n */g, "\n").replace(/[ \t]+/g, " ")
+  if (!text.trim()) return text
+  const leading = text.match(/^\s+/)?.[0] ?? ""
+  const trailing = text.match(/\s+$/)?.[0] ?? ""
+  const inner = text.slice(leading.length, trailing.length ? text.length - trailing.length : undefined)
+  return inner ? `${leading}${mark}${inner}${mark}${trailing}` : text
 }
 
 // HTML 行内容里的连续空白（含换行缩进）按渲染规则折叠成单个空格。
@@ -212,7 +244,25 @@ function collapseWhitespace(text: string): string {
 }
 
 function normalizeInlineWhitespace(text: string): string {
-  return text.replace(/ *\n */g, "\n").replace(/[ \t]+/g, " ").trim()
+  return text.replace(/ *\n */g, "\n").replace(/[ \t]+/g, " ").trim().split(HARD_BREAK).join("  \n")
+}
+
+// 这里只转义来自 HTML 文本节点的 Markdown 标点；转换器自己生成的链接、强调、表格语法
+// 不经过此函数，因此既能保留字面符号，又不会出现整段二次转义。
+function escapeMarkdownText(text: string): string {
+  return text.replace(/[\\`*{}\[\]()#+\-.!_|<>~&]/g, "\\$&")
+}
+
+function longestBacktickRun(text: string): number {
+  let longest = 0
+  for (const match of text.matchAll(/`+/g)) longest = Math.max(longest, match[0].length)
+  return longest
+}
+
+function serializeLinkDestination(href: string): string {
+  // Markdown 目的地址中的空白和括号会改变解析边界；逐字符编码且保留既有 %xx，
+  // 避免 encodeURI 对括号放行，也避免把整个 URL 编码成不可用文本。
+  return href.replace(/[\s()<>]/g, (character) => encodeURIComponent(character))
 }
 
 // colspan/rowspan 超出 GFM 表达能力：展开为完整网格，内容只保留在跨度起始格，
@@ -227,7 +277,7 @@ function tableToMarkdown(table: HTMLTableElement): string | null {
     const cells = Array.from(row.cells)
     for (const cell of cells) {
       while (spans[column] > 0) { line[column] = line[column] ?? ""; column += 1 }
-      const content = normalizeInlineWhitespace(renderInlineChildren(cell)).replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>")
+      const content = normalizeInlineWhitespace(renderInlineChildren(cell)).replace(/(?<!\\)\|/g, "\\|").replace(/ {2}\r?\n|\r?\n/g, "<br>")
       const colspan = Math.max(1, Math.min(cell.colSpan || 1, 50))
       const rowspan = Math.max(1, Math.min(cell.rowSpan || 1, 200))
       line[column] = content

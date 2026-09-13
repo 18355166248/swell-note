@@ -752,51 +752,179 @@ export function wrapSelectionAsLink(view: EditorView, url: string) {
 }
 
 // 块格式作用于完整行，不能从光标中间插入换行把一句话切断；选区恰好结束于下一行行首时不改那一行。
+type BlockFormatKind = "heading" | "quote" | "bulletList" | "orderedList" | "taskList"
+
+type ParsedBlockLine = {
+  contentFrom: number
+  contentIndent: string
+  contentIndentFrom: number
+  format: BlockFormatKind | "plain"
+  mark: string
+  quoteFrom: number
+  quoteMark: string
+}
+
+// 行首拆成缩进、引用容器和段落格式三层。列表互转只替换最内层标记，因此引用中的
+// 列表不会被搬出引用；切换引用也不会破坏其内部的标题、任务状态或列表类型。
+function parseBlockLine(lineFrom: number, text: string): ParsedBlockLine {
+  const leading = /^\s*/.exec(text)![0]
+  const afterLeading = text.slice(leading.length)
+  // 引用符号前的空格属于引用容器；普通列表行的行首空格则是列表嵌套深度。
+  const outerIndent = afterLeading.startsWith(">") ? leading : ""
+  const rest = text.slice(outerIndent.length)
+  const quoteMark = /^(?:> ?)+/.exec(rest)?.[0] ?? ""
+  const afterQuote = rest.slice(quoteMark.length)
+  const contentIndent = /^\s*/.exec(afterQuote)![0]
+  const body = afterQuote.slice(contentIndent.length)
+  const heading = /^#{1,6}\s+/.exec(body)?.[0]
+  const task = /^(?:[-+*]|\d+[.)])\s+\[[ xX]\]\s+/.exec(body)?.[0]
+  const ordered = /^\d+[.)]\s+/.exec(body)?.[0]
+  const bullet = /^[-+*]\s+/.exec(body)?.[0]
+  const mark = heading ?? task ?? ordered ?? bullet ?? ""
+  const format: ParsedBlockLine["format"] = heading ? "heading"
+    : task ? "taskList"
+      : ordered ? "orderedList"
+        : bullet ? "bulletList"
+          : "plain"
+  const quoteFrom = lineFrom + outerIndent.length
+  const contentIndentFrom = quoteFrom + quoteMark.length
+  return { contentFrom: contentIndentFrom + contentIndent.length, contentIndent, contentIndentFrom, format, mark, quoteFrom, quoteMark }
+}
+
+function blockFormatForPrefix(prefix: string): BlockFormatKind {
+  if (prefix === "> ") return "quote"
+  if (prefix === "- ") return "bulletList"
+  if (prefix === "1. ") return "orderedList"
+  if (prefix === "- [ ] ") return "taskList"
+  return "heading"
+}
+
+// Checkbox 属于列表项正文，不参与后代缩进；任务项的结构宽度仍由 “- ” 或 “1. ” 决定。
+function listIndentWidth(format: ParsedBlockLine["format"], mark: string): number {
+  if (format === "taskList") return /^(?:[-+*]|\d+[.)])\s+/.exec(mark)?.[0].length ?? 0
+  return mark.length
+}
+
 export function toggleBlockFormat(view: EditorView, template: string) {
-  const prefix = /^\n(#{1,3} |> |- |- \[ \] )$/.exec(template)?.[1]
+  const prefix = /^\n(#{1,6} |> |- |1\. |- \[ \] )$/.exec(template)?.[1]
   if (!prefix) return false
   const { state } = view
   if (state.readOnly) return true
   const range = state.selection.main
   const first = state.doc.lineAt(range.from)
   const last = state.doc.lineAt(range.empty ? range.to : Math.max(range.from, range.to - 1))
-  const lines = []
-  for (let number = first.number; number <= last.number; number += 1) {
+  const selectedLastNumber = last.number
+  let scanLastNumber = selectedLastNumber
+  const target = blockFormatForPrefix(prefix)
+  const lines: Array<ParsedBlockLine & { active: boolean; continuation: boolean; listKey: string; segment: number }> = []
+  let segment = 0
+  for (let number = first.number; number <= scanLastNumber; number += 1) {
     const line = state.doc.line(number)
     // 代码与表格内的行首符号是内容，不能当作普通段落批量改写。
     let node: MdSyntaxNode | null = syntaxTree(state).resolveInner(line.from + line.text.search(/\S|$/), 1)
     let protectedLine = false
+    let insideListItem = false
+    let listKey = ""
+    let listItemTo = 0
     for (; node; node = node.parent) {
       if (["FencedCode", "CodeBlock", "Table"].includes(node.name)) protectedLine = true
+      if (node.name === "ListItem") {
+        insideListItem = true
+        if (!listItemTo) listItemTo = node.to
+      }
+      // 每个嵌套 List 节点就是一个独立编号序列；同一个 loose list 跨空行仍共享节点范围。
+      if (["BulletList", "OrderedList"].includes(node.name)) {
+        const key = `${node.from}:${node.to}`
+        if (!listKey) listKey = key
+      }
     }
-    if (protectedLine || (!range.empty && !line.text.trim())) continue
-    const indent = /^\s*/.exec(line.text)![0]
-    const body = line.text.slice(indent.length)
-    const mark = prefix.startsWith("#") ? /^#{1,6}\s+/.exec(body)?.[0] ?? ""
-      : prefix === "> " ? /^> ?/.exec(body)?.[0] ?? ""
-      : /^(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/.exec(body)?.[0] ?? ""
-    const active = prefix === "- [ ] " ? /\[[ xX]\]/.test(mark)
-      : prefix === "- " ? Boolean(mark) && !/\[[ xX]\]/.test(mark)
-      : mark.trim() === prefix.trim()
-    lines.push({ from: line.from + indent.length, mark, active })
+    if (!line.text.trim()) {
+      segment += 1
+      continue
+    }
+    const parsed = parseBlockLine(line.from, line.text)
+    if (number <= selectedLastNumber && parsed.format !== "plain" && listItemTo) {
+      // 父项标记宽度改变时，未选中的后代仍需随父内容列平移；扩展扫描范围只做结构迁移，
+      // 不会把后代的无序/有序/任务类型一并改掉。
+      scanLastNumber = Math.max(scanLastNumber, state.doc.lineAt(Math.max(0, listItemTo - 1)).number)
+    }
+    if (number <= selectedLastNumber && parsed.format !== "plain") {
+      // CommonMark 对列表内围栏/表格的容忍缩进比语法树 ListItem 范围更宽；继续按原始内容列
+      // 扫描紧随其后的缩进行，避免父标记变宽后这些块掉到列表外层。
+      for (let descendantNumber = number + 1; descendantNumber <= state.doc.lines; descendantNumber += 1) {
+        const descendant = state.doc.line(descendantNumber)
+        if (!descendant.text.trim()) { scanLastNumber = Math.max(scanLastNumber, descendantNumber); continue }
+        const descendantParsed = parseBlockLine(descendant.from, descendant.text)
+        if (descendantParsed.quoteMark !== parsed.quoteMark || descendantParsed.contentIndent.length <= parsed.contentIndent.length) break
+        scanLastNumber = Math.max(scanLastNumber, descendantNumber)
+      }
+    }
+    // 缩进在列表项里的无标记行是上一项的续行：它跟随父标记宽度平移，但不新增列表标记。
+    const continuation = protectedLine || number > selectedLastNumber
+      || (["bulletList", "orderedList", "taskList"].includes(target) && parsed.format === "plain" && insideListItem)
+    const active = target === "quote" ? Boolean(parsed.quoteMark)
+      : target === "heading" ? parsed.format === "heading" && parsed.mark.trim() === prefix.trim()
+        : parsed.format === target
+    lines.push({ ...parsed, active, continuation, listKey, segment })
   }
-  const remove = lines.length > 0 && lines.every((line) => line.active)
-  const changes = state.changes(lines.map(({ from, mark, active }) => ({
-    from, to: from + mark.length,
-    // 混合选区补齐格式时保留已完成任务的勾选状态和已有列表符号。
-    insert: remove ? "" : active ? mark : prefix,
-  })))
-  view.dispatch({ changes, selection: state.selection.map(changes, 1), scrollIntoView: true, userEvent: "input.format" })
+  const formattedLines = lines.filter((line) => !line.continuation)
+  const remove = formattedLines.length > 0 && formattedLines.every((line) => line.active)
+  const orderedCounters = new Map<string, number>()
+  const parentDeltas: Array<{ depth: number; delta: number; quoteMark: string }> = []
+  const changes: ChangeSpec[] = []
+  for (const line of lines) {
+    if (target === "quote") {
+      // 混合选区补引用时保留已经引用的行；全部已引用时只退出一层引用。
+      const firstQuote = /^> ?/.exec(line.quoteMark)?.[0] ?? ""
+      changes.push({
+        from: line.quoteFrom,
+        to: line.quoteFrom + (remove ? firstQuote.length : 0),
+        insert: remove || line.active ? "" : "> ",
+      })
+      continue
+    }
+    let insert = remove ? "" : line.active ? line.mark : prefix
+    const depth = line.contentIndent.length
+    while (parentDeltas.length) {
+      const parent = parentDeltas[parentDeltas.length - 1]
+      if (parent.quoteMark === line.quoteMark && parent.depth < depth) break
+      parentDeltas.pop()
+    }
+    const inheritedDelta = parentDeltas.reduce((sum, parent) => sum + parent.delta, 0)
+    if (inheritedDelta > 0) {
+      changes.push({ from: line.contentIndentFrom, to: line.contentIndentFrom, insert: " ".repeat(inheritedDelta) })
+    } else if (inheritedDelta < 0) {
+      changes.push({ from: line.contentIndentFrom, to: line.contentIndentFrom + Math.min(-inheritedDelta, line.contentIndent.length), insert: "" })
+    }
+    if (line.continuation) continue
+    if (!remove && target === "orderedList") {
+      // 只让真实列表项推进序号；续行在上方已跳过，不会占用一个编号。
+      const key = line.listKey || `${line.segment}\u0000${line.contentIndent}\u0000${line.quoteMark}`
+      const next = (orderedCounters.get(key) ?? 0) + 1
+      orderedCounters.set(key, next)
+      insert = `${next}. `
+    }
+    const ownDelta = listIndentWidth(target, insert) - listIndentWidth(line.format, line.mark)
+    if (!remove && line.format !== "plain" && ownDelta) parentDeltas.push({ depth, delta: ownDelta, quoteMark: line.quoteMark })
+    // 目标仍是任务列表时保留 [x]；列表类型互转只替换行首标记。
+    changes.push({ from: line.contentFrom, to: line.contentFrom + line.mark.length, insert })
+  }
+  const changeSet = state.changes(changes)
+  view.dispatch({ changes: changeSet, selection: state.selection.map(changeSet, 1), scrollIntoView: true, userEvent: "input.format" })
   view.focus()
   return true
 }
 
 export type EditorFormatState = {
+  bulletList?: boolean
   code: boolean
   emphasis: boolean
-  heading: 0 | 1 | 2 | 3
+  heading: 0 | 1 | 2 | 3 | 4 | 5 | 6
+  orderedList?: boolean
+  quote?: boolean
   strike: boolean
   strong: boolean
+  taskList?: boolean
 }
 
 // 工具栏高亮：汇报光标或选区当前的格式。行内格式要求选区被同一标记节点完整覆盖——
@@ -809,7 +937,11 @@ export function detectFormatState(state: EditorState): EditorFormatState {
   const first = state.doc.lineAt(range.from)
   // 选区恰好结束于下一行行首时，该行不算入选区（与 toggleBlockFormat 的行范围一致）。
   const last = state.doc.lineAt(range.empty ? range.to : Math.max(range.from, range.to - 1))
-  let heading: 0 | 1 | 2 | 3 = 0
+  let heading: EditorFormatState["heading"] = 0
+  let bulletList = false
+  let orderedList = false
+  let quote = false
+  let taskList = false
   let checked = false
   for (let number = first.number; number <= last.number; number += 1) {
     const line = state.doc.line(number)
@@ -819,21 +951,33 @@ export function detectFormatState(state: EditorState): EditorFormatState {
     for (; node; node = node.parent) {
       if (["FencedCode", "CodeBlock", "Table"].includes(node.name)) protectedLine = true
     }
-    const level = (protectedLine ? 0 : /^(#{1,3})\s/.exec(line.text)?.[1].length ?? 0) as 0 | 1 | 2 | 3
+    const parsed = parseBlockLine(line.from, line.text)
+    const level = (protectedLine ? 0 : /^#{1,6}\s/.exec(parsed.mark)?.[0].trim().length ?? 0) as EditorFormatState["heading"]
     if (!checked) {
       heading = level
+      bulletList = !protectedLine && parsed.format === "bulletList"
+      orderedList = !protectedLine && parsed.format === "orderedList"
+      quote = !protectedLine && Boolean(parsed.quoteMark)
+      taskList = !protectedLine && parsed.format === "taskList"
       checked = true
-    } else if (level !== heading) {
-      heading = 0
-      break
+    } else {
+      if (level !== heading) heading = 0
+      bulletList &&= !protectedLine && parsed.format === "bulletList"
+      orderedList &&= !protectedLine && parsed.format === "orderedList"
+      quote &&= !protectedLine && Boolean(parsed.quoteMark)
+      taskList &&= !protectedLine && parsed.format === "taskList"
     }
   }
 
   return {
+    bulletList,
     code: markActive(INLINE_MARK_NODE_NAMES.code),
     emphasis: markActive(INLINE_MARK_NODE_NAMES.emphasis),
     heading: checked ? heading : 0,
+    orderedList,
+    quote,
     strike: markActive(INLINE_MARK_NODE_NAMES.strike),
     strong: markActive(INLINE_MARK_NODE_NAMES.strong),
+    taskList,
   }
 }

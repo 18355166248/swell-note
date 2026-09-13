@@ -281,6 +281,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         },
         paste(event, view) {
           const text = event.clipboardData?.getData("text/plain")
+          // 代码范围中的粘贴必须保持字面内容：URL 不能包成链接，HTML 也不能转换成强调/列表。
+          // 返回 false 交给 CodeMirror 原生粘贴，可保留一次撤销且不改动选区之外的文本。
+          if (!readOnly && shouldPasteAsPlainText(view.state)) return false
           // 选中文字时粘一个链接，直接包成 [选中文字](URL)。
           if (text && !readOnly && wrapSelectionAsLink(view, text)) {
             event.preventDefault()
@@ -692,6 +695,17 @@ function isInsideTable(state: EditorState, position: number) {
     if (node.name === "Table") return true
   }
   return false
+}
+
+export function shouldPasteAsPlainText(state: EditorState) {
+  const range = state.selection.main
+  const positions = range.empty ? [range.head] : [range.from, Math.max(range.from, range.to - 1)]
+  return positions.every((position) => {
+    for (let node: MdNode | null = syntaxTree(state).resolveInner(position, 1); node; node = node.parent) {
+      if (node.name === "InlineCode" || node.name === "FencedCode" || node.name === "CodeBlock") return true
+    }
+    return false
+  })
 }
 
 // 在表格末行、或紧邻其后的空行插入块时都需要边界，不能只处理文档末尾。

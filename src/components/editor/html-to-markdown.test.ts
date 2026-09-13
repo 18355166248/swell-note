@@ -1,8 +1,19 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest"
 import { markdownLanguage } from "@codemirror/lang-markdown"
+import { createElement } from "react"
+import { renderToStaticMarkup } from "react-dom/server"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
+import { remarkObsidian } from "@/services/markdown/remark-obsidian"
 
 import { htmlToMarkdown, isInlineMarkdownFragment } from "./html-to-markdown"
+
+function renderMarkdown(markdown: string) {
+  // 与正式阅读态一致，兼容旧 Vault 语法的 remark 插件也参与转换结果验收。
+  const html = renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins: [remarkGfm, remarkObsidian] }, markdown))
+  return new DOMParser().parseFromString(html, "text/html").body
+}
 
 describe("htmlToMarkdown", () => {
   it("没有可用结构时返回 null，交给纯文本粘贴", () => {
@@ -90,7 +101,7 @@ describe("htmlToMarkdown", () => {
 
   it("带尾随文字的等长反引号行是代码内容，不关闭围栏", () => {
     // 关闭围栏要求反引号之后仅余空白：````js 只是代码内容，其后的空行必须保留。
-    expect(htmlToMarkdown("<pre>````js\n\n\nx</pre>")).toBe("````\n````js\n\n\nx\n````")
+    expect(htmlToMarkdown("<pre>````js\n\n\nx</pre>")).toBe("`````\n````js\n\n\nx\n`````")
   })
 
   it("行内片段与块级结构的判定", () => {
@@ -123,5 +134,77 @@ describe("htmlToMarkdown", () => {
     let hasTaskMarker = false
     tasks.cursor().iterate((node) => { if (node.name === "TaskMarker") hasTaskMarker = true })
     expect(hasTaskMarker).toBe(true)
+  })
+
+  it("按源文本节点转义字面 Markdown，预览不会把内容误识别成格式", () => {
+    const markdown = htmlToMarkdown("<p>请原样输入 **关键词** 和 [说明](地址)，还有 # 标题与 a|b</p>")!
+    const body = renderMarkdown(markdown)
+    expect(body.textContent).toBe("请原样输入 **关键词** 和 [说明](地址)，还有 # 标题与 a|b")
+    expect(body.querySelector("strong, a, h1")).toBeNull()
+  })
+
+  it("链接保留方括号标签并安全序列化含空格、括号的地址", () => {
+    const markdown = htmlToMarkdown('<p><a href="https://example.com/a (b)?q=x y">数组[0]</a></p>')!
+    const body = renderMarkdown(markdown)
+    const link = body.querySelector("a")
+    expect(link?.textContent).toBe("数组[0]")
+    expect(link?.getAttribute("href")).toBe("https://example.com/a%20(b)?q=x%20y")
+  })
+
+  it("行内格式把两侧空格移到标记外，可见文字不粘连", () => {
+    const body = renderMarkdown(htmlToMarkdown("<p>Hello<strong> world </strong>again</p>")!)
+    expect(body.textContent).toBe("Hello world again")
+    expect(body.querySelector("strong")?.textContent).toBe("world")
+  })
+
+  it("任意长度反引号在行内代码和代码块中均完整保留", () => {
+    const inlineText = "a``b```c"
+    const inline = renderMarkdown(htmlToMarkdown(`<p><code>${inlineText}</code></p>`)!)
+    expect(inline.querySelector("code")?.textContent).toBe(inlineText)
+
+    const blockText = "before\n````\nafter"
+    const block = renderMarkdown(htmlToMarkdown(`<pre>${blockText}</pre>`)!)
+    expect(block.querySelector("pre code")?.textContent).toBe(`${blockText}\n`)
+  })
+
+  it("BR 在预览中保持视觉换行，列表内多个段落仍属于同一列表项", () => {
+    const breakBody = renderMarkdown(htmlToMarkdown("<p>第一行<br>第二行</p>")!)
+    expect(breakBody.querySelector("br")).not.toBeNull()
+    expect(breakBody.textContent).toBe("第一行\n第二行")
+
+    const listBody = renderMarkdown(htmlToMarkdown("<ul><li><p>首段</p><p>续段</p><pre>code\nline</pre></li></ul>")!)
+    const items = listBody.querySelectorAll("li")
+    expect(items).toHaveLength(1)
+    expect(items[0].querySelectorAll("p")).toHaveLength(2)
+    expect(items[0].querySelector("pre code")?.textContent).toBe("code\nline\n")
+  })
+
+  it("格式标签内部的 BR 仍渲染成硬换行", () => {
+    const markdown = htmlToMarkdown("<p><strong>甲<br>乙</strong></p>")!
+    const body = renderMarkdown(markdown)
+    expect(body.querySelector("strong br")).not.toBeNull()
+    expect(body.textContent).toBe("甲\n乙")
+  })
+
+  it("HTML 解码后形似 Markdown 实体的文本不会被二次解码", () => {
+    const markdown = htmlToMarkdown("<p>&amp;amp; &amp;copy;</p>")!
+    const body = renderMarkdown(markdown)
+    expect(body.textContent).toBe("&amp; &copy;")
+  })
+
+  it("列表首块为 PRE 时缩进全部围栏内容，真实渲染保持在列表项内", () => {
+    const markdown = htmlToMarkdown("<ul><li><pre><code>a\nb</code></pre></li></ul>")!
+    const body = renderMarkdown(markdown)
+    expect(body.querySelectorAll("li")).toHaveLength(1)
+    expect(body.querySelector("li pre code")?.textContent).toBe("a\nb\n")
+    expect(body.querySelector("body > pre")).toBeNull()
+  })
+
+  it("列表中的行内与段落按 DOM 原顺序渲染", () => {
+    const markdown = htmlToMarkdown("<ul><li><p>首</p>中间<p>尾</p></li></ul>")!
+    const body = renderMarkdown(markdown)
+    const item = body.querySelector("li")!
+    expect(item.textContent?.trim()).toBe("首\n中间\n尾")
+    expect(Array.from(item.querySelectorAll("p"), (node) => node.textContent)).toEqual(["首", "中间", "尾"])
   })
 })

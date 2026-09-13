@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import type { EditorFormatState } from "@/components/editor/markdown-input"
 import { TooltipProvider } from "@/components/ui/tooltip"
 
 import { FormattingToolbar } from "./formatting-toolbar"
@@ -140,7 +141,11 @@ describe("SelectionActionBar", () => {
 })
 
 describe("FormattingToolbar 选区模式（移动端选区操作并入格式栏）", () => {
-  function mountToolbar(editor: MarkdownEditorHandle, hasSelection: boolean) {
+  function mountToolbar(editor: MarkdownEditorHandle, hasSelection: boolean, options: {
+    formatState?: EditorFormatState
+    mobile?: boolean
+    onFormat?: (syntax: string) => void
+  } = {}) {
     const ref = createRef<MarkdownEditorHandle>()
     ;(ref as { current: MarkdownEditorHandle | null }).current = editor
     container = document.createElement("div")
@@ -153,9 +158,10 @@ describe("FormattingToolbar 选区模式（移动端选区操作并入格式栏�
             attachmentBusy={false}
             canInsertAttachment={false}
             editorRef={ref}
+            formatState={options.formatState}
             hasSelection={hasSelection}
-            mobile
-            onFormat={vi.fn()}
+            mobile={options.mobile ?? true}
+            onFormat={options.onFormat ?? vi.fn()}
             onInsertFiles={vi.fn().mockResolvedValue(undefined)}
           />
         </TooltipProvider>,
@@ -199,5 +205,32 @@ describe("FormattingToolbar 选区模式（移动端选区操作并入格式栏�
     await click(bar.button("复制")!)
 
     expect(editor.copySelection).toHaveBeenCalledTimes(1)
+  })
+
+  it("桌面提供有序列表入口并高亮当前块格式", () => {
+    const bar = mountToolbar(createEditor(), false, {
+      formatState: { bulletList: false, code: false, emphasis: false, heading: 4, orderedList: true, quote: true, strike: false, strong: false, taskList: false },
+      mobile: false,
+    })
+
+    expect(bar.button("有序列表")?.getAttribute("data-active")).toBe("true")
+    expect(bar.button("引用")?.getAttribute("data-active")).toBe("true")
+    expect((container!.querySelector(".toolbar-heading-select") as HTMLSelectElement).value).toBe("####")
+  })
+
+  it("移动端把有序列表放在更多菜单且仍报告激活状态", async () => {
+    const onFormat = vi.fn()
+    const bar = mountToolbar(createEditor(), false, {
+      formatState: { bulletList: false, code: false, emphasis: false, heading: 0, orderedList: true, quote: false, strike: false, strong: false, taskList: false },
+      onFormat,
+    })
+
+    expect(bar.button("有序列表")).toBeNull()
+    await click(bar.button("更多格式")!)
+    const ordered = Array.from(container!.querySelectorAll<HTMLButtonElement>("[role='menuitem']"))
+      .find((button) => button.textContent === "有序列表")!
+    expect(ordered.getAttribute("data-active")).toBe("true")
+    await click(ordered)
+    expect(onFormat).toHaveBeenCalledWith("\n1. ")
   })
 })

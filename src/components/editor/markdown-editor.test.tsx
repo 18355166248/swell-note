@@ -8,7 +8,7 @@ import { EditorState } from "@codemirror/state"
 import { EditorView } from "@codemirror/view"
 
 import type { MarkdownEditorHandle } from "./markdown-editor"
-import MarkdownEditor, { findPlainTextMatches, findTableWrapperAtLine, formatToolbarText, paragraphSeparatorAtEnd } from "./markdown-editor"
+import MarkdownEditor, { findPlainTextMatches, findTableWrapperAtLine, formatToolbarText, paragraphSeparatorAtEnd, shouldPasteAsPlainText } from "./markdown-editor"
 
 // React 19 在测试里要求显式打开 act 环境标记。
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -31,6 +31,28 @@ afterEach(() => {
 })
 
 describe("MarkdownEditor", () => {
+  it("代码范围粘贴始终走纯文本路径，不把 URL 或 HTML 转成 Markdown", () => {
+    const fenced = EditorState.create({
+      doc: "```ts\nconst url = old\n```",
+      extensions: [markdown({ base: markdownLanguage })],
+      selection: { anchor: 14, head: 17 },
+    })
+    expect(shouldPasteAsPlainText(fenced)).toBe(true)
+
+    const inline = EditorState.create({
+      doc: "正文 `old` 结尾",
+      extensions: [markdown({ base: markdownLanguage })],
+      selection: { anchor: 4, head: 7 },
+    })
+    expect(shouldPasteAsPlainText(inline)).toBe(true)
+
+    const paragraph = EditorState.create({
+      doc: "正文 old 结尾",
+      extensions: [markdown({ base: markdownLanguage })],
+      selection: { anchor: 3, head: 6 },
+    })
+    expect(shouldPasteAsPlainText(paragraph)).toBe(false)
+  })
   it("keeps an attachment bookmark while the cursor moves and earlier text changes", () => {
     const handle = createRef<MarkdownEditorHandle>()
     const onChange = vi.fn()

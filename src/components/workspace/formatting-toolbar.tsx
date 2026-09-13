@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react"
-import { Bold, CheckCircle2, Code, Code2, Heading3, Image, Italic, Link, List, LoaderCircle, Minus, MoreHorizontal, Quote, Redo2, Strikethrough, Table, Undo2 } from "lucide-react"
+import { Bold, CheckCircle2, Code, Code2, Heading3, Image, Italic, Link, List, ListOrdered, LoaderCircle, Minus, MoreHorizontal, Quote, Redo2, Strikethrough, Table, Undo2 } from "lucide-react"
 
 import { TABLE_INSERT_TEMPLATE, type MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { EditorFormatState } from "@/components/editor/markdown-input"
@@ -9,15 +9,21 @@ import { SelectionButtons, useSelectionActions } from "./selection-action-bar"
 
 // 手机一行放不下全部按钮，这些低频格式收进“更多”；语法与桌面端共用，避免两处写法漂移。
 // 前 4 项的顺序被下方解构复用，新增项一律往后追加。
-const SECONDARY_FORMATS = [
+const SECONDARY_FORMATS: Array<{
+  icon: typeof List
+  label: string
+  stateKey?: keyof Pick<EditorFormatState, "orderedList" | "quote">
+  syntax: string
+}> = [
   { icon: Heading3, label: "三级标题", syntax: "\n### " },
-  { icon: Quote, label: "引用", syntax: "\n> " },
+  { icon: Quote, label: "引用", stateKey: "quote", syntax: "\n> " },
   { icon: Code2, label: "代码块", syntax: "\n```\n\n```\n" },
   { icon: Link, label: "链接", syntax: "[链接](https://)" },
   { icon: Strikethrough, label: "删除线", syntax: "~~删除线文字~~" },
   { icon: Code, label: "行内代码", syntax: "`行内代码`" },
   { icon: Minus, label: "分割线", syntax: "\n---\n" },
   { icon: Table, label: "表格", syntax: TABLE_INSERT_TEMPLATE },
+  { icon: ListOrdered, label: "有序列表", stateKey: "orderedList", syntax: "\n1. " },
 ]
 
 export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable = false, attachmentBusy, canInsertAttachment, editorRef, formatState = null, hasSelection = false, mobile = false, onFormat, onInsertFiles }: {
@@ -50,7 +56,7 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
         <SelectionButtons run={run} />
         <FormatButton active={Boolean(formatState?.strong)} icon={Bold} label="加粗（⌘/Ctrl+B）" onClick={() => onFormat("**加粗文字**")} />
         <FormatButton active={Boolean(formatState?.emphasis)} icon={Italic} label="斜体（⌘/Ctrl+I）" onClick={() => onFormat("*斜体文字*")} />
-        <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} onFormat={onFormat} />
+        <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} formatState={formatState} onFormat={onFormat} />
       </div>
     )
   }
@@ -72,14 +78,18 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
         <option value="#">一级标题</option>
         <option value="##">二级标题</option>
         <option value="###">三级标题</option>
+        <option value="####">四级标题</option>
+        <option value="#####">五级标题</option>
+        <option value="######">六级标题</option>
       </select>
       <span className="toolbar-divider" />
       <FormatButton active={Boolean(formatState?.strong)} icon={Bold} label="加粗（⌘/Ctrl+B）" onClick={() => onFormat("**加粗文字**")} />
       <FormatButton active={Boolean(formatState?.emphasis)} icon={Italic} label="斜体（⌘/Ctrl+I）" onClick={() => onFormat("*斜体文字*")} />
       {mobile ? null : <FormatButton active={Boolean(formatState?.strike)} icon={strike.icon} label={strike.label} onClick={() => onFormat(strike.syntax)} />}
-      {mobile ? null : <FormatButton disabled={editingTable} icon={quote.icon} label={quote.label} onClick={() => onFormat(quote.syntax)} />}
-      <FormatButton disabled={editingTable} icon={List} label="无序列表" onClick={() => onFormat("\n- ")} />
-      <FormatButton disabled={editingTable} icon={CheckCircle2} label="任务列表" onClick={() => onFormat("\n- [ ] ")} />
+      {mobile ? null : <FormatButton active={Boolean(formatState?.quote)} disabled={editingTable} icon={quote.icon} label={quote.label} onClick={() => onFormat(quote.syntax)} />}
+      <FormatButton active={Boolean(formatState?.bulletList)} disabled={editingTable} icon={List} label="无序列表" onClick={() => onFormat("\n- ")} />
+      {mobile ? null : <FormatButton active={Boolean(formatState?.orderedList)} disabled={editingTable} icon={ListOrdered} label="有序列表" onClick={() => onFormat("\n1. ")} />}
+      <FormatButton active={Boolean(formatState?.taskList)} disabled={editingTable} icon={CheckCircle2} label="任务列表" onClick={() => onFormat("\n- [ ] ")} />
       {mobile ? null : (
         <>
           <FormatButton active={Boolean(formatState?.code)} icon={inlineCode.icon} label={inlineCode.label} onClick={() => onFormat(inlineCode.syntax)} />
@@ -101,17 +111,18 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
           }} ref={fileInputRef} tabIndex={-1} type="file" />
         </>
       ) : null}
-      {mobile ? <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} onFormat={onFormat} /> : null}
+      {mobile ? <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} formatState={formatState} onFormat={onFormat} /> : null}
     </div>
   )
 }
 
 // 用工具栏内部的浮层而不是通用下拉菜单：菜单一旦接管焦点，手机键盘会收起再弹出，
 // 工具栏也会跟着键盘上下跳一次；自绘浮层可以让焦点始终留在 CodeMirror 里。
-function SecondaryFormatsMenu({ canRedo = true, editorRef, onFormat, editingTable }: {
+function SecondaryFormatsMenu({ canRedo = true, editorRef, formatState, onFormat, editingTable }: {
   canRedo?: boolean
   editorRef: RefObject<MarkdownEditorHandle | null>
   editingTable: boolean
+  formatState: EditorFormatState | null
   onFormat: (syntax: string) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -151,8 +162,10 @@ function SecondaryFormatsMenu({ canRedo = true, editorRef, onFormat, editingTabl
             <Redo2 />
             <span>重做</span>
           </button>
-          {SECONDARY_FORMATS.map(({ icon: Icon, label, syntax }) => (
+          {SECONDARY_FORMATS.map(({ icon: Icon, label, stateKey, syntax }) => (
             <button
+              aria-pressed={stateKey ? Boolean(formatState?.[stateKey]) : undefined}
+              data-active={stateKey && formatState?.[stateKey] ? "true" : undefined}
               key={label}
               disabled={editingTable && syntax.startsWith("\n")}
               onClick={() => {

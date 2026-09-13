@@ -7,7 +7,7 @@ import { DecorationSet, EditorView } from "@codemirror/view"
 import { describe, expect, it, vi } from "vitest"
 
 import type { LivePreviewOptions } from "./live-preview"
-import { ListBulletWidget, markdownLivePreview, markdownLivePreviewPlugin, MarkdownImageWidget, mergeDecorationRanges, tableDecorationsField, TableWidget, TaskCheckboxWidget } from "./live-preview"
+import { ListBulletWidget, markdownLivePreview, markdownLivePreviewPlugin, MarkdownImageWidget, MarkdownTextWidget, mergeDecorationRanges, tableDecorationsField, TableWidget, TaskCheckboxWidget } from "./live-preview"
 
 const doc = [
   "# 标题",
@@ -93,6 +93,7 @@ function collect(decorations: DecorationSet) {
   const images: Array<{ alt: string; block: boolean; from: number; source: string; to: number }> = []
   const marks: Array<{ attributes?: Record<string, string>; class: string; from: number; to: number }> = []
   const bullets: Array<{ from: number; to: number }> = []
+  const decoded: Array<{ from: number; text: string; to: number }> = []
   const cursor = decorations.iter()
   while (cursor.value) {
     const spec = (cursor.value.spec ?? {}) as DecorationSpec
@@ -104,12 +105,13 @@ function collect(decorations: DecorationSet) {
     if (spec.widget instanceof TaskCheckboxWidget) checkboxes.push({ checked: spec.widget.checked, from: spec.widget.from, to: cursor.to })
     if (spec.widget instanceof TableWidget) tables.push({ from: cursor.from, to: cursor.to })
     if (spec.widget instanceof ListBulletWidget) bullets.push({ from: cursor.from, to: cursor.to })
+    if (spec.widget instanceof MarkdownTextWidget) decoded.push({ from: cursor.from, text: spec.widget.text, to: cursor.to })
     if (spec.widget instanceof MarkdownImageWidget) {
       images.push({ alt: spec.widget.alt, block: spec.widget.block, from: cursor.from, source: spec.widget.source, to: cursor.to })
     }
     cursor.next()
   }
-  return { bullets, checkboxes, classes, hidden, images, marks, tables }
+  return { bullets, checkboxes, classes, decoded, hidden, images, marks, tables }
 }
 
 function markOf(marks: ReturnType<typeof collect>["marks"], className: string) {
@@ -1187,6 +1189,46 @@ describe("markdown live preview blocks", () => {
 
     // "## " 三个字符一起隐藏，行首才不会留下一个孤零零的缩进。
     expect(hidden).toContainEqual({ from: 0, to: 3 })
+  })
+})
+
+describe("escaped text, entities and hard breaks", () => {
+  it("hides only escape markers away from the cursor and restores source when touched", async () => {
+    const content = "前 \\*普通\\* 后"
+    const away = collect(await settleInlineDecorations(createView({ anchor: 0 }, content)))
+    expect(away.hidden).toContainEqual({ from: 2, to: 3 })
+    expect(away.hidden).toContainEqual({ from: 6, to: 7 })
+
+    const touched = collect(await settleInlineDecorations(createView({ anchor: 3 }, content)))
+    expect(touched.hidden).not.toContainEqual({ from: 2, to: 3 })
+  })
+
+  it("decodes entities into safe text widgets and reveals source while editing", async () => {
+    const content = "前 &amp; &#42; 后"
+    const away = collect(await settleInlineDecorations(createView({ anchor: 0 }, content)))
+    expect(away.decoded.map(({ text }) => text)).toEqual(["&", "*"])
+
+    const amp = content.indexOf("&amp;")
+    const touched = collect(await settleInlineDecorations(createView({ anchor: amp + 1 }, content)))
+    expect(touched.decoded.some(({ from }) => from === amp)).toBe(false)
+  })
+
+  it("hard break only hides its marker and locked mode ignores the old cursor", async () => {
+    const content = "甲\\\n乙"
+    const away = collect(await settleInlineDecorations(createView({ anchor: content.length }, content)))
+    expect(away.hidden).toContainEqual({ from: 1, to: 2 })
+
+    const locked = new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc: "\\*普通\\* &amp;",
+        extensions: [markdown({ base: markdownLanguage }), markdownLivePreview({}), EditorState.readOnly.of(true)],
+        selection: { anchor: 1 },
+      }),
+    })
+    const result = collect(await settleInlineDecorations(locked))
+    expect(result.hidden).toContainEqual({ from: 0, to: 1 })
+    expect(result.decoded.map(({ text }) => text)).toContain("&")
   })
 })
 

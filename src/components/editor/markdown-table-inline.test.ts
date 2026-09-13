@@ -1,6 +1,13 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest"
 
-import { rawOffsetForDisplayOffset, truncateLinkLabel } from "./markdown-table-inline"
+import { rawOffsetForDisplayOffset, renderTableInlineMarkdown, truncateLinkLabel } from "./markdown-table-inline"
+
+function renderInline(source: string) {
+  const element = document.createElement("div")
+  renderTableInlineMarkdown(element, source)
+  return element
+}
 
 describe("truncateLinkLabel（表格内长链接显示文本截短）", () => {
   it("短文本原样返回", () => {
@@ -29,6 +36,50 @@ describe("truncateLinkLabel（表格内长链接显示文本截短）", () => {
 })
 
 describe("rawOffsetForDisplayOffset（展示层偏移 → 原文偏移）", () => {
+  it("转义标点与实体显示为字面文本，且不会误生成强调", () => {
+    const source = "1\\.2\\.3 \\*不是斜体\\* \\&copy; &amp;"
+    const element = renderInline(source)
+    expect(element.textContent).toBe("1.2.3 *不是斜体* &copy; &")
+    expect(element.querySelector("em")).toBeNull()
+
+    // 转义标点吃掉一个反斜杠，实体则把一个显示字符映射到完整原文范围末端。
+    expect(rawOffsetForDisplayOffset("\\*甲", 0)).toBe(1)
+    expect(rawOffsetForDisplayOffset("\\*甲", 1)).toBe(2)
+    expect(rawOffsetForDisplayOffset("&amp;甲", 0)).toBe(0)
+    expect(rawOffsetForDisplayOffset("&amp;甲", 1)).toBe(5)
+  })
+
+  it("格式标记内部递归处理转义文本并保持显示偏移映射", () => {
+    const source = "**1\\.2\\.3 \\*不是斜体\\***"
+    const element = renderInline(source)
+    expect(element.querySelector("strong")?.textContent).toBe("1.2.3 *不是斜体*")
+    expect(element.querySelector("strong em")).toBeNull()
+
+    // 显示到第一个点之后时，应越过 ** 与点前的反斜杠。
+    expect(rawOffsetForDisplayOffset(source, 2)).toBe(5)
+  })
+
+  it("链接标签允许转义方括号，仍生成单个可点击链接", () => {
+    const source = "[\\[文档\\]](https://example.com)"
+    const element = renderInline(source)
+    const links = element.querySelectorAll("a")
+    expect(links).toHaveLength(1)
+    expect(links[0].textContent).toBe("[文档]")
+    expect(links[0].dataset.mdHref).toBe("https://example.com")
+    expect(element.textContent).toBe("[文档]")
+
+    expect(rawOffsetForDisplayOffset(source, 0)).toBe(2)
+    expect(rawOffsetForDisplayOffset(source, 1)).toBe(3)
+  })
+
+  it("任意长度反引号围栏只生成一个代码节点且不露标记", () => {
+    const source = "```a``b```"
+    const element = renderInline(source)
+    expect(element.querySelectorAll("code")).toHaveLength(1)
+    expect(element.querySelector("code")?.textContent).toBe("a``b")
+    expect(element.textContent).toBe("a``b")
+    expect(rawOffsetForDisplayOffset(source, 3)).toBe(6)
+  })
   it("没有行内标记时逐字符对应", () => {
     expect(rawOffsetForDisplayOffset("普通文字", 0)).toBe(0)
     expect(rawOffsetForDisplayOffset("普通文字", 2)).toBe(2)
