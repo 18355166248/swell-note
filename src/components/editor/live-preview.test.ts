@@ -211,15 +211,90 @@ describe("markdown live preview", () => {
       view.destroy()
     })
 
+    it("编辑引用把光标折叠到源码并退出图片预览态", async () => {
+      const view = await createImageView()
+      const imageFrom = imageRefDoc.indexOf("![图]")
+      toolButton(view, "编辑引用").click()
+
+      expect(view.state.selection.main).toMatchObject({ anchor: imageFrom, head: imageFrom })
+      expect(view.dom.querySelectorAll(".cm-md-image")).toHaveLength(1)
+      expect(view.hasFocus).toBe(true)
+      view.destroy()
+    })
+
+    it("键盘重试进入加载态后把焦点交还编辑器", async () => {
+      let attempt = 0
+      const view = new EditorView({
+        parent: document.body,
+        state: EditorState.create({
+          doc: "正文\n\n![图](a.png)",
+          extensions: [markdown({ base: markdownLanguage }), markdownLivePreview({
+            onResolveAsset: () => ++attempt === 1 ? Promise.resolve(null) : new Promise(() => {}),
+          })],
+          selection: { anchor: 0 },
+        }),
+      })
+      vi.spyOn(view, "requestMeasure").mockImplementation(() => {})
+      await settle()
+      const retry = toolButton(view, "重试")
+      retry.focus()
+      retry.click()
+
+      expect(retry.hidden).toBe(true)
+      expect(view.hasFocus).toBe(true)
+      view.destroy()
+    })
+
     it("调整尺寸写入宽度标题，一步撤销恢复", async () => {
       const view = await createImageView()
       const host = view.dom.querySelector(".cm-md-image")!
       const sizes = host.querySelector<HTMLSelectElement>(".cm-md-image-tools select")!
       sizes.value = "480"
+      sizes.focus()
       sizes.dispatchEvent(new Event("change"))
       expect(view.state.doc.toString()).toBe('正文\n\n![图](a.png "480")\n\n同图第二处 ![图](a.png) 结尾')
+      expect(view.hasFocus).toBe(true)
       undo(view)
       expect(view.state.doc.toString()).toBe(imageRefDoc)
+      view.destroy()
+    })
+
+    it("取消更换或按 Esc 后把焦点归还更换按钮", async () => {
+      const view = await createImageView()
+      const replaceButton = toolButton(view, "更换")
+      replaceButton.click()
+      let input = view.dom.querySelector<HTMLInputElement>(".cm-md-image-tools input")!
+      input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+      expect(document.activeElement).toBe(replaceButton)
+
+      replaceButton.click()
+      input = view.dom.querySelector<HTMLInputElement>(".cm-md-image-tools input")!
+      const cancel = toolButton(view, "取消")
+      cancel.click()
+      expect(input.isConnected).toBe(false)
+      expect(document.activeElement).toBe(replaceButton)
+      view.destroy()
+    })
+
+    it("加载成功后图片可点击和键盘聚焦，重试只在失败时出现", async () => {
+      const view = await createImageView("正文\n\n![图](data:image/png;base64,cG5n)")
+      const host = view.dom.querySelector<HTMLElement>(".cm-md-image")!
+      const image = host.querySelector<HTMLImageElement>("img")!
+      const viewButton = toolButton(view, "查看")
+      const retryButton = toolButton(view, "重试")
+      const measure = vi.spyOn(view, "requestMeasure").mockImplementation(() => {})
+
+      expect(image).toMatchObject({ tabIndex: 0 })
+      expect(image.getAttribute("role")).toBe("button")
+      expect(viewButton.hidden).toBe(true)
+      expect(retryButton.hidden).toBe(true)
+      image.dispatchEvent(new Event("load"))
+      expect(measure).toHaveBeenCalled()
+      expect(viewButton.hidden).toBe(false)
+      expect(retryButton.hidden).toBe(true)
+      image.dispatchEvent(new Event("error"))
+      expect(viewButton.hidden).toBe(true)
+      expect(retryButton.hidden).toBe(false)
       view.destroy()
     })
 

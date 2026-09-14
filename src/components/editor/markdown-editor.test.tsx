@@ -12,6 +12,10 @@ import MarkdownEditor, { findPlainTextMatches, findTableWrapperAtLine, formatToo
 
 // React 19 在测试里要求显式打开 act 环境标记。
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+// jsdom 的 Range 缺少布局 API；焦点回到 CodeMirror 时会读取它来刷新选区层。
+if (!Range.prototype.getClientRects) {
+  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] })
+}
 
 let container: HTMLElement | null = null
 let root: Root | null = null
@@ -46,6 +50,32 @@ describe("MarkdownEditor", () => {
     } })
     return event
   }
+
+  it("点击图片本体打开预览，Esc 关闭后焦点回到图片", async () => {
+    mount(<MarkdownEditor onChange={() => {}} value={"正文\n\n![截图](data:image/png;base64,cG5n)"} />)
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+    const image = container!.querySelector<HTMLImageElement>(".cm-md-image img")!
+
+    await act(async () => { image.click(); await Promise.resolve() })
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(document.activeElement).toBe(document.querySelector(".image-zoom-close"))
+
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }))
+      await Promise.resolve()
+    })
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(document.activeElement).toBe(image)
+
+    await act(async () => { image.click(); await Promise.resolve() })
+    act(() => { editorView().dispatch({ selection: { anchor: editorView().state.doc.toString().indexOf("![截图]") } }) })
+    expect(image.isConnected).toBe(false)
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }))
+      await Promise.resolve()
+    })
+    expect(editorView().hasFocus).toBe(true)
+  })
 
   it("Cmd-V 可从 items.getAsFile 插入截图，files/items 重复时只插入一次", () => {
     const image = new File(["png"], "截图.png", { type: "image/png" })

@@ -763,7 +763,7 @@ function RailButton({ active = false, icon: Icon, indicator = false, label, onCl
   )
 }
 
-type LibraryPanelProps = {
+export type LibraryPanelProps = {
   activeCacheId: string | null
   canCreateFolder: boolean
   canCreateNote: boolean
@@ -797,7 +797,7 @@ type LibraryPanelProps = {
 }
 
 // 侧栏只关心目录树与笔记库状态，搜索输入和正文编辑都不该惊动它。
-const LibraryPanel = memo(function LibraryPanel({
+export const LibraryPanel = memo(function LibraryPanel({
   activeCacheId,
   connected,
   canCreateNote,
@@ -830,58 +830,91 @@ const LibraryPanel = memo(function LibraryPanel({
   vaultCaches,
 }: LibraryPanelProps) {
   const navigate = useNavigate()
+  const importInputRef = useRef<HTMLInputElement>(null)
+  const activeFolder = folders.find((folder) => folder.path === selectedFolder)
+  // recent/starred 是跨目录视图，优先级高于残留的 selectedFolder，避免路由切换中间帧显示错标签。
+  const currentView = libraryView === "recent"
+    ? { count: Math.min(noteCount, 32), icon: CheckCircle2, label: "最近更新" }
+    : libraryView === "starred"
+      ? { count: starredNoteCount, icon: Star, label: "收藏" }
+      : selectedFolder
+        ? { count: activeFolder?.count, icon: FolderOpen, label: activeFolder?.label ?? selectedFolder }
+        : { count: noteCount, icon: FileText, label: "全部笔记" }
+  const CurrentViewIcon = currentView.icon
+
   return (
     <aside className="library-panel">
-      <div className="pane-header library-titlebar">
-        <div>
-          <span className="eyebrow">工作区</span>
-          <h1>笔记库</h1>
+      {/* 导入 input 常驻在菜单外：Radix 关闭菜单会卸载菜单项，系统文件选择器返回时仍需有稳定节点接收 change。 */}
+      <input
+        accept=".md,text/markdown"
+        className="attachment-file-input"
+        multiple
+        onChange={(event) => {
+          const files = Array.from(event.target.files ?? [])
+          event.target.value = ""
+          if (files.length > 0) onImportNotes(files)
+        }}
+        ref={importInputRef}
+        tabIndex={-1}
+        type="file"
+      />
+
+      <div className="library-compact-header">
+        <div className="library-identity">
+          <span className="eyebrow">笔记库</span>
+          <CacheSwitcher
+            activeCacheId={activeCacheId}
+            caches={vaultCaches}
+            compact
+            onSelectCache={onSelectVaultCache}
+          />
+          {vaultCaches.length === 0 ? <h1>我的笔记</h1> : null}
         </div>
-        <ImportMarkdownButton disabled={!canCreateNote || isCreatingNote} onImport={onImportNotes} />
+        <div className="library-compact-actions">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button aria-label={isCreatingNote ? "正在创建笔记" : "新建笔记"} disabled={!canCreateNote || isCreatingNote} onClick={onCreateNote} size="icon-sm" variant="ghost">
+                {isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{canCreateNote ? "新建笔记" : "当前笔记库只读"}</TooltipContent>
+          </Tooltip>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button aria-label="更多笔记库操作" size="icon-sm" variant="ghost"><MoreHorizontal /></Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="library-more-menu">
+              <DropdownMenuItem disabled={!localVaultSupported || isOpeningVault} onClick={onOpenLocalVault}>
+                <FolderOpen />
+                {isOpeningVault ? "正在读取…" : "打开本地笔记库"}
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={!canCreateNote || isCreatingNote} onClick={() => importInputRef.current?.click()}>
+                <FileUp />
+                导入 Markdown
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => navigate("/settings/trash")}><Trash2 />回收站</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
-      <div className="library-actions">
-        <Button className="new-note-button" disabled={!canCreateNote || isCreatingNote} onClick={onCreateNote}>
-          {isCreatingNote ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
-          {isCreatingNote ? "正在创建…" : canCreateNote ? "新建笔记" : "本地 Vault 中可新建"}
-        </Button>
-        <Button
-          className="open-vault-button"
-          disabled={!localVaultSupported || isOpeningVault}
-          onClick={onOpenLocalVault}
-          variant="outline"
-        >
-          <FolderOpen data-icon="inline-start" />
-          {isOpeningVault ? "正在读取…" : "打开本地笔记库"}
-        </Button>
-        <CacheSwitcher
-          activeCacheId={activeCacheId}
-          caches={vaultCaches}
-          onSelectCache={onSelectVaultCache}
-        />
-        {vaultError ? <p className="vault-error">{vaultError}</p> : null}
+      {vaultError ? <p className="vault-error library-vault-error" role="alert">{vaultError}</p> : null}
+
+      <div className="library-section-title library-folder-title">
+        <span>文件夹</span>
+        {canCreateFolder ? (
+          <CreateFolderButton
+            disabled={isManagingFolder}
+            onCreate={(name) => onCreateFolder(name, selectedFolder)}
+            parentFolder={selectedFolder}
+          />
+        ) : null}
       </div>
 
-      <ScrollArea className="library-scroll">
+      <ScrollArea className="library-scroll library-folder-scroll">
         <nav className="library-navigation" aria-label="笔记库导航">
-          <LibraryRow active={selectedFolder === null && libraryView === "all"} count={noteCount} icon={FileText} label="全部笔记" onClick={() => onSelectLibraryView("all")} />
-          <LibraryRow active={libraryView === "recent"} count={Math.min(noteCount, 32)} icon={CheckCircle2} label="最近更新" onClick={() => onSelectLibraryView("recent")} />
-          <LibraryRow active={libraryView === "starred"} count={starredNoteCount} icon={Star} label="收藏" onClick={() => onSelectLibraryView("starred")} />
-
-          <LibraryRow icon={Trash2} label="回收站" onClick={() => navigate("/settings/trash")} />
-
-          <div className="library-section-title">
-            <span>文件夹</span>
-            {canCreateFolder ? (
-              <CreateFolderButton
-                disabled={isManagingFolder}
-                onCreate={(name) => onCreateFolder(name, selectedFolder)}
-                parentFolder={selectedFolder}
-              />
-            ) : null}
-          </div>
-
-          {folders.map((folder) => (
+          {folders.length > 0 ? folders.map((folder) => (
             <LibraryRow
               active={libraryView === "all" && selectedFolder === folder.path}
               contextActions={folderContextActions}
@@ -896,9 +929,48 @@ const LibraryPanel = memo(function LibraryPanel({
               onClick={() => onSelectFolder(folder.path)}
               onToggle={folder.hasChildren ? () => onToggleFolder(folder.path) : undefined}
             />
-          ))}
+          )) : (
+            <div className="library-empty-folders">
+              <FolderTree />
+              <strong>还没有文件夹</strong>
+              <p>{canCreateFolder
+                ? canCreateNote ? "新建文件夹整理笔记，或从更多菜单导入 Markdown。" : "新建文件夹整理现有内容；连接恢复后即可继续写入。"
+                : "打开本地笔记库，或前往设置连接坚果云。"}</p>
+              {canCreateFolder ? (
+                <CreateFolderButton disabled={isManagingFolder} label="新建文件夹" onCreate={(name) => onCreateFolder(name, null)} parentFolder={null} />
+              ) : localVaultSupported ? (
+                <Button disabled={isOpeningVault} onClick={onOpenLocalVault} size="sm" variant="outline">打开本地库</Button>
+              ) : (
+                <Button onClick={onOpenSettings} size="sm" variant="outline">连接坚果云</Button>
+              )}
+            </div>
+          )}
         </nav>
       </ScrollArea>
+
+      <div className="library-view-shell">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button aria-label={`当前浏览：${currentView.label}`} className="library-view-switcher" type="button">
+              <CurrentViewIcon />
+              <span>{currentView.label}</span>
+              {typeof currentView.count === "number" ? <small>{currentView.count}</small> : null}
+              <ChevronDown />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="library-view-menu">
+            <DropdownMenuItem onClick={() => onSelectLibraryView("all")}>
+              <FileText /><span>全部笔记</span><small>{noteCount}</small>{selectedFolder === null && libraryView === "all" ? <Check /> : null}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onSelectLibraryView("recent")}>
+              <CheckCircle2 /><span>最近更新</span><small>{Math.min(noteCount, 32)}</small>{libraryView === "recent" ? <Check /> : null}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onSelectLibraryView("starred")}>
+              <Star /><span>收藏</span><small>{starredNoteCount}</small>{libraryView === "starred" ? <Check /> : null}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
 
       <div className="sync-summary-shell">
         <button className="sync-summary" onClick={onOpenSettings} type="button">
@@ -928,11 +1000,13 @@ const LibraryPanel = memo(function LibraryPanel({
 function CacheSwitcher({
   activeCacheId,
   caches,
+  compact = false,
   mobile = false,
   onSelectCache,
 }: {
   activeCacheId: string | null
   caches: VaultCacheSummary[]
+  compact?: boolean
   mobile?: boolean
   onSelectCache: (cacheId: string) => void
 }) {
@@ -942,7 +1016,7 @@ function CacheSwitcher({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button className={mobile ? "mobile-cache-switcher" : "cache-switcher"} variant="outline">
+        <Button aria-label={`切换笔记库，当前为${activeCache?.label ?? "离线缓存"}`} className={mobile ? "mobile-cache-switcher" : compact ? "cache-switcher cache-switcher-compact" : "cache-switcher"} title={compact ? activeCache?.label ?? "切换离线缓存" : undefined} variant={compact ? "ghost" : "outline"}>
           <Database data-icon="inline-start" />
           <span>{activeCache?.label ?? "切换离线缓存"}</span>
           <ChevronDown className="cache-switcher-chevron" />
@@ -1252,10 +1326,12 @@ function FolderRenameButton({
 
 function CreateFolderButton({
   disabled,
+  label,
   onCreate,
   parentFolder,
 }: {
   disabled: boolean
+  label?: string
   onCreate: (name: string) => void
   parentFolder: string | null
 }) {
@@ -1264,7 +1340,7 @@ function CreateFolderButton({
 
   return (
     <Dialog onOpenChange={(nextOpen) => { setOpen(nextOpen); if (nextOpen) setName("") }} open={open}>
-      <Button aria-label="新建文件夹" disabled={disabled} onClick={() => setOpen(true)} size="icon-sm" variant="ghost"><FolderPlus /></Button>
+      <Button aria-label="新建文件夹" disabled={disabled} onClick={() => setOpen(true)} size={label ? "sm" : "icon-sm"} variant={label ? "outline" : "ghost"}><FolderPlus />{label}</Button>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>新建空文件夹</DialogTitle>

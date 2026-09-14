@@ -16,6 +16,8 @@ export type TableInlineOptions = {
   tableStorageKey?: string
 }
 
+export type MarkdownImageLoadState = "loading" | "loaded" | "error"
+
 const LINK_HINT = "点击打开链接"
 const WIKI_HINT = "点击打开笔记"
 
@@ -204,19 +206,23 @@ export function appendMarkdownImage(
   options: TableInlineOptions,
   registerObjectUrl?: (url: string) => void,
   cacheScope?: string,
+  onStateChange?: (state: MarkdownImageLoadState) => void,
 ) {
   const image = document.createElement("img")
   image.alt = alt
   image.className = "cm-md-table-image"
   image.decoding = "async"
   image.loading = "lazy"
+  image.addEventListener("load", () => onStateChange?.("loaded"))
   image.addEventListener("error", () => {
+    onStateChange?.("error")
     const failure = document.createElement("span")
     failure.className = "cm-md-table-asset-state"
     failure.textContent = `无法读取图片：${alt || source}`
     failure.title = source
     image.replaceWith(failure)
   })
+  onStateChange?.("loading")
   if (/^(?:https?:|data:|blob:)/i.test(source)) {
     image.src = source
     parent.appendChild(image)
@@ -224,6 +230,7 @@ export function appendMarkdownImage(
   }
   if (!options.onResolveAsset) {
     appendAssetState(parent, alt || source)
+    onStateChange?.("error")
     return
   }
 
@@ -239,13 +246,19 @@ export function appendMarkdownImage(
     })
   void objectUrl.then((url) => {
     if (!url || !loading.isConnected) {
-      if (loading.isConnected) loading.textContent = alt ? `无法读取图片：${alt}` : "无法读取图片"
+      if (loading.isConnected) {
+        loading.textContent = alt ? `无法读取图片：${alt}` : "无法读取图片"
+        onStateChange?.("error")
+      }
       return
     }
     image.src = url
     loading.replaceWith(image)
   }).catch(() => {
-    if (loading.isConnected) loading.textContent = alt ? `无法读取图片：${alt}` : "无法读取图片"
+    if (loading.isConnected) {
+      loading.textContent = alt ? `无法读取图片：${alt}` : "无法读取图片"
+      onStateChange?.("error")
+    }
   })
 }
 

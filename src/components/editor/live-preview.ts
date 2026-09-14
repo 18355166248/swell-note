@@ -9,7 +9,7 @@ import { openExternalUrl } from "@/services/open-external-url"
 
 import { collectCompatibilityBlocks, CompatibilityBlockWidget, type CompatibilityBlock, type CompatibilityBlockOptions } from "./compatibility-blocks"
 import { parseMarkdownTable } from "./markdown-table-model"
-import { appendMarkdownImage, type TableInlineOptions } from "./markdown-table-inline"
+import { appendMarkdownImage, type MarkdownImageLoadState, type TableInlineOptions } from "./markdown-table-inline"
 import { linkTargetAt, type EditorLinkTap } from "./markdown-input"
 import { openImageZoom } from "./image-zoom"
 import { TableWidget } from "./markdown-table-widget"
@@ -149,43 +149,85 @@ export class MarkdownImageWidget extends WidgetType {
     const host = document.createElement("span")
     host.className = this.block ? "cm-md-image cm-md-image-block" : "cm-md-image"
     host.title = this.alt || this.source
-    // tableStorageKey 是当前笔记的标识，拿它当缓存作用域，不同笔记里的同名相对路径不会串。
-    appendMarkdownImage(host, this.alt, this.source, this.options, undefined, this.options.tableStorageKey ?? "editor")
     const size = this.title?.match(/^(\d+)(?:x(\d+))?$/)
     if (size) { host.style.width = `${size[1]}px`; host.style.maxWidth = "100%" }
+    let imageState: MarkdownImageLoadState = "loading"
+    let viewButton: HTMLButtonElement | undefined
+    let retryButton: HTMLButtonElement | undefined
+    let tools: HTMLSpanElement | undefined
+    const syncImageTools = () => {
+      host.dataset.imageStatus = imageState
+      if (viewButton) viewButton.hidden = imageState !== "loaded"
+      if (retryButton) retryButton.hidden = imageState !== "error"
+    }
+    const updateImageState = (state: MarkdownImageLoadState) => {
+      imageState = state
+      syncImageTools()
+      // Blob 解析和图片解码都会异步改变块高，显式通知 CodeMirror 重测，避免下方光标看似卡在旧位置。
+      if (host.isConnected) view.requestMeasure()
+    }
+    const openPreview = (image: HTMLImageElement, origin: HTMLElement) => {
+      if (!image.src) return
+      origin.focus({ preventScroll: true })
+      openImageZoom(image.src, this.alt, origin, view.contentDOM)
+    }
+    // 图片本体也是主要查看入口；事件留在 widget 内处理，避免 CodeMirror 把点击误解为源码定位。
+    host.addEventListener("click", (event) => {
+      const image = event.target instanceof HTMLImageElement ? event.target : null
+      if (image) openPreview(image, image)
+    })
+    host.addEventListener("keydown", (event) => {
+      const image = event.target instanceof HTMLImageElement ? event.target : null
+      if (!image || event.key !== "Enter" && event.key !== " ") return
+      event.preventDefault()
+      event.stopPropagation()
+      openPreview(image, image)
+    })
+    host.addEventListener("load", (event) => {
+      const image = event.target instanceof HTMLImageElement ? event.target : null
+      if (!image) return
+      image.tabIndex = 0
+      image.setAttribute("role", "button")
+      image.setAttribute("aria-label", `查看图片：${this.alt || this.source}`)
+    }, true)
     if (this.from !== undefined && this.to !== undefined) {
       const sourceText = view.state.sliceDoc(this.from, this.to)
-      const tools = document.createElement("span")
-      tools.className = "cm-md-image-tools"
-      tools.setAttribute("role", "group")
-      tools.setAttribute("aria-label", "图片操作")
+      const imageTools = document.createElement("span")
+      tools = imageTools
+      imageTools.className = "cm-md-image-tools"
+      imageTools.setAttribute("role", "group")
+      imageTools.setAttribute("aria-label", "图片操作")
       const button = (label: string, run: () => void) => {
         const button = document.createElement("button")
         button.type = "button"; button.textContent = label
         button.addEventListener("mousedown", (event) => event.preventDefault())
         button.addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); run() })
-        tools.append(button)
+        imageTools.append(button)
         return button
       }
       const replace = (text: string) => {
         // 浮层操作只作用于创建时的图片；源文本变化时拒绝覆盖新内容。
         if (view.state.readOnly || view.state.sliceDoc(this.from!, this.to!) !== sourceText) return
         view.dispatch({ changes: { from: this.from!, to: this.to!, insert: text }, userEvent: "input.image", annotations: isolateHistory.of("full") })
+        // select/button/input 会随装饰重建而卸载，主动把焦点交还编辑器，不能落到 body。
+        view.focus()
       }
-      const viewButton = button("查看", () => { const image = host.querySelector("img"); if (image?.src) openImageZoom(image.src, this.alt) })
-      viewButton.disabled = true
-      host.addEventListener("load", () => { viewButton.disabled = false }, true)
-      host.addEventListener("error", () => { viewButton.disabled = true }, true)
-      button("重试", () => {
-        viewButton.disabled = true
+      viewButton = button("查看", () => { const image = host.querySelector("img"); if (image?.src) openPreview(image, viewButton!) })
+      retryButton = button("重试", () => {
         const imageHost = document.createElement("span")
         host.querySelectorAll(":scope > img, :scope > .cm-md-table-asset-state, :scope > .cm-md-image-retry").forEach((element) => element.remove())
         imageHost.className = "cm-md-image-retry"
         host.prepend(imageHost)
-        appendMarkdownImage(imageHost, this.alt, this.source, this.options, undefined, `${this.options.tableStorageKey ?? "editor"}:retry:${Date.now()}`)
+        appendMarkdownImage(imageHost, this.alt, this.source, this.options, undefined, `${this.options.tableStorageKey ?? "editor"}:retry:${Date.now()}`, updateImageState)
+        // 键盘激活后按钮会在加载期隐藏；立刻把焦点交回原编辑器，避免落到 document.body。
+        view.focus()
       })
       if (!this.readOnly) {
-        button("编辑引用", () => { view.dispatch({ selection: { anchor: this.from!, head: this.to! }, scrollIntoView: true }); view.focus() })
+        button("编辑引用", () => {
+          // live preview 只会为零宽光标还原源码；选中整段会保持图片态，导致按钮看似无响应。
+          view.dispatch({ selection: { anchor: this.from! }, scrollIntoView: true })
+          view.focus()
+        })
         const sizes = document.createElement("select")
         sizes.setAttribute("aria-label", "图片宽度")
         for (const [value, label] of [["", "自适应"], ["240", "小 · 240"], ["480", "中 · 480"], ["720", "大 · 720"]]) {
@@ -193,28 +235,37 @@ export class MarkdownImageWidget extends WidgetType {
         }
         sizes.value = size?.[1] ?? ""
         sizes.addEventListener("change", () => replace(`![${this.alt}](${this.source}${sizes.value ? ` "${sizes.value}"` : ""})`))
-        tools.append(sizes)
-        button("更换", () => {
-          if (tools.querySelector("input")) { tools.querySelector("input")?.focus(); return }
+        imageTools.append(sizes)
+        const replaceButton = button("更换", () => {
+          if (imageTools.querySelector("input")) { imageTools.querySelector("input")?.focus(); return }
           const input = document.createElement("input")
           input.type = "text"; input.value = this.source; input.setAttribute("aria-label", "图片地址或附件路径")
           const apply = document.createElement("button"); apply.type = "button"; apply.textContent = "应用"
           const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "取消"
-          const dismiss = () => { input.remove(); apply.remove(); cancel.remove() }
+          const dismiss = () => { input.remove(); apply.remove(); cancel.remove(); replaceButton.focus() }
           cancel.addEventListener("click", dismiss)
           const save = () => { const path = input.value.trim(); if (!path || /[\n\r<>]/.test(path) || /^[a-z][a-z\d+.-]*:/i.test(path) && !/^https?:/i.test(path)) { input.setCustomValidity("请输入附件路径或 HTTP(S) 地址"); input.reportValidity(); return }; replace(`![${this.alt}](${path.replace(/[ ()]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)}${this.title ? ` "${this.title}"` : ""})`) }
           apply.addEventListener("click", save)
           input.addEventListener("keydown", (event) => { if (event.isComposing) return; if (event.key === "Enter") { event.preventDefault(); save() }; if (event.key === "Escape") { dismiss() } })
-          tools.append(input, apply, cancel); input.focus(); input.select()
+          imageTools.append(input, apply, cancel); input.focus(); input.select()
         })
         button("删除", () => replace(""))
       }
-      host.append(tools)
+      syncImageTools()
     }
+    // tableStorageKey 是当前笔记的标识，拿它当缓存作用域，不同笔记里的同名相对路径不会串。
+    appendMarkdownImage(host, this.alt, this.source, this.options, undefined, this.options.tableStorageKey ?? "editor", updateImageState)
+    const immediateImage = host.querySelector("img")
+    if (immediateImage) {
+      immediateImage.tabIndex = 0
+      immediateImage.setAttribute("role", "button")
+      immediateImage.setAttribute("aria-label", `查看图片：${this.alt || this.source}`)
+    }
+    if (tools) host.append(tools)
     return host
   }
 
-  // 交给 CodeMirror 处理点击：点图片即把光标落到这段语法上，源码随之还原、可以直接改。
+  // 图片、工具栏和键盘入口都由 widget 自己处理，避免 CodeMirror 同时改动选区。
   ignoreEvent() {
     return true
   }
