@@ -622,6 +622,18 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .library-row-main > svg { width: 15px; height: 15px; flex: 0 0 auto; }
 .library-row-main > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .library-row-main small { margin-left: auto; color: var(--muted-foreground); font-size: 11px; font-weight: 450; }
+/* 桌面文件夹排序管理模式：拖动手柄只在排序时出现，侧栏固定标题与独立滚动布局不变。 */
+.library-folder-sort-toggle { flex: 0 0 auto; }
+.library-folder-sortable { position: relative; z-index: 0; border-radius: 7px; background: var(--panel-soft); }
+.library-folder-sortable .library-row { background: var(--panel-soft); }
+.library-folder-sortable[data-dragging="true"] { z-index: 4; box-shadow: 0 8px 22px rgb(15 23 42 / .14); opacity: .97; }
+.library-folder-sortable[data-dragging="true"] .library-row { background: var(--panel-soft); }
+.library-folder-drag-handle { display: grid; width: 24px; height: 26px; flex: 0 0 24px; margin-right: 4px; place-items: center; border-radius: 5px; color: var(--muted-foreground); cursor: grab; touch-action: none; }
+.library-folder-drag-handle:hover { background: color-mix(in oklab,var(--foreground) 8%,transparent); color: var(--foreground); }
+.library-folder-drag-handle:active { cursor: grabbing; color: var(--primary); }
+.library-folder-drag-handle svg { width: 13px; height: 13px; }
+.library-folder-system-lock { display: grid; width: 24px; height: 26px; flex: 0 0 24px; margin-right: 4px; place-items: center; color: var(--muted-foreground); }
+.library-folder-system-lock svg { width: 12px; height: 12px; }
 .folder-children { margin-left: 15px; padding-left: 7px; border-left: 1px solid var(--border); }
 .library-section-title { display: flex; height: 40px; align-items: end; padding: 0 6px 6px 8px; color: var(--muted-foreground); font-size: 11px; font-weight: 620; }
 .library-section-title > span { flex: 1; }

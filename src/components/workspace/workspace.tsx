@@ -1,18 +1,7 @@
 import { useLocation, useNavigate, useNavigationType } from "react-router-dom"
 import { createContext, useContext, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import {
-  closestCenter,
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core"
-import {
-  arrayMove,
   SortableContext,
-  sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
@@ -20,6 +9,7 @@ import { CSS as DndCss } from "@dnd-kit/utilities"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import {
   ArrowLeft,
+  ArrowUpDown,
   AlertCircle,
   AlertTriangle,
   Check,
@@ -114,7 +104,7 @@ import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-group
 import { sortNotes, type NoteSort } from "@/services/search/note-sort"
 import { noteMatchesLibraryQuery } from "@/services/search/note-list-filter"
 import { getNoteViewModeAction, loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
-import { applyFolderOrder, loadFolderOrder, saveFolderOrder } from "@/services/preferences/folder-order-preferences"
+import { SYSTEM_ROOT_FOLDER_PATH } from "@/services/preferences/folder-order-preferences"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { EditorFormatState } from "@/components/editor/markdown-input"
 import { FormattingToolbar } from "@/components/workspace/formatting-toolbar"
@@ -148,6 +138,7 @@ import { mobileLibraryScrollMemory, mobileNoteListScrollMemory, noteEditorScroll
 import { createMobileRouteEntry, createMobileRouteStack, updateMobileRouteStack, type MobileNavigationAction, type MobileRouteEntry, type MobileRouteStack } from "@/services/navigation/mobile-route-stack"
 import type { SyncProgress } from "@/services/sync/sync-progress"
 import { shouldShowFloatingSyncProgress } from "@/services/sync/sync-progress"
+import { FolderSortDndContext } from "./folder-sort-dnd"
 import { SyncFailureToast } from "./sync-failure-toast"
 
 // CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
@@ -178,6 +169,8 @@ type WorkspaceProps = {
   folders: VaultFolder[]
   allNotes: Note[]
   folderManagementMode: "local" | "webdav" | null
+  // 目录排序偏好的库身份：拖动提交校验发起库，切库时卸载进行中的拖动上下文。
+  folderOrderKey: string
   includeNestedFolderNotes: boolean
   isOpeningVault: boolean
   isCreatingNote: boolean
@@ -216,6 +209,7 @@ type WorkspaceProps = {
   onDeleteNoteById: (noteId: string) => void
   onDeleteFolder: (folderPath: string) => void
   onExportNote: () => void
+  onFolderOrderChange: (paths: string[]) => void
   onOpenLocalVault: () => void
   onOpenMobileLibrary: () => void
   onLoadWikiNote: (target: string) => void
@@ -522,12 +516,14 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         connectionLabel={props.connectionLabel}
         expandedFolderPaths={props.expandedFolderPaths}
         folderContextActions={folderContextActions}
+        folderOrderKey={props.folderOrderKey}
         folders={props.visibleFolders}
         libraryView={props.libraryView}
         noteCount={props.totalNoteCount}
         starredNoteCount={props.starredNoteCount}
         onCreateNote={createNote}
         onCreateFolder={createFolder}
+        onFolderOrderChange={props.onFolderOrderChange}
         onImportNotes={importNotes}
         onOpenLocalVault={openLocalVault}
         onOpenSettings={openSettings}
@@ -783,6 +779,8 @@ export type LibraryPanelProps = {
   connectionLabel: string
   expandedFolderPaths: ReadonlySet<string>
   folders: VaultFolder[]
+  // 排序偏好绑定的库身份：拖动提交校验发起库，切库时卸载进行中的拖动。
+  folderOrderKey: string
   isManagingFolder: boolean
   isOpeningVault: boolean
   isCreatingNote: boolean
@@ -793,6 +791,7 @@ export type LibraryPanelProps = {
   starredNoteCount: number
   onCreateNote: () => void
   onCreateFolder: (name: string, parentFolder: string | null) => void
+  onFolderOrderChange: (paths: string[]) => void
   onImportNotes: (files: File[]) => void
   onOpenLocalVault: () => void
   onOpenSettings: () => void
@@ -817,6 +816,7 @@ export const LibraryPanel = memo(function LibraryPanel({
   expandedFolderPaths,
   folderContextActions,
   folders,
+  folderOrderKey,
   isManagingFolder,
   isOpeningVault,
   isCreatingNote,
@@ -827,6 +827,7 @@ export const LibraryPanel = memo(function LibraryPanel({
   starredNoteCount,
   onCreateNote,
   onCreateFolder,
+  onFolderOrderChange,
   onImportNotes,
   onOpenLocalVault,
   onOpenSettings,
@@ -842,6 +843,8 @@ export const LibraryPanel = memo(function LibraryPanel({
 }: LibraryPanelProps) {
   const navigate = useNavigate()
   const importInputRef = useRef<HTMLInputElement>(null)
+  // 排序管理模式的开关只影响侧栏展示，不参与写权限判断：只读或离线的库同样允许调整本地顺序。
+  const [sortingFolders, setSortingFolders] = useState(false)
   const activeFolder = folders.find((folder) => folder.path === selectedFolder)
   // recent/starred 是跨目录视图，优先级高于残留的 selectedFolder，避免路由切换中间帧显示错标签。
   const currentView = libraryView === "recent"
@@ -852,6 +855,19 @@ export const LibraryPanel = memo(function LibraryPanel({
         ? { count: activeFolder?.count, icon: FolderOpen, label: activeFolder?.label ?? selectedFolder }
         : { count: noteCount, icon: FileText, label: "全部笔记" }
   const CurrentViewIcon = currentView.icon
+
+  // 顶层目录在传入前已在完整目录树上排好序（含根目录置顶）；这里只负责裁剪出可拖动的那部分。
+  const topLevelFolders = useMemo(() => folders.filter((folder) => folder.depth === 0), [folders])
+  const systemRootFolder = topLevelFolders.find((folder) => folder.path === SYSTEM_ROOT_FOLDER_PATH)
+  const sortableFolderPaths = useMemo(
+    () => topLevelFolders.filter((folder) => folder.path !== SYSTEM_ROOT_FOLDER_PATH).map((folder) => folder.path),
+    [topLevelFolders],
+  )
+
+  useEffect(() => {
+    // 目录被删到不足两个时没有可调整的对象，自动退出管理模式，避免留下空手柄。
+    if (sortingFolders && sortableFolderPaths.length < 2) setSortingFolders(false)
+  }, [sortingFolders, sortableFolderPaths.length])
 
   return (
     <aside className="library-panel">
@@ -913,7 +929,24 @@ export const LibraryPanel = memo(function LibraryPanel({
       {vaultError ? <p className="vault-error library-vault-error" role="alert">{vaultError}</p> : null}
 
       <div className="library-section-title library-folder-title">
-        <span>文件夹</span>
+        <span>{sortingFolders ? "拖动排序" : "文件夹"}</span>
+        {sortableFolderPaths.length > 1 ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label={sortingFolders ? "完成文件夹排序" : "调整文件夹顺序"}
+                aria-pressed={sortingFolders}
+                className="library-folder-sort-toggle"
+                onClick={() => setSortingFolders((value) => !value)}
+                size="icon-sm"
+                variant="ghost"
+              >
+                {sortingFolders ? <Check /> : <ArrowUpDown />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{sortingFolders ? "完成排序" : "调整文件夹顺序"}</TooltipContent>
+          </Tooltip>
+        ) : null}
         {canCreateFolder ? (
           <CreateFolderButton
             disabled={isManagingFolder}
@@ -924,8 +957,41 @@ export const LibraryPanel = memo(function LibraryPanel({
       </div>
 
       <ScrollArea className="library-scroll library-folder-scroll">
-        <nav className="library-navigation" aria-label="笔记库导航">
-          {folders.length > 0 ? folders.map((folder) => (
+        <nav aria-label="笔记库导航" className="library-navigation">
+          {folders.length > 0 ? sortingFolders ? (
+            /* 管理模式只平铺顶层目录：拖动父目录时整个子树在数据层跟随，这里不渲染子行避免误拖。 */
+            <FolderSortDndContext
+              folderOrderKey={folderOrderKey}
+              key={folderOrderKey}
+              onCommit={onFolderOrderChange}
+              sortableFolderPaths={sortableFolderPaths}
+            >
+              <SortableContext items={sortableFolderPaths} strategy={verticalListSortingStrategy}>
+                {systemRootFolder ? (
+                  <div className="library-row library-row-system" data-depth={0}>
+                    <span className="library-chevron-placeholder" />
+                    <div className="library-row-main">
+                      <Folder />
+                      <span>{systemRootFolder.label}</span>
+                      <small>{systemRootFolder.count}</small>
+                    </div>
+                    <span aria-label="系统目录，固定在最前" className="library-folder-system-lock" role="img">
+                      <LockKeyhole />
+                    </span>
+                  </div>
+                ) : null}
+                {topLevelFolders.filter((folder) => folder.path !== SYSTEM_ROOT_FOLDER_PATH).map((folder) => (
+                  <SortableLibraryFolderRow
+                    active={libraryView === "all" && selectedFolder === folder.path}
+                    contextActions={folderContextActions}
+                    folder={folder}
+                    key={folder.path}
+                    onSelectFolder={onSelectFolder}
+                  />
+                ))}
+              </SortableContext>
+            </FolderSortDndContext>
+          ) : folders.map((folder) => (
             <LibraryRow
               active={libraryView === "all" && selectedFolder === folder.path}
               contextActions={folderContextActions}
@@ -1093,6 +1159,64 @@ function LibraryRow({ active = false, contextActions, contextFolder, count, dept
   return contextActions && contextFolder
     ? <FolderRowContextMenu actions={contextActions} folder={contextFolder}>{row}</FolderRowContextMenu>
     : row
+}
+
+// 桌面管理模式下可拖动的顶层目录行：只有手柄注册拖动监听，普通点击与右键菜单行为不变。
+function SortableLibraryFolderRow({
+  active = false,
+  contextActions,
+  folder,
+  onSelectFolder,
+}: {
+  active?: boolean
+  contextActions?: FolderContextActions
+  folder: VaultFolder
+  onSelectFolder: (folder: string | null) => void
+}) {
+  const {
+    attributes,
+    isDragging,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({ id: folder.path })
+  const style: CSSProperties = {
+    transform: DndCss.Transform.toString(transform),
+    transition,
+  }
+  const row = (
+    <div className="library-row library-row-sorting" data-active={active} data-depth={0}>
+      <span className="library-chevron-placeholder" />
+      {/* 目录主体保持普通点击导航；拖动监听只挂在手柄上，拖动释放不会触发行点击。 */}
+      <button className="library-row-main" onClick={() => onSelectFolder(folder.path)} type="button">
+        {active ? <FolderOpen /> : <Folder />}
+        <span>{folder.label}</span>
+        <small>{folder.count}</small>
+      </button>
+      <button
+        aria-label={`拖动排序 ${folder.label}`}
+        className="library-folder-drag-handle"
+        type="button"
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical />
+      </button>
+    </div>
+  )
+  return (
+    <div
+      className="library-folder-sortable"
+      data-dragging={isDragging}
+      ref={setNodeRef}
+      style={style}
+    >
+      {contextActions
+        ? <FolderRowContextMenu actions={contextActions} folder={folder}>{row}</FolderRowContextMenu>
+        : row}
+    </div>
+  )
 }
 
 type NoteListPanelProps = {
@@ -3158,31 +3282,15 @@ function MobileLibrary(props: MobileLibraryProps) {
   const searchRef = useRef<HTMLInputElement>(null)
   const [managingFolders, setManagingFolders] = useState(false)
   const [actionFolder, setActionFolder] = useState<VaultFolder | null>(null)
-  const folderOrderKey = props.activeCacheId ?? `library:${props.connectionLabel}`
-  const [folderOrder, setFolderOrder] = useState<string[]>(() => loadFolderOrder(folderOrderKey))
-  const rootFolders = useMemo(
+  // props.folders 已在共享层按本地偏好排好序（根目录置顶），两个布局读同一份状态，这里不再各自维护。
+  const orderedRootFolders = useMemo(
     () => getDirectChildVaultFolders(props.folders, null),
     [props.folders],
   )
-  const orderedRootFolders = useMemo(
-    () => {
-      const systemRoot = rootFolders.find((folder) => folder.path === "根目录")
-      const regularFolders = applyFolderOrder(
-        rootFolders.filter((folder) => folder.path !== "根目录"),
-        folderOrder,
-      )
-      return systemRoot ? [systemRoot, ...regularFolders] : regularFolders
-    },
-    [folderOrder, rootFolders],
+  const sortableFolderPaths = useMemo(
+    () => orderedRootFolders.filter((folder) => folder.path !== SYSTEM_ROOT_FOLDER_PATH).map((folder) => folder.path),
+    [orderedRootFolders],
   )
-  const folderSensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  )
-
-  useEffect(() => {
-    setFolderOrder(loadFolderOrder(folderOrderKey))
-  }, [folderOrderKey])
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current
@@ -3205,18 +3313,6 @@ function MobileLibrary(props: MobileLibraryProps) {
   const selectFolder = (folder: string | null) => {
     rememberPosition()
     props.onSelectFolder(folder)
-  }
-  const handleFolderDragEnd = ({ active, over }: DragEndEvent) => {
-    if (!over || active.id === over.id) return
-    const paths = orderedRootFolders
-      .filter((folder) => folder.path !== "根目录")
-      .map((folder) => folder.path)
-    const previousIndex = paths.indexOf(String(active.id))
-    const nextIndex = paths.indexOf(String(over.id))
-    if (previousIndex < 0 || nextIndex < 0) return
-    const nextOrder = arrayMove(paths, previousIndex, nextIndex)
-    setFolderOrder(nextOrder)
-    saveFolderOrder(folderOrderKey, nextOrder)
   }
 
   return (
@@ -3277,7 +3373,7 @@ function MobileLibrary(props: MobileLibraryProps) {
               aria-label={managingFolders ? "完成文件夹管理" : "管理文件夹"}
               aria-pressed={managingFolders}
               className="mobile-folder-manage"
-              disabled={!props.folderManagementMode}
+              disabled={sortableFolderPaths.length < 2}
               onClick={() => setManagingFolders((value) => !value)}
               size="icon"
               variant="ghost"
@@ -3292,9 +3388,15 @@ function MobileLibrary(props: MobileLibraryProps) {
             />
           </div>
           <div className="mobile-folder-list">
-            <DndContext collisionDetection={closestCenter} onDragEnd={handleFolderDragEnd} sensors={folderSensors}>
-              <SortableContext items={orderedRootFolders.filter((folder) => folder.path !== "根目录").map((folder) => folder.path)} strategy={verticalListSortingStrategy}>
-                {orderedRootFolders.map((folder) => managingFolders && folder.path === "根目录" ? (
+            <FolderSortDndContext
+              enabled={managingFolders}
+              folderOrderKey={props.folderOrderKey}
+              key={props.folderOrderKey}
+              onCommit={props.onFolderOrderChange}
+              sortableFolderPaths={sortableFolderPaths}
+            >
+              <SortableContext items={sortableFolderPaths} strategy={verticalListSortingStrategy}>
+                {orderedRootFolders.map((folder) => managingFolders && folder.path === SYSTEM_ROOT_FOLDER_PATH ? (
                   <MobileLibraryRow
                     count={folder.count}
                     icon={Folder}
@@ -3302,7 +3404,9 @@ function MobileLibrary(props: MobileLibraryProps) {
                     label={folder.label}
                     trailing={<span aria-label="系统目录，不可编辑" className="mobile-system-folder"><LockKeyhole /></span>}
                   />
-                ) : managingFolders && props.folderManagementMode ? (
+                ) : managingFolders ? (
+                  // 排序只改本地展示偏好：无编辑权限（本地只读缓存等）也提供手柄；
+                  // 重命名/删除入口在 SortableMobileFolderRow 内按 mode 单独判断，不扩大写权限。
                   <SortableMobileFolderRow
                     disabled={props.isManagingNote}
                     folder={folder}
@@ -3317,12 +3421,12 @@ function MobileLibrary(props: MobileLibraryProps) {
                     icon={Folder}
                     key={folder.path}
                     label={folder.label}
-                    onLongPress={folder.path === "根目录" || !props.folderManagementMode ? undefined : () => setActionFolder(folder)}
+                    onLongPress={folder.path === SYSTEM_ROOT_FOLDER_PATH || !props.folderManagementMode ? undefined : () => setActionFolder(folder)}
                     onClick={() => selectFolder(folder.path)}
                   />
                 ))}
               </SortableContext>
-            </DndContext>
+            </FolderSortDndContext>
           </div>
         </div>
       </ScrollArea>
@@ -3412,7 +3516,8 @@ function SortableMobileFolderRow({
 }: {
   disabled: boolean
   folder: VaultFolder
-  mode: "local" | "webdav"
+  // null 表示当前库没有编辑权限（如本地只读缓存）：仍允许拖动排序，但不显示重命名/删除入口。
+  mode: "local" | "webdav" | null
   onDelete: (folderPath: string) => void
   onRename: (folderPath: string, nextName: string) => void
 }) {
@@ -3442,13 +3547,15 @@ function SortableMobileFolderRow({
         label={folder.label}
         trailing={(
           <div className="mobile-folder-edit-actions">
-            <MobileFolderActions
-              disabled={disabled}
-              folderPath={folder.path}
-              mode={mode}
-              onDelete={onDelete}
-              onRename={onRename}
-            />
+            {mode ? (
+              <MobileFolderActions
+                disabled={disabled}
+                folderPath={folder.path}
+                mode={mode}
+                onDelete={onDelete}
+                onRename={onRename}
+              />
+            ) : null}
             <button
               aria-label={`拖动排序 ${folder.label}`}
               className="mobile-folder-drag-handle"

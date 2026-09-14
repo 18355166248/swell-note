@@ -152,6 +152,8 @@ import {
   type ColorMode,
   type NoteViewMode,
 } from "@/services/preferences/ui-preferences"
+import { applyFolderOrderToTree } from "@/services/preferences/folder-order-preferences"
+import { useFolderOrder } from "@/services/preferences/use-folder-order"
 import {
   deriveDirectoryPath,
   deriveRemoteFolder,
@@ -659,6 +661,12 @@ function App() {
       : cached
         ? "缓存"
         : "未连接"
+  // 目录顺序按稳定缓存标识隔离：activeCacheMeta.id 由笔记库身份派生，同一库的桌面/移动布局共享。
+  // 只有在完全没有库（也就没有目录可排）时才落到 label 兜底，不会把顺序写进其他库。
+  const folderOrderKey = activeCacheMeta?.id ?? `library:${connectionLabel}`
+  const { folderOrder, migrateFolderOrderPath, updateFolderOrder } = useFolderOrder(folderOrderKey)
+  // 顶层顺序应用在完整目录树上，子树随父目录整体移动；可见目录只是这棵有序树按展开状态的裁剪。
+  const orderedFolders = useMemo(() => applyFolderOrderToTree(folders, folderOrder), [folders, folderOrder])
 
   const handleWebDavAuthenticationFailure = useCallback(async (message: string) => {
     const config = loadWebDavConfig()
@@ -2623,6 +2631,8 @@ function App() {
       ))
       const activePlan = plans.get(activeNoteId)
       if (activePlan) setActiveNoteId(activePlan.id)
+      // 只有 moveDirectory 成功才会走到这里；排序偏好随之迁移到新路径，失败时保持原顺序不动。
+      migrateFolderOrderPath(folderPath, targetFolder)
       setSelectedFolder(targetFolder)
       setLibraryView("all")
       navigate(getNotesListRoute("all", targetFolder), { replace: true })
@@ -2795,9 +2805,12 @@ function App() {
     }
     const firstPlan = plans.values().next().value as { folder: string } | undefined
     if (firstPlan) {
-      setSelectedFolder(firstPlan.folder.split(/\s*\/\s*/).slice(0, folderPath.split(/\s*\/\s*/).length).join(" / "))
+      const renamedFolder = firstPlan.folder.split(/\s*\/\s*/).slice(0, folderPath.split(/\s*\/\s*/).length).join(" / ")
+      // 前面的提前 return 已经挡住所有失败分支，走到这里说明本机重命名已生效，排序偏好同步迁移。
+      migrateFolderOrderPath(folderPath, renamedFolder)
+      setSelectedFolder(renamedFolder)
       setLibraryView("all")
-      navigate(getNotesListRoute("all", firstPlan.folder.split(/\s*\/\s*/).slice(0, folderPath.split(/\s*\/\s*/).length).join(" / ")), { replace: true })
+      navigate(getNotesListRoute("all", renamedFolder), { replace: true })
     }
     setIsManagingNote(false)
     if (unavailableCount > 0) setVaultError(`已重命名；另有 ${unavailableCount} 篇未缓存正文，暂无法检查其中的相对链接`)
@@ -3625,11 +3638,12 @@ function App() {
             )}
             canInsertAttachment={canWriteVaultAttachments(vaultSession)
               || (activeNote?.source === "webdav" && activeCacheMeta?.sourceKind === "webdav")}
-            folders={folders}
+            folders={orderedFolders}
             allNotes={availableNotes}
             folderManagementMode={vaultSession?.kind === "browser" || vaultSession?.kind === "tauri"
               ? "local"
               : activeCacheMeta?.sourceKind === "webdav" ? "webdav" : null}
+            folderOrderKey={folderOrderKey}
             isOpeningVault={isOpeningVault}
             isCreatingNote={isCreatingNote}
             isManagingNote={isManagingNote}
@@ -3663,6 +3677,7 @@ function App() {
             onDeleteNote={() => void deleteActiveNote()}
             onDeleteNoteById={(noteId) => void deleteNote(noteId, false)}
             onDeleteFolder={deleteFolder}
+            onFolderOrderChange={updateFolderOrder}
             onFormat={formatActiveNote}
             onFormatNote={formatNoteById}
             onInsertAttachments={insertActiveNoteAttachments}
