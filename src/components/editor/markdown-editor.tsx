@@ -441,7 +441,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           const selectionUntouched = mark.anchor !== undefined
             && view.state.selection.main.anchor === mark.anchor
             && view.state.selection.main.head === mark.head
-          if (selectionUntouched) {
+          // 路由栈会保活上一页编辑器；异步附件可以继续写回它绑定的文档，
+          // 但隐藏页绝不能在完成时抢焦点或滚动，否则当前笔记会突然跳动。
+          const editorIsActive = !view.dom.closest("[inert]")
+          if (selectionUntouched && editorIsActive) {
             view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: "input.attachment", scrollIntoView: true })
             view.focus()
           } else {

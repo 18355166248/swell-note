@@ -5,11 +5,18 @@ import { Dialog as DialogPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { useRouteActivity } from "@/components/ui/route-activity"
 import { XIcon } from "lucide-react"
 
 function Dialog({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
+  const routeActive = useRouteActivity()
+  React.useLayoutEffect(() => {
+    // 路由保活页仍会渲染在 React 树中；失活时主动关闭受控 Dialog，
+    // 否则 portal 留在 body 下，不受 entry 外层 inert 约束并会挡住上一页。
+    if (!routeActive && props.open) props.onOpenChange?.(false)
+  }, [props.onOpenChange, props.open, routeActive])
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
 }
 
@@ -57,6 +64,8 @@ function DialogContent({
   placement?: "bottom" | "center"
   showCloseButton?: boolean
 }) {
+  const routeActive = useRouteActivity()
+  if (!routeActive) return null
   return (
     <DialogPortal>
       <DialogOverlay />

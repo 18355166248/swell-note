@@ -1,8 +1,10 @@
 import { expect, test, type Page } from "@playwright/test"
 
-async function seedCachedVault(page: Page, noteContent?: string, readOnly = false) {
+import { useCompatibilityPreview } from "./note-view-mode"
+
+async function seedCachedVault(page: Page, noteContent?: string, readOnly = false, secondNoteContent = "# 第二篇\n\n正文 B") {
   await page.goto("/#/notes")
-  await page.evaluate(async ({ noteContent, readOnly }) => {
+  await page.evaluate(async ({ noteContent, readOnly, secondNoteContent }) => {
     const cacheId = "e2e-vault"
     const noteA = {
       content: "",
@@ -70,12 +72,12 @@ async function seedCachedVault(page: Page, noteContent?: string, readOnly = fals
       "外部链接：[示例站](https://example.com)",
       "",
     ].join("\n")
-    for (const [note, content] of [[noteA, contentA], [noteB, "# 第二篇\n\n正文 B"]] as const) {
+    for (const [note, content] of [[noteA, contentA], [noteB, secondNoteContent]] as const) {
       transaction.objectStore("documents").put({
         baseContent: content,
         cacheId,
         content,
-        key: `${cacheId} ${note.id}`,
+        key: `${cacheId}\u0000${note.id}`,
         noteId: note.id,
         outgoingLinks: [],
         path: note.remotePath,
@@ -88,7 +90,7 @@ async function seedCachedVault(page: Page, noteContent?: string, readOnly = fals
       transaction.onerror = () => reject(transaction.error)
     })
     database.close()
-  }, { noteContent, readOnly })
+  }, { noteContent, readOnly, secondNoteContent })
   await page.reload()
 }
 
@@ -149,6 +151,55 @@ test.describe("编辑态链接点击跳转", () => {
     await expect(sheet.getByRole("button", { name: "移除链接" })).toBeVisible()
     await sheet.getByRole("button", { name: "打开链接" }).tap()
     await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
+  })
+
+  test("移动端 A 到 B 保活原编辑器且更新始终写入 B", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await seedCachedVault(page)
+    const workspace = page.locator(".mobile-workspace:visible")
+    await workspace.getByText("测试", { exact: true }).first().click()
+    await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    await expect(workspace).toHaveAttribute("data-screen", "editor")
+    await expect(workspace.locator(".mobile-edge-swipe-current .cm-content")).toBeVisible()
+    const entryA = workspace.locator(".mobile-edge-swipe-current")
+    await entryA.evaluate((element) => { element.setAttribute("data-e2e-editor-identity", "editor-a") })
+
+    await entryA.locator(".cm-md-link-actionable[data-md-note-target]").first().tap()
+    await page.locator(".mobile-action-sheet").getByRole("button", { name: "打开链接" }).tap()
+    await expect(workspace.getByRole("button", { name: "返回第一篇" })).toBeVisible()
+    await expect(workspace.locator(".mobile-edge-swipe-previous")).toHaveAttribute("data-e2e-editor-identity", "editor-a")
+
+    const editorB = workspace.locator(".mobile-edge-swipe-current .cm-content")
+    await editorB.click()
+    await page.keyboard.press("ControlOrMeta+End")
+    await page.keyboard.type("\n只属于 B")
+    await expect(editorB).toContainText("只属于 B")
+    await page.goBack()
+
+    const restoredA = workspace.locator(".mobile-edge-swipe-current")
+    await expect(restoredA).toHaveAttribute("data-e2e-editor-identity", "editor-a")
+    await expect(restoredA.locator(".cm-content")).not.toContainText("只属于 B")
+  })
+
+  test("移动端 Wiki 锚点只滚动当前路由层的同名标题", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await seedCachedVault(page, "# 同名标题\n\n[[第二篇#同名标题]]", false, "# 同名标题\n\n正文 B")
+    await page.evaluate(() => {
+      const calls: boolean[] = []
+      Object.defineProperty(window, "__anchorScrollCalls", { configurable: true, value: calls })
+      Element.prototype.scrollIntoView = function scrollIntoView() {
+        calls.push(Boolean(this.closest("[inert]")))
+      }
+    })
+    const workspace = page.locator(".mobile-workspace:visible")
+    await workspace.getByText("测试", { exact: true }).first().click()
+    await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    await useCompatibilityPreview(page)
+    await workspace.locator(".mobile-edge-swipe-current .markdown-preview").getByRole("button", { name: "第二篇", exact: true }).tap()
+    await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
+
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __anchorScrollCalls: boolean[] }).__anchorScrollCalls)).toContain(false)
+    expect(await page.evaluate(() => (window as unknown as { __anchorScrollCalls: boolean[] }).__anchorScrollCalls)).not.toContain(true)
   })
 
   async function openMobileEditor(page: Page, noteContent?: string) {

@@ -1,7 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { Navigate, Route, Routes, useLocation, useMatch, useNavigate } from "react-router-dom"
 
-import { Workspace, type LibraryView, type MobileScreen } from "@/components/workspace/workspace"
+import { Workspace, type LibraryView } from "@/components/workspace/workspace"
 import { AppInitializationState } from "@/components/app-initialization-state"
 import {
   AboutSettingsPage,
@@ -83,6 +83,7 @@ import {
   normalizeNoteTarget,
 } from "@/services/search/note-index"
 import { sortNotes, type NoteSort } from "@/services/search/note-sort"
+import { noteMatchesLibraryQuery } from "@/services/search/note-list-filter"
 import {
   buildVaultFolders,
   noteBelongsDirectlyToFolder,
@@ -181,22 +182,32 @@ type MarkdownLinkRepair = {
   oldPath: string
 }
 
+function hasMobileNavigationOverlay(value: unknown) {
+  return typeof value === "object" && value !== null
+    && (value as { mobileOverlay?: unknown }).mobileOverlay === "navigation"
+}
+
 function App() {
   // 键盘高度写在根节点上，工作区、设置页和各类弹层都要靠它避让，所以挂在应用最外层而不是某个页面里。
   useKeyboardInset()
   const navigate = useNavigate()
   const location = useLocation()
+  const locationRef = useRef(location)
+  locationRef.current = location
   const notesLibraryRouteMatch = useMatch("/notes")
   const folderRouteMatch = useMatch("/notes/folder/:folderPath")
   const noteRouteMatch = useMatch("/notes/:noteId")
   const viewRouteMatch = useMatch("/notes/view/:view")
   const isNotesLibraryRoute = notesLibraryRouteMatch !== null
+  const mobileScreen = noteRouteMatch ? "editor" as const
+    : folderRouteMatch || viewRouteMatch ? "notes" as const : "library" as const
   const [notes, setNotes] = useState<Note[]>([])
   const [vaultDirectories, setVaultDirectories] = useState<string[]>([])
   const [pendingWebDavDirectories, setPendingWebDavDirectories] = useState<string[]>([])
   const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([])
   const [trashRetention, setTrashRetention] = useState<TrashRetentionDays>(loadTrashRetention)
   const [activeNoteId, setActiveNoteId] = useState("")
+  const discardingDraftIdsRef = useRef(new Set<string>())
   const pendingNoteRouteMove = useRef<{ from: string; to: string } | null>(null)
   const [query, setQuery] = useState("")
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
@@ -205,7 +216,6 @@ function App() {
   const [libraryView, setLibraryView] = useState<LibraryView>("all")
   const [noteSort, setNoteSort] = useState<NoteSort>("updated-desc")
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
-  const [mobileScreen, setMobileScreen] = useState<MobileScreen>("library")
   const [noteViewMode, setNoteViewMode] = useState<NoteViewMode>(() => loadUiPreferences().noteViewMode)
   const [colorMode, setColorMode] = useState<ColorMode>(() => loadUiPreferences().colorMode)
   const changeNoteViewMode = useCallback((mode: NoteViewMode) => {
@@ -469,20 +479,17 @@ function App() {
     if (folderRouteMatch?.params.folderPath) {
       setLibraryView("all")
       setSelectedFolder(decodeURIComponent(folderRouteMatch.params.folderPath))
-      setMobileScreen("notes")
       return
     }
     const routeView = viewRouteMatch?.params.view
     if (routeView === "all" || routeView === "recent" || routeView === "starred") {
       setLibraryView(routeView)
       setSelectedFolder(null)
-      setMobileScreen("notes")
       return
     }
     if (isNotesLibraryRoute) {
       setLibraryView("all")
       setSelectedFolder(null)
-      setMobileScreen("library")
     }
   }, [cacheReady, folderRouteMatch?.params.folderPath, isNotesLibraryRoute, noteRouteMatch?.params.noteId, viewRouteMatch?.params.view])
 
@@ -540,14 +547,7 @@ function App() {
     ? nativeSearchResult.paths
     : null
   const filteredNotes = useMemo(() => normalizedQuery
-    ? libraryNotes.filter((note) => {
-        // 标题和摘要都很短，逐条小写化的代价可以忽略。正文索引写入时已经是小写，
-        // 这里绝不能再把它拼进大字符串重新小写：那等于每敲一个字就把整库正文复制一遍。
-        if (`${note.title} ${note.preview}`.toLocaleLowerCase().includes(normalizedQuery)) return true
-        return nativeSearchPaths
-          ? Boolean(note.remotePath && nativeSearchPaths.has(note.remotePath))
-          : Boolean(note.searchText?.includes(normalizedQuery))
-      })
+    ? libraryNotes.filter((note) => noteMatchesLibraryQuery(note, normalizedQuery, nativeSearchPaths))
     : libraryNotes, [libraryNotes, nativeSearchPaths, normalizedQuery])
   const visibleNotes = useMemo(() => sortNotes(filteredNotes, noteSort), [filteredNotes, noteSort])
   const activeNote = notes.find((note) => note.id === activeNoteId) ?? null
@@ -676,10 +676,10 @@ function App() {
   const authenticationFailureRef = useRef(handleWebDavAuthenticationFailure)
   authenticationFailureRef.current = handleWebDavAuthenticationFailure
 
-  const resolveActiveAsset = useCallback(async (source: string) => {
+  const resolveNoteAsset = useCallback(async (noteId: string, source: string) => {
     // 同步会连续替换笔记和缓存元数据；读取入口必须保持引用稳定，否则图片组件会反复撤销 Blob URL 并重新加载。
-    const { activeCacheMeta, activeNote, isOnline, vaultSession } = assetResolverContextRef.current
-    const notePath = activeNote?.remotePath
+    const { activeCacheMeta, isOnline, vaultSession } = assetResolverContextRef.current
+    const notePath = notesRef.current.find((note) => note.id === noteId)?.remotePath
     if (!notePath) return null
     const assetPath = resolveVaultAssetPath(notePath, source)
     if (!assetPath) return null
@@ -708,18 +708,22 @@ function App() {
       }
       throw error
     }
-    if (activeCacheMeta?.sourceKind === "webdav" && activeNote) {
+    if (activeCacheMeta?.sourceKind === "webdav") {
       // 图片在线首次打开后落入附件缓存，之后刷新或离线启动仍可直接预览。
       await cacheSyncedVaultAttachment({
         cacheId: activeCacheMeta.id,
         data: new Uint8Array(asset.data).slice().buffer,
         mimeType: asset.mimeType,
-        noteId: activeNote.id,
+        noteId,
         path: assetPath,
       })
     }
     return asset
   }, [])
+  const resolveActiveAsset = useCallback(
+    (source: string) => resolveNoteAsset(activeNoteId, source),
+    [activeNoteId, resolveNoteAsset],
+  )
 
   const attachmentNoteId = activeNote?.id
   const attachmentNotePath = activeNote?.remotePath
@@ -760,21 +764,22 @@ function App() {
     return writeVaultAttachments(vaultSession, attachmentNotePath, files)
   }, [attachmentCacheId, attachmentNoteId, attachmentNotePath, attachmentNoteSource, vaultSession])
 
-  const updateActiveNote = (patch: Partial<Note>) => {
-    if (!activeNote) return
+  const updateNoteById = (noteId: string, patch: Partial<Note>) => {
+    const targetNote = notesRef.current.find((note) => note.id === noteId)
+    if (!targetNote) return
     const touchesDocument = typeof patch.content === "string" || typeof patch.title === "string"
     if (touchesDocument && isRefreshingVault) {
       setVaultError("正在同步当前笔记库，请等待完成后继续编辑")
       return
     }
-    if (typeof patch.content === "string" && patch.content !== activeNote.content && activeCacheMeta) {
+    if (typeof patch.content === "string" && patch.content !== targetNote.content && activeCacheMeta) {
       // 自动历史保存的是“本次修改前”的版本；服务层会按五分钟窗口合并连续输入，避免逐键生成快照。
       void saveNoteVersion({
         cacheId: activeCacheMeta.id,
-        content: activeNote.content,
-        noteId: activeNote.id,
+        content: targetNote.content,
+        noteId: targetNote.id,
         reason: "编辑前",
-        title: activeNote.title,
+        title: targetNote.title,
       }).catch(() => undefined)
     }
     const indexedPatch: Partial<Note> = typeof patch.content === "string"
@@ -791,7 +796,7 @@ function App() {
       : patch
     setNotes((current) =>
       current.map((note) =>
-        note.id === activeNoteId
+        note.id === noteId
           ? {
               ...note,
               ...indexedPatch,
@@ -811,16 +816,17 @@ function App() {
           : note,
       ),
     )
-    if (touchesDocument && activeNote.source === "webdav") {
+    if (touchesDocument && targetNote.source === "webdav") {
       setSaveStates((current) => ({
         ...current,
-        [activeNote.id]: activeNote.syncStatus === "conflict"
+        [targetNote.id]: targetNote.syncStatus === "conflict"
           ? { status: "conflict" }
           : { status: "pending" },
       }))
     }
-    if (typeof patch.content === "string") scheduleLocalSave(activeNote, patch.content)
+    if (typeof patch.content === "string") scheduleLocalSave(targetNote, patch.content)
   }
+  const updateActiveNote = (patch: Partial<Note>) => updateNoteById(activeNoteId, patch)
 
   const scheduleLocalSave = (note: Note, content: string) => {
     // WebDAV 正文先落入 IndexedDB 工作副本，只有显式同步动作才允许写入坚果云。
@@ -1014,7 +1020,6 @@ function App() {
         openNoteViewForEditing()
         setSaveStates((current) => ({ ...current, [id]: { status: "pending" } }))
         setVaultNoteCount((count) => count + 1)
-        setMobileScreen("editor")
         navigate(`/notes/${encodeURIComponent(id)}`)
         return
       }
@@ -1046,7 +1051,6 @@ function App() {
       openNoteViewForEditing()
       setSaveStates((current) => ({ ...current, [id]: { status: "saved" } }))
       setVaultNoteCount((count) => count + 1)
-      setMobileScreen("editor")
       navigate(`/notes/${encodeURIComponent(id)}`)
     } catch (error) {
       setVaultError(error instanceof Error ? error.message : "新建笔记失败")
@@ -1149,7 +1153,6 @@ function App() {
         }))
         setVaultNoteCount((count) => count + imported.length)
         setActiveNoteId(imported[0].id)
-        setMobileScreen("editor")
         navigate(`/notes/${encodeURIComponent(imported[0].id)}`)
       }
       if (errors.length > 0) setVaultError(`${imported.length > 0 ? `已导入 ${imported.length} 篇；` : ""}${errors.slice(0, 3).join("；")}${errors.length > 3 ? `；另有 ${errors.length - 3} 项失败` : ""}`)
@@ -1509,7 +1512,6 @@ function App() {
     setVaultNoteCount(mergedNotes.filter((note) => note.pendingOperation !== "delete").length)
     setSaveStates(Object.fromEntries(mergedNotes.map((note) => [note.id, getNoteSaveState(note)])))
     setVaultError(null)
-    if (!preserveContext) setMobileScreen("notes")
     const refreshedIndexEntries = mergedNotes
       .filter((note) => note.contentLoaded && note.remotePath && loadedDocuments.has(note.remotePath))
       .map((note) => ({
@@ -1868,7 +1870,6 @@ function App() {
       await saveVaultCache(snapshot)
       applyCachedSnapshot(snapshot)
       setVaultCaches(await listVaultCaches())
-      setMobileScreen("notes")
     } catch (error) {
       setVaultError(error instanceof Error ? error.message : "切换缓存失败")
     }
@@ -2007,7 +2008,6 @@ function App() {
 
   const selectNote = async (note: Note) => {
     setActiveNoteId(note.id)
-    setMobileScreen("editor")
     await loadNoteDocument(note)
   }
 
@@ -2024,7 +2024,6 @@ function App() {
     const routeNoteId = noteRouteMatch?.params.noteId
     if (!routeNoteId || !cacheReady) return
     // 手机端直达失效链接也必须进入详情层，才能展示恢复入口；否则会无提示地停在笔记库首页。
-    setMobileScreen("editor")
     const decodedNoteId = resolveRouteNoteId(routeNoteId, notes.map((note) => note.id))
     // 重命名的笔记状态先于路由 transition 提交；这几帧保留同一编辑器，避免清空详情并丢失焦点。
     const moving = pendingNoteRouteMove.current
@@ -2506,7 +2505,6 @@ function App() {
       setVaultDirectories((current) => [...new Set([...current, folderPath])])
       setLibraryView("all")
       setSelectedFolder(folderPath)
-      setMobileScreen("notes")
       navigate(getNotesListRoute("all", folderPath))
     } catch (error) {
       setVaultError(error instanceof Error ? error.message : "新建文件夹失败")
@@ -2627,7 +2625,6 @@ function App() {
       if (activePlan) setActiveNoteId(activePlan.id)
       setSelectedFolder(targetFolder)
       setLibraryView("all")
-      setMobileScreen("notes")
       navigate(getNotesListRoute("all", targetFolder), { replace: true })
       if (unavailableCount > 0) setVaultError(`已重命名；另有 ${unavailableCount} 篇正文不可读取，暂无法检查其中的相对链接`)
     } catch (error) {
@@ -2681,7 +2678,6 @@ function App() {
       if (candidateIds.has(activeNoteId)) setActiveNoteId(remainingNotes[0]?.id ?? "")
       setSelectedFolder(null)
       setLibraryView("all")
-      setMobileScreen("library")
       navigate("/notes", { replace: true })
     } catch (error) {
       setVaultError(error instanceof Error ? error.message : "删除文件夹失败")
@@ -2801,7 +2797,6 @@ function App() {
     if (firstPlan) {
       setSelectedFolder(firstPlan.folder.split(/\s*\/\s*/).slice(0, folderPath.split(/\s*\/\s*/).length).join(" / "))
       setLibraryView("all")
-      setMobileScreen("notes")
       navigate(getNotesListRoute("all", firstPlan.folder.split(/\s*\/\s*/).slice(0, folderPath.split(/\s*\/\s*/).length).join(" / ")), { replace: true })
     }
     setIsManagingNote(false)
@@ -2863,7 +2858,6 @@ function App() {
     }
     setSelectedFolder(null)
     setLibraryView("all")
-    setMobileScreen("library")
     navigate("/notes", { replace: true })
   }
 
@@ -2885,6 +2879,9 @@ function App() {
 
   const discardEmptyDraft = async (note: Note) => {
     if (!isDiscardableEmptyDraft(note)) return false
+    if (discardingDraftIdsRef.current.has(note.id)) return false
+    discardingDraftIdsRef.current.add(note.id)
+    const draftCacheId = activeCacheMeta?.id ?? null
 
     const coordinator = localSaveCoordinatorRef.current
     const pendingTimer = saveTimersRef.current.get(note.id)
@@ -2895,6 +2892,7 @@ function App() {
     } else if (coordinator.hasPending(note.id)) {
       // 已进入文件 API 的写入不能撤销；先保留草稿，避免删除后旧写入又把文件创建回来。
       setVaultError("笔记仍在保存，请稍后再离开空白草稿")
+      discardingDraftIdsRef.current.delete(note.id)
       return false
     }
 
@@ -2910,21 +2908,26 @@ function App() {
         setPendingAttachmentCount((await listPendingVaultAttachments(activeCacheMeta.id)).length)
       }
 
-      const remainingNotes = notes.filter((candidate) => candidate.id !== note.id)
-      setNotes(remainingNotes)
+      // 删除文件期间用户可能已经切换笔记库；旧请求只能清理旧文件，不能再改写新库状态。
+      if ((assetResolverContextRef.current.activeCacheMeta?.id ?? null) !== draftCacheId) return false
+      const currentNotes = notesRef.current
+      const remainingNotes = currentNotes.filter((candidate) => candidate.id !== note.id)
+      setNotes((current) => current.filter((candidate) => candidate.id !== note.id))
       setSaveStates((current) => {
         const next = { ...current }
         delete next[note.id]
         return next
       })
       setVaultNoteCount((count) => Math.max(0, count - 1))
-      setActiveNoteId(remainingNotes.find((candidate) => candidate.pendingOperation !== "delete")?.id ?? "")
-      setMobileScreen("notes")
-      navigate(getNoteReturnRoute(location.state, libraryView, selectedFolder), { replace: true })
+      setActiveNoteId((current) => current === note.id
+        ? remainingNotes.find((candidate) => candidate.pendingOperation !== "delete")?.id ?? ""
+        : current)
       return true
     } catch (error) {
       setVaultError(error instanceof Error ? error.message : "撤销空白草稿失败")
       return false
+    } finally {
+      discardingDraftIdsRef.current.delete(note.id)
     }
   }
 
@@ -2968,7 +2971,6 @@ function App() {
       }, ...current])
       if (activeNoteId === note.id) setActiveNoteId(nextNote?.id ?? "")
       if (navigateAfter) {
-        setMobileScreen(nextNote ? "editor" : "notes")
         navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
       }
       return
@@ -3002,7 +3004,6 @@ function App() {
       }, ...current])
       if (activeNoteId === note.id) setActiveNoteId(nextNote?.id ?? "")
       if (navigateAfter) {
-        setMobileScreen(nextNote ? "editor" : "notes")
         navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
       }
       return
@@ -3043,7 +3044,6 @@ function App() {
       }, ...current])
       if (activeNoteId === note.id) setActiveNoteId(nextNote?.id ?? "")
       if (navigateAfter) {
-        setMobileScreen(nextNote ? "editor" : "notes")
         navigate(nextNote ? `/notes/${encodeURIComponent(nextNote.id)}` : "/notes", { replace: true })
       }
     } catch (error) {
@@ -3548,7 +3548,8 @@ function App() {
     const scrollWhenReady = () => {
       if (cancelled) return
       const element = Array.from(document.querySelectorAll<HTMLElement>(`[id="${CSS.escape(id)}"]`))
-        .find((candidate) => candidate.getClientRects().length > 0)
+        // 保活页即使 visibility:hidden 仍有布局矩形；锚点只能在当前非 inert 路由层命中。
+        .find((candidate) => !candidate.closest("[inert]") && candidate.getClientRects().length > 0)
       if (element) {
         element.scrollIntoView({ behavior: "smooth", block: "start" })
         pendingWikiAnchorRef.current = ""
@@ -3564,6 +3565,19 @@ function App() {
       window.cancelAnimationFrame(frame)
     }
   }, [activeNote?.contentLoaded, activeNote?.id])
+
+  const navigateMobileBack = async (fallback: string, canGoBack: boolean) => {
+    const originLocationKey = location.key
+    if (noteRouteMatch && activeNote && isDiscardableEmptyDraft(activeNote)) {
+      const discarded = await discardEmptyDraft(activeNote)
+      if (!discarded) return false
+      // 文件删除可能跨过系统 back/forward 或菜单跳转；只清数据，不让旧回调从新页面再退一次。
+      if (locationRef.current.key !== originLocationKey) return false
+    }
+    if (canGoBack) navigate(-1)
+    else navigate(fallback, { replace: true })
+    return true
+  }
 
   if (!cacheReady) return <AppInitializationState />
 
@@ -3625,12 +3639,18 @@ function App() {
             includeNestedFolderNotes={includeNestedFolderNotes}
             isRefreshingVault={isRefreshingVault}
             libraryView={libraryView}
+            loadingNoteIds={loadingNoteIds}
             localVaultSupported={canSelectLocalVault()}
+            mobileCanGoBack={false}
+            mobileRouteResetKey={activeCacheMeta?.id ?? "no-vault"}
             mobileScreen={mobileScreen}
             mobileConnectionLabel={mobileConnectionLabel}
             mobileListStateKey={normalizedQuery}
+            nativeSearchPaths={nativeSearchPaths}
+            nativeSearchQuery={nativeSearchResult?.query ?? ""}
             noteViewMode={noteViewMode}
             noteSort={noteSort}
+            noteLoadErrors={noteLoadErrors}
             notes={visibleNotes}
             onCreateNote={() => void createNote()}
             onCreateNoteInFolder={(folderPath) => void createNote(folderPath)}
@@ -3651,25 +3671,11 @@ function App() {
               setNestedFolderNotesPath(include ? selectedFolder : null)
             }}
             onImportNotes={(files) => void importMarkdownFiles(files)}
-            onMobileScreenChange={(screen) => {
-              if (screen === "notes"
-                && noteRouteMatch
-                && activeNote
-                && isDiscardableEmptyDraft(activeNote)) {
-                void discardEmptyDraft(activeNote)
-                return
-              }
-              setMobileScreen(screen)
-              if (screen === "library") {
-                setQuery("")
-                navigate("/notes")
-                return
-              }
-              if (screen === "notes" && noteRouteMatch) {
-                navigate(getNoteReturnRoute(location.state, libraryView, selectedFolder), { replace: true })
-              }
-            }}
-            onNavigate={navigate}
+            onMobileBack={navigateMobileBack}
+            onMobileScreenChange={(screen) => { void navigateMobileBack(screen === "library" ? "/notes" : getNoteReturnRoute(location.state, libraryView, selectedFolder), false) }}
+            onNavigate={(path) => navigate(path, hasMobileNavigationOverlay(location.state)
+              ? { replace: true, state: { mobileOverlayTarget: true } }
+              : undefined)}
             onMoveNote={(folderPath) => void moveActiveNote(folderPath)}
             onMoveNoteById={(noteId, folderPath) => void moveNote(noteId, folderPath, undefined, false)}
             onNoteViewModeChange={changeNoteViewMode}
@@ -3679,7 +3685,12 @@ function App() {
               const note = notes.find((candidate) => candidate.id === noteId)
               void moveNote(noteId, note?.folder === "根目录" ? null : note?.folder ?? null, title, false)
             }}
+            onRenameNoteFromEditor={(noteId, title) => {
+              const note = notesRef.current.find((candidate) => candidate.id === noteId)
+              void moveNote(noteId, note?.folder === "根目录" ? null : note?.folder ?? null, title, true)
+            }}
             onOpenLocalVault={() => void openLocalVault()}
+            onOpenMobileLibrary={() => navigate("/notes")}
             onExportNote={() => void exportActiveNote()}
             onOpenSourceFile={() => void openActiveSourceFile()}
             onOpenWikiLink={openWikiLink}
@@ -3694,6 +3705,7 @@ function App() {
             onRetrySync={() => void refreshVault()}
             onResolveConflict={(strategy) => void resolveActiveConflict(strategy)}
             onResolveAsset={resolveActiveAsset}
+            onResolveAssetForNote={resolveNoteAsset}
             onLoadWikiNote={loadWikiNote}
             onResolveWikiNote={resolveWikiNote}
             onRestoreNoteVersion={restoreActiveNoteVersion}
@@ -3710,24 +3722,30 @@ function App() {
               setQuery("")
               setLibraryView("all")
               setSelectedFolder(folder)
-              setMobileScreen("notes")
-              navigate(folder ? getNotesListRoute("all", folder) : getNotesListRoute("all", null))
+              navigate(folder ? getNotesListRoute("all", folder) : getNotesListRoute("all", null), {
+                replace: hasMobileNavigationOverlay(location.state),
+                state: hasMobileNavigationOverlay(location.state) ? { mobileOverlayTarget: true } : undefined,
+              })
             }}
             onSelectLibraryView={(view) => {
               setQuery("")
               setLibraryView(view)
               setSelectedFolder(null)
-              setMobileScreen("notes")
-              navigate(getNotesListRoute(view, null))
+              navigate(getNotesListRoute(view, null), {
+                replace: hasMobileNavigationOverlay(location.state),
+                state: hasMobileNavigationOverlay(location.state) ? { mobileOverlayTarget: true } : undefined,
+              })
             }}
             onSelectNote={openNote}
             onSelectTag={setSelectedTag}
             onSelectVaultCache={(cacheId) => void selectVaultCache(cacheId)}
             onUpdateNote={updateActiveNote}
+            onUpdateNoteById={updateNoteById}
             query={query}
             selectedFolder={selectedFolder}
             selectedTag={selectedTag}
             saveState={activeSaveState}
+            saveStates={saveStates}
             syncLabel={syncLabel}
             syncFailure={syncFailure}
             syncProgress={syncProgress}

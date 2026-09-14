@@ -4,6 +4,7 @@ import * as React from "react"
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
+import { useRouteActivity } from "@/components/ui/route-activity"
 import { CheckIcon, ChevronRightIcon } from "lucide-react"
 
 function DropdownMenu({
@@ -37,6 +38,8 @@ function DropdownMenuContent({
   sideOffset = 4,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+  const routeActive = useRouteActivity()
+  if (!routeActive) return null
   return (
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content

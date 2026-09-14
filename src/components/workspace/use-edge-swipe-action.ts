@@ -12,6 +12,7 @@ type EdgeSwipeKind = "back" | "drawer"
 type EdgeSwipePhase = "completing" | "dragging" | "idle" | "returning"
 type Gesture = {
   horizontal: boolean
+  identifier?: number
   pointerId?: number
   startedAt: number
   startX: number
@@ -35,7 +36,7 @@ function isEditorSurface(target: EventTarget | null) {
 // 整个工作区（编辑器 + 垫底的上一页列表）按触摸频率重渲染，主线程被占满，
 // translate3d 更新到达不匀，肉眼就是抖动。相位仍走 state：它驱动 transition
 // 与上一页显隐，且每次手势最多变三次。
-export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kind: EdgeSwipeKind = "back") {
+export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<boolean | void>, enabled: boolean, kind: EdgeSwipeKind = "back", navigationKey?: string) {
   const pointerGestureRef = useRef<Gesture | null>(null)
   const touchGestureRef = useRef<Gesture | null>(null)
   const suppressClickRef = useRef(false)
@@ -45,6 +46,21 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
   // 供下一次手势或组件卸载时处理，避免路由交接被丢掉或在卸载后才触发。
   const pendingHandoffRef = useRef<{ cancel: () => void; run: () => void } | null>(null)
   const [phase, setPhase] = useState<EdgeSwipePhase>("idle")
+  const phaseRef = useRef<EdgeSwipePhase>("idle")
+  // 每次新手势或路由提交都会推进代际；异步 onComplete 只能收尾它发起时的那一代，
+  // 避免旧页清理失败后把新页正在进行的手势强制复位。
+  const gestureGenerationRef = useRef(0)
+  const completingNavigationKeyRef = useRef<string | null>(null)
+  const previousNavigationKeyRef = useRef(navigationKey)
+  const onCompleteRef = useRef(onComplete)
+  onCompleteRef.current = onComplete
+
+  const changePhase = (next: EdgeSwipePhase | ((current: EdgeSwipePhase) => EdgeSwipePhase)) => {
+    const resolved = typeof next === "function" ? next(phaseRef.current) : next
+    // ref 必须先于 React 状态同步更新，同一事件批次里的 cancel/down 才能看到完成锁。
+    phaseRef.current = resolved
+    setPhase(resolved)
+  }
 
   useEffect(() => () => {
     timersRef.current.forEach((timer) => window.clearTimeout(timer))
@@ -90,11 +106,29 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
   }
   const clearPointerGesture = () => { pointerGestureRef.current = null }
   const clearTouchGesture = () => { touchGestureRef.current = null }
-  const reset = () => setPhase("idle")
-  const returnToStart = () => {
-    setPhase((current) => current === "idle" ? current : "returning")
-    schedule(reset, 190)
+  const reset = () => changePhase("idle")
+  const returnToStart = (generation = gestureGenerationRef.current) => {
+    if (generation !== gestureGenerationRef.current) return
+    changePhase((current) => current === "idle" ? current : "returning")
+    schedule(() => {
+      if (generation === gestureGenerationRef.current && phaseRef.current === "returning") reset()
+    }, 190)
   }
+
+  useLayoutEffect(() => {
+    if (previousNavigationKeyRef.current === navigationKey) return
+    previousNavigationKeyRef.current = navigationKey
+    // 外部的浏览器前进/后退也会换 key。绘制前终止旧页手势，旧 timer 不能再向新页补一次返回。
+    clearScheduled()
+    gestureGenerationRef.current += 1
+    clearPointerGesture()
+    clearTouchGesture()
+    pendingHandoffRef.current?.cancel()
+    pendingHandoffRef.current = null
+    completingNavigationKeyRef.current = null
+    applyVisual(0, 0)
+    changePhase("idle")
+  }, [navigationKey])
   const updateDrag = (gesture: Gesture, currentX: number, currentY: number) => {
     const now = performance.now()
     const deltaX = Math.max(0, currentX - gesture.startX)
@@ -121,13 +155,12 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
     const progress = getEdgeSwipeProgress(deltaX)
     // 根目录手势只负责识别“打开导航”，拖动期间不移动正文；只有返回上页才做跟手转场。
     applyVisual(kind === "drawer" ? 0 : deltaX, progress)
-    setPhase("dragging")
+    changePhase("dragging")
     return "horizontal" as const
   }
   const finish = (gesture: Gesture | null) => {
     if (!gesture) return
-    // 上一次返回若还在等滑出动画收尾，先把它的路由交接补上，再处理这一次。
-    pendingHandoffRef.current?.run()
+    if (phaseRef.current === "completing") return
     const complete = gesture.horizontal && shouldCompleteEdgeSwipe({
       elapsedMs: Date.now() - gesture.startedAt,
       endX: gesture.x,
@@ -141,11 +174,17 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
       return
     }
     if (kind === "drawer") {
-      onComplete()
+      try {
+        void Promise.resolve(onCompleteRef.current()).catch(() => undefined)
+      } catch {
+        // 打开抽屉失败不改变 history，根页保持原位即可。
+      }
       reset()
       return
     }
-    setPhase("completing")
+    changePhase("completing")
+    const completionGeneration = gestureGenerationRef.current
+    completingNavigationKeyRef.current = navigationKey ?? ""
     // 底层此刻已是真实上一页。交接路由会把正在滑出的当前层整棵子树卸载，
     // 真机上 var() 驱动的 transform 过渡跑在主线程、还要和列表回收抢占，
     // 若在滑出结束前就卸载，旧页往往还盖着小半屏，被硬删后下一页瞬间顶上——
@@ -158,8 +197,21 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
       pendingHandoffRef.current = null
       outgoing?.removeEventListener("transitionend", onTransitionEnd)
       // 手势已经把页面送到位，交接后不再补一段反向入场动画，避免二次位移。
-      onComplete()
-      reset()
+      let completion: boolean | void | Promise<boolean | void>
+      try {
+        completion = onCompleteRef.current()
+      } catch {
+        completion = false
+      }
+      void Promise.resolve(completion).then((committed) => {
+        if (committed !== false || completionGeneration !== gestureGenerationRef.current) return
+        completingNavigationKeyRef.current = null
+        returnToStart(completionGeneration)
+      }).catch(() => {
+        if (completionGeneration !== gestureGenerationRef.current) return
+        completingNavigationKeyRef.current = null
+        returnToStart(completionGeneration)
+      })
     }
     function onTransitionEnd(event: TransitionEvent) {
       if (event.target === outgoing && event.propertyName === "transform") handoff()
@@ -175,8 +227,9 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
       run: handoff,
     }
   }
-  const startGesture = (startX: number, startY: number, pointerId?: number): Gesture => ({
+  const startGesture = (startX: number, startY: number, pointerId?: number, identifier?: number): Gesture => ({
     horizontal: false,
+    identifier,
     pointerId,
     sampledAt: performance.now(),
     startedAt: Date.now(),
@@ -190,13 +243,12 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     // 每次新的按下都先解除抑制，否则上一轮残留的标记会把这次正常点击一起吞掉。
     suppressClickRef.current = false
-    if (!enabled || !event.isPrimary || event.clientX > EDGE_ZONE_WIDTH) return
+    if (!enabled || phaseRef.current === "completing" || !event.isPrimary || event.clientX > EDGE_ZONE_WIDTH) return
     // 起手落在编辑器上就别让它拿到焦点：contenteditable 一聚焦，iOS 立刻顶起输入辅助栏，
     // 布局跟着收缩，手势走完焦点又消失、布局回落，看起来就是侧滑中途闪一下。
     if (isEditorSurface(event.target)) event.preventDefault()
-    // 上一次返回若还在等滑出动画收尾，这里先把路由交接补上，别让它悬着。
-    pendingHandoffRef.current?.run()
     clearScheduled()
+    gestureGenerationRef.current += 1
     pointerGestureRef.current = startGesture(event.clientX, event.clientY, event.pointerId)
   }
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -218,22 +270,34 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
     finish(gesture)
   }
   const onPointerCancel = () => {
+    if (touchGestureRef.current || phaseRef.current === "completing" || !pointerGestureRef.current) return
     clearPointerGesture()
     returnToStart()
   }
   const onTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
     suppressClickRef.current = false
     const touch = event.touches[0]
-    if (!enabled || event.touches.length !== 1 || !touch || touch.clientX > EDGE_ZONE_WIDTH) return
-    // 上一次返回若还在等滑出动画收尾，这里先把路由交接补上，别让它悬着。
-    pendingHandoffRef.current?.run()
+    if (event.touches.length !== 1) {
+      if (phaseRef.current === "completing" || !touchGestureRef.current) return
+      clearTouchGesture()
+      returnToStart()
+      return
+    }
+    if (!enabled || phaseRef.current === "completing" || !touch || touch.clientX > EDGE_ZONE_WIDTH) return
     clearScheduled()
+    gestureGenerationRef.current += 1
     clearPointerGesture()
-    touchGestureRef.current = startGesture(touch.clientX, touch.clientY)
+    touchGestureRef.current = startGesture(touch.clientX, touch.clientY, undefined, touch.identifier)
   }
   const onTouchMove = (event: ReactTouchEvent<HTMLDivElement>) => {
     const gesture = touchGestureRef.current
-    const touch = event.touches[0]
+    if (event.touches.length !== 1) {
+      if (phaseRef.current === "completing" || !gesture) return
+      clearTouchGesture()
+      returnToStart()
+      return
+    }
+    const touch = Array.from(event.touches).find((candidate) => candidate.identifier === gesture?.identifier)
     if (!gesture || !touch) return
     const intent = updateDrag(gesture, touch.clientX, touch.clientY)
     if (intent === "horizontal" && event.cancelable) event.preventDefault()
@@ -244,13 +308,14 @@ export function useEdgeSwipeAction(onComplete: () => void, enabled: boolean, kin
   }
   const onTouchEnd = (event: ReactTouchEvent<HTMLDivElement>) => {
     const gesture = touchGestureRef.current
-    const touch = event.changedTouches[0]
+    const touch = Array.from(event.changedTouches).find((candidate) => candidate.identifier === gesture?.identifier)
     clearTouchGesture()
     if (!gesture || !touch) return
     updateDrag(gesture, touch.clientX, touch.clientY)
     finish(gesture)
   }
   const onTouchCancel = () => {
+    if (phaseRef.current === "completing" || !touchGestureRef.current) return
     clearTouchGesture()
     returnToStart()
   }

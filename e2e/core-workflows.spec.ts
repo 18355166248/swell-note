@@ -223,9 +223,8 @@ test.describe("核心笔记流程", () => {
     await expect(workspace.getByRole("heading", { name: "找不到这篇笔记" })).toBeVisible()
     await workspace.getByRole("button", { name: /第一篇/ }).click()
     await expect(page).toHaveURL(/#\/notes\/webdav/)
-    // 从恢复页打开的是一篇已有笔记，视图模式沿用用户偏好（默认阅读态），
-    // 此时标题是只读标题而不是输入框；强制切编辑态只发生在新建笔记时。
-    await expect(workspace.locator(".document-title")).toHaveText("第一篇")
+    // 从恢复页打开已有笔记并保留统一画布；标题控件应绑定到新路由对应的笔记。
+    await expect(workspace.getByRole("textbox", { name: "笔记标题" })).toHaveValue("第一篇")
   })
 
   test("移动端搜索确认会失焦，清空后恢复全部数据", async ({ page }, testInfo) => {
@@ -327,6 +326,142 @@ test.describe("核心笔记流程", () => {
       return [...visited]
     })
     expect(visitedScreens).not.toContain("editor")
+  })
+
+  test("移动端路由返回复用真实列表 DOM 并保留筛选与取消现场", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await seedCachedVault(page)
+    const workspace = page.locator(".mobile-workspace:visible")
+
+    await workspace.getByText("测试", { exact: true }).first().click()
+    const listEntry = workspace.locator(".mobile-edge-swipe-current")
+    const search = listEntry.getByRole("textbox", { name: "搜索笔记" })
+    await search.fill("第一篇")
+    await search.press("Enter")
+    await listEntry.evaluate((element) => { element.setAttribute("data-e2e-entry-identity", "kept-list") })
+    await listEntry.getByText("第一篇", { exact: true }).first().click()
+
+    const previous = workspace.locator(".mobile-edge-swipe-previous")
+    await expect(previous).toHaveAttribute("data-e2e-entry-identity", "kept-list")
+    await expect(previous.locator('input[aria-label="搜索笔记"]')).toHaveValue("第一篇")
+
+    // 未过阈值的拖动只回弹，location 与底层 entry 都不能改变。
+    const detailUrl = page.url()
+    await page.mouse.move(6, 360)
+    await page.mouse.down()
+    await page.mouse.move(20, 361, { steps: 3 })
+    await page.mouse.up()
+    await expect(page).toHaveURL(detailUrl)
+    await expect(previous).toHaveAttribute("data-e2e-entry-identity", "kept-list")
+
+    await page.mouse.move(6, 360)
+    await page.mouse.down()
+    await page.mouse.move(120, 361, { steps: 6 })
+    await page.mouse.up()
+    const restored = workspace.locator(".mobile-edge-swipe-current")
+    await expect(restored).toHaveAttribute("data-e2e-entry-identity", "kept-list")
+    await expect(restored.getByRole("textbox", { name: "搜索笔记" })).toHaveValue("第一篇")
+  })
+
+  test("移动端真实 TouchEvent 完成返回且多点触摸取消", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await seedCachedVault(page)
+    const workspace = page.locator(".mobile-workspace:visible")
+    const libraryEntry = workspace.locator(".mobile-edge-swipe-current")
+    await libraryEntry.evaluate((element) => { element.setAttribute("data-e2e-touch-return", "library") })
+    await workspace.getByText("测试", { exact: true }).first().click()
+
+    await workspace.evaluate(async (target) => {
+      const touch = (identifier: number, x: number) => new Touch({ clientX: x, clientY: 320, identifier, target })
+      target.dispatchEvent(new TouchEvent("touchstart", { bubbles: true, cancelable: true, touches: [touch(7, 6)] }))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      target.dispatchEvent(new TouchEvent("touchmove", { bubbles: true, cancelable: true, touches: [touch(7, 140)] }))
+      target.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true, changedTouches: [touch(7, 140)], touches: [] }))
+    })
+    await expect(workspace).toHaveAttribute("data-screen", "library")
+    await expect(workspace.locator(".mobile-edge-swipe-current")).toHaveAttribute("data-e2e-touch-return", "library")
+
+    await workspace.getByText("测试", { exact: true }).first().click()
+    const listUrl = page.url()
+    await workspace.evaluate(async (target) => {
+      const touch = (identifier: number, x: number) => new Touch({ clientX: x, clientY: 320, identifier, target })
+      target.dispatchEvent(new TouchEvent("touchstart", { bubbles: true, cancelable: true, touches: [touch(7, 6)] }))
+      target.dispatchEvent(new TouchEvent("touchmove", { bubbles: true, cancelable: true, touches: [touch(7, 70)] }))
+      target.dispatchEvent(new TouchEvent("touchstart", { bubbles: true, cancelable: true, touches: [touch(7, 70), touch(8, 12)] }))
+      target.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true, changedTouches: [touch(7, 150)], touches: [] }))
+      await new Promise((resolve) => setTimeout(resolve, 260))
+    })
+    await expect(page).toHaveURL(listUrl)
+    await expect(workspace).toHaveAttribute("data-edge-swipe-state", "idle")
+  })
+
+  test("移动端详情重命名以 REPLACE 保留编辑器并更新路由", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await seedCachedVault(page)
+    const workspace = page.locator(".mobile-workspace:visible")
+    await workspace.getByText("测试", { exact: true }).first().click()
+    await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    await expect(workspace).toHaveAttribute("data-screen", "editor")
+    await expect(workspace.locator(".mobile-edge-swipe-current .cm-content")).toBeVisible()
+
+    const editorEntry = workspace.locator(".mobile-edge-swipe-current")
+    await editorEntry.evaluate((element) => { element.setAttribute("data-e2e-editor-identity", "rename-session") })
+    const title = editorEntry.getByRole("textbox", { name: "笔记标题" })
+    await title.fill("重命名后")
+    await title.press("Enter")
+
+    await expect(page).toHaveURL(/#\/notes\/webdav.*%E9%87%8D%E5%91%BD%E5%90%8D%E5%90%8E/)
+    await expect(workspace.locator(".mobile-edge-swipe-current")).toHaveAttribute("data-e2e-editor-identity", "rename-session")
+    await expect(workspace.locator(".mobile-edge-swipe-current").getByRole("textbox", { name: "笔记标题" })).toHaveValue("重命名后")
+  })
+
+  test("移动端缓存页失活会关闭其 Portal 弹层", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await seedCachedVault(page)
+    const workspace = page.locator(".mobile-workspace:visible")
+    await workspace.getByText("测试", { exact: true }).first().click()
+
+    await workspace.getByRole("button", { name: "重命名文件夹 测试" }).click()
+    await expect(page.getByRole("dialog").getByText("重命名文件夹")).toBeVisible()
+    await page.goBack()
+    await expect(workspace).toHaveAttribute("data-screen", "library")
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+
+    await workspace.getByText("测试", { exact: true }).first().click()
+    await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    await expect(workspace).toHaveAttribute("data-screen", "editor")
+    await workspace.locator(".mobile-edge-swipe-current").getByRole("button", { name: "更多操作" }).click()
+    await page.getByRole("menuitem", { name: "重命名", exact: true }).click()
+    await expect(page.getByRole("dialog").getByText("重命名笔记")).toBeVisible()
+    await page.goBack()
+    await expect(workspace).toHaveAttribute("data-screen", "notes")
+    await expect(page.getByRole("dialog")).toHaveCount(0)
+    await expect(workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first()).toBeVisible()
+  })
+
+  test("移动端空白草稿清理后 POP 回原列表实例", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await seedCachedVault(page)
+    await page.evaluate(() => {
+      localStorage.setItem("swell-note:webdav-config:v1", JSON.stringify({
+        provider: "jianguoyun",
+        remotePath: "/Swell/",
+        serverUrl: "https://dav.jianguoyun.com/dav/",
+        username: "e2e@example.com",
+      }))
+    })
+    await page.reload()
+    const workspace = page.locator(".mobile-workspace:visible")
+    await workspace.getByText("测试", { exact: true }).first().click()
+    const listEntry = workspace.locator(".mobile-edge-swipe-current")
+    await listEntry.evaluate((element) => { element.setAttribute("data-e2e-draft-return", "original-list") })
+    await workspace.getByRole("button", { name: "在测试中新建笔记" }).click()
+    await expect(workspace).toHaveAttribute("data-screen", "editor")
+
+    await workspace.getByRole("button", { name: "返回测试" }).click()
+    await expect(workspace).toHaveAttribute("data-screen", "notes")
+    await expect(workspace.locator(".mobile-edge-swipe-current")).toHaveAttribute("data-e2e-draft-return", "original-list")
+    await expect(workspace.getByText("未命名笔记", { exact: true })).toHaveCount(0)
   })
 
   test("移动端从编辑器侧滑返回不会被编辑器抢走焦点", async ({ page }, testInfo) => {

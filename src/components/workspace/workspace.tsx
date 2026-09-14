@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate, useNavigationType } from "react-router-dom"
 import { createContext, useContext, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import {
   closestCenter,
@@ -61,6 +61,7 @@ import {
 
 import swellNoteLogo from "@/assets/brand/swell-note-logo-ribbon-s.svg"
 import { Button } from "@/components/ui/button"
+import { RouteActivityProvider } from "@/components/ui/route-activity"
 import { lazyWithRetry } from "@/lib/lazy-with-retry"
 import { useOptionalStableCallback, useStableCallback } from "@/lib/use-stable-callback"
 import type { AttachmentWriteResult } from "@/services/vault/attachment-writer"
@@ -99,9 +100,11 @@ import {
   getParentFolderPath,
   getVisibleVaultFolders,
   noteBelongsDirectlyToFolder,
+  noteBelongsToFolder,
   type VaultFolder,
 } from "@/services/search/vault-folders"
 import { buildNotePreview } from "@/services/markdown/note-preview"
+import { normalizeNoteTarget } from "@/services/search/note-index"
 import { openExternalUrl } from "@/services/open-external-url"
 import { HighlightedText, useSearchMatch } from "@/components/workspace/note-search-match"
 import { countWords, estimateReadingMinutes } from "@/services/markdown/note-stats"
@@ -109,6 +112,7 @@ import { extractNoteOutline } from "@/services/markdown/note-outline"
 import { buildMarkdownNoteLink, buildRelativeMarkdownHref } from "@/services/markdown/markdown-link"
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
 import { sortNotes, type NoteSort } from "@/services/search/note-sort"
+import { noteMatchesLibraryQuery } from "@/services/search/note-list-filter"
 import { getNoteViewModeAction, loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
 import { applyFolderOrder, loadFolderOrder, saveFolderOrder } from "@/services/preferences/folder-order-preferences"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
@@ -118,7 +122,7 @@ import { NoteVersionHistoryDialog } from "@/components/workspace/note-version-hi
 import { GlobalSearchDialog } from "@/components/workspace/global-search-dialog"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
-import { stableNoteRenderIdentity } from "@/lib/note-route-resolution"
+import { resolveRouteNoteId, stableNoteRenderIdentity } from "@/lib/note-route-resolution"
 import { MobileNoteSearch } from "@/components/workspace/mobile-note-search"
 import { MobileFolderActionSheet, MobileNoteActionSheet } from "@/components/workspace/mobile-action-sheets"
 import { MobileLinkSheet, type LinkSheetState } from "@/components/workspace/mobile-link-sheet"
@@ -141,6 +145,7 @@ import { useEdgeSwipeAction } from "@/components/workspace/use-edge-swipe-action
 import { SyncActivityToast } from "@/components/workspace/sync-activity-toast"
 import { useMobileLayoutQuery } from "@/services/navigation/mobile-layout"
 import { mobileLibraryScrollMemory, mobileNoteListScrollMemory, noteEditorScrollMemory } from "@/services/navigation/mobile-scroll-memory"
+import { createMobileRouteEntry, createMobileRouteStack, updateMobileRouteStack, type MobileNavigationAction, type MobileRouteEntry, type MobileRouteStack } from "@/services/navigation/mobile-route-stack"
 import type { SyncProgress } from "@/services/sync/sync-progress"
 import { shouldShowFloatingSyncProgress } from "@/services/sync/sync-progress"
 import { SyncFailureToast } from "./sync-failure-toast"
@@ -153,12 +158,6 @@ const MarkdownPreview = lazyWithRetry(() => import("@/components/editor/markdown
 const CanvasPreview = lazyWithRetry(() => import("@/components/editor/canvas-preview"))
 
 export type MobileScreen = "library" | "notes" | "editor"
-
-// 手机端两层页面的渲染单元：key 是页面身份，交接时靠它决定复用还是重建。
-type MobileScreenLayer = { key: string; node: ReactNode }
-
-// 手机端三级页面的层级深浅，用来判断这次切换是往里走还是往回退。
-const MOBILE_SCREEN_DEPTH: Record<MobileScreen, number> = { editor: 2, library: 0, notes: 1 }
 
 export type AppSection = "notes" | "settings" | "todos"
 export type LibraryView = "all" | "recent" | "starred"
@@ -189,12 +188,18 @@ type WorkspaceProps = {
   missingNoteSuggestions: Note[]
   isRefreshingVault: boolean
   libraryView: LibraryView
+  loadingNoteIds: ReadonlySet<string>
   localVaultSupported: boolean
+  mobileRouteResetKey: string
   mobileScreen: MobileScreen
   mobileConnectionLabel: string
+  mobileCanGoBack: boolean
   mobileListStateKey: string
+  nativeSearchPaths: ReadonlySet<string> | null
+  nativeSearchQuery: string
   noteViewMode: NoteViewMode
   noteSort: NoteSort
+  noteLoadErrors: Readonly<Record<string, string>>
   notes: Note[]
   onCreateNote: () => void
   onCreateNoteInFolder: (folderPath: string) => void
@@ -204,6 +209,7 @@ type WorkspaceProps = {
   onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
   onIncludeNestedFolderNotesChange: (include: boolean) => void
   onImportNotes: (files: File[]) => void
+  onMobileBack: (fallback: string, canGoBack: boolean) => boolean | Promise<boolean>
   onMobileScreenChange: (screen: MobileScreen) => void
   onNoteViewModeChange: (mode: NoteViewMode) => void
   onDeleteNote: () => void
@@ -211,6 +217,7 @@ type WorkspaceProps = {
   onDeleteFolder: (folderPath: string) => void
   onExportNote: () => void
   onOpenLocalVault: () => void
+  onOpenMobileLibrary: () => void
   onLoadWikiNote: (target: string) => void
   onOpenWikiLink: (target: string) => void
   onOpenSourceFile: () => void
@@ -219,6 +226,7 @@ type WorkspaceProps = {
   onRenameFolder: (folderPath: string, nextName: string) => void
   onRenameNote: (title: string) => void
   onRenameNoteById: (noteId: string, title: string) => void
+  onRenameNoteFromEditor: (noteId: string, title: string) => void
   onOpenSettings: () => void
   onNavigate: (path: string) => void
   onQueryChange: (query: string) => void
@@ -228,6 +236,7 @@ type WorkspaceProps = {
   onRefreshVault: () => void
   onResolveConflict: (strategy: "local" | "merge" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
+  onResolveAssetForNote: (noteId: string, source: string) => Promise<VaultAsset | null>
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
   onRestoreNoteVersion: (content: string) => void
   onToggleNoteStar: (noteId: string) => void
@@ -238,8 +247,10 @@ type WorkspaceProps = {
   onSelectTag: (tag: string | null) => void
   onSelectVaultCache: (cacheId: string) => void
   onUpdateNote: (patch: Partial<Note>) => void
+  onUpdateNoteById: (noteId: string, patch: Partial<Note>) => void
   query: string
   saveState: NoteSaveState
+  saveStates: Readonly<Record<string, NoteSaveState>>
   selectedFolder: string | null
   selectedTag: string | null
   starredNoteCount: number
@@ -349,7 +360,7 @@ export function Workspace(props: WorkspaceProps) {
     <SearchNavigationContext.Provider value={searchNavigation}>
     <main className="workspace-root">
       {mobileLayout ? (
-        <MobileWorkspace
+        <RouteStackMobileWorkspace
           {...props}
           expandedFolderPaths={expandedFolderPaths}
           onOpenGlobalSearch={openGlobalSearch}
@@ -631,7 +642,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           saveState={props.saveState}
           syncing={props.isRefreshingVault}
         />
-      ) : <EmptyNoteEditor canCreateNote={props.canCreateNote} canRefresh={Boolean(props.activeCacheId)} hasNotes={props.totalNoteCount > 0} isLoading={props.isRefreshingVault} missing={props.missingNoteRoute} onBack={props.missingNoteRoute ? () => props.onMobileScreenChange("notes") : undefined} onOpenSettings={props.onOpenSettings} onRefresh={props.onRefreshVault} onSelectNote={props.onSelectNote} suggestions={props.missingNoteSuggestions} />}
+      ) : <EmptyNoteEditor canCreateNote={props.canCreateNote} canRefresh={Boolean(props.activeCacheId)} hasNotes={props.totalNoteCount > 0} isLoading={props.isRefreshingVault} missing={props.missingNoteRoute} onBack={props.missingNoteRoute ? () => { void props.onMobileBack("/notes/view/all", false) } : undefined} onOpenSettings={props.onOpenSettings} onRefresh={props.onRefreshVault} onSelectNote={props.onSelectNote} suggestions={props.missingNoteSuggestions} />}
       <ContextMenuRequestDialog
         folderMode={props.folderManagementMode}
         onClose={() => setContextRequest(null)}
@@ -1573,6 +1584,7 @@ const NoteListRow = memo(function NoteListRow({ active, contextActions, note, on
 })
 
 type NoteEditorProps = {
+  active?: boolean
   activeCacheId: string | null
   backLabel?: string
   onSelectFolder?: (folder: string) => void
@@ -1650,7 +1662,7 @@ function alignPreviewToSourceLine(viewport: HTMLElement, article: HTMLElement | 
 
 // 搜索、切目录、展开侧栏统统与正文无关，但它们每一次都把编辑器整棵子树重画一遍
 // （实测搜索敲 6 个字，编辑器白渲染 11 次）。上面已经把入参固定住，这里收口。
-const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
+const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
   const noteRenderIdentity = note.editorSessionKey ?? stableNoteRenderIdentity(note.id, note.remotePath)
   const assetScope = `${activeCacheId ?? "session"}:${noteRenderIdentity}`
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
@@ -1973,7 +1985,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
 
   useEffect(() => {
     const search = previewSearchRef.current
-    if (!findOpen || !previewing) { search.clear(); return }
+    if (!active || !findOpen || !previewing) { search.clear(); return }
     const article = editorArticleRef.current
     if (!article) return
     let frame = 0
@@ -1987,7 +1999,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     if (content) observer.observe(content, { childList: true, subtree: true, characterData: true })
     refresh()
     return () => { observer.disconnect(); cancelAnimationFrame(frame); search.clear() }
-  }, [findOpen, findQuery, previewing, note.id])
+  }, [active, findOpen, findQuery, previewing, note.id])
 
   useEffect(() => {
     setFindOpen(false)
@@ -1998,16 +2010,16 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
 
   useEffect(() => {
     const request = searchNavigation.request
-    if (!request || request.noteId !== note.id || note.contentLoaded === false) return
+    if (!active || !request || request.noteId !== note.id || note.contentLoaded === false) return
     if (!isSpecialPreview) {
       setFindQuery(request.query)
       setFindOpen(true)
     }
     searchNavigation.consume()
-  }, [searchNavigation, note.id, note.contentLoaded, isSpecialPreview])
+  }, [active, searchNavigation, note.id, note.contentLoaded, isSpecialPreview])
 
   useEffect(() => {
-    if (!findOpen || previewing || note.contentLoaded === false) return
+    if (!active || !findOpen || previewing || note.contentLoaded === false) return
     let frame = 0
     const refresh = () => {
       cancelAnimationFrame(frame)
@@ -2022,16 +2034,16 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     if (editorArticleRef.current) observer.observe(editorArticleRef.current, { childList: true, subtree: true })
     refresh()
     return () => { observer.disconnect(); cancelAnimationFrame(frame) }
-  }, [findOpen, findQuery, previewing, note.id, note.contentLoaded])
+  }, [active, findOpen, findQuery, previewing, note.id, note.contentLoaded])
 
   useEffect(() => {
-    if (!findOpen) return
+    if (!active || !findOpen) return
     const frame = window.requestAnimationFrame(() => findInputRef.current?.focus())
     return () => window.cancelAnimationFrame(frame)
-  }, [findOpen, previewing])
+  }, [active, findOpen, previewing])
 
   useEffect(() => {
-    if (!findOpen) return
+    if (!active || !findOpen) return
     // 查找栏挂在编辑器下沿，点回正文改内容是常事；Esc 只绑在查找框上的话，
     // 焦点一离开输入框就收不起来了，只能回去点关闭按钮。
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -2041,10 +2053,10 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     }
     document.addEventListener("keydown", closeOnEscape)
     return () => document.removeEventListener("keydown", closeOnEscape)
-  }, [findOpen])
+  }, [active, findOpen])
 
   useEffect(() => {
-    if (isSpecialPreview) return
+    if (!active || isSpecialPreview) return
     const handleFindShortcut = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLocaleLowerCase() !== "f") return
       if (hasOpenModal()) return
@@ -2054,11 +2066,11 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     }
     window.addEventListener("keydown", handleFindShortcut)
     return () => window.removeEventListener("keydown", handleFindShortcut)
-  }, [isSpecialPreview])
+  }, [active, isSpecialPreview])
 
   useEffect(() => {
     // 画布有自己的全选语义（选中所有图形），不接管。
-    if (isSpecialPreview) return
+    if (!active || isSpecialPreview) return
     const handleSelectAll = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return
       if (event.key.toLocaleLowerCase() !== "a") return
@@ -2074,10 +2086,10 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     }
     document.addEventListener("keydown", handleSelectAll)
     return () => document.removeEventListener("keydown", handleSelectAll)
-  }, [isSpecialPreview, previewing])
+  }, [active, isSpecialPreview, previewing])
 
   useEffect(() => {
-    if (!outlinePinned || compact || isSpecialPreview) return
+    if (!active || !outlinePinned || compact || isSpecialPreview) return
     const viewport = editorViewportRef.current
     if (!viewport) return
     let frame = 0
@@ -2110,7 +2122,7 @@ const NoteEditor = memo(function NoteEditor({ activeCacheId, backLabel = "全部
     observer.observe(viewport, { childList: true, subtree: true })
     refresh()
     return () => { viewport.removeEventListener("scroll", refresh); observer.disconnect(); cancelAnimationFrame(frame) }
-  }, [outlinePinned, compact, isSpecialPreview, noteOutline, previewing, readTopSourceLine])
+  }, [active, outlinePinned, compact, isSpecialPreview, noteOutline, previewing, readTopSourceLine])
 
   const revealOutlineHeading = (heading: (typeof noteOutline)[number], index: number) => {
     setOutlineDialogOpen(false)
@@ -2701,225 +2713,364 @@ function ImportMarkdownButton({ disabled, onImport }: { disabled: boolean; onImp
   )
 }
 
-function MobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
-  const [navigationOpen, setNavigationOpen] = useState(false)
-  // 使用与实际可见结果一致的延迟搜索键，避免输入态先更新时覆盖原列表滚动位置。
-  const listRouteKey = `${props.libraryView}\u0000${props.selectedFolder ?? "__all__"}`
-  const listStateKey = `${listRouteKey}\u0000${props.mobileListStateKey}`
-  const libraryStateKey = `${props.totalNoteCount}\u0000${props.folders.map((folder) => folder.path).join("\u0000")}`
-  // 返回按钮会回到来源列表，文案必须跟着来源变化，否则从目录进入时会谎称回到「全部笔记」。
-  const backLabel = getMobileBackLabel(props.libraryView, props.selectedFolder)
-  // 手势已经把页面跟着手指送到位，交接路由后不能再补一段入场动画，否则会二次位移。
-  // 相位在同一批更新里就回到 idle，光看 edgeSwipe.active 判断不出这次导航来自手势。
-  const swipeNavigationRef = useRef(false)
-  const handleEdgeSwipe = useCallback(() => {
-    const isRootNoteList = props.mobileScreen === "notes"
-      && (!props.selectedFolder || props.selectedFolder === "根目录")
-    if (props.mobileScreen === "library" || isRootNoteList) {
-      setNavigationOpen(true)
-      return
-    }
-    if (props.mobileScreen === "editor") {
-      swipeNavigationRef.current = true
-      props.onMobileScreenChange("notes")
-      return
-    }
-    if (props.mobileScreen !== "notes") return
-    const parentFolder = props.selectedFolder ? getParentFolderPath(props.selectedFolder) : null
-    if (parentFolder) props.onSelectFolder(parentFolder)
-    else {
-      swipeNavigationRef.current = true
-      props.onMobileScreenChange("library")
-    }
-  }, [props.mobileScreen, props.onMobileScreenChange, props.onSelectFolder, props.selectedFolder])
-  const isRootSwipe = props.mobileScreen === "library"
-    || (props.mobileScreen === "notes" && (!props.selectedFolder || props.selectedFolder === "根目录"))
-  const edgeSwipe = useEdgeSwipeAction(handleEdgeSwipe, !navigationOpen, isRootSwipe ? "drawer" : "back")
-  // 侧滑返回是跟手的，点击进入却是硬切，同一个层级切换会给出两种观感。
-  // 这里给点击路径补一段方向一致的入场动画；手势自己已经把页面送到位，就不再叠加。
-  // 用 Web Animations API 而不是 CSS class：连续两次同方向切换时，属性值不变的 CSS 动画不会重播。
-  const currentPageRef = useRef<HTMLDivElement | null>(null)
-  const screenAnimationRef = useRef<Animation | null>(null)
-  const previousScreenRef = useRef(props.mobileScreen)
-  useEffect(() => {
-    const previous = previousScreenRef.current
-    if (previous === props.mobileScreen) return
-    previousScreenRef.current = props.mobileScreen
-    const bySwipe = swipeNavigationRef.current
-    swipeNavigationRef.current = false
-    const element = currentPageRef.current
-    if (!element || bySwipe) return
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
-    const forward = MOBILE_SCREEN_DEPTH[props.mobileScreen] > MOBILE_SCREEN_DEPTH[previous]
-    // 连点两级时上一段还没播完，不取消的话两个 transform 会叠在同一个元素上。
-    screenAnimationRef.current?.cancel()
-    screenAnimationRef.current = element.animate(
-      [
-        { opacity: forward ? 0.45 : 0.55, transform: `translate3d(${forward ? "15%" : "-9%"},0,0)` },
-        { opacity: 1, transform: "translate3d(0,0,0)" },
-      ],
-      { duration: forward ? 210 : 195, easing: "cubic-bezier(.22,.8,.25,1)" },
-    )
-  }, [props.mobileScreen])
+type MobileRouteDescriptor =
+  | { screen: "editor"; rawNoteId: string }
+  | { screen: "library" }
+  | { folder: string | null; screen: "notes"; view: LibraryView }
 
-  useEffect(() => () => screenAnimationRef.current?.cancel(), [])
-  const previousFolder = props.mobileScreen === "notes" && props.selectedFolder
-    ? getParentFolderPath(props.selectedFolder)
-    : null
-  const previousFolderNotes = useMemo(() => previousFolder
-    ? sortNotes(props.allNotes.filter((note) => noteBelongsDirectlyToFolder(note, previousFolder)), props.noteSort)
-    : [], [previousFolder, props.allNotes, props.noteSort])
+type MobileOverlayState = {
+  mobileOverlay?: "navigation"
+  mobileOverlayTarget?: boolean
+  mobilePageKey?: string
+}
 
-  // 底层与当前层用同一个数组渲染，页面身份进 key。
-  // 侧滑交接时两层互换角色，key 不变的那个页面会被 React 复用；分成两棵子树写的话，
-  // 底层那份笔记列表会连同虚拟列表一起卸载、当前层再挂载一份一模一样的，
-  // 返回时「整页刷新一下」正是这次重建。
-  const previousLayer: MobileScreenLayer | null = edgeSwipe.kind === "back"
-    ? props.mobileScreen === "editor"
-      ? {
-          key: `notes:${listRouteKey}`,
-          node: (
-            <MobileNoteList
-              {...props}
-              initialScrollTop={mobileNoteListScrollMemory.get(listStateKey)}
-              navigationOpen={false}
-              onNavigationOpenChange={() => undefined}
-              onScrollPositionChange={() => undefined}
-            />
-          ),
-        }
-      : previousFolder
-        ? {
-            key: `notes:${props.libraryView}\u0000${previousFolder}`,
-            node: (
-              <MobileNoteList
-                {...props}
-                includeNestedFolderNotes={false}
-                initialScrollTop={mobileNoteListScrollMemory.get(`${props.libraryView}\u0000${previousFolder}\u0000`)}
-                navigationOpen={false}
-                notes={previousFolderNotes}
-                onNavigationOpenChange={() => undefined}
-                onScrollPositionChange={() => undefined}
-                query=""
-                selectedFolder={previousFolder}
-                selectedTag={null}
-              />
-            ),
-          }
-        : {
-            key: "library",
-            node: (
-              <MobileLibrary
-                {...props}
-                initialScrollTop={mobileLibraryScrollMemory.get(libraryStateKey)}
-                navigationOpen={false}
-                onNavigationOpenChange={() => undefined}
-                onScrollPositionChange={() => undefined}
-              />
-            ),
-          }
-    : null
+function readMobileOverlayState(value: unknown): MobileOverlayState {
+  return typeof value === "object" && value !== null ? value as MobileOverlayState : {}
+}
 
-  const currentLayer: MobileScreenLayer = {
-    key: props.mobileScreen === "library"
-      ? "library"
-      : props.mobileScreen === "notes"
-        ? `notes:${listRouteKey}`
-        : `editor:${props.activeNote?.editorSessionKey ?? props.activeNote?.id ?? "__empty__"}`,
-    node: props.mobileScreen === "library" ? (
-        <MobileLibrary
-          {...props}
-          initialScrollTop={mobileLibraryScrollMemory.get(libraryStateKey)}
-          navigationOpen={navigationOpen}
-          onNavigationOpenChange={setNavigationOpen}
-          onScrollPositionChange={(scrollTop) => mobileLibraryScrollMemory.set(libraryStateKey, scrollTop)}
-        />
-      ) : props.mobileScreen === "notes" ? (
-        <MobileNoteList
-          {...props}
-          initialScrollTop={mobileNoteListScrollMemory.get(listStateKey)}
-          navigationOpen={navigationOpen}
-          onNavigationOpenChange={setNavigationOpen}
-          onScrollPositionChange={(scrollTop) => mobileNoteListScrollMemory.set(listStateKey, scrollTop)}
-        />
-      ) : (
-        props.activeNote ? props.activeNoteLoading || props.activeNoteLoadError ? (
-          <NoteDocumentState
-            backLabel={backLabel}
-            error={props.activeNoteLoadError}
-            loading={props.activeNoteLoading}
-            onBack={() => props.onMobileScreenChange("notes")}
-            onRetry={props.onRetryNoteLoad}
-            title={props.activeNote.title}
-          />
-        ) : (
-          <NoteEditor
-            activeCacheId={props.activeCacheId}
-            backlinks={props.backlinks}
-            cloudConnected={props.cloudConnected}
-            canManageNote={Boolean(
-              props.activeNote.remotePath
-              && !props.activeNote.readOnly,
-            )}
-            canInsertAttachment={props.canInsertAttachment}
-            isManagingNote={props.isManagingNote}
-            compact
-            moveTargets={props.folders}
-            note={props.activeNote}
-            wikiLinkNotes={props.allNotes}
-            noteViewMode={props.noteViewMode}
-            backLabel={backLabel}
-            onSelectFolder={props.onSelectFolder}
-            onBack={() => props.onMobileScreenChange("notes")}
-            onDeleteNote={props.onDeleteNote}
-            onExportNote={props.onExportNote}
-            onFormat={props.onFormat}
-            onFormatNote={props.onFormatNote}
-            onInsertAttachments={props.onInsertAttachments}
-            onLoadWikiNote={props.onLoadWikiNote}
-            onOpenWikiLink={props.onOpenWikiLink}
-            onOpenSourceFile={props.onOpenSourceFile}
-            onMoveNote={props.onMoveNote}
-            onNoteViewModeChange={props.onNoteViewModeChange}
-            onRenameNote={props.onRenameNote}
-            onReloadNote={props.onReloadNote}
-            onResolveAsset={props.onResolveAsset}
-            onResolveConflict={props.onResolveConflict}
-            onResolveWikiNote={props.onResolveWikiNote}
-            onRestoreNoteVersion={props.onRestoreNoteVersion}
-            onSelectNote={props.onSelectNote}
-            onSync={props.onRefreshVault}
-            onToggleTask={props.onToggleNoteTask
-              ? (line, checked) => {
-                  const noteId = props.activeNote?.id
-                  if (noteId) props.onToggleNoteTask?.(noteId, line, checked)
-                }
-              : undefined}
-            onUpdateNote={props.onUpdateNote}
-            saveState={props.saveState}
-            syncing={props.isRefreshingVault}
-          />
-        ) : <EmptyNoteEditor backLabel={backLabel} canCreateNote={props.canCreateNote} canRefresh={Boolean(props.activeCacheId)} hasNotes={props.totalNoteCount > 0} isLoading={props.isRefreshingVault} missing={props.missingNoteRoute} onBack={() => props.onMobileScreenChange("notes")} onOpenSettings={props.onOpenSettings} onRefresh={props.onRefreshVault} onSelectNote={props.onSelectNote} suggestions={props.missingNoteSuggestions} />
-      ),
+function describeMobileRoute(pathname: string): MobileRouteDescriptor {
+  if (pathname === "/notes") return { screen: "library" }
+  const folderMatch = pathname.match(/^\/notes\/folder\/(.+)$/)
+  if (folderMatch) {
+    try {
+      return { folder: decodeURIComponent(folderMatch[1]), screen: "notes", view: "all" }
+    } catch {
+      return { folder: folderMatch[1], screen: "notes", view: "all" }
+    }
   }
+  const viewMatch = pathname.match(/^\/notes\/view\/(all|recent|starred)$/)
+  if (viewMatch) return { folder: null, screen: "notes", view: viewMatch[1] as LibraryView }
+  const noteMatch = pathname.match(/^\/notes\/(.+)$/)
+  return noteMatch ? { rawNoteId: noteMatch[1], screen: "editor" } : { screen: "library" }
+}
+
+function getMobileRouteFallback(descriptor: MobileRouteDescriptor) {
+  if (descriptor.screen === "editor") return "/notes/view/all"
+  if (descriptor.screen === "library") return "/notes"
+  if (descriptor.folder) {
+    const parent = getParentFolderPath(descriptor.folder)
+    return parent ? `/notes/folder/${encodeURIComponent(parent)}` : "/notes"
+  }
+  return "/notes"
+}
+
+function getMobileRouteEntryLabel(entry: MobileRouteEntry | null, notes: Note[]) {
+  if (!entry) return "笔记列表"
+  const descriptor = describeMobileRoute(entry.pathname)
+  if (descriptor.screen === "library") return "笔记库"
+  if (descriptor.screen === "notes") return getMobileBackLabel(descriptor.view, descriptor.folder)
+  const noteId = resolveRouteNoteId(descriptor.rawNoteId, notes.map((note) => note.id))
+  return notes.find((note) => note.id === noteId)?.title || "上一页"
+}
+
+function createInitialMobileRouteStack(entry: MobileRouteEntry) {
+  const descriptor = describeMobileRoute(entry.pathname)
+  if (descriptor.screen === "library") return createMobileRouteStack(entry)
+  const fallback = {
+    ...createMobileRouteEntry(`fallback:${entry.key}`, getMobileRouteFallback(descriptor)),
+    synthetic: true,
+  }
+  return { activeIndex: 1, entries: [fallback, entry] }
+}
+
+function RouteStackMobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const navigationType = useNavigationType()
+  const overlayState = readMobileOverlayState(location.state)
+  const navigationOpen = overlayState.mobileOverlay === "navigation"
+  // 抽屉是 history 中的 modal entry，但页面栈继续使用底下页面的 key，打开抽屉不会复制整棵 DOM。
+  const pageKey = navigationOpen && overlayState.mobilePageKey ? overlayState.mobilePageKey : location.key
+  const routeEntry = createMobileRouteEntry(pageKey, location.pathname, location.search)
+  const locationSignature = `${location.key}\u0000${location.pathname}\u0000${location.search}\u0000${navigationOpen}\u0000${Boolean(overlayState.mobileOverlayTarget)}`
+  const [storedRouteState, setStoredRouteState] = useState<{
+    locationSignature: string
+    navigationOpen: boolean
+    pathname: string
+    resetKey: string
+    stack: MobileRouteStack
+  }>(() => ({
+    locationSignature,
+    navigationOpen,
+    pathname: location.pathname,
+    resetKey: props.mobileRouteResetKey,
+    stack: createInitialMobileRouteStack(routeEntry),
+  }))
+  let routeState = storedRouteState
+  if (storedRouteState.resetKey !== props.mobileRouteResetKey || storedRouteState.locationSignature !== locationSignature) {
+    let stackAction: MobileNavigationAction = navigationType
+    if (navigationType === "REPLACE" && storedRouteState.navigationOpen && overlayState.mobileOverlayTarget) {
+      // 从抽屉选目标时用 REPLACE 消掉 modal entry；对页面栈而言仍是从底下页面 PUSH 新页。
+      stackAction = "PUSH"
+    }
+    routeState = {
+      locationSignature,
+      navigationOpen,
+      pathname: location.pathname,
+      resetKey: props.mobileRouteResetKey,
+      stack: storedRouteState.resetKey !== props.mobileRouteResetKey
+        ? createInitialMobileRouteStack(routeEntry)
+        : updateMobileRouteStack(storedRouteState.stack, routeEntry, stackAction),
+    }
+    // React 会在提交 DOM 前立即用新路由状态重渲染；并发 render 被放弃时这次更新也不会污染已提交历史。
+    setStoredRouteState(routeState)
+  }
+  const stack = routeState.stack
+  const activeEntry = stack.entries[stack.activeIndex]
+  const previousEntry = stack.entries[stack.activeIndex - 1] ?? null
+  const canGoBack = Boolean(previousEntry && !previousEntry.synthetic)
+  const descriptor = describeMobileRoute(activeEntry.pathname)
+
+  const openNavigation = useCallback(() => {
+    if (navigationOpen) return
+    navigate(`${location.pathname}${location.search}`, {
+      state: { ...readMobileOverlayState(location.state), mobileOverlay: "navigation", mobilePageKey: activeEntry.key },
+    })
+  }, [activeEntry.key, location.pathname, location.search, location.state, navigate, navigationOpen])
+  const closeNavigation = useCallback(() => {
+    if (navigationOpen) navigate(-1)
+  }, [navigate, navigationOpen])
+  const completeEdgeSwipe = useCallback(() => {
+    if (descriptor.screen === "library" && !previousEntry) {
+      openNavigation()
+      return true
+    }
+    return props.onMobileBack(getMobileRouteFallback(descriptor), canGoBack)
+  }, [canGoBack, descriptor, openNavigation, previousEntry, props])
+  const edgeSwipeKind = descriptor.screen === "library" && !previousEntry ? "drawer" : "back"
+  const edgeSwipe = useEdgeSwipeAction(completeEdgeSwipe, !navigationOpen, edgeSwipeKind, activeEntry.key)
 
   return (
-    <div className="mobile-workspace" data-screen={props.mobileScreen} {...edgeSwipe.bind}>
-      {(previousLayer ? [
-        { ...previousLayer, role: "previous" as const },
-        { ...currentLayer, role: "current" as const },
-      ] : [{ ...currentLayer, role: "current" as const }]).map((layer) => (
-        <div
-          aria-hidden={layer.role === "previous" || undefined}
-          className={`mobile-edge-swipe-${layer.role}`}
-          inert={layer.role === "previous" || undefined}
-          key={layer.key}
-          ref={layer.role === "current" ? currentPageRef : undefined}
-        >
-          {layer.node}
-        </div>
-      ))}
+    <div className="mobile-workspace" data-screen={descriptor.screen} {...edgeSwipe.bind}>
+      {stack.entries.map((entry, index) => {
+        const role = entry.mountKey === activeEntry.mountKey
+          ? "current"
+          : entry.mountKey === previousEntry?.mountKey ? "previous" : "cached"
+        return (
+          <div
+            aria-hidden={role !== "current" || undefined}
+            className={role === "cached" ? "mobile-route-entry-cached" : `mobile-edge-swipe-${role}`}
+            data-route-entry-key={entry.mountKey}
+            inert={role !== "current" || undefined}
+            key={`${props.mobileRouteResetKey}:${entry.mountKey}`}
+          >
+            <RouteActivityProvider active={role === "current"}>
+              <MobileRouteEntryPage
+                active={role === "current"}
+                backLabel={getMobileRouteEntryLabel(stack.entries[index - 1] ?? null, props.allNotes)}
+                canGoBack={Boolean(index > 0 && !stack.entries[index - 1]?.synthetic)}
+                entry={entry}
+                navigationOpen={role === "current" && navigationOpen}
+                onNavigationOpenChange={(open) => { if (open) openNavigation(); else closeNavigation() }}
+                props={props}
+              />
+            </RouteActivityProvider>
+          </div>
+        )
+      })}
     </div>
+  )
+}
+
+function MobileRouteEntryPage({ active, backLabel, canGoBack, entry, navigationOpen, onNavigationOpenChange, props: liveProps }: {
+  active: boolean
+  backLabel: string
+  canGoBack: boolean
+  entry: MobileRouteEntry
+  navigationOpen: boolean
+  onNavigationOpenChange: (open: boolean) => void
+  props: WorkspaceProps & FolderTreeProps
+}) {
+  const descriptor = useMemo(() => describeMobileRoute(entry.pathname), [entry.pathname])
+  const [query, setQuery] = useState(liveProps.query)
+  const [selectedTag, setSelectedTag] = useState(liveProps.selectedTag)
+  const [noteSort, setNoteSort] = useState(liveProps.noteSort)
+  const [includeNestedFolderNotes, setIncludeNestedFolderNotes] = useState(liveProps.includeNestedFolderNotes)
+  // 全局滚动记忆只用于 entry 首次挂载。此后每个 history entry 自持位置，
+  // 同目录再次 PUSH 出来的新列表不会反向改写仍在栈里的旧列表。
+  const entryScrollTopRef = useRef<number | null>(null)
+  const nativeSearchSnapshotRef = useRef<{
+    paths: ReadonlySet<string>
+    query: string
+    source: ReadonlySet<string>
+  } | null>(null)
+  const boundPropsRef = useRef(liveProps)
+  const routeNoteId = descriptor.screen === "editor"
+    ? resolveRouteNoteId(descriptor.rawNoteId, liveProps.allNotes.map((note) => note.id))
+    : ""
+  const directRouteNote = descriptor.screen === "editor"
+    ? liveProps.allNotes.find((note) => note.id === routeNoteId) ?? null
+    : null
+  const editorSessionKeyRef = useRef<string | null>(directRouteNote?.editorSessionKey ?? directRouteNote?.id ?? null)
+  if (directRouteNote) editorSessionKeyRef.current = directRouteNote.editorSessionKey ?? directRouteNote.id
+  // 重命名先提交 notes 的新 id，再 replace URL。用稳定 editorSessionKey 跨过这段窗口，
+  // 保留原 CodeMirror 实例，也不会把旧地址短暂渲染成“笔记不存在”。
+  const routeNote = directRouteNote ?? (descriptor.screen === "editor" && editorSessionKeyRef.current
+    ? liveProps.allNotes.find((note) => (note.editorSessionKey ?? note.id) === editorSessionKeyRef.current) ?? null
+    : null)
+  const routeAligned = descriptor.screen === "editor"
+    ? liveProps.activeNote?.id === routeNote?.id || (!routeNote && liveProps.missingNoteRoute)
+    : descriptor.screen === "library"
+      ? liveProps.mobileScreen === "library"
+      : liveProps.mobileScreen === "notes"
+        && liveProps.libraryView === descriptor.view
+        && liveProps.selectedFolder === descriptor.folder
+  if (active && routeAligned) boundPropsRef.current = liveProps
+  const boundProps = boundPropsRef.current
+
+  useLayoutEffect(() => {
+    if (!active) return
+    // 这四项属于当前 history entry。POP 时先显示原 DOM，再同步全局派生值供索引查询使用，
+    // 不让上一页在交接帧短暂套用离开页的筛选条件。
+    liveProps.onQueryChange(query)
+    liveProps.onSelectTag(selectedTag)
+    liveProps.onNoteSortChange(noteSort)
+    liveProps.onIncludeNestedFolderNotesChange(includeNestedFolderNotes)
+  }, [active])
+
+  const selectedFolder = descriptor.screen === "notes" ? descriptor.folder : boundProps.selectedFolder
+  const libraryView = descriptor.screen === "notes" ? descriptor.view : boundProps.libraryView
+  const normalizedEntryQuery = query.trim().toLocaleLowerCase()
+  if (nativeSearchSnapshotRef.current?.query !== normalizedEntryQuery) nativeSearchSnapshotRef.current = null
+  if (normalizedEntryQuery
+    && liveProps.nativeSearchQuery === normalizedEntryQuery
+    && liveProps.nativeSearchPaths
+    && nativeSearchSnapshotRef.current?.source !== liveProps.nativeSearchPaths) {
+    // 原生正文检索结果属于当前 history entry。别的页面改全局 query 时继续使用本页最近一次成功快照，
+    // 这样侧滑露出的上一页不会先丢掉“仅正文命中”的行，再等待一次异步检索补回来。
+    nativeSearchSnapshotRef.current = {
+      paths: new Set(liveProps.nativeSearchPaths),
+      query: normalizedEntryQuery,
+      source: liveProps.nativeSearchPaths,
+    }
+  }
+  const entryNativeSearchPaths = nativeSearchSnapshotRef.current?.paths ?? null
+  const visibleNotes = useMemo(() => {
+    if (descriptor.screen !== "notes") return boundProps.notes
+    const normalizedQuery = normalizedEntryQuery
+    const folderNotes = selectedFolder
+      ? liveProps.allNotes.filter((note) => includeNestedFolderNotes
+        ? noteBelongsToFolder(note, selectedFolder)
+        : noteBelongsDirectlyToFolder(note, selectedFolder))
+      : liveProps.allNotes
+    const tagged = selectedTag ? folderNotes.filter((note) => note.tags?.includes(selectedTag)) : folderNotes
+    const viewed = libraryView === "recent"
+      ? sortNotes(tagged, "updated-desc").slice(0, 32)
+      : libraryView === "starred" ? tagged.filter((note) => note.starred) : tagged
+    const searched = normalizedQuery
+      ? viewed.filter((note) => noteMatchesLibraryQuery(note, normalizedQuery, entryNativeSearchPaths))
+      : viewed
+    return sortNotes(searched, noteSort)
+  }, [boundProps.notes, descriptor.screen, entryNativeSearchPaths, includeNestedFolderNotes, libraryView, liveProps.allNotes, normalizedEntryQuery, noteSort, selectedFolder, selectedTag])
+  const noteTarget = routeNote ? normalizeNoteTarget(routeNote.title) : ""
+  const backlinks = routeNote && noteTarget
+    ? liveProps.allNotes.filter((note) => note.id !== routeNote.id && note.outgoingLinks?.includes(noteTarget))
+    : []
+  const fallback = getMobileRouteFallback(descriptor)
+  const resolveRouteAsset = useCallback((source: string) => routeNote
+    ? liveProps.onResolveAssetForNote(routeNote.id, source)
+    : Promise.resolve(null), [liveProps.onResolveAssetForNote, routeNote?.id])
+  const routeProps: WorkspaceProps & FolderTreeProps = {
+    ...boundProps,
+    activeNote: routeNote,
+    activeNoteId: routeNote?.id ?? "",
+    activeNoteLoadError: routeNote ? liveProps.noteLoadErrors[routeNote.id] ?? null : null,
+    activeNoteLoading: routeNote ? liveProps.loadingNoteIds.has(routeNote.id) : false,
+    allNotes: liveProps.allNotes,
+    backlinks,
+    folders: liveProps.folders,
+    includeNestedFolderNotes,
+    libraryView,
+    missingNoteRoute: descriptor.screen === "editor" && !routeNote && active ? liveProps.missingNoteRoute : false,
+    missingNoteSuggestions: descriptor.screen === "editor" && !routeNote && active ? liveProps.missingNoteSuggestions : [],
+    mobileCanGoBack: canGoBack,
+    mobileListStateKey: query.trim().toLocaleLowerCase(),
+    mobileScreen: descriptor.screen,
+    noteSort,
+    notes: visibleNotes,
+    onIncludeNestedFolderNotesChange: (include) => {
+      setIncludeNestedFolderNotes(include)
+      if (active) liveProps.onIncludeNestedFolderNotesChange(include)
+    },
+    onMobileScreenChange: () => { void liveProps.onMobileBack(fallback, canGoBack) },
+    onNoteSortChange: (sort) => {
+      setNoteSort(sort)
+      if (active) liveProps.onNoteSortChange(sort)
+    },
+    onQueryChange: (nextQuery) => {
+      setQuery(nextQuery)
+      if (active) liveProps.onQueryChange(nextQuery)
+    },
+    onResolveAsset: resolveRouteAsset,
+    onSelectTag: (tag) => {
+      setSelectedTag(tag)
+      if (active) liveProps.onSelectTag(tag)
+    },
+    onUpdateNote: (patch) => { if (routeNote) liveProps.onUpdateNoteById(routeNote.id, patch) },
+    query,
+    saveState: routeNote ? liveProps.saveStates[routeNote.id] ?? boundProps.saveState : boundProps.saveState,
+    selectedFolder,
+    selectedTag,
+  } as WorkspaceProps & FolderTreeProps
+
+  if (descriptor.screen === "library") {
+    const libraryStateKey = `${liveProps.totalNoteCount}\u0000${liveProps.folders.map((folder) => folder.path).join("\u0000")}`
+    entryScrollTopRef.current ??= mobileLibraryScrollMemory.get(libraryStateKey)
+    return <MobileLibrary {...routeProps} initialScrollTop={entryScrollTopRef.current} navigationOpen={navigationOpen} onNavigationOpenChange={onNavigationOpenChange} onScrollPositionChange={(scrollTop) => { entryScrollTopRef.current = scrollTop; mobileLibraryScrollMemory.set(libraryStateKey, scrollTop) }} />
+  }
+  if (descriptor.screen === "notes") {
+    const listStateKey = `${libraryView}\u0000${selectedFolder ?? "__all__"}\u0000${query.trim().toLocaleLowerCase()}`
+    entryScrollTopRef.current ??= mobileNoteListScrollMemory.get(listStateKey)
+    return <MobileNoteList {...routeProps} initialScrollTop={entryScrollTopRef.current} navigationOpen={navigationOpen} onNavigationOpenChange={onNavigationOpenChange} onScrollPositionChange={(scrollTop) => { entryScrollTopRef.current = scrollTop; mobileNoteListScrollMemory.set(listStateKey, scrollTop) }} />
+  }
+  if (!routeNote) {
+    return <EmptyNoteEditor backLabel={backLabel} canCreateNote={routeProps.canCreateNote} canRefresh={Boolean(routeProps.activeCacheId)} hasNotes={routeProps.totalNoteCount > 0} isLoading={routeProps.isRefreshingVault} missing={routeProps.missingNoteRoute} onBack={() => { void routeProps.onMobileBack(fallback, canGoBack) }} onOpenSettings={routeProps.onOpenSettings} onRefresh={routeProps.onRefreshVault} onSelectNote={routeProps.onSelectNote} suggestions={routeProps.missingNoteSuggestions} />
+  }
+  if (routeProps.activeNoteLoading || routeProps.activeNoteLoadError) {
+    return <NoteDocumentState backLabel={backLabel} error={routeProps.activeNoteLoadError} loading={routeProps.activeNoteLoading} onBack={() => { void routeProps.onMobileBack(fallback, canGoBack) }} onRetry={routeProps.onRetryNoteLoad} title={routeNote.title} />
+  }
+  return (
+    <NoteEditor
+      active={active}
+      activeCacheId={routeProps.activeCacheId}
+      backlinks={backlinks}
+      backLabel={backLabel}
+      canInsertAttachment={routeProps.canInsertAttachment}
+      canManageNote={Boolean(routeNote.remotePath && !routeNote.readOnly)}
+      cloudConnected={routeProps.cloudConnected}
+      compact
+      isManagingNote={routeProps.isManagingNote}
+      moveTargets={routeProps.folders}
+      note={routeNote}
+      noteViewMode={routeProps.noteViewMode}
+      onBack={() => { void routeProps.onMobileBack(fallback, canGoBack) }}
+      onDeleteNote={routeProps.onDeleteNote}
+      onExportNote={routeProps.onExportNote}
+      onFormat={routeProps.onFormat}
+      onFormatNote={routeProps.onFormatNote}
+      onInsertAttachments={routeProps.onInsertAttachments}
+      onLoadWikiNote={routeProps.onLoadWikiNote}
+      onMoveNote={routeProps.onMoveNote}
+      onNoteViewModeChange={routeProps.onNoteViewModeChange}
+      onOpenSourceFile={routeProps.onOpenSourceFile}
+      onOpenWikiLink={routeProps.onOpenWikiLink}
+      onReloadNote={routeProps.onReloadNote}
+      onRenameNote={(title) => liveProps.onRenameNoteFromEditor(routeNote.id, title)}
+      onResolveAsset={routeProps.onResolveAsset}
+      onResolveConflict={routeProps.onResolveConflict}
+      onResolveWikiNote={routeProps.onResolveWikiNote}
+      onRestoreNoteVersion={routeProps.onRestoreNoteVersion}
+      onSelectFolder={routeProps.onSelectFolder}
+      onSelectNote={routeProps.onSelectNote}
+      onSync={routeProps.onRefreshVault}
+      onToggleTask={routeProps.onToggleNoteTask
+        ? (line, checked) => routeProps.onToggleNoteTask?.(routeNote.id, line, checked)
+        : undefined}
+      onUpdateNote={routeProps.onUpdateNote}
+      saveState={routeProps.saveState}
+      syncing={routeProps.isRefreshingVault}
+      wikiLinkNotes={routeProps.allNotes}
+    />
   )
 }
 
@@ -3448,11 +3599,8 @@ function MobileNoteList(props: MobileNoteListProps) {
 
   const goBack = () => {
     props.onScrollPositionChange(viewportRef.current?.scrollTop ?? 0)
-    if (parentFolder) {
-      props.onSelectFolder(parentFolder)
-      return
-    }
-    props.onMobileScreenChange("library")
+    const fallback = parentFolder ? `/notes/folder/${encodeURIComponent(parentFolder)}` : "/notes"
+    void props.onMobileBack(fallback, props.mobileCanGoBack)
   }
 
   return (
@@ -3483,7 +3631,7 @@ function MobileNoteList(props: MobileNoteListProps) {
       </header>
       {props.selectedFolder ? (
         <nav aria-label="目录路径" className="mobile-folder-breadcrumbs">
-          <button onClick={() => props.onMobileScreenChange("library")} type="button">笔记库</button>
+          <button onClick={props.onOpenMobileLibrary} type="button">笔记库</button>
           {folderPaths.map((path, index) => (
             <span key={path}>
               <ChevronRight />
@@ -3593,11 +3741,11 @@ export function MobileNavigationDrawer({
   }, [open])
 
   const navigate = (path: string) => {
-    setOpen(false)
+    if (controlledOpen === undefined) setOpen(false)
     onNavigate(path)
   }
   const selectView = (view: LibraryView, path: string) => {
-    setOpen(false)
+    if (controlledOpen === undefined) setOpen(false)
     if (onSelectLibraryView) onSelectLibraryView(view)
     else onNavigate(path)
   }

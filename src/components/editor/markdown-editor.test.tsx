@@ -53,8 +53,15 @@ describe("MarkdownEditor", () => {
 
   it("点击图片本体打开预览，Esc 关闭后焦点回到图片", async () => {
     mount(<MarkdownEditor onChange={() => {}} value={"正文\n\n![截图](data:image/png;base64,cG5n)"} />)
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+    await act(async () => {
+      // 全量并发时图片装饰的异步解析可能超过固定 30ms；等待真实节点就绪并设置上限，
+      // 让测试验证组件状态而不是机器调度速度。
+      for (let attempt = 0; attempt < 30 && !container?.querySelector(".cm-md-image img"); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+    })
     const image = container!.querySelector<HTMLImageElement>(".cm-md-image img")!
+    expect(image).not.toBeNull()
 
     await act(async () => { image.click(); await Promise.resolve() })
     expect(document.querySelector('[role="dialog"]')).not.toBeNull()
@@ -62,7 +69,9 @@ describe("MarkdownEditor", () => {
 
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }))
-      await Promise.resolve()
+      for (let attempt = 0; attempt < 30 && document.activeElement !== image; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
     })
     expect(document.querySelector('[role="dialog"]')).toBeNull()
     expect(document.activeElement).toBe(image)
@@ -72,7 +81,9 @@ describe("MarkdownEditor", () => {
     expect(image.isConnected).toBe(false)
     await act(async () => {
       document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" }))
-      await Promise.resolve()
+      for (let attempt = 0; attempt < 30 && !editorView().hasFocus; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
     })
     expect(editorView().hasFocus).toBe(true)
   })
