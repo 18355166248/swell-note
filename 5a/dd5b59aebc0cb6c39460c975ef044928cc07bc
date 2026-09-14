@@ -1,0 +1,64 @@
+src/components/editor/markdown-table-inline.ts
+  s_211c58e4389233::t_f519561614fd41 19-20,209,216,218,225,233,249-252,258-261
+docs/editor-audit-2026-09-10/harness.tsx
+  s_211c58e4389233::t_c565c635b70ef3 10-11,35-42,63-82,86,97
+  s_211c58e4389233::t_cdb93a77de37ee 98-100
+src/App.css
+  s_211c58e4389233::t_7ae070e7a6d8f8 547-555,563-565,576-585
+  s_211c58e4389233::t_0b24031d231542 562,601,603
+  s_211c58e4389233::t_329526946763ed 574,602,604-608
+  s_211c58e4389233::t_e89afc9f35a7c5 658-672
+  s_211c58e4389233::t_6389af5e930763 575
+src/components/editor/image-zoom.tsx
+  s_211c58e4389233::t_176c093aa313ca 28-34
+  s_211c58e4389233::t_81797e9852d472 4,7-13,25-27,35
+  s_211c58e4389233::t_77a5cc9130ee14 20-21
+src/components/workspace/workspace.tsx
+  s_211c58e4389233::t_6389af5e930763 936-938,1019
+  s_211c58e4389233::t_eec03b7f906919 766,800,833-834,842-844,847-898,902-912,915,917,932-935,939-947,1003,1009
+  s_211c58e4389233::t_38cec9d0e880cf 962-963
+  s_211c58e4389233::t_c3699e9add0c63 1329,1334,1343
+  s_211c58e4389233::t_3d7aee4022e81d 835-841,951-961,964-973
+  s_211c58e4389233::t_e3e20caebe846a 974
+src/components/editor/live-preview.ts
+  s_211c58e4389233::t_f519561614fd41 12,154-156,158-171,173-192,212-213,215-216,221,226-230,239,245,254-262,268
+  s_211c58e4389233::t_e9002c8938afd1 195-199,205,238,240,250
+  s_211c58e4389233::t_81797e9852d472 172,222-223
+  s_211c58e4389233::t_c565c635b70ef3 157,264
+docs/sidebar-audit-2026-09-14/index.html
+  s_211c58e4389233::t_e89afc9f35a7c5 1-9
+docs/editor-audit-2026-09-10/image-preview-2026-09-14.md
+  s_211c58e4389233::t_eedd56338330ac 1-27
+src/components/editor/live-preview.test.ts
+  s_211c58e4389233::t_2010fc796cf743 214-220,244-247,253,256,260-284,286-291,293-298
+  s_211c58e4389233::t_81797e9852d472 221-243
+  s_211c58e4389233::t_e9002c8938afd1 285,292
+docs/sidebar-audit-2026-09-14/harness.tsx
+  s_211c58e4389233::t_e89afc9f35a7c5 1-141
+src/components/workspace/library-panel.test.tsx
+  s_211c58e4389233::t_1346711c9e2a51 1-54,56-115
+  s_211c58e4389233::t_e5de24b75dee28 55
+src/components/editor/markdown-editor.test.tsx
+  s_211c58e4389233::t_e9002c8938afd1 61
+  s_211c58e4389233::t_3e7e2b314a8b2b 54-60,62-68,78-79
+  s_211c58e4389233::t_0bebf14799e829 15-18
+  s_211c58e4389233::t_12cab558dfee4c 69-77
+docs/sidebar-audit-2026-09-14/review.md
+  s_211c58e4389233::t_026a47e18689b7 1-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "5add5b59aebc0cb6c39460c975ef044928cc07bc",
+  "prompts": {},
+  "sessions": {
+    "s_211c58e4389233": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09d96-600d-75c1-abce-dec2ef2bc264",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
