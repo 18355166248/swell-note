@@ -4,12 +4,18 @@ vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => false }))
 vi.mock("@tauri-apps/plugin-http", () => ({ fetch: vi.fn() }))
 
 import {
+  checkWebDavDirectoryExists,
+  createJsonDocument,
   createMarkdownFile,
   createWebDavBinaryFile,
   deleteMarkdownFile,
   ensureWebDavDirectory,
   moveMarkdownFile,
+  readJsonDocument,
+  updateJsonDocument,
   WebDavAuthenticationError,
+  WebDavContentTooLargeError,
+  WebDavHttpError,
   WebDavNetworkError,
   WebDavRevisionConflictError,
   writeMarkdownFile,
@@ -151,5 +157,102 @@ describe("WebDAV multi-device concurrency", () => {
       .rejects.toBeInstanceOf(WebDavRevisionConflictError)
 
     expect(fetchMock.mock.calls.map(([, request]) => request.headers["If-Match"])).toEqual(['"v1"', '"v1"'])
+  })
+})
+
+describe("WebDAV JSON metadata", () => {
+  const documentPath = "/Swell/.swell/folder-order.json"
+
+  it("读取返回字节与强 ETag，404 是缺失而不是错误", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('{"order":[]}', { headers: { etag: '"v7"' }, status: 200 }))
+      .mockResolvedValueOnce(new Response("", { status: 404 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(readJsonDocument(config, "app-password", documentPath, 1024))
+      .resolves.toMatchObject({ etag: '"v7"', etagWeak: false })
+    await expect(readJsonDocument(config, "app-password", documentPath, 1024)).resolves.toBeNull()
+  })
+
+  it("弱 ETag 单独标记，不能冒充强 ETag", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("{}", { headers: { etag: 'W/"v1"' }, status: 200 }),
+    ))
+
+    await expect(readJsonDocument(config, "app-password", documentPath, 1024))
+      .resolves.toMatchObject({ etag: 'W/"v1"', etagWeak: true })
+  })
+
+  it("读取按实际字节执行上限，不能只信 Content-Length", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("x".repeat(2048), { status: 200 })))
+    await expect(readJsonDocument(config, "app-password", documentPath, 1024))
+      .rejects.toBeInstanceOf(WebDavContentTooLargeError)
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response("ok", { headers: { "content-length": "2048" }, status: 200 }),
+    ))
+    await expect(readJsonDocument(config, "app-password", documentPath, 1024))
+      .rejects.toBeInstanceOf(WebDavContentTooLargeError)
+  })
+
+  it("401/403/429 状态可程序化区分", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })))
+    await expect(readJsonDocument(config, "wrong", documentPath, 1024))
+      .rejects.toBeInstanceOf(WebDavAuthenticationError)
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 403 })))
+    await expect(readJsonDocument(config, "app-password", documentPath, 1024))
+      .rejects.toBeInstanceOf(WebDavHttpError)
+    await expect(readJsonDocument(config, "app-password", documentPath, 1024))
+      .rejects.toMatchObject({ status: 403 })
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 429 })))
+    await expect(readJsonDocument(config, "app-password", documentPath, 1024))
+      .rejects.toMatchObject({ name: "WebDavHttpError", status: 429 })
+  })
+
+  it("条件创建携带 If-None-Match 与 JSON MIME，412 可识别", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", { headers: { etag: '"c1"' }, status: 201 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(createJsonDocument(config, "app-password", documentPath, "{}"))
+      .resolves.toEqual({ etag: '"c1"', etagWeak: false })
+    const [, request] = fetchMock.mock.calls[0]
+    expect(request).toMatchObject({
+      headers: expect.objectContaining({
+        "Content-Type": "application/json; charset=utf-8",
+        "If-None-Match": "*",
+      }),
+      method: "PUT",
+    })
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 412 })))
+    await expect(createJsonDocument(config, "app-password", documentPath, "{}"))
+      .rejects.toBeInstanceOf(WebDavRevisionConflictError)
+  })
+
+  it("条件更新使用强 ETag；弱 ETag 直接拒绝；无新 ETag 时返回 null 而不是沿用旧值", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(updateJsonDocument(config, "app-password", documentPath, "{}", '"v3"'))
+      .resolves.toEqual({ etag: null, etagWeak: false })
+    const [, request] = fetchMock.mock.calls[0]
+    expect(request.headers).toMatchObject({ "If-Match": '"v3"' })
+
+    await expect(updateJsonDocument(config, "app-password", documentPath, "{}", 'W/"v3"'))
+      .rejects.toThrow(/弱 ETag/)
+  })
+
+  it("根目录存在性检查：404 为 false，207 为 true，401 抛认证错误", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 207 })))
+    await expect(checkWebDavDirectoryExists(config, "app-password", "/Swell/")).resolves.toBe(true)
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 404 })))
+    await expect(checkWebDavDirectoryExists(config, "app-password", "/Swell/")).resolves.toBe(false)
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })))
+    await expect(checkWebDavDirectoryExists(config, "app-password", "/Swell/"))
+      .rejects.toBeInstanceOf(WebDavAuthenticationError)
   })
 })

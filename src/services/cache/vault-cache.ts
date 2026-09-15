@@ -349,6 +349,8 @@ export async function deleteVaultCache(id: string) {
   ])
   // 指针若仍指向被删缓存，下次启动会读到空快照并跳过其余现存缓存，因此要一并清理。
   if (lastCache?.value === id) settingsStore.delete(LAST_CACHE_KEY)
+  // 文件夹排序的同步工作副本与缓存同生命周期，删除缓存时一并清理。
+  settingsStore.delete(`folder-order-sync:v1:${id}`)
   for (const key of attachmentKeys) attachmentStore.delete(key)
   for (const key of documentKeys) documentStore.delete(key)
   await done
@@ -360,6 +362,11 @@ export async function deleteVaultCache(id: string) {
 export function isIndexedDbConnectionLostError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : ""
   return message.includes("Indexed Database server lost")
+}
+
+// 排序同步工作副本等独立元数据模块复用同一数据库连接，避免各自维护升级逻辑。
+export function openVaultCacheDatabase() {
+  return openDatabase()
 }
 
 function openDatabase() {

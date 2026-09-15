@@ -178,6 +178,144 @@ export async function readWebDavAsset(
   }
 }
 
+// ---- 专用 JSON 元数据接口（.swell/folder-order.json）----
+// 与 Markdown 接口的区别：404 是可区分的“缺失”而不是普通错误；更新失败不回落旧 ETag；
+// 状态码全部可程序化区分，不通过中文错误字符串匹配。
+
+export class WebDavHttpError extends Error {
+  readonly status: number
+
+  constructor(status: number, message?: string) {
+    super(message ?? `坚果云请求失败（HTTP ${status}）`)
+    this.name = "WebDavHttpError"
+    this.status = status
+  }
+}
+
+export class WebDavContentTooLargeError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "WebDavContentTooLargeError"
+  }
+}
+
+export type WebDavJsonDocument = {
+  bytes: Uint8Array
+  // 服务端返回的 ETag 原文；弱 ETag（W/ 前缀）单独标记，不能去掉 W/ 冒充强 ETag 用于 If-Match。
+  etag: string | null
+  etagWeak: boolean
+}
+
+export type WebDavJsonWriteResult = {
+  // PUT 可能不返回新 ETag：返回 null，调用方必须 GET 读回核对，绝不能沿用旧 ETag 表示新版本。
+  etag: string | null
+  etagWeak: boolean
+}
+
+function jsonResponseEtag(response: Response): WebDavJsonWriteResult {
+  const etag = response.headers.get("etag")
+  return { etag, etagWeak: Boolean(etag?.startsWith("W/")) }
+}
+
+function throwForJsonErrorStatus(response: Response, path: string): never {
+  if (response.status === 401) throw new WebDavAuthenticationError()
+  if (response.status === 412) throw new WebDavRevisionConflictError(path)
+  if (response.status === 403) throw new WebDavHttpError(403, "坚果云拒绝了本次请求（HTTP 403），请检查账号权限")
+  if (response.status === 404) throw new WebDavHttpError(404, `远端资源不存在：${path}`)
+  if (response.status === 429) throw new WebDavHttpError(429, "坚果云请求过于频繁，请稍后再试")
+  throw new WebDavHttpError(response.status)
+}
+
+// GET 读取 JSON 与 ETag；404 返回 null 表示缺失。读取按实际字节数执行上限，不能只信 Content-Length。
+export async function readJsonDocument(
+  config: WebDavConfig,
+  password: string,
+  path: string,
+  maxBytes: number,
+): Promise<WebDavJsonDocument | null> {
+  const response = await webDavRawFetch(config, password, path, {
+    headers: { "Cache-Control": "no-cache" },
+    method: "GET",
+  })
+  if (response.status === 404) return null
+  if (!response.ok) throwForJsonErrorStatus(response, path)
+  const declaredLength = Number(response.headers.get("content-length"))
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new WebDavContentTooLargeError("远端排序配置超出大小上限，已保留本机顺序")
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  if (bytes.length > maxBytes) {
+    throw new WebDavContentTooLargeError("远端排序配置超出大小上限，已保留本机顺序")
+  }
+  return { bytes, ...jsonResponseEtag(response) }
+}
+
+// 条件创建：If-None-Match: *，已存在时抛 WebDavRevisionConflictError，绝不覆盖。
+export async function createJsonDocument(
+  config: WebDavConfig,
+  password: string,
+  path: string,
+  body: string,
+): Promise<WebDavJsonWriteResult> {
+  const response = await webDavRawFetch(config, password, path, {
+    body,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "If-None-Match": "*",
+    },
+    method: "PUT",
+  })
+  if (!response.ok) throwForJsonErrorStatus(response, path)
+  return jsonResponseEtag(response)
+}
+
+// 条件更新：If-Match 必须使用强 ETag（RFC 9110 §13.1.1 强比较）；弱 ETag 在调用前就应被拦截。
+export async function updateJsonDocument(
+  config: WebDavConfig,
+  password: string,
+  path: string,
+  body: string,
+  expectedEtag: string,
+): Promise<WebDavJsonWriteResult> {
+  if (expectedEtag.startsWith("W/")) {
+    throw new Error("弱 ETag 不能用于 If-Match 条件更新")
+  }
+  const response = await webDavRawFetch(config, password, path, {
+    body,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "If-Match": expectedEtag,
+    },
+    method: "PUT",
+  })
+  if (!response.ok) throwForJsonErrorStatus(response, path)
+  return jsonResponseEtag(response)
+}
+
+// 确认目录存在（Depth:0 PROPFIND，开销最小）：404 返回 false，其余状态照常抛错。
+// 配置 404 只有配合根目录存在才能视为“配置被重置”；根目录丢失或身份错误不能当作重置。
+export async function checkWebDavDirectoryExists(
+  config: WebDavConfig,
+  password: string,
+  directoryPath: string,
+): Promise<boolean> {
+  const response = await webDavRawFetch(config, password, directoryPath, {
+    body: `<?xml version="1.0" encoding="utf-8" ?>
+      <d:propfind xmlns:d="DAV:">
+        <d:prop><d:resourcetype /></d:prop>
+      </d:propfind>`,
+    headers: {
+      "Content-Type": "application/xml; charset=utf-8",
+      Depth: "0",
+    },
+    method: "PROPFIND",
+  })
+  if (response.status === 404) return false
+  if (response.status === 401) throw new WebDavAuthenticationError()
+  if (!response.ok && response.status !== 207) throwForJsonErrorStatus(response, directoryPath)
+  return true
+}
+
 async function listDirectory(
   config: WebDavConfig,
   password: string,
@@ -224,18 +362,17 @@ async function listDirectory(
   )
 }
 
-async function webDavFetch(
+// 传输与认证共用入口：只把网络层异常统一成 WebDavNetworkError，状态码交给调用方区分。
+async function webDavRawFetch(
   config: WebDavConfig,
   password: string,
   path: string,
   init: RequestInit,
-  acceptedStatuses: number[] = [],
 ) {
   // 原生包通过 Rust HTTP 客户端请求 WebDAV，规避各平台 WebView 的 CORS 差异；Web 预览仍走同源代理。
   const request = isTauri() ? nativeFetch : fetch
-  let response: Response
   try {
-    response = await request(buildRequestUrl(config, path), {
+    return await request(buildRequestUrl(config, path), {
       ...init,
       headers: {
         ...init.headers,
@@ -246,6 +383,16 @@ async function webDavFetch(
     // 不透传底层 fetch/native HTTP 错误，避免泄露请求信息并给出可执行的恢复提示。
     throw new WebDavNetworkError()
   }
+}
+
+async function webDavFetch(
+  config: WebDavConfig,
+  password: string,
+  path: string,
+  init: RequestInit,
+  acceptedStatuses: number[] = [],
+) {
+  const response = await webDavRawFetch(config, password, path, init)
 
   if (response.ok || response.status === 207 || acceptedStatuses.includes(response.status)) return response
   if (response.status === 401) throw new WebDavAuthenticationError()

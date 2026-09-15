@@ -6,7 +6,8 @@ import {
   type VaultFileEntry,
 } from "@/services/vault/vault-adapter"
 
-const ignoredDirectoryNames = new Set([".git", ".obsidian", ".swell-trash", "node_modules"])
+// .swell 是 WebDAV 排序元数据的保留目录；本地库虽不读写它，也不让它进目录树或触发重扫。
+const ignoredDirectoryNames = new Set([".git", ".obsidian", ".swell", ".swell-trash", "node_modules"])
 
 type BrowserFileSystemFileHandle = {
   kind: "file"
@@ -227,7 +228,7 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
       return watch(rootPath, (event) => {
         const relevant = event.paths.some((changedPath) => {
           const normalized = changedPath.replace(/\\/g, "/")
-          if (["/.git/", "/.obsidian/", "/.swell-trash/", "/node_modules/", "/attachments/"].some((segment) => normalized.includes(segment))) return false
+          if (["/.git/", "/.obsidian/", "/.swell/", "/.swell-trash/", "/node_modules/", "/attachments/"].some((segment) => normalized.includes(segment))) return false
           return isVaultTextDocument(normalized) || !normalized.split("/").pop()?.includes(".")
         })
         if (relevant) onChange()

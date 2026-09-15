@@ -16,6 +16,7 @@ import {
 } from "@/components/routes/app-pages"
 import { WebDavSettingsForm } from "@/components/settings/webdav-settings-form"
 import { QuickWebDavConnectDialog } from "@/components/settings/quick-webdav-connect-dialog"
+import { FolderOrderConflictDialog } from "@/components/workspace/folder-order-conflict-dialog"
 import { hasSavedWebDavConfig, loadWebDavConfig, type WebDavConfig } from "@/lib/webdav-config"
 import { getNoteReturnRoute, getNotesListRoute } from "@/lib/note-routes"
 import {
@@ -128,6 +129,7 @@ import {
 } from "@/services/sync/webdav-working-copy"
 import { syncWebDavNoteQueue } from "@/services/sync/webdav-note-queue"
 import { buildAutoSyncQueueKey } from "@/services/sync/auto-sync-queue"
+import { resolveFolderOrderConflict, syncFolderOrder, type FolderOrderSyncRunResult } from "@/services/sync/folder-order-sync"
 import type { SyncProgress } from "@/services/sync/sync-progress"
 import { summarizeWebDavSync } from "@/services/sync/sync-summary"
 import { mergeMarkdownVersions } from "@/services/sync/three-way-merge"
@@ -154,6 +156,7 @@ import {
 } from "@/services/preferences/ui-preferences"
 import { applyFolderOrderToTree } from "@/services/preferences/folder-order-preferences"
 import { useFolderOrder } from "@/services/preferences/use-folder-order"
+import type { FolderOrderConflict } from "@/services/cache/folder-order-sync-store"
 import {
   deriveDirectoryPath,
   deriveRemoteFolder,
@@ -183,10 +186,120 @@ type MarkdownLinkRepair = {
   noteId: string
   oldPath: string
 }
+type FolderOrderSyncStartSource = "automatic" | "explicit" | "passive"
+type FolderOrderResolutionScope = {
+  adapter: VaultAdapter
+  cacheId: string
+  requestId: number
+}
+type ScopedWebDavAuthenticationFailureOptions = {
+  adapter: VaultAdapter
+  cacheId: string
+  config: WebDavConfig
+  createCacheId: (identity: string) => Promise<string>
+  deletePassword: (config: WebDavConfig) => Promise<void>
+  isCurrent: () => boolean
+  message: string
+  onApply: (message: string, result: { credentialDeleted: boolean }) => void
+}
+type FolderOrderResolutionRequestOptions = {
+  handleAuthenticationFailure: (message: string) => Promise<void>
+  isCurrent: () => boolean
+  onFinally: () => void
+  resolve: () => Promise<FolderOrderSyncRunResult>
+  showFailure: (message: string) => void
+}
 
 function hasMobileNavigationOverlay(value: unknown) {
   return typeof value === "object" && value !== null
     && (value as { mobileOverlay?: unknown }).mobileOverlay === "navigation"
+}
+
+export function buildFolderOrderConflictDialogId(
+  cacheId: string | null | undefined,
+  conflict: FolderOrderConflict | null,
+) {
+  if (!cacheId || !conflict) return null
+  return JSON.stringify({
+    cacheId,
+    localGeneration: conflict.localGeneration,
+    localOrder: conflict.localOrder,
+    remoteChangeId: conflict.remoteChangeId,
+    remoteExists: conflict.remoteExists,
+    remoteOrder: conflict.remoteOrder,
+  })
+}
+
+export function nextFolderOrderConflictDismissed(
+  dismissedConflictId: string | null,
+  source: FolderOrderSyncStartSource,
+) {
+  // 只有用户明确发起同步才重新给一次选择机会；后台自动同步和前台只读拉取都保持已关闭状态。
+  return source === "explicit" ? null : dismissedConflictId
+}
+
+export function isCurrentFolderOrderResolution(
+  scope: FolderOrderResolutionScope,
+  current: {
+    activeCacheMeta: ActiveCacheMeta | null
+    requestId: number
+    vaultSession: VaultAdapter | null
+  },
+) {
+  return current.requestId === scope.requestId
+    && current.vaultSession === scope.adapter
+    && current.activeCacheMeta?.sourceKind === "webdav"
+    && current.activeCacheMeta.id === scope.cacheId
+}
+
+export async function handleScopedWebDavAuthenticationFailure({
+  adapter,
+  cacheId,
+  config,
+  createCacheId,
+  deletePassword,
+  isCurrent,
+  message,
+  onApply,
+}: ScopedWebDavAuthenticationFailureOptions) {
+  // 排序冲突选择可能跨库悬挂；删除凭据和断开连接都必须确认仍属于发起库。
+  if (!isCurrent()) return
+  const configIdentity = createWebDavVaultAdapter(config, "").cacheIdentity
+  const configCacheId = await createCacheId(configIdentity).catch(() => null)
+  if (!isCurrent()) return
+  const canDeleteCredential = configIdentity === adapter.cacheIdentity && configCacheId === cacheId
+  if (!canDeleteCredential) {
+    // 设置页可能已保存另一个 WebDAV 配置；此时只提示当前排序请求失效，不能删除新配置的凭据。
+    onApply(message, { credentialDeleted: false })
+    return
+  }
+  await deletePassword(config).catch(() => undefined)
+  if (!isCurrent()) return
+  onApply(message, { credentialDeleted: true })
+}
+
+export async function runFolderOrderResolutionRequest({
+  handleAuthenticationFailure,
+  isCurrent,
+  onFinally,
+  resolve,
+  showFailure,
+}: FolderOrderResolutionRequestOptions) {
+  try {
+    const result = await resolve()
+    if (!isCurrent()) return
+    if (result.outcome === "error") showFailure(result.message ?? "文件夹排序同步失败，本机修改已保留")
+    // outcome 为 conflict 时对话框保持打开并展示刷新后的候选；其余结果由订阅清掉冲突后自动关闭。
+  } catch (error) {
+    if (!isCurrent()) return
+    if (error instanceof WebDavAuthenticationError) {
+      await handleAuthenticationFailure("坚果云应用密码已失效，请输入新密码；本地修改仍安全保留")
+    } else {
+      showFailure(error instanceof Error ? error.message : "文件夹排序同步失败，本机修改已保留")
+    }
+  } finally {
+    if (isCurrent()) onFinally()
+  }
 }
 
 function App() {
@@ -281,6 +394,11 @@ function App() {
   const autoSyncQueueKeyRef = useRef("")
   const pendingWikiAnchorRef = useRef("")
   const passiveWebDavReaderRef = useRef<Promise<VaultAdapter | null> | null>(null)
+  // 前台只读拉取按库节流（30 秒）；显式同步不经过该限流。
+  const folderOrderForegroundPullAtRef = useRef(new Map<string, number>())
+  const folderOrderResolutionRequestRef = useRef(0)
+  const [folderOrderConflictDismissed, setFolderOrderConflictDismissed] = useState<string | null>(null)
+  const [folderOrderResolving, setFolderOrderResolving] = useState(false)
 
   const invalidateLocalSaveContext = useCallback(() => {
     for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer)
@@ -395,6 +513,8 @@ function App() {
         if (!cancelled && cacheId === activeCacheMeta.id) {
           setVaultSession(adapter)
           setVaultError(null)
+          // 启动恢复成功后只读拉取排序配置；不写云端，失败只记入工作副本，不弹登录框。
+          void syncFolderOrder({ adapter, allowUpload: false, cacheId }).catch(() => undefined)
         }
       })
       .catch(() => {
@@ -459,6 +579,22 @@ function App() {
     document.addEventListener("visibilitychange", flushCacheWhenHidden)
     return () => document.removeEventListener("visibilitychange", flushCacheWhenHidden)
   }, [])
+
+  // 应用从后台回到前台：按库节流（≥30 秒）只读拉取排序配置，不写云端；离线或无凭据时保持本地显示。
+  useEffect(() => {
+    const pullFolderOrderWhenVisible = () => {
+      if (document.visibilityState !== "visible" || !isOnline) return
+      if (vaultSession?.kind !== "webdav" || activeCacheMeta?.sourceKind !== "webdav") return
+      const cacheId = activeCacheMeta.id
+      const now = Date.now()
+      const lastPullAt = folderOrderForegroundPullAtRef.current.get(cacheId) ?? 0
+      if (now - lastPullAt < 30_000) return
+      folderOrderForegroundPullAtRef.current.set(cacheId, now)
+      void syncFolderOrder({ adapter: vaultSession, allowUpload: false, cacheId }).catch(() => undefined)
+    }
+    document.addEventListener("visibilitychange", pullFolderOrderWhenVisible)
+    return () => document.removeEventListener("visibilitychange", pullFolderOrderWhenVisible)
+  }, [activeCacheMeta, isOnline, vaultSession])
 
   useEffect(() => () => {
     invalidateLocalSaveContext()
@@ -617,22 +753,42 @@ function App() {
     }, 120)
     return () => { cancelled = true; window.clearTimeout(timer) }
   }, [activeCacheMeta, normalizedQuery])
+  const connectionLabel = vaultSession?.kind === "webdav"
+    ? "已连接坚果云"
+    : vaultSession
+      ? "已打开本地笔记库"
+      : activeCacheMeta?.label ?? "配置 WebDAV"
+  // 目录顺序按稳定缓存标识隔离：activeCacheMeta.id 由笔记库身份派生，同一库的桌面/移动布局共享。
+  // 只有在完全没有库（也就没有目录可排）时才落到 label 兜底，不会把顺序写进其他库。
+  const folderOrderKey = activeCacheMeta?.id ?? `library:${connectionLabel}`
+  // WebDAV 库的排序以 IndexedDB 工作副本为事实来源并可跨设备同步；本地库保持本机 v1 排序，不参与上传。
+  const folderOrderSyncCacheId = activeCacheMeta?.sourceKind === "webdav" ? activeCacheMeta.id : null
+  const { folderOrder, folderOrderSync, migrateFolderOrderPath, updateFolderOrder } = useFolderOrder(folderOrderKey, folderOrderSyncCacheId)
+  // 顶层顺序应用在完整目录树上，子树随父目录整体移动；可见目录只是这棵有序树按展开状态的裁剪。
+  const orderedFolders = useMemo(() => applyFolderOrderToTree(folders, folderOrder), [folders, folderOrder])
+
   const cached = !vaultSession && activeCacheMeta !== null && vaultNoteCount > 0
   const syncSummary = useMemo(() => summarizeWebDavSync(notes), [notes])
-  const pendingSyncCount = syncSummary.pending + syncSummary.failed + pendingWebDavDirectories.length + pendingAttachmentCount
-  const autoSyncQueueKey = useMemo(() => buildAutoSyncQueueKey(
+  // 一份排序配置算一个待处理项目（不按目录条目计数）；冲突单独展示，不计入待处理数。
+  const folderOrderPendingCount = folderOrderSync && (folderOrderSync.status === "pending" || folderOrderSync.status === "error") ? 1 : 0
+  const pendingSyncCount = syncSummary.pending + syncSummary.failed + pendingWebDavDirectories.length + pendingAttachmentCount + folderOrderPendingCount
+  const autoSyncQueueKey = useMemo(() => `${buildAutoSyncQueueKey(
     activeCacheMeta?.id,
     notes,
     pendingWebDavDirectories,
     pendingAttachmentCount,
-  ), [activeCacheMeta?.id, notes, pendingAttachmentCount, pendingWebDavDirectories])
+  )}|folder-order:${folderOrderSync?.queueSignature ?? ""}`,
+  [activeCacheMeta?.id, folderOrderSync?.queueSignature, notes, pendingAttachmentCount, pendingWebDavDirectories])
   autoSyncQueueKeyRef.current = autoSyncQueueKey
   const conflictCount = syncSummary.conflicts
+  const folderOrderHasConflict = folderOrderSync?.status === "conflict"
   const syncLabel = connected
     ? !isOnline
       ? `${pendingSyncCount} 项待同步 · 当前离线`
       : conflictCount > 0
       ? `${conflictCount} 篇存在同步冲突`
+      : folderOrderHasConflict
+      ? "文件夹排序存在冲突"
       : pendingSyncCount > 0
         ? `${pendingSyncCount} 项修改待同步`
         : indexProgress && indexProgress.indexed < indexProgress.total
@@ -643,16 +799,13 @@ function App() {
       : webDavConfigured
       ? "等待输入应用密码"
       : "尚未连接"
-  const connectionLabel = vaultSession?.kind === "webdav"
-    ? "已连接坚果云"
-    : vaultSession
-      ? "已打开本地笔记库"
-      : activeCacheMeta?.label ?? "配置 WebDAV"
   const mobileConnectionLabel = vaultSession?.kind === "webdav"
     ? !isOnline
       ? "离线"
       : conflictCount > 0
       ? `${conflictCount} 个冲突`
+      : folderOrderHasConflict
+      ? "排序冲突"
       : pendingSyncCount > 0
         ? `${pendingSyncCount} 项待同步`
         : "已同步"
@@ -661,12 +814,6 @@ function App() {
       : cached
         ? "缓存"
         : "未连接"
-  // 目录顺序按稳定缓存标识隔离：activeCacheMeta.id 由笔记库身份派生，同一库的桌面/移动布局共享。
-  // 只有在完全没有库（也就没有目录可排）时才落到 label 兜底，不会把顺序写进其他库。
-  const folderOrderKey = activeCacheMeta?.id ?? `library:${connectionLabel}`
-  const { folderOrder, migrateFolderOrderPath, updateFolderOrder } = useFolderOrder(folderOrderKey)
-  // 顶层顺序应用在完整目录树上，子树随父目录整体移动；可见目录只是这棵有序树按展开状态的裁剪。
-  const orderedFolders = useMemo(() => applyFolderOrderToTree(folders, folderOrder), [folders, folderOrder])
 
   const handleWebDavAuthenticationFailure = useCallback(async (message: string) => {
     const config = loadWebDavConfig()
@@ -683,6 +830,78 @@ function App() {
   assetResolverContextRef.current = { activeCacheMeta, activeNote, isOnline, vaultSession }
   const authenticationFailureRef = useRef(handleWebDavAuthenticationFailure)
   authenticationFailureRef.current = handleWebDavAuthenticationFailure
+
+  // 排序冲突选择：关闭只记录“已暂不处理”的冲突身份，候选变化（新代次/新远端）时重新展示，不循环弹窗。
+  const folderOrderConflict = folderOrderSync?.conflict ?? null
+  const folderOrderConflictId = buildFolderOrderConflictDialogId(activeCacheMeta?.id, folderOrderConflict)
+  const folderOrderConflictOpen = Boolean(
+    folderOrderConflict
+    && folderOrderConflictId !== folderOrderConflictDismissed
+    && vaultSession?.kind === "webdav"
+    && activeCacheMeta?.sourceKind === "webdav",
+  )
+
+  const resolveFolderOrderChoice = async (choice: "local" | "remote") => {
+    if (folderOrderResolving || vaultSession?.kind !== "webdav" || activeCacheMeta?.sourceKind !== "webdav") return
+    const config = loadWebDavConfig()
+    const scope: FolderOrderResolutionScope = {
+      adapter: vaultSession,
+      cacheId: activeCacheMeta.id,
+      requestId: folderOrderResolutionRequestRef.current + 1,
+    }
+    folderOrderResolutionRequestRef.current = scope.requestId
+    const isCurrentResolution = () => isCurrentFolderOrderResolution(scope, {
+      activeCacheMeta: assetResolverContextRef.current.activeCacheMeta,
+      requestId: folderOrderResolutionRequestRef.current,
+      vaultSession: assetResolverContextRef.current.vaultSession,
+    })
+    setFolderOrderResolving(true)
+    void runFolderOrderResolutionRequest({
+      handleAuthenticationFailure: (message) => handleScopedWebDavAuthenticationFailure({
+        adapter: scope.adapter,
+        cacheId: scope.cacheId,
+        config,
+        createCacheId: createVaultCacheId,
+        deletePassword: deleteWebDavPassword,
+        isCurrent: isCurrentResolution,
+        message,
+        onApply: (nextMessage, result) => {
+          if (!result.credentialDeleted) {
+            showSyncFailure(nextMessage)
+            return
+          }
+          restoredCredentialCacheIdRef.current = scope.cacheId
+          passiveWebDavReaderRef.current = null
+          setVaultSession(null)
+          setVaultError(nextMessage)
+          setQuickConnectOpen(true)
+        },
+      }),
+      isCurrent: isCurrentResolution,
+      onFinally: () => setFolderOrderResolving(false),
+      resolve: () => resolveFolderOrderConflict({
+        adapter: scope.adapter,
+        cacheId: scope.cacheId,
+        choice,
+        // “使用本机”同样受结构阻断约束：存在未完成的 MOVE/DELETE/create 时只允许拉取，不允许覆盖上传。
+        structureUploadBlocked: pendingWebDavDirectories.length > 0 || hasPendingStructureOperations(notes),
+      }),
+      showFailure: showSyncFailure,
+    })
+  }
+
+  useEffect(() => {
+    // 切换库或重建适配器会让旧冲突选择请求失去 UI 归属；旧请求可继续写回原库工作副本，但不能回填当前库状态。
+    folderOrderResolutionRequestRef.current += 1
+    setFolderOrderResolving(false)
+  }, [activeCacheMeta?.id, vaultSession])
+
+  // IndexedDB 不可用时排序仍留在会话内，但必须明确提示“本机保存失败”，不能声称刷新后仍安全保留。
+  useEffect(() => {
+    if (folderOrderSync?.persistenceFailed) {
+      setVaultError("本机保存失败：文件夹排序仅在本次会话内有效，刷新后可能丢失")
+    }
+  }, [folderOrderSync?.persistenceFailed])
 
   const resolveNoteAsset = useCallback(async (noteId: string, source: string) => {
     // 同步会连续替换笔记和缓存元数据；读取入口必须保持引用稳定，否则图片组件会反复撤销 Blob URL 并重新加载。
@@ -1274,8 +1493,9 @@ function App() {
       .catch((error) => setVaultError(error instanceof Error ? error.message : "建立搜索索引失败"))
   }
 
+  // 返回仍未完成的目录数：排序上传需要在结构操作全部成功后才能放行。
   const pushPendingWebDavDirectories = async (adapter: VaultAdapter, run?: SyncRun) => {
-    if (adapter.kind !== "webdav" || !adapter.ensureDirectory || pendingWebDavDirectories.length === 0) return
+    if (adapter.kind !== "webdav" || !adapter.ensureDirectory || pendingWebDavDirectories.length === 0) return 0
     const completedPaths: string[] = []
     for (const folderPath of pendingWebDavDirectories) {
       if (run?.cancelled) break
@@ -1291,22 +1511,65 @@ function App() {
       const completed = new Set(completedPaths)
       setPendingWebDavDirectories((current) => current.filter((path) => !completed.has(path)))
     }
+    return pendingWebDavDirectories.length - completedPaths.length
+  }
+
+  // 排序同步与笔记同步共用同一条按库串行协调链；allowUpload=false 时是只读拉取，不写云端。
+  // run 传入时透传取消状态：协调器在后续异步边界与写入前检查，已发出的 PUT 仍按 attempted 机制确认。
+  const runFolderOrderSync = async (
+    adapter: VaultAdapter,
+    allowUpload: boolean,
+    options: { rootVerified?: boolean; run?: SyncRun; structureUploadBlocked?: boolean } = {},
+  ) => {
+    if (adapter.kind !== "webdav" || !adapter.folderOrderStore) return null
+    const cacheId = await createVaultCacheId(adapter.cacheIdentity)
+    return syncFolderOrder({
+      adapter,
+      allowUpload,
+      cacheId,
+      isCancelled: options.run ? () => options.run!.cancelled : undefined,
+      rootVerified: options.rootVerified,
+      structureUploadBlocked: options.structureUploadBlocked,
+    })
+  }
+
+  // 结构阻断的一致规则：同步后仍未完成的目录 MKCOL 或笔记 create/move/delete
+  // （包括失败、冲突和部分重试后仍挂起的）都暂停排序上传；
+  // 普通正文失败（无 pendingOperation）不应无条件阻断排序。
+  const hasPendingStructureOperations = (list: Note[]) =>
+    list.some((note) => note.source === "webdav" && Boolean(note.pendingOperation))
+
+  // 排序冲突/失败不能让整轮看起来全部同步成功：把 loadVault 提前推进的“最近同步”时间退回。
+  const revertLastSyncedAt = (cacheId: string, previous: number | undefined) => {
+    setActiveCacheMeta((current) => current && current.id === cacheId ? { ...current, lastSyncedAt: previous } : current)
   }
 
   const connectWebDav = async (config: WebDavConfig, password: string) => {
     setSyncFailure(null)
+    setFolderOrderConflictDismissed((current) => nextFolderOrderConflictDismissed(current, "explicit"))
     const adapter = createWebDavVaultAdapter(config, password)
     const cacheId = await createVaultCacheId(adapter.cacheIdentity)
     const restoreWorkingCopy = activeCacheMeta?.id === cacheId
+    const previousLastSyncedAt = restoreWorkingCopy ? activeCacheMeta?.lastSyncedAt : undefined
     // 同一笔记库重新输入密码后必须携带离线工作副本参与合并，不能把重连误当成首次导入。
     const mergedNotes = await loadVault(adapter, restoreWorkingCopy, restoreWorkingCopy ? notes : [])
-    await pushPendingWebDavDirectories(adapter)
+    const remainingDirectories = await pushPendingWebDavDirectories(adapter)
     const hasPendingChanges = mergedNotes.some((note) =>
       note.source === "webdav" && note.syncStatus === "modified",
     )
     const attachmentResult = await pushPendingWebDavAttachments(adapter)
     if (!hasPendingChanges) {
-      if (attachmentResult.errorMessage) showSyncFailure(attachmentResult.errorMessage)
+      // 没有待上传笔记也要完成排序阶段：读取远端排序并上传本机排序意图。
+      const folderOrderResult = await runFolderOrderSync(adapter, true, {
+        rootVerified: true,
+        structureUploadBlocked: remainingDirectories > 0 || hasPendingStructureOperations(mergedNotes),
+      })
+      if (folderOrderResult?.outcome === "conflict" || folderOrderResult?.outcome === "error") {
+        revertLastSyncedAt(cacheId, previousLastSyncedAt)
+      }
+      const earlyError = attachmentResult.errorMessage
+        ?? (folderOrderResult?.outcome === "error" ? folderOrderResult.message ?? "文件夹排序同步失败" : null)
+      if (earlyError) showSyncFailure(earlyError)
       return mergedNotes.length
     }
 
@@ -1316,7 +1579,15 @@ function App() {
       : undefined
     const syncResult = await pushPendingWebDavNotes(adapter, mergedNotes, eligibleNoteIds)
     const refreshedNotes = await loadVault(adapter, true, syncResult.notes)
+    const folderOrderResult = await runFolderOrderSync(adapter, true, {
+      rootVerified: true,
+      structureUploadBlocked: remainingDirectories > 0 || hasPendingStructureOperations(refreshedNotes),
+    })
+    if (folderOrderResult?.outcome === "conflict" || folderOrderResult?.outcome === "error") {
+      revertLastSyncedAt(cacheId, previousLastSyncedAt)
+    }
     const syncErrorMessage = attachmentResult.errorMessage ?? syncResult.errorMessage
+      ?? (folderOrderResult?.outcome === "error" ? folderOrderResult.message ?? "文件夹排序同步失败" : null)
     if (syncErrorMessage) showSyncFailure(syncErrorMessage)
     return refreshedNotes.length
   }
@@ -1655,6 +1926,8 @@ function App() {
   const refreshVault = async (noteIds?: ReadonlySet<string>, options: { automatic?: boolean } = {}) => {
     // 新一轮重试先收起旧错误；若仍失败会立即用本轮原因替换，成功则不会残留过期提示。
     setSyncFailure(null)
+    setFolderOrderConflictDismissed((current) =>
+      nextFolderOrderConflictDismissed(current, options.automatic ? "automatic" : "explicit"))
     if (!vaultSession) {
       if (activeCacheMeta?.sourceKind === "webdav" && webDavConfigured) {
         if (!isOnline) {
@@ -1725,7 +1998,9 @@ function App() {
         total: pendingDirectories + pendingAttachments + pendingNotes,
       })
       // 所有手动/自动同步都汇入同一条带版本校验的写入链路，避免不同入口产生覆盖差异。
-      if (!noteIds) await pushPendingWebDavDirectories(vaultSession, run)
+      const remainingDirectories = noteIds
+        ? pendingWebDavDirectories.length
+        : await pushPendingWebDavDirectories(vaultSession, run)
       if (run.cancelled) {
         setSyncLogs(appendSyncLog({ message: "同步已取消，未处理文件夹仍保留在本机队列", status: "error" }))
         return
@@ -1746,11 +2021,28 @@ function App() {
         return
       }
       setSyncProgress((current) => current ? { ...current, currentLabel: "刷新远端列表", phase: "refreshing" } : current)
-      await loadVault(vaultSession, true, syncResult.notes)
+      const previousLastSyncedAt = activeCacheMeta?.lastSyncedAt
+      const refreshedNotes = await loadVault(vaultSession, true, syncResult.notes)
+      // 排序阶段：即使仅排序改变也完成三方判定与条件上传；结构操作未成功时暂停上传但允许拉取。
+      setSyncProgress((current) => current ? { ...current, currentLabel: "同步文件夹排序", phase: "refreshing" } : current)
+      const folderOrderResult = await runFolderOrderSync(vaultSession, true, {
+        rootVerified: true,
+        run,
+        structureUploadBlocked: remainingDirectories > 0 || hasPendingStructureOperations(refreshedNotes),
+      })
+      const folderOrderFailed = folderOrderResult?.outcome === "error"
+      const folderOrderConflicts = folderOrderResult?.outcome === "conflict"
+      // 未解决的排序冲突/失败不能让整轮看起来全部同步成功。
+      if (activeCacheMeta && (folderOrderFailed || folderOrderConflicts)) {
+        revertLastSyncedAt(activeCacheMeta.id, previousLastSyncedAt)
+      }
       const combinedError = attachmentResult.errorMessage ?? syncResult.errorMessage
+        ?? (folderOrderFailed ? folderOrderResult.message ?? "文件夹排序同步失败" : null)
       if (combinedError) {
         showSyncFailure(combinedError)
         setSyncLogs(appendSyncLog({ message: `同步完成，但部分内容失败：${combinedError}`, status: "error" }))
+      } else if (folderOrderConflicts) {
+        setSyncLogs(appendSyncLog({ message: "笔记同步完成；文件夹排序存在冲突，待在提示中选择保留哪一份", status: "error" }))
       } else {
         const pendingCount = notes.filter((note) => note.source === "webdav"
           && (note.pendingOperation || note.syncStatus === "modified")).length
@@ -1793,6 +2085,10 @@ function App() {
       }
     }
     if (failedNoteIds.size > 0) await refreshVault(failedNoteIds)
+    else if (folderOrderSync && (folderOrderSync.status === "error" || folderOrderSync.status === "pending")) {
+      // 只有排序失败/待上传时也能重试：完整同步的排序阶段会重新处理该库配置。
+      await refreshVault()
+    }
   }
 
   refreshVaultRef.current = refreshVault
@@ -2522,6 +2818,8 @@ function App() {
   }
 
   const renameLocalFolder = async (folderPath: string, requestedName: string) => {
+    // 发起重命名这一刻的排序库身份：异步完成时即使已经切库，迁移也只写发起库。
+    const folderOrderOrigin = { key: folderOrderKey, syncCacheId: folderOrderSyncCacheId }
     const adapter = vaultSession
     if (!adapter?.moveDirectory || (adapter.kind !== "browser" && adapter.kind !== "tauri")) {
       setVaultError("当前本地 Vault 不支持文件夹重命名")
@@ -2632,7 +2930,7 @@ function App() {
       const activePlan = plans.get(activeNoteId)
       if (activePlan) setActiveNoteId(activePlan.id)
       // 只有 moveDirectory 成功才会走到这里；排序偏好随之迁移到新路径，失败时保持原顺序不动。
-      migrateFolderOrderPath(folderPath, targetFolder)
+      migrateFolderOrderPath(folderPath, targetFolder, folderOrderOrigin)
       setSelectedFolder(targetFolder)
       setLibraryView("all")
       navigate(getNotesListRoute("all", targetFolder), { replace: true })
@@ -2697,6 +2995,8 @@ function App() {
   }
 
   const renameWebDavFolder = async (folderPath: string, requestedName: string) => {
+    // 发起重命名这一刻的排序库身份：异步完成时即使已经切库，迁移也只写发起库。
+    const folderOrderOrigin = { key: folderOrderKey, syncCacheId: folderOrderSyncCacheId }
     if (isRefreshingVault || isManagingNote) {
       setVaultError("正在处理笔记库，请稍后再重命名文件夹")
       return
@@ -2807,7 +3107,7 @@ function App() {
     if (firstPlan) {
       const renamedFolder = firstPlan.folder.split(/\s*\/\s*/).slice(0, folderPath.split(/\s*\/\s*/).length).join(" / ")
       // 前面的提前 return 已经挡住所有失败分支，走到这里说明本机重命名已生效，排序偏好同步迁移。
-      migrateFolderOrderPath(folderPath, renamedFolder)
+      migrateFolderOrderPath(folderPath, renamedFolder, folderOrderOrigin)
       setSelectedFolder(renamedFolder)
       setLibraryView("all")
       navigate(getNotesListRoute("all", renamedFolder), { replace: true })
@@ -3900,6 +4200,13 @@ function App() {
         }}
         onOpenChange={setQuickConnectOpen}
         open={quickConnectOpen}
+      />
+      <FolderOrderConflictDialog
+        conflict={folderOrderConflict}
+        onDismiss={() => setFolderOrderConflictDismissed(folderOrderConflictId)}
+        onResolve={(choice) => void resolveFolderOrderChoice(choice)}
+        open={folderOrderConflictOpen}
+        resolving={folderOrderResolving}
       />
     </>
   )

@@ -1,13 +1,18 @@
 import type { WebDavConfig } from "@/lib/webdav-config"
+import { FOLDER_ORDER_MAX_BYTES } from "@/services/preferences/folder-order-document"
 import {
+  checkWebDavDirectoryExists,
+  createJsonDocument,
   createMarkdownFile,
   createWebDavBinaryFile,
   deleteMarkdownFile,
   ensureWebDavDirectory,
   listMarkdownFiles,
   moveMarkdownFile,
+  readJsonDocument,
   readMarkdownDocument,
   readWebDavAsset,
+  updateJsonDocument,
   WebDavRevisionConflictError,
   writeMarkdownFile,
 } from "@/services/webdav-client"
@@ -17,6 +22,9 @@ export function createWebDavVaultAdapter(
   config: WebDavConfig,
   password: string,
 ): VaultAdapter {
+  // 排序元数据固定在 <root>/.swell/folder-order.json；凭据留在闭包里，组件层不可见。
+  const metadataDirectoryPath = `${config.remotePath.replace(/\/+$/g, "")}/.swell`
+  const folderOrderDocumentPath = `${metadataDirectoryPath}/folder-order.json`
   return {
     cacheIdentity: `webdav:${config.serverUrl}:${config.username}:${config.remotePath}`,
     cacheLabel: `坚果云 · ${config.remotePath}`,
@@ -35,6 +43,23 @@ export function createWebDavVaultAdapter(
     },
     kind: "webdav",
     readOnly: true,
+    folderOrderStore: {
+      async ensureMetadataDirectory() {
+        await ensureWebDavDirectory(config, password, metadataDirectoryPath)
+      },
+      readDocument() {
+        return readJsonDocument(config, password, folderOrderDocumentPath, FOLDER_ORDER_MAX_BYTES)
+      },
+      createDocument(body) {
+        return createJsonDocument(config, password, folderOrderDocumentPath, body)
+      },
+      updateDocument(body, expectedEtag) {
+        return updateJsonDocument(config, password, folderOrderDocumentPath, body, expectedEtag)
+      },
+      verifyRoot() {
+        return checkWebDavDirectoryExists(config, password, config.remotePath)
+      },
+    },
     async createBinaryFile(path, data, mimeType) {
       try {
         const result = await createWebDavBinaryFile(config, password, path, data, mimeType)

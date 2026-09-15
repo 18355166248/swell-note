@@ -102,6 +102,28 @@ async function readStoredOrder(page: Page, cacheId: string) {
   }, cacheId)
 }
 
+// WebDAV 缓存库的排序事实来源是 IndexedDB 工作副本（folder-order-sync:v1:<cacheId>），
+// 不再写 v1 localStorage；返回 null 表示没有有效排序落盘（未编辑或旧会话守卫拦截）。
+async function readWorkingCopyOrder(page: Page, cacheId: string) {
+  return page.evaluate(async (key) => {
+    const request = indexedDB.open("swell-note-vault-cache", 3)
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const record = await new Promise<{ localOrder?: string[] } | undefined>((resolve, reject) => {
+      const get = database.transaction("settings", "readonly").objectStore("settings")
+        .get(`folder-order-sync:v1:${key}`)
+      get.onsuccess = () => resolve(get.result as { localOrder?: string[] } | undefined)
+      get.onerror = () => reject(get.error)
+    })
+    database.close()
+    return record && Array.isArray(record.localOrder) && record.localOrder.length > 0
+      ? record.localOrder
+      : null
+  }, cacheId)
+}
+
 async function desktopHandleOrder(page: Page) {
   return page.locator(".library-folder-drag-handle").evaluateAll(
     (handles) => handles.map((handle) => handle.getAttribute("aria-label")),
@@ -181,7 +203,7 @@ test.describe("文件夹排序", () => {
     await waitAfterDragEnd(page)
 
     expect(await desktopHandleOrder(page)).toEqual(["拖动排序 Gamma", "拖动排序 Alpha", "拖动排序 Beta"])
-    expect(await readStoredOrder(page, "e2e-vault")).toEqual(["Gamma", "Alpha", "Beta"])
+    expect(await readWorkingCopyOrder(page, "e2e-vault")).toEqual(["Gamma", "Alpha", "Beta"])
     // 拖动释放不会误触发行点击：仍然停留在全部笔记视图。
     await expect(page.getByRole("heading", { name: "全部笔记" })).toBeVisible()
 
@@ -213,7 +235,7 @@ test.describe("文件夹排序", () => {
     await expect(panel.locator("[role='status']")).toContainText("当前位于 Alpha")
     await page.keyboard.press("Escape")
     await waitAfterDragEnd(page)
-    expect(await readStoredOrder(page, "e2e-vault")).toBeNull()
+    expect(await readWorkingCopyOrder(page, "e2e-vault")).toBeNull()
     expect(await desktopHandleOrder(page)).toEqual(["拖动排序 Alpha", "拖动排序 Beta", "拖动排序 Gamma"])
 
     await panel.getByRole("button", { name: "拖动排序 Beta" }).focus()
@@ -225,7 +247,7 @@ test.describe("文件夹排序", () => {
     await waitAfterDragEnd(page)
 
     expect(await desktopHandleOrder(page)).toEqual(["拖动排序 Beta", "拖动排序 Alpha", "拖动排序 Gamma"])
-    expect(await readStoredOrder(page, "e2e-vault")).toEqual(["Beta", "Alpha", "Gamma"])
+    expect(await readWorkingCopyOrder(page, "e2e-vault")).toEqual(["Beta", "Alpha", "Gamma"])
     // 焦点回到发起拖动的手柄上。
     await expect(panel.getByRole("button", { name: "拖动排序 Beta" })).toBeFocused()
   })
@@ -260,7 +282,7 @@ test.describe("文件夹排序", () => {
     await waitAfterDragEnd(page)
 
     expect(await mobileHandleOrder()).toEqual(["拖动排序 Gamma", "拖动排序 Alpha", "拖动排序 Beta"])
-    expect(await readStoredOrder(page, "e2e-vault")).toEqual(["Gamma", "Alpha", "Beta"])
+    expect(await readWorkingCopyOrder(page, "e2e-vault")).toEqual(["Gamma", "Alpha", "Beta"])
   })
 
   test("移动端非手柄区域正常滚动、长按菜单不回归", async ({ page }, testInfo) => {
@@ -292,7 +314,7 @@ test.describe("文件夹排序", () => {
     )
     const scrollAfter = await viewport.evaluate((element) => element.scrollTop)
     expect(scrollAfter).toBeGreaterThan(scrollBefore)
-    expect(await readStoredOrder(page, "e2e-scroll-vault")).toBeNull()
+    expect(await readWorkingCopyOrder(page, "e2e-scroll-vault")).toBeNull()
 
     // 退出管理模式，长按普通行仍弹出操作菜单（没有被拖动手势劫持）。
     await library.getByRole("button", { name: "完成文件夹管理" }).click()
@@ -317,7 +339,7 @@ test.describe("文件夹排序", () => {
 
     await expect(page.getByRole("heading", { name: "Alpha" })).toBeVisible()
     // 纯点击不产生任何排序写入。
-    expect(await readStoredOrder(page, "e2e-vault")).toBeNull()
+    expect(await readWorkingCopyOrder(page, "e2e-vault")).toBeNull()
   })
 
   test("桌面端抓起后切换笔记库：确认/取消都不写盘", async ({ page }, testInfo) => {
@@ -345,8 +367,8 @@ test.describe("文件夹排序", () => {
     await page.keyboard.press("Escape")
     await waitAfterDragEnd(page)
 
-    expect(await readStoredOrder(page, "e2e-vault-a")).toBeNull()
-    expect(await readStoredOrder(page, "e2e-vault-b")).toBeNull()
+    expect(await readWorkingCopyOrder(page, "e2e-vault-a")).toBeNull()
+    expect(await readWorkingCopyOrder(page, "e2e-vault-b")).toBeNull()
     expect(await desktopHandleOrder(page)).toEqual(["拖动排序 Beta", "拖动排序 Delta"])
   })
 
@@ -409,7 +431,7 @@ test.describe("文件夹排序", () => {
     await panel.locator(".library-folder-title").click()
     await page.keyboard.press("Space")
     await waitAfterDragEnd(page)
-    expect(await readStoredOrder(page, "e2e-vault")).toBeNull()
+    expect(await readWorkingCopyOrder(page, "e2e-vault")).toBeNull()
 
     // 清理没有破坏后续会话：重新进入管理模式拖动正常提交。
     await panel.getByRole("button", { name: "调整文件夹顺序" }).click()
@@ -420,7 +442,7 @@ test.describe("文件夹排序", () => {
     await expect(panel.locator("[role='status']")).toContainText("当前位于 Alpha")
     await page.keyboard.press("Space")
     await waitAfterDragEnd(page)
-    expect(await readStoredOrder(page, "e2e-vault")).toEqual(["Beta", "Alpha", "Gamma"])
+    expect(await readWorkingCopyOrder(page, "e2e-vault")).toEqual(["Beta", "Alpha", "Gamma"])
   })
 
   test("桌面端切库往返后旧拖动确认不写任何库", async ({ page }, testInfo) => {
@@ -441,8 +463,8 @@ test.describe("文件夹排序", () => {
     await page.keyboard.press("Space")
     await waitAfterDragEnd(page)
 
-    expect(await readStoredOrder(page, "e2e-vault-a")).toBeNull()
-    expect(await readStoredOrder(page, "e2e-vault-b")).toBeNull()
+    expect(await readWorkingCopyOrder(page, "e2e-vault-a")).toBeNull()
+    expect(await readWorkingCopyOrder(page, "e2e-vault-b")).toBeNull()
   })
 
   test("桌面端切库后直接开始新拖动：不写旧库，新拖动正常提交", async ({ page }, testInfo) => {
@@ -467,8 +489,8 @@ test.describe("文件夹排序", () => {
     await waitAfterDragEnd(page)
 
     // 旧拖动不写 A；B 的新拖动基于自己的目录正常提交。
-    expect(await readStoredOrder(page, "e2e-vault-a")).toBeNull()
-    expect(await readStoredOrder(page, "e2e-vault-b")).toEqual(["Delta", "Beta"])
+    expect(await readWorkingCopyOrder(page, "e2e-vault-a")).toBeNull()
+    expect(await readWorkingCopyOrder(page, "e2e-vault-b")).toEqual(["Delta", "Beta"])
   })
 
   test("桌面端拖动途中切到移动布局：旧拖动失效，回到桌面后新拖动正常", async ({ page }, testInfo) => {
@@ -487,7 +509,7 @@ test.describe("文件夹排序", () => {
     await expect(page.locator(".mobile-library")).toBeVisible()
     await page.keyboard.press("Space")
     await waitAfterDragEnd(page)
-    expect(await readStoredOrder(page, "e2e-vault")).toBeNull()
+    expect(await readWorkingCopyOrder(page, "e2e-vault")).toBeNull()
 
     // 回到桌面布局后重新拖动正常提交。
     await page.setViewportSize({ width: 1280, height: 720 })
@@ -499,6 +521,6 @@ test.describe("文件夹排序", () => {
     await expect(panel.locator("[role='status']")).toContainText("当前位于 Alpha")
     await page.keyboard.press("Space")
     await waitAfterDragEnd(page)
-    expect(await readStoredOrder(page, "e2e-vault")).toEqual(["Beta", "Alpha", "Gamma"])
+    expect(await readWorkingCopyOrder(page, "e2e-vault")).toEqual(["Beta", "Alpha", "Gamma"])
   })
 })

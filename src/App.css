@@ -409,6 +409,13 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .quick-connect-fields { display: grid; gap: 18px; margin-block: 20px; }
 [data-slot="dialog-content"] > form { display: grid; gap: 0; }
 
+/* 文件夹排序冲突：本机/云端候选并排预览，窄屏堆叠。 */
+.folder-order-conflict-columns { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; margin-block: 18px; }
+.folder-order-conflict-column h3 { margin: 0 0 8px; color: var(--muted-foreground); font-size: 12px; font-weight: 600; }
+.folder-order-conflict-list { display: grid; gap: 4px; margin: 0; padding-left: 18px; font-size: 12px; }
+.folder-order-conflict-empty { margin: 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.6; }
+@media (max-width: 520px) { .folder-order-conflict-columns { grid-template-columns: 1fr; } }
+
 /* 旧页面仍有少量历史硬编码色；深色模式集中兜底，避免列表、编辑器和移动抽屉出现白色断层。 */
 .dark .route-page-shell,
 .dark .settings-route-shell,

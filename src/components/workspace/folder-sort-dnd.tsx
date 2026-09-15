@@ -17,6 +17,7 @@ import {
 } from "@dnd-kit/core"
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable"
 
+import { setFolderDragActive } from "@/services/preferences/folder-drag-state"
 import { reorderTopLevelPaths } from "@/services/preferences/folder-order-preferences"
 
 // legacy dnd-kit 的传感器在拖动激活后把 move/end/keydown 监听挂到 document 上，且 DndContext
@@ -185,11 +186,14 @@ export function FolderSortDndContext({
 
   // 永久失效当前会话并主动终止所有已激活传感器（摘掉 document 监听，包括键盘
   // 传感器尚未注册的迟到 keydown），旧监听不再吞掉或干扰新拖动和正常键盘操作。
+  // 同时复位显式拖动状态：切库、卸载、退出管理模式、被拖目录消失都经过这里，
+  // 被暂缓的远端顺序应用据此按最新工作副本重跑守卫。
   const invalidateSession = useCallback(() => {
     const session = sessionRef.current
     if (session) session.dead = true
     sessionRef.current = null
     registry.forceDetachAll()
+    setFolderDragActive(latestRef.current.folderOrderKey, false)
   }, [registry])
 
   // 卸载即失效：切库（key 重挂载）、桌面退出管理模式、布局切换都经过这里。
@@ -208,6 +212,8 @@ export function FolderSortDndContext({
 
   const handleDragStart = (event: DragStartEvent) => {
     sessionRef.current = { activeId: String(event.active.id), dead: false, key: folderOrderKey }
+    // 上报显式拖动状态：远端顺序到达时 useFolderOrder 据此暂缓可见替换。
+    setFolderDragActive(folderOrderKey, true)
   }
 
   const handleDragEnd = (event: DragEndEvent) => {
@@ -215,16 +221,22 @@ export function FolderSortDndContext({
     sessionRef.current = null
     // 校验的是本次拖动自己发起时创建的会话对象，不是共享 ref 的最新值：
     // 失效后的旧会话 dead=true，永远不会因为切回同一库或新拖动开始而重新通过。
-    if (!session || session.dead) return
-    const latest = latestRef.current
-    if (session.key !== latest.folderOrderKey) return
-    const nextOrder = resolveFolderDragOrder(latest.sortableFolderPaths, event)
-    if (nextOrder) latest.onCommit(nextOrder)
+    if (session && !session.dead) {
+      const latest = latestRef.current
+      if (session.key === latest.folderOrderKey) {
+        const nextOrder = resolveFolderDragOrder(latest.sortableFolderPaths, event)
+        // 先提交再复位拖动状态：被暂缓的应用重跑守卫时已能看到本次提交的本机操作，
+        // 不会把提交前的远端顺序盖到刚落笔的本机编辑上。
+        if (nextOrder) latest.onCommit(nextOrder)
+      }
+    }
+    setFolderDragActive(latestRef.current.folderOrderKey, false)
   }
 
   // 正常确认（end）与取消（cancel）都会清理本次会话；cancel 只是不产生提交。
   const handleDragCancel = () => {
     sessionRef.current = null
+    setFolderDragActive(latestRef.current.folderOrderKey, false)
   }
 
   return (
