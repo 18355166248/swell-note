@@ -1,0 +1,62 @@
+src/components/editor/markdown-editor.tsx
+  s_ce0ec8bd29b41a::t_259f4723c528f9 7,244-246,253-259,261-265,809-813,815-817,833-838,842-843,850,852,869-871,875,884,886-887,892-895,897,899-900,906,912-913,916,919-920,922-925,930-939
+  s_ce0ec8bd29b41a::t_77dea755c510d2 242,251,944-949,951-954
+  s_ce0ec8bd29b41a::t_6c3badc90f7aa3 8,17,839-840,847-848,854,859-868,896,898,902,904,914,917,921
+  s_ce0ec8bd29b41a::t_5fc4748eedb7a8 844-846,849
+  s_ce0ec8bd29b41a::t_8774fea3eb0c15 872,901,903,905,907-911
+  s_ce0ec8bd29b41a::t_96316b5ea208f2 885,888-890,960,964
+  s_ce0ec8bd29b41a::t_7ad5d1b8c7374e 915
+  s_ce0ec8bd29b41a::t_c0544c888337b0 487-489,496-499,505,513-517,814,818-822,824-832
+  s_ce0ec8bd29b41a::t_d3a5196f0acb2c 918,926-929
+  s_ce0ec8bd29b41a::t_afe0da03bbab72 23,26-27,198,752
+  s_ce0ec8bd29b41a::t_ba0d89b1da8ee7 823
+  s_ce0ec8bd29b41a::t_908abdb21e2f53 241,247-250,260,266-267,491,808,855-858,873-874,876-883,891,940,955-959,961-963,965-966
+  s_ce0ec8bd29b41a::t_e4259d7608c22d 841,851,853
+  s_ce0ec8bd29b41a::t_a56d41883231e1 243,252,941-943,950
+src/components/editor/live-preview.ts
+  s_ce0ec8bd29b41a::t_b785655336eff6 659,671-673,969-972
+  s_ce0ec8bd29b41a::t_3087c52a002ef7 973-974
+src/components/editor/selection-rendering.ts
+  s_ce0ec8bd29b41a::t_afe0da03bbab72 1-20
+src/components/editor/selection-rendering.test.ts
+  s_ce0ec8bd29b41a::t_9e40ad099aea08 1
+  s_ce0ec8bd29b41a::t_b58c61383360f8 2-59
+src/App.css
+  s_ce0ec8bd29b41a::t_4c260d71394441 826
+  s_ce0ec8bd29b41a::t_afe0da03bbab72 819-825,827
+src/components/editor/markdown-editor.test.tsx
+  s_ce0ec8bd29b41a::t_d37e0c65a52459 415-421,428-430,433-434,447
+  s_ce0ec8bd29b41a::t_9e52d5e5f40c5b 57
+  s_ce0ec8bd29b41a::t_6338a67a12978e 7,13,127
+  s_ce0ec8bd29b41a::t_daac10a8a67a55 8,111
+  s_ce0ec8bd29b41a::t_a117919a2135a6 246-247
+  s_ce0ec8bd29b41a::t_5c54c0b5ce680d 303,347,436
+  s_ce0ec8bd29b41a::t_22e0f7c0b296af 263-268,270-280
+  s_ce0ec8bd29b41a::t_4068b96f3bb419 118,123,254-260
+  s_ce0ec8bd29b41a::t_d4321e11804b34 350,362-412
+  s_ce0ec8bd29b41a::t_d6d42e2f0c08b1 9,24-28,45,48-56,58-60,68-95
+  s_ce0ec8bd29b41a::t_3c4354f2b05dbd 269,422-427,432
+  s_ce0ec8bd29b41a::t_03d2cd76141e11 319-345
+  s_ce0ec8bd29b41a::t_06d0088d0088b5 38-40,281-298
+  s_ce0ec8bd29b41a::t_46bd6c42413a9f 12,107-110,112-117,119-122,124-126,128-132,234-240,242,252-253,261-262,299-302,304-318,346,348-349,351-361,413-414,435,437-446
+  s_ce0ec8bd29b41a::t_d3fec2be62011a 241,243-245,248-251
+  s_ce0ec8bd29b41a::t_1bd19ad6d328ed 431
+  s_ce0ec8bd29b41a::t_32182983b23fbd 96
+  s_ce0ec8bd29b41a::t_d898c5bec7e487 448
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "b43b300b7390d8ff702ed98099e2af1946cdc77b",
+  "prompts": {},
+  "sessions": {
+    "s_ce0ec8bd29b41a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09e14-cc2b-73f0-97be-e1f583f5b258",
+        "model": "gpt-5.5"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
