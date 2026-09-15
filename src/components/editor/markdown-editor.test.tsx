@@ -4,11 +4,13 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
-import { EditorState } from "@codemirror/state"
-import { EditorView } from "@codemirror/view"
+import { ensureSyntaxTree } from "@codemirror/language"
+import { EditorSelection, EditorState } from "@codemirror/state"
+import { EditorView, getDrawSelectionConfig } from "@codemirror/view"
 
 import type { MarkdownEditorHandle } from "./markdown-editor"
-import MarkdownEditor, { findPlainTextMatches, findTableWrapperAtLine, formatToolbarText, paragraphSeparatorAtEnd, shouldPasteAsPlainText } from "./markdown-editor"
+import MarkdownEditor, { findPlainTextMatches, findTableWrapperAtLine, formatToolbarText, paragraphSeparatorAtEnd, selectedMarkdownRange, shouldPasteAsPlainText } from "./markdown-editor"
+import { markdownLivePreview } from "./live-preview"
 
 // React 19 在测试里要求显式打开 act 环境标记。
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -19,6 +21,11 @@ if (!Range.prototype.getClientRects) {
 
 let container: HTMLElement | null = null
 let root: Root | null = null
+const originalNavigator = {
+  maxTouchPoints: Object.getOwnPropertyDescriptor(Navigator.prototype, "maxTouchPoints"),
+  platform: Object.getOwnPropertyDescriptor(Navigator.prototype, "platform"),
+  userAgent: Object.getOwnPropertyDescriptor(Navigator.prototype, "userAgent"),
+}
 
 function mount(element: React.ReactElement) {
   container = document.createElement("div")
@@ -28,11 +35,28 @@ function mount(element: React.ReactElement) {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks()
+  const selection = document.getSelection()
+  if (selection && "removeAllRanges" in selection) selection.removeAllRanges()
   act(() => { root?.unmount() })
   container?.remove()
   root = null
   container = null
+  restoreNavigatorPlatform()
 })
+
+function setNavigatorPlatform(platform: { maxTouchPoints: number; platform: string; userAgent: string }) {
+  Object.defineProperty(Navigator.prototype, "maxTouchPoints", { configurable: true, get: () => platform.maxTouchPoints })
+  Object.defineProperty(Navigator.prototype, "platform", { configurable: true, get: () => platform.platform })
+  Object.defineProperty(Navigator.prototype, "userAgent", { configurable: true, get: () => platform.userAgent })
+}
+
+function restoreNavigatorPlatform() {
+  for (const [key, descriptor] of Object.entries(originalNavigator)) {
+    if (descriptor) Object.defineProperty(Navigator.prototype, key, descriptor)
+    else Reflect.deleteProperty(Navigator.prototype, key)
+  }
+}
 
 describe("MarkdownEditor", () => {
   function editorView() {
@@ -40,6 +64,35 @@ describe("MarkdownEditor", () => {
     if (!view) throw new Error("编辑器未挂载")
     return view
   }
+
+  it("桌面端实际组件使用自绘选区，并保持范围尾部额外光标关闭", () => {
+    setNavigatorPlatform({
+      maxTouchPoints: 0,
+      platform: "MacIntel",
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)",
+    })
+    mount(<MarkdownEditor onChange={() => {}} value={"第一行\n第二行"} />)
+    const view = editorView()
+
+    expect(view.dom.dataset.selectionRendering).toBe("drawn")
+    expect(view.dom.querySelector(".cm-selectionLayer")).not.toBeNull()
+    expect(view.dom.querySelector(".cm-cursorLayer")).not.toBeNull()
+    expect(getDrawSelectionConfig(view.state).drawRangeCursor).toBe(false)
+  })
+
+  it("iOS 实际组件保留原生选区，不挂 CodeMirror 自绘层", () => {
+    setNavigatorPlatform({
+      maxTouchPoints: 5,
+      platform: "iPhone",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
+    })
+    mount(<MarkdownEditor onChange={() => {}} value={"第一行\n第二行"} />)
+    const view = editorView()
+
+    expect(view.dom.dataset.selectionRendering).toBe("native")
+    expect(view.dom.querySelector(".cm-selectionLayer")).toBeNull()
+    expect(view.dom.querySelector(".cm-cursorLayer")).toBeNull()
+  })
 
   function pasteEvent(data: { files?: File[]; html?: string; itemFiles?: File[]; text?: string }) {
     const event = new Event("paste", { bubbles: true, cancelable: true })
@@ -49,6 +102,32 @@ describe("MarkdownEditor", () => {
       items: (data.itemFiles ?? []).map((file) => ({ getAsFile: () => file, kind: "file" })),
     } })
     return event
+  }
+
+  function clipboardEvent(type: "copy" | "cut") {
+    const data = new Map<string, string>()
+    const event = new Event(type, { bubbles: true, cancelable: true })
+    Object.defineProperty(event, "clipboardData", { value: {
+      clearData: (format?: string) => { format ? data.delete(format) : data.clear() },
+      getData: (format: string) => data.get(format) ?? "",
+      setData: (format: string, value: string) => { data.set(format, value) },
+    } })
+    return { data, event }
+  }
+
+  function markdownRangeText(content: string, from: number, to: number, reverse = false, livePreview = true) {
+    const view = new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc: content,
+        extensions: livePreview ? [markdown({ base: markdownLanguage }), markdownLivePreview({})] : [markdown({ base: markdownLanguage })],
+        selection: reverse ? { anchor: to, head: from } : { anchor: from, head: to },
+      }),
+    })
+    ensureSyntaxTree(view.state, content.length, 1000)
+    const selected = selectedMarkdownRange(view)
+    view.destroy()
+    return selected?.text ?? ""
   }
 
   it("点击图片本体打开预览，Esc 关闭后焦点回到图片", async () => {
@@ -150,6 +229,221 @@ describe("MarkdownEditor", () => {
     expect(onChange).toHaveBeenLastCalledWith("网页正文原文", expect.anything())
     expect(onInsertFiles).not.toHaveBeenCalled()
     Reflect.deleteProperty(navigator, "clipboard")
+  })
+
+  it("复制从即时预览结构行可见文字起点开始的选区时补回 Markdown 前缀", async () => {
+    const content = [
+      "- 第一项",
+      "  - [x] 子任务",
+      "> 1. 引用有序",
+    ].join("\n")
+    expect(markdownRangeText(content, content.indexOf("第一项"), content.indexOf("\n  - [x]"))).toBe("- 第一项")
+    expect(markdownRangeText(content, content.indexOf("第一项"), content.indexOf("第一项") + 1)).toBe("第")
+    expect(markdownRangeText(content, content.indexOf("子任务"), content.indexOf("\n>"))).toBe("  - [x] 子任务")
+    expect(markdownRangeText(content, content.indexOf("1. "), content.length, true)).toBe("> 1. 引用有序")
+    expect(markdownRangeText("1. 第一项", 3, 6)).toBe("第一项")
+    expect(markdownRangeText("- **粗体**", 4, 6)).toBe("- **粗体**")
+    expect(markdownRangeText("- 第一项\n- **粗体**", 2, 12)).toBe("- 第一项\n- **粗体**")
+    expect(markdownRangeText("- 第一项\n- **粗体** 后续", 2, 12)).toBe("- 第一项\n- **粗体")
+    expect(markdownRangeText("# 一级标题", 2, 6)).toBe("# 一级标题")
+    expect(markdownRangeText("# 一级标题", 2, 4)).toBe("一级")
+    expect(markdownRangeText("Setext\n===", 0, 6)).toBe("Setext")
+    expect(markdownRangeText("- &amp;word", 7, 11)).toBe("word")
+    expect(markdownRangeText(content, content.indexOf("一项"), content.indexOf("一项") + 2)).toBe("一项")
+    expect(markdownRangeText("    - code", 6, 10)).toBe("code")
+  })
+
+  it("结构行复制不依赖当前行还在 live-preview 可见装饰范围内", async () => {
+    const content = `- 第一项\n\n${"长段落".repeat(2000)}\n\n- 最后一项`
+    const from = content.indexOf("第一项")
+    const to = content.indexOf("最后一项") + "最后一项".length
+    expect(markdownRangeText(content, from, to, false, false)).toBe(content)
+  })
+
+  it("空光标停在结构标记上时按即时预览可见源码处理，不补未选前缀", () => {
+    const content = "- 第一项"
+    const view = new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc: content,
+        extensions: [markdown({ base: markdownLanguage }), markdownLivePreview({}), EditorState.allowMultipleSelections.of(true)],
+        selection: EditorSelection.create([
+          EditorSelection.cursor(0),
+          EditorSelection.range(2, content.length),
+        ]),
+      }),
+    })
+    ensureSyntaxTree(view.state, content.length, 1000)
+    expect(selectedMarkdownRange(view)?.text).toBe("第一项")
+    view.destroy()
+  })
+
+  it("结构前缀只有部分被隐藏时不补可见且未选中的源码", () => {
+    const content = "> - body"
+    const view = new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc: content,
+        extensions: [markdown({ base: markdownLanguage }), markdownLivePreview({}), EditorState.allowMultipleSelections.of(true)],
+        selection: EditorSelection.create([
+          EditorSelection.cursor(0),
+          EditorSelection.range(4, content.length),
+        ]),
+      }),
+    })
+    ensureSyntaxTree(view.state, content.length, 1000)
+    expect(selectedMarkdownRange(view)?.text).toBe("body")
+    view.destroy()
+  })
+
+  it("工具栏复制与剪切使用同一份带 Markdown 前缀的选区文本", async () => {
+    const handle = createRef<MarkdownEditorHandle>()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } })
+    mount(<MarkdownEditor onChange={() => {}} ref={handle} value={"- 第一项\n- 第二项"} />)
+    const view = editorView()
+    const from = view.state.doc.toString().indexOf("第一项")
+    act(() => { view.dispatch({ selection: { anchor: from, head: view.state.doc.length } }) })
+
+    await act(async () => { expect(await handle.current!.copySelection()).toBe(true) })
+    expect(writeText).toHaveBeenLastCalledWith("- 第一项\n- 第二项")
+
+    await act(async () => { expect(await handle.current!.cutSelection()).toBe(true) })
+    expect(writeText).toHaveBeenLastCalledWith("- 第一项\n- 第二项")
+    expect(editorView().state.doc.toString()).toBe("")
+    act(() => { handle.current!.undo() })
+    expect(editorView().state.doc.toString()).toBe("- 第一项\n- 第二项")
+    Reflect.deleteProperty(navigator, "clipboard")
+  })
+
+  it("工具栏复制与剪切支持多个选区并按同一批范围删除", async () => {
+    const handle = createRef<MarkdownEditorHandle>()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } })
+    mount(<MarkdownEditor onChange={() => {}} ref={handle} value={"- 第一项\n- 第二项\n- 第三项"} />)
+    const view = editorView()
+    const doc = view.state.doc.toString()
+    const first = doc.indexOf("第一项")
+    const third = doc.indexOf("第三项")
+    act(() => {
+      view.dispatch({
+        selection: EditorSelection.create([
+          EditorSelection.range(first, doc.indexOf("\n")),
+          EditorSelection.range(third, doc.length),
+        ]),
+      })
+    })
+
+    await act(async () => { expect(await handle.current!.copySelection()).toBe(true) })
+    expect(writeText).toHaveBeenLastCalledWith("- 第一项\n- 第三项")
+
+    await act(async () => { expect(await handle.current!.cutSelection()).toBe(true) })
+    expect(writeText).toHaveBeenLastCalledWith("- 第一项\n- 第三项")
+    expect(editorView().state.doc.toString()).toBe("\n- 第二项\n")
+    Reflect.deleteProperty(navigator, "clipboard")
+  })
+
+  it("原生 copy/cut 与工具栏保持同样的 Markdown 选区语义", () => {
+    mount(<MarkdownEditor onChange={() => {}} value={"- 第一项\n- 第二项"} />)
+    const view = editorView()
+    const from = view.state.doc.toString().indexOf("第一项")
+    act(() => { view.focus(); view.dispatch({ selection: { anchor: from, head: view.state.doc.length } }) })
+
+    const copy = clipboardEvent("copy")
+    act(() => { view.contentDOM.dispatchEvent(copy.event) })
+    expect(copy.event.defaultPrevented).toBe(true)
+    expect(copy.data.get("text/plain")).toBe("- 第一项\n- 第二项")
+
+    const cut = clipboardEvent("cut")
+    act(() => { view.contentDOM.dispatchEvent(cut.event) })
+    expect(cut.event.defaultPrevented).toBe(true)
+    expect(cut.data.get("text/plain")).toBe("- 第一项\n- 第二项")
+    expect(view.state.doc.toString()).toBe("")
+  })
+
+  it("原生复制多个选区时逐段补齐结构前缀并用换行拼接", () => {
+    mount(<MarkdownEditor onChange={() => {}} value={"- 第一项\n- 第二项"} />)
+    const view = editorView()
+    const doc = view.state.doc.toString()
+    const first = doc.indexOf("第一项")
+    const second = doc.indexOf("第二项")
+    act(() => {
+      view.focus()
+      view.dispatch({
+        selection: EditorSelection.create([
+          EditorSelection.range(first, doc.indexOf("\n")),
+          EditorSelection.range(second, doc.length),
+        ]),
+      })
+    })
+
+    const copy = clipboardEvent("copy")
+    act(() => { view.contentDOM.dispatchEvent(copy.event) })
+    expect(copy.event.defaultPrevented).toBe(true)
+    expect(copy.data.get("text/plain")).toBe("- 第一项\n- 第二项")
+  })
+
+  it("原生剪切写剪贴板失败时不删除编辑器内容", () => {
+    mount(<MarkdownEditor onChange={() => {}} value="- 第一项" />)
+    const view = editorView()
+    act(() => { view.focus(); view.dispatch({ selection: { anchor: 2, head: view.state.doc.length } }) })
+
+    const event = new Event("cut", { bubbles: true, cancelable: true })
+    Object.defineProperty(event, "clipboardData", { value: {
+      clearData: vi.fn(),
+      setData: vi.fn(() => { throw new Error("denied") }),
+    } })
+    act(() => { view.contentDOM.dispatchEvent(event) })
+    expect(event.defaultPrevented).toBe(true)
+    expect(view.state.doc.toString()).toBe("- 第一项")
+  })
+
+  it("编辑器失焦时原生复制不截获页面其它 DOM 选区", () => {
+    mount(<MarkdownEditor onChange={() => {}} value="- 第一项" />)
+    const view = editorView()
+    act(() => { view.dispatch({ selection: { anchor: 2, head: view.state.doc.length } }) })
+    const input = document.createElement("input")
+    document.body.append(input)
+    input.focus()
+
+    const copy = clipboardEvent("copy")
+    act(() => { view.contentDOM.dispatchEvent(copy.event) })
+    expect(copy.event.defaultPrevented).toBe(false)
+    expect(copy.data.get("text/plain")).toBeUndefined()
+  })
+
+  it("页面真实 DOM 选区不完全属于编辑器时不接管原生复制", () => {
+    mount(<MarkdownEditor onChange={() => {}} value="- 第一项" />)
+    const view = editorView()
+    act(() => { view.focus(); view.dispatch({ selection: { anchor: 2, head: view.state.doc.length } }) })
+    const outside = document.createElement("div")
+    outside.textContent = "外部文字"
+    document.body.append(outside)
+    const selection = vi.spyOn(document, "getSelection").mockReturnValue({
+      anchorNode: outside.firstChild,
+      focusNode: outside.firstChild,
+      isCollapsed: false,
+      rangeCount: 1,
+    } as Selection)
+
+    const copy = clipboardEvent("copy")
+    act(() => { view.contentDOM.dispatchEvent(copy.event) })
+    expect(copy.data.get("text/plain")).not.toBe("- 第一项")
+    selection.mockRestore()
+  })
+
+  it("原生复制不接管表格单元格 textarea 自己的选区", () => {
+    mount(<MarkdownEditor onChange={() => {}} value={"| A | B |\n| --- | --- |\n| 1 | 2 |"} />)
+    const view = editorView()
+    const textarea = document.createElement("textarea")
+    textarea.value = "cell"
+    view.contentDOM.append(textarea)
+    textarea.setSelectionRange(0, 4)
+
+    const copy = clipboardEvent("copy")
+    act(() => { textarea.dispatchEvent(copy.event) })
+    expect(copy.event.defaultPrevented).toBe(false)
+    expect(copy.data.get("text/plain")).toBeUndefined()
   })
 
   it("菜单图片使用默认书签，附件完成后光标落到图片引用之后", async () => {

@@ -4,8 +4,8 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { syntaxTree } from "@codemirror/language"
 import { languages } from "@codemirror/language-data"
 import { undo, redo, undoDepth, redoDepth } from "@codemirror/commands"
-import type { EditorState } from "@codemirror/state"
-import { EditorView } from "@codemirror/view"
+import type { EditorState, SelectionRange } from "@codemirror/state"
+import { EditorView, type DecorationSet } from "@codemirror/view"
 
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
 import { collectClipboardFiles, readClipboardContent, readClipboardEvent, validateClipboardFiles } from "@/services/clipboard/clipboard-content"
@@ -14,13 +14,16 @@ import type { VaultAsset } from "@/services/vault/vault-adapter"
 import { bottomOverlayHeight, scrollCursorIntoView } from "./cursor-visibility"
 import { applyLinkTarget, detectFormatState, focusExistingLinkUrl, linkInsertion, linkTargetAt, linkTargetInText, removeLinkTarget, type EditorFormatState, type EditorLinkTarget, type InlineMarkKind, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
 import { htmlToMarkdown, isInlineMarkdownFragment } from "./html-to-markdown"
-import { markdownLivePreview, type EditorLinkTap } from "./live-preview"
+import { buildLivePreviewDecorationsForRanges, markdownLivePreview, type EditorLinkTap } from "./live-preview"
 import type { EmbeddedWikiNoteResult } from "./markdown-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import { ImageZoomOverlay } from "./image-zoom"
 import { activeTableEdit, type TableEditTarget } from "./table-edit-target"
 import { rememberEditorSession, restoreEditorSession } from "./editor-session"
+import { selectionRenderingExtensions } from "./selection-rendering"
 import "./markdown-table.css"
+
+export { shouldDrawCodeMirrorSelection } from "./selection-rendering"
 
 // 链接面板在表格单元格编辑中打开时的现场快照：保存前校验单元格内容未变，
 // 取消时据此把焦点与选区还给单元格 textarea。
@@ -69,15 +72,6 @@ export type MarkdownFindResult = {
 // 工具栏「插入表格」按钮与 formatToolbarText 共用同一份模板字符串，
 // 插入完成后靠它识别出这次插入的是表格，从而自动聚焦到第一个单元格。
 export const TABLE_INSERT_TEMPLATE = "\n| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |\n"
-
-type SelectionPlatform = Pick<Navigator, "maxTouchPoints" | "platform" | "userAgent">
-
-export function shouldDrawCodeMirrorSelection(platform: SelectionPlatform = navigator) {
-  // iOS WKWebView 在中文输入时仍会合成原生 caret；再叠加 CodeMirror 自绘层会留下两条错位光标。
-  const iosDevice = /iPad|iPhone|iPod/i.test(platform.userAgent)
-    || (/MacIntel/i.test(platform.platform) && platform.maxTouchPoints > 1)
-  return !iosDevice
-}
 
 // 一次装饰更新里可能同时挂着好几张表格的 wrapper，用起点行号才能挑出这次刚插入的那一张。
 export function findTableWrapperAtLine(root: ParentNode, lineStart: number): HTMLElement | null {
@@ -201,6 +195,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       // 列表 / 引用回车续写、结构行 Tab 缩进、选中文字敲 * ` ~ 即包裹。
       markdownInputEnhancements(),
       wikiLinkCompletion(() => handlers.current.getWikiLinkSuggestions?.() ?? []),
+      selectionRenderingExtensions(),
       EditorView.lineWrapping,
       EditorView.scrollHandler.of((view, range, options) => {
         const viewport = view.dom.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')
@@ -243,6 +238,33 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         if (compact && update.view.hasFocus) scrollCursorIntoView(update.view)
       }),
       EditorView.domEventHandlers({
+        copy(event, view) {
+          if (isEditableFormControl(event.target)) return false
+          if (!hasEditorClipboardContext(view)) return false
+          const selected = selectedMarkdownRanges(view)
+          if (selected.length === 0) return false
+          if (!writeClipboardEventText(event, selected.map((range) => range.text).join("\n"))) return false
+          event.preventDefault()
+          return true
+        },
+        cut(event, view) {
+          if (isEditableFormControl(event.target) || view.state.readOnly) return false
+          if (!hasEditorClipboardContext(view)) return false
+          const selected = selectedMarkdownRanges(view)
+          if (selected.length === 0) return false
+          // 原生 cut 只有先写入剪贴板才允许删除；写入失败时吞掉事件，避免默认路径删掉但没复制成功。
+          if (!writeClipboardEventText(event, selected.map((range) => range.text).join("\n"))) {
+            event.preventDefault()
+            return true
+          }
+          event.preventDefault()
+          view.dispatch({
+            changes: selected.map((range) => ({ from: range.from, to: range.to })),
+            selection: { anchor: selected[0].from },
+            userEvent: "delete.cut",
+          })
+          return true
+        },
         // CodeMirror 的选区不随失焦清空：点走标题输入框后选区高亮已经没了，
         // 选区操作条却会继续占着底部，所以焦点变化时同步汇报一次。
         blur() {
@@ -462,21 +484,25 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       async copySelection() {
         const view = editorRef.current?.view
         const input = activeTableEdit(view)?.input
-        const selected = input ? input.value.slice(input.selectionStart, input.selectionEnd) : readSelectedText(view)
+        const selected = input
+          ? input.value.slice(input.selectionStart, input.selectionEnd)
+          : selectedMarkdownRanges(view).map((range) => range.text).join("\n")
         if (!selected) return false
-        return writeClipboardText(selected)
+        return writeClipboardText(selected, "text")
       },
       async cutSelection() {
         const view = editorRef.current?.view
         const target = activeTableEdit(view)
-        const selected = target ? target.input.value.slice(target.input.selectionStart, target.input.selectionEnd) : readSelectedText(view)
+        const ranges = target ? [] : selectedMarkdownRanges(view)
+        const selected = target
+          ? target.input.value.slice(target.input.selectionStart, target.input.selectionEnd)
+          : ranges.map((range) => range.text).join("\n")
         if (!view || readOnly || !selected) return false
         const state = view.state
-        const range = state.selection.main
         const inputValue = target?.input.value
         const inputFrom = target?.input.selectionStart
         const inputTo = target?.input.selectionEnd
-        if (!await writeClipboardText(selected)) return false
+        if (!await writeClipboardText(selected, "text")) return false
         // 剪贴板授权可能异步返回；期间正文/选区变了就只复制，不删除任何新选区。
         if (target) {
           if (activeTableEdit(view) !== target || target.input.value !== inputValue || target.input.selectionStart !== inputFrom || target.input.selectionEnd !== inputTo) return false
@@ -484,7 +510,11 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           target.commit()
         } else {
           if (view.state.doc !== state.doc || !view.state.selection.eq(state.selection) || view.state.readOnly || !view.dom.isConnected) return false
-          view.dispatch({ changes: { from: range.from, to: range.to }, selection: { anchor: range.from }, userEvent: "delete.cut" })
+          view.dispatch({
+            changes: ranges.map((range) => ({ from: range.from, to: range.to })),
+            selection: { anchor: ranges[0].from },
+            userEvent: "delete.cut",
+          })
         }
         view.focus()
         return true
@@ -719,7 +749,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         basicSetup={{
           bracketMatching: true,
           closeBrackets: true,
-          drawSelection: shouldDrawCodeMirrorSelection(),
+          drawSelection: false,
           foldGutter: false,
           highlightActiveLine: false,
           highlightActiveLineGutter: false,
@@ -775,10 +805,165 @@ async function pasteClipboardAtSnapshot(view: EditorView, onInsertFiles: (files:
   return false
 }
 
-function readSelectedText(view: EditorView | undefined) {
-  if (!view) return ""
-  const selection = view.state.selection.main
-  return view.state.sliceDoc(selection.from, selection.to)
+export function selectedMarkdownRange(view: EditorView | undefined) {
+  return selectedMarkdownRanges(view)[0] ?? null
+}
+
+function selectedMarkdownRanges(view: EditorView | undefined) {
+  if (!view) return []
+  const ranges = view.state.selection.ranges
+    .filter((range) => !range.empty)
+    .map((range) => normalizedMarkdownRange(view, range))
+    .filter((range): range is { from: number; text: string; to: number } => range !== null)
+  return mergeMarkdownRanges(view.state, ranges)
+}
+
+function mergeMarkdownRanges(state: EditorState, ranges: Array<{ from: number; text: string; to: number }>) {
+  const merged: Array<{ from: number; text: string; to: number }> = []
+  for (const range of [...ranges].sort((left, right) => left.from - right.from || left.to - right.to)) {
+    const previous = merged[merged.length - 1]
+    if (!previous || range.from > previous.to) {
+      merged.push({ ...range })
+      continue
+    }
+    previous.to = Math.max(previous.to, range.to)
+    previous.text = state.sliceDoc(previous.from, previous.to)
+  }
+  return merged
+}
+
+function normalizedMarkdownRange(view: EditorView, range: SelectionRange) {
+  let from = range.from
+  let to = range.to
+  const line = view.state.doc.lineAt(from)
+  const decorations = clipboardLineDecorations(view, range.from, range.to)
+  const hiddenPrefixEnd = hiddenStructuralPrefixEnd(view.state, decorations, line.from, line.text)
+  let expandedStart = false
+  // 即时预览只在源码标记被真实替换时才需要补范围；并且必须覆盖首项可见整行，
+  // 否则从正文开头随手选几个字也会被误升级成整条 Markdown。
+  if (
+    hiddenPrefixEnd !== null
+    && from >= hiddenPrefixEnd
+    && rangeFullyHiddenSourceMarks(decorations, hiddenPrefixEnd, from)
+    && selectionCoversVisibleLineEnd(decorations, to, line.to)
+  ) {
+    from = line.from
+    expandedStart = true
+  }
+  const endLine = view.state.doc.lineAt(to)
+  if ((expandedStart || range.from < endLine.from) && to < endLine.to && rangeFullyHiddenSourceMarks(decorations, to, endLine.to)) to = endLine.to
+  if (from >= to) return null
+  return { from, text: view.state.sliceDoc(from, to), to }
+}
+
+function clipboardLineDecorations(view: EditorView, from: number, to: number) {
+  const startLine = view.state.doc.lineAt(from)
+  const endLine = view.state.doc.lineAt(to)
+  const ranges = startLine.number === endLine.number
+    ? [{ from: startLine.from, to: startLine.to }]
+    : [{ from: startLine.from, to: startLine.to }, { from: endLine.from, to: endLine.to }]
+  return buildLivePreviewDecorationsForRanges(view, ranges)
+}
+
+function hiddenStructuralPrefixEnd(state: EditorState, decorations: DecorationSet, lineFrom: number, text: string) {
+  const candidateEnd = structuralHiddenLineContentStart(text)
+  if (candidateEnd === null) return null
+  const to = lineFrom + candidateEnd
+  return isStructuralMarkdownLine(state, lineFrom, to) && prefixNonWhitespaceHiddenByReplacement(state, decorations, lineFrom, to) ? to : null
+}
+
+function structuralHiddenLineContentStart(text: string) {
+  let offset = 0
+  let structural = false
+  while (offset < text.length) {
+    const quote = text.slice(offset).match(/^(?: {0,3}>\s?)/)
+    if (!quote) break
+    offset += quote[0].length
+    structural = true
+  }
+  const rest = text.slice(offset)
+  const heading = rest.match(/^#{1,6}\s+/)
+  const task = rest.match(/^[ \t]*(?:[-+*]|\d+[.)])\s+\[[ xX]\]\s+/)
+  const unordered = rest.match(/^[ \t]*[-+*]\s+/)
+  const mark = heading?.[0] ?? task?.[0] ?? unordered?.[0]
+  if (mark) {
+    offset += mark.length
+    structural = true
+  }
+  return structural && offset > 0 && offset <= text.length ? offset : null
+}
+
+function selectionCoversVisibleLineEnd(decorations: DecorationSet, to: number, lineTo: number) {
+  if (to >= lineTo) return true
+  return rangeFullyHiddenSourceMarks(decorations, to, lineTo)
+}
+
+function prefixNonWhitespaceHiddenByReplacement(state: EditorState, decorations: DecorationSet, from: number, to: number) {
+  if (from >= to) return false
+  const hidden: Array<{ from: number; to: number }> = []
+  decorations.between(from, to, (rangeFrom, rangeTo, decoration) => {
+    if (rangeFrom < rangeTo && isReplacementDecoration(decoration.spec)) hidden.push({ from: rangeFrom, to: rangeTo })
+  })
+  for (let position = from; position < to; position += 1) {
+    if (state.sliceDoc(position, position + 1).trim() === "") continue
+    if (!hidden.some((range) => position >= range.from && position < range.to)) return false
+  }
+  return hidden.length > 0
+}
+
+function rangeFullyHiddenSourceMarks(decorations: DecorationSet, from: number, to: number) {
+  if (from >= to) return true
+  let cursor = from
+  decorations.between(from, to, (rangeFrom, rangeTo, decoration) => {
+    if (!isSourceHiddenDecoration(decoration.spec) || rangeFrom > cursor) return
+    cursor = Math.max(cursor, rangeTo)
+  })
+  return cursor >= to
+}
+
+function isReplacementDecoration(spec: Record<string, unknown>) {
+  return !("class" in spec) && (!("attributes" in spec) || !spec.attributes)
+}
+
+function isSourceHiddenDecoration(spec: Record<string, unknown>) {
+  return isReplacementDecoration(spec) && (!("widget" in spec) || !spec.widget)
+}
+
+function writeClipboardEventText(event: ClipboardEvent, text: string) {
+  if (!event.clipboardData || !text) return false
+  try {
+    event.clipboardData.clearData()
+    event.clipboardData.setData("text/plain", text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function hasEditorClipboardContext(view: EditorView) {
+  const selection = document.getSelection()
+  if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
+    const anchor = selection.anchorNode
+    const focus = selection.focusNode
+    return !!anchor && !!focus && view.contentDOM.contains(anchor) && view.contentDOM.contains(focus)
+  }
+  return view.hasFocus || view.dom.contains(document.activeElement)
+}
+
+function isEditableFormControl(target: EventTarget | null) {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+}
+
+function isStructuralMarkdownLine(state: EditorState, lineFrom: number, contentStart: number) {
+  for (let node: MdNode | null = syntaxTree(state).resolveInner(Math.min(contentStart, state.doc.length), -1); node; node = node.parent) {
+    if (node.name === "FencedCode" || node.name === "CodeBlock" || node.name === "Table") return false
+    if (node.name === "Blockquote" || node.name === "ListItem" || /^ATXHeading[1-6]$/.test(node.name)) return true
+  }
+  for (let node: MdNode | null = syntaxTree(state).resolveInner(lineFrom, 1); node; node = node.parent) {
+    if (node.name === "FencedCode" || node.name === "CodeBlock" || node.name === "Table") return false
+    if (node.name === "Blockquote" || node.name === "ListItem" || /^ATXHeading[1-6]$/.test(node.name)) return true
+  }
+  return false
 }
 
 // 只用到节点名与父链；按结构声明，避免为类型引入 @lezer/common 显式依赖。

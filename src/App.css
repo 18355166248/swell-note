@@ -816,8 +816,15 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 /* 正文下方的空白必须属于文本层：正文只有一张表格时，它是唯一能落下光标的地方。 */
 .markdown-editor-shell .cm-content { min-height: var(--editor-min-height); padding: 0; caret-color: var(--primary); }
 .markdown-editor-shell .cm-line { padding: 0; }
-.markdown-editor-shell .cm-selectionBackground,
-.markdown-editor-shell .cm-content ::selection { background: color-mix(in oklab,var(--primary) 18%,transparent) !important; }
+.markdown-editor-shell .cm-editor[data-selection-rendering="drawn"] .cm-selectionBackground { background: color-mix(in oklab,var(--primary) 18%,transparent) !important; }
+/* 自绘选区只给 CodeMirror 的 selection layer 上色；正文根的原生选区保持透明，避免文末 min-height 空白被拖成大蓝块。 */
+.markdown-editor-shell .cm-editor[data-selection-rendering="drawn"] .cm-content::selection { background: transparent !important; }
+.markdown-editor-shell .cm-editor[data-selection-rendering="native"] .cm-content::selection,
+.markdown-editor-shell .cm-editor[data-selection-rendering="native"] .cm-content ::selection { background: color-mix(in oklab,var(--primary) 18%,transparent); }
+/* 行内表格/富块编辑框必须保留系统 textarea 选区，覆盖 CodeMirror 隐藏原生选区主题可能命中的 widget 后代。 */
+.markdown-editor-shell .cm-md-table-cell-input::selection,
+.markdown-editor-shell .cm-md-compat-editor textarea::selection,
+.markdown-editor-shell .cm-md-rich-editor textarea::selection { background: Highlight !important; color: HighlightText !important; }
 /* 默认 1px 光标在手机屏上太细，加粗到 2px 并用负边距抵消占位，避免行宽随光标闪烁变化。 */
 .markdown-editor-shell .cm-cursor { border-left: 2px solid var(--primary); margin-left: -1px; }
 .markdown-editor-shell .cm-placeholder { color: var(--muted-foreground); font-style: normal; }

@@ -656,7 +656,7 @@ export function mergeDecorationRanges(ranges: readonly DocRange[], buffer: numbe
   return merged
 }
 
-function buildLivePreviewDecorations(view: EditorView): DecorationSet {
+function buildLivePreviewDecorations(view: EditorView, forcedRanges?: readonly DocRange[]): DecorationSet {
   const isCursorActive = cursorLineChecker(view.state)
   const isCursorTouching = cursorRangeChecker(view.state)
   const isMarkTouched = cursorMarkChecker(view.state)
@@ -668,7 +668,9 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   // 编辑器自身不滚动，但 CodeMirror 会跟着外层 ScrollArea 更新 viewport，
   // 因此按可见范围加缓冲计算即可，滚动时由 viewportChanged 续算。
   const doc = view.state.doc
-  const decorationRanges = view.visibleRanges.length > 0
+  const decorationRanges = forcedRanges
+    ? mergeDecorationRanges(forcedRanges, 0, doc.length)
+    : view.visibleRanges.length > 0
     ? mergeDecorationRanges(view.visibleRanges, DECORATION_BUFFER, doc.length)
     : [{ from: 0, to: doc.length }]
 
@@ -962,6 +964,12 @@ function buildLivePreviewDecorations(view: EditorView): DecorationSet {
   ),
   ))
   return Decoration.set(visibleDecorations, true)
+}
+
+// 剪贴板语义需要知道选区首尾行的源码标记当前是否会被即时预览隐藏；
+// 这里复用同一套装饰规则，只把计算范围收窄到指定行，避免受当前 viewport 裁剪影响。
+export function buildLivePreviewDecorationsForRanges(view: EditorView, ranges: readonly DocRange[]): DecorationSet {
+  return buildLivePreviewDecorations(view, ranges)
 }
 
 const markdownLivePreviewPlugin = ViewPlugin.fromClass(
