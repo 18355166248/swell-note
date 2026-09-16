@@ -34,5 +34,8 @@ describe("auto sync queue key", () => {
     const first = buildAutoSyncQueueKey("cache", [], ["A"], 0)
     expect(buildAutoSyncQueueKey("cache", [], ["B"], 0)).not.toBe(first)
     expect(buildAutoSyncQueueKey("cache", [], ["A"], 1)).not.toBe(first)
+    expect(buildAutoSyncQueueKey("cache", [], ["A"], 0, [{ id: "move-1", sourceFolder: "旧", targetFolder: "新" }])).not.toBe(first)
+    expect(buildAutoSyncQueueKey("cache", [], ["A"], 0, [{ id: "move-1", moved: true, sourceFolder: "旧", targetFolder: "新" }]))
+      .not.toBe(buildAutoSyncQueueKey("cache", [], ["A"], 0, [{ id: "move-1", sourceFolder: "旧", targetFolder: "新" }]))
   })
 })

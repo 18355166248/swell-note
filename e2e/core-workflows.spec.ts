@@ -453,6 +453,8 @@ test.describe("核心笔记流程", () => {
     await page.reload()
     const workspace = page.locator(".mobile-workspace:visible")
     await workspace.getByText("测试", { exact: true }).first().click()
+    // 点击完成只代表事件处理结束；先等待路由提交，避免把身份标记误贴到仍在退场的笔记库页。
+    await expect(workspace).toHaveAttribute("data-screen", "notes")
     const listEntry = workspace.locator(".mobile-edge-swipe-current")
     await listEntry.evaluate((element) => { element.setAttribute("data-e2e-draft-return", "original-list") })
     await workspace.getByRole("button", { name: "在测试中新建笔记" }).click()

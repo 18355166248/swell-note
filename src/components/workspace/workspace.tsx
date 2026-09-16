@@ -226,6 +226,7 @@ type WorkspaceProps = {
   onQueryChange: (query: string) => void
   onNoteSortChange: (sort: NoteSort) => void
   onReloadNote: () => void
+  onRevealSearchResult: (note: Note) => void
   onRetryNoteLoad: () => void
   onRefreshVault: () => void
   onResolveConflict: (strategy: "local" | "merge" | "remote") => void
@@ -260,6 +261,7 @@ type WorkspaceProps = {
 }
 
 type SearchNavigation = { noteId: string; query: string }
+type SearchRevealRequest = { noteId: string; requestId: number }
 const SearchNavigationContext = createContext<{ request: SearchNavigation | null; consume: () => void }>({ request: null, consume: () => {} })
 
 export function handleNoteViewModeShortcut(event: KeyboardEvent, currentMode: NoteViewMode, onChange: (mode: NoteViewMode) => void) {
@@ -284,6 +286,8 @@ export function resolveEditorReadOnly(fileReadOnly: boolean, source: Note["sourc
 
 export function Workspace(props: WorkspaceProps) {
   const [searchRequest, setSearchRequest] = useState<SearchNavigation | null>(null)
+  const [searchRevealRequest, setSearchRevealRequest] = useState<SearchRevealRequest | null>(null)
+  const searchRevealSequence = useRef(0)
   const consumeSearchRequest = useCallback(() => setSearchRequest(null), [])
   const searchNavigation = useMemo(() => ({ request: searchRequest, consume: consumeSearchRequest }), [searchRequest, consumeSearchRequest])
   const mobileLayout = useMobileWorkspaceLayout()
@@ -359,6 +363,7 @@ export function Workspace(props: WorkspaceProps) {
           expandedFolderPaths={expandedFolderPaths}
           onOpenGlobalSearch={openGlobalSearch}
           onToggleFolder={toggleFolder}
+          searchRevealRequest={searchRevealRequest}
           visibleFolders={visibleFolders}
         />
       ) : (
@@ -367,6 +372,7 @@ export function Workspace(props: WorkspaceProps) {
           expandedFolderPaths={expandedFolderPaths}
           onOpenGlobalSearch={openGlobalSearch}
           onToggleFolder={toggleFolder}
+          searchRevealRequest={searchRevealRequest}
           visibleFolders={visibleFolders}
         />
       )}
@@ -385,7 +391,9 @@ export function Workspace(props: WorkspaceProps) {
         onSelectNote={(note, query) => {
           // 请求带目标笔记标识，等正文异步加载完成后再消费，避免高亮落在上一篇。
           setSearchRequest(query ? { noteId: note.id, query } : null)
-          props.onSelectNote(note)
+          setSearchRevealRequest({ noteId: note.id, requestId: ++searchRevealSequence.current })
+          // 搜索使用专用的一次导航：上游同步目录/筛选/返回路径，本地请求负责展开与滚动。
+          props.onRevealSearchResult(note)
         }}
         open={globalSearchOpen}
         placement={mobileLayout ? "bottom" : "center"}
@@ -404,6 +412,7 @@ type FolderTreeProps = {
   expandedFolderPaths: ReadonlySet<string>
   onOpenGlobalSearch: () => void
   onToggleFolder: (folderPath: string) => void
+  searchRevealRequest: SearchRevealRequest | null
   visibleFolders: VaultFolder[]
 }
 
@@ -532,6 +541,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         onToggleFolder={toggleFolder}
         onSelectLibraryView={selectLibraryView}
         onSelectVaultCache={selectVaultCache}
+        searchRevealRequest={props.searchRevealRequest}
         selectedFolder={props.selectedFolder}
         isManagingFolder={props.isManagingNote}
         isOpeningVault={props.isOpeningVault}
@@ -578,6 +588,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         query={props.query}
         selectedTag={props.selectedTag}
         selectedFolder={props.selectedFolder}
+        searchRevealRequest={props.searchRevealRequest}
         isManagingFolder={props.isManagingNote}
         isLoading={props.isRefreshingVault}
       /> : null}
@@ -800,6 +811,7 @@ export type LibraryPanelProps = {
   onToggleFolder: (folderPath: string) => void
   onSelectLibraryView: (view: LibraryView) => void
   onSelectVaultCache: (cacheId: string) => void
+  searchRevealRequest?: SearchRevealRequest | null
   selectedFolder: string | null
   syncLabel: string
   vaultError: string | null
@@ -836,6 +848,7 @@ export const LibraryPanel = memo(function LibraryPanel({
   onToggleFolder,
   onSelectLibraryView,
   onSelectVaultCache,
+  searchRevealRequest,
   selectedFolder,
   syncLabel,
   vaultError,
@@ -843,6 +856,8 @@ export const LibraryPanel = memo(function LibraryPanel({
 }: LibraryPanelProps) {
   const navigate = useNavigate()
   const importInputRef = useRef<HTMLInputElement>(null)
+  const folderViewportRef = useRef<HTMLDivElement>(null)
+  const lastFolderRevealRef = useRef(0)
   // 排序管理模式的开关只影响侧栏展示，不参与写权限判断：只读或离线的库同样允许调整本地顺序。
   const [sortingFolders, setSortingFolders] = useState(false)
   const activeFolder = folders.find((folder) => folder.path === selectedFolder)
@@ -868,6 +883,20 @@ export const LibraryPanel = memo(function LibraryPanel({
     // 目录被删到不足两个时没有可调整的对象，自动退出管理模式，避免留下空手柄。
     if (sortingFolders && sortableFolderPaths.length < 2) setSortingFolders(false)
   }, [sortingFolders, sortableFolderPaths.length])
+
+  useLayoutEffect(() => {
+    const viewport = folderViewportRef.current
+    if (!viewport || !searchRevealRequest || !selectedFolder) return
+    if (lastFolderRevealRef.current === searchRevealRequest.requestId) return
+    const frame = window.requestAnimationFrame(() => {
+      const row = [...viewport.querySelectorAll<HTMLElement>("[data-folder-path]")]
+        .find((candidate) => candidate.dataset.folderPath === selectedFolder)
+      if (!row) return
+      revealWithinViewport(viewport, row)
+      lastFolderRevealRef.current = searchRevealRequest.requestId
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [folders, searchRevealRequest?.requestId, selectedFolder])
 
   return (
     <aside className="library-panel">
@@ -956,7 +985,7 @@ export const LibraryPanel = memo(function LibraryPanel({
         ) : null}
       </div>
 
-      <ScrollArea className="library-scroll library-folder-scroll">
+      <ScrollArea className="library-scroll library-folder-scroll" viewportRef={folderViewportRef}>
         <nav aria-label="笔记库导航" className="library-navigation">
           {folders.length > 0 ? sortingFolders ? (
             /* 管理模式只平铺顶层目录：拖动父目录时整个子树在数据层跟随，这里不渲染子行避免误拖。 */
@@ -1134,7 +1163,7 @@ type LibraryRowProps = {
 
 function LibraryRow({ active = false, contextActions, contextFolder, count, depth = 0, expanded, folderTree = false, icon: Icon, label, onClick, onToggle }: LibraryRowProps) {
   const row = (
-    <div className="library-row" data-active={active} data-depth={Math.min(depth, 3)}>
+    <div className="library-row" data-active={active} data-depth={Math.min(depth, 3)} data-folder-path={contextFolder?.path}>
       {folderTree ? (
         onToggle ? (
           <button
@@ -1247,6 +1276,7 @@ type NoteListPanelProps = {
   query: string
   selectedTag: string | null
   selectedFolder: string | null
+  searchRevealRequest?: SearchRevealRequest | null
 }
 
 function NoteListPanel({
@@ -1277,6 +1307,7 @@ function NoteListPanel({
   query,
   selectedTag,
   selectedFolder,
+  searchRevealRequest,
 }: NoteListPanelProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const [viewportReady, setViewportReady] = useState(false)
@@ -1345,6 +1376,7 @@ function NoteListPanel({
               onSelectFolder={onSelectFolder}
               onSelectNote={onSelectNote}
               query={query}
+              searchRevealRequest={searchRevealRequest}
               viewportRef={viewportRef}
             />
           ) : viewportReady ? <EmptyNoteList canCreateNote={canCreateNote} isLoading={isLoading} onCreateNote={onCreateNote} onOpenSettings={onOpenSettings} selectedFolder={selectedFolder} /> : null}
@@ -1416,7 +1448,7 @@ function EmptyNoteList({
   )
 }
 
-function FolderRenameButton({
+export function FolderRenameButton({
   disabled,
   folderPath,
   mode,
@@ -1431,26 +1463,35 @@ function FolderRenameButton({
 }) {
   const folderSegments = folderPath.split(/\s*\/\s*/).filter(Boolean)
   const currentName = folderSegments[folderSegments.length - 1] ?? folderPath
-  const [open, setOpen] = useState(false)
+  const [request, setRequest] = useState<{ initialName: string; mode: "local" | "webdav"; sourcePath: string } | null>(null)
   const [name, setName] = useState(currentName)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const openRename = () => {
+    // 弹窗打开时冻结源路径；期间即使父→子导航或列表复用组件，提交也只作用于原目标。
+    setRequest({ initialName: currentName, mode, sourcePath: folderPath })
+    setName(currentName)
+    setConfirmingDelete(false)
+  }
+  const requestName = request?.initialName ?? currentName
+  const requestMode = request?.mode ?? mode
+  const requestPath = request?.sourcePath ?? folderPath
 
   return (
-    <Dialog onOpenChange={(nextOpen) => { setOpen(nextOpen); setConfirmingDelete(false); if (nextOpen) setName(currentName) }} open={open}>
-      <Button aria-label={`重命名文件夹 ${currentName}`} disabled={disabled} onClick={() => setOpen(true)} size="icon-sm" variant="ghost"><PencilLine /></Button>
+    <Dialog onOpenChange={(nextOpen) => { if (!nextOpen) setRequest(null); setConfirmingDelete(false) }} open={request !== null}>
+      <Button aria-label={`重命名文件夹 ${currentName}`} disabled={disabled} onClick={openRename} size="icon-sm" variant="ghost"><PencilLine /></Button>
       <DialogContent>
-        <DialogHeader><DialogTitle>{confirmingDelete ? "删除文件夹" : "重命名文件夹"}</DialogTitle><DialogDescription>{confirmingDelete && mode === "local" ? "文件夹及其中的全部文件会移动到 Swell Note 回收站，可在保留期内恢复。" : confirmingDelete ? "该目录中的笔记将进入待同步删除，可在同步前撤销。" : mode === "local" ? "将直接重命名本地 Vault 中的目录，并同步更新当前笔记索引。" : "该目录及所有子目录中的笔记会先在本机排队，点击同步后才移动坚果云文件。"}</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>{confirmingDelete ? "删除文件夹" : "重命名文件夹"}</DialogTitle><DialogDescription>{confirmingDelete && requestMode === "local" ? "文件夹及其中的全部文件会移动到 Swell Note 回收站，可在保留期内恢复。" : confirmingDelete ? "该目录中的笔记将进入待同步删除，可在同步前撤销。" : requestMode === "local" ? `将直接重命名“${requestPath}”，并同步更新当前笔记索引。` : `“${requestPath}”及其子目录会先在本机排队，点击同步后整体移动坚果云目录。`}</DialogDescription></DialogHeader>
         <Input autoFocus aria-label="新文件夹名称" onChange={(event) => setName(event.target.value)} value={name} />
         <DialogFooter>
           {confirmingDelete ? (
             <>
               <Button onClick={() => setConfirmingDelete(false)} variant="ghost">暂不删除</Button>
-              <Button onClick={() => { setOpen(false); onDelete(folderPath) }} variant="destructive">{mode === "local" ? "移入回收站" : "确认移入待删除"}</Button>
+              <Button onClick={() => { setRequest(null); onDelete(requestPath) }} variant="destructive">{requestMode === "local" ? "移入回收站" : "确认移入待删除"}</Button>
             </>
           ) : (
             <>
               <Button onClick={() => setConfirmingDelete(true)} variant="destructive">删除文件夹</Button>
-              <Button disabled={!name.trim() || name.trim() === currentName} onClick={() => { setOpen(false); onRename(folderPath, name) }}>确认重命名</Button>
+              <Button disabled={!name.trim() || name.trim() === requestName} onClick={() => { setRequest(null); onRename(requestPath, name) }}>确认重命名</Button>
             </>
           )}
         </DialogFooter>
@@ -3588,13 +3629,17 @@ function MobileFolderActions({
 }) {
   const folderSegments = folderPath.split(/\s*\/\s*/).filter(Boolean)
   const currentName = folderSegments[folderSegments.length - 1] ?? folderPath
-  const [dialogMode, setDialogMode] = useState<"delete" | "rename" | null>(null)
+  const [request, setRequest] = useState<{ initialName: string; kind: "delete" | "rename"; mode: "local" | "webdav"; sourcePath: string } | null>(null)
   const [name, setName] = useState(currentName)
 
   const openRename = () => {
     setName(currentName)
-    setDialogMode("rename")
+    // 移动端菜单关闭会触发重渲染，显式快照避免随后导航改变重命名目标。
+    setRequest({ initialName: currentName, kind: "rename", mode, sourcePath: folderPath })
   }
+  const requestName = request?.initialName ?? currentName
+  const requestMode = request?.mode ?? mode
+  const requestPath = request?.sourcePath ?? folderPath
 
   return (
     <>
@@ -3607,34 +3652,34 @@ function MobileFolderActions({
         <DropdownMenuContent align="end" className="mobile-folder-actions-menu">
           <DropdownMenuItem onSelect={openRename}><PencilLine />重命名</DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem className="mobile-folder-delete-action" onSelect={() => setDialogMode("delete")}><Trash2 />删除</DropdownMenuItem>
+          <DropdownMenuItem className="mobile-folder-delete-action" onSelect={() => setRequest({ initialName: currentName, kind: "delete", mode, sourcePath: folderPath })}><Trash2 />删除</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <Dialog onOpenChange={(open) => { if (!open) setDialogMode(null) }} open={dialogMode !== null}>
+      <Dialog onOpenChange={(open) => { if (!open) setRequest(null) }} open={request !== null}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{dialogMode === "delete" ? `删除“${currentName}”` : "重命名文件夹"}</DialogTitle>
+            <DialogTitle>{request?.kind === "delete" ? `删除“${requestName}”` : "重命名文件夹"}</DialogTitle>
             <DialogDescription>
-              {dialogMode === "delete"
-                ? mode === "local"
+              {request?.kind === "delete"
+                ? requestMode === "local"
                   ? "文件夹及其中的全部文件会移动到 Swell Note 回收站，可在保留期内恢复。"
                   : "该目录中的笔记将进入待同步删除；同步前仍可从回收站恢复。"
-                : mode === "local"
-                  ? "将重命名本地 Vault 目录，并同步更新当前笔记索引。"
-                  : "目录和子目录中的笔记会先在本机排队，点击同步后才移动坚果云文件。"}
+                : requestMode === "local"
+                  ? `将重命名“${requestPath}”，并同步更新当前笔记索引。`
+                  : `“${requestPath}”及其子目录会先在本机排队，点击同步后整体移动坚果云目录。`}
             </DialogDescription>
           </DialogHeader>
-          {dialogMode === "rename" ? (
+          {request?.kind === "rename" ? (
             <Input autoFocus aria-label="新文件夹名称" onChange={(event) => setName(event.target.value)} value={name} />
           ) : null}
           <DialogFooter>
-            <Button onClick={() => setDialogMode(null)} variant="ghost">取消</Button>
-            {dialogMode === "delete" ? (
-              <Button onClick={() => { setDialogMode(null); onDelete(folderPath) }} variant="destructive">
-                {mode === "local" ? "移入回收站" : "确认移入待删除"}
+            <Button onClick={() => setRequest(null)} variant="ghost">取消</Button>
+            {request?.kind === "delete" ? (
+              <Button onClick={() => { setRequest(null); onDelete(requestPath) }} variant="destructive">
+                {requestMode === "local" ? "移入回收站" : "确认移入待删除"}
               </Button>
             ) : (
-              <Button disabled={!name.trim() || name.trim() === currentName} onClick={() => { setDialogMode(null); onRename(folderPath, name) }}>
+              <Button disabled={!name.trim() || name.trim() === requestName} onClick={() => { setRequest(null); onRename(requestPath, name) }}>
                 保存
               </Button>
             )}
@@ -3650,6 +3695,7 @@ type MobileNoteListProps = WorkspaceProps & {
   navigationOpen: boolean
   onNavigationOpenChange: (open: boolean) => void
   onScrollPositionChange: (scrollTop: number) => void
+  searchRevealRequest?: SearchRevealRequest | null
 }
 
 function MobileNoteList(props: MobileNoteListProps) {
@@ -3775,6 +3821,7 @@ function MobileNoteList(props: MobileNoteListProps) {
               onSelectFolder={selectFolder}
               onSelectNote={selectNote}
               query={props.query}
+              searchRevealRequest={props.searchRevealRequest}
               viewportRef={viewportRef}
             />
           ) : viewportReady ? <EmptyNoteList canCreateNote={props.canCreateNote} isLoading={props.isRefreshingVault} onCreateNote={props.onCreateNote} onOpenSettings={props.onOpenSettings} selectedFolder={props.selectedFolder} /> : null}
@@ -3919,6 +3966,7 @@ function VirtualNoteRows({
   onSelectFolder,
   onSelectNote,
   query = "",
+  searchRevealRequest,
   viewportRef,
 }: {
   activeNoteId: string
@@ -3934,6 +3982,7 @@ function VirtualNoteRows({
   onSelectFolder?: (folder: string) => void
   onSelectNote: (note: Note) => void
   query?: string
+  searchRevealRequest?: SearchRevealRequest | null
   viewportRef: RefObject<HTMLDivElement | null>
 }) {
   // 分组按本地日历日划分；把当天序号纳入依赖，跨零点后的首次渲染就会重算，
@@ -3966,6 +4015,17 @@ function VirtualNoteRows({
     initialOffset: () => initialScrollOffset,
     overscan: 8,
   })
+  const lastNoteRevealRef = useRef(0)
+
+  useLayoutEffect(() => {
+    if (!searchRevealRequest) return
+    if (lastNoteRevealRef.current === searchRevealRequest.requestId) return
+    const targetIndex = items.findIndex((item) => item.kind === "note" && item.note.id === searchRevealRequest.noteId)
+    if (targetIndex < 0) return
+    // 虚拟列表没有目标 DOM 时由 virtualizer 直接改真实滚动宿主，不能只调用 scrollIntoView。
+    virtualizer.scrollToIndex(targetIndex, { align: "center" })
+    lastNoteRevealRef.current = searchRevealRequest.requestId
+  }, [items, searchRevealRequest?.requestId, searchRevealRequest?.noteId, virtualizer])
 
   return (
     <div className="virtual-note-list" style={{ height: `${virtualizer.getTotalSize()}px` }}>
@@ -3992,6 +4052,15 @@ function VirtualNoteRows({
       })}
     </div>
   )
+}
+
+function revealWithinViewport(viewport: HTMLElement, element: HTMLElement) {
+  const viewportRect = viewport.getBoundingClientRect()
+  const elementRect = element.getBoundingClientRect()
+  const top = viewport.scrollTop + elementRect.top - viewportRect.top
+  const bottom = top + elementRect.height
+  if (top < viewport.scrollTop) viewport.scrollTop = top
+  else if (bottom > viewport.scrollTop + viewport.clientHeight) viewport.scrollTop = bottom - viewport.clientHeight
 }
 
 const FolderListRow = memo(function FolderListRow({

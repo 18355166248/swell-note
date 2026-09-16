@@ -1,7 +1,9 @@
+import "fake-indexeddb/auto"
 import { describe, expect, it, vi } from "vitest"
 
 import { syncWebDavNoteQueue } from "./webdav-note-queue"
 import { VaultConflictError, type VaultAdapter } from "@/services/vault/vault-adapter"
+import { loadVaultCache, saveVaultCache, saveVaultNoteQueueCheckpoint } from "@/services/cache/vault-cache"
 import type { Note } from "@/types/note"
 
 function note(id: string, patch: Partial<Note> = {}): Note {
@@ -187,5 +189,130 @@ describe("syncWebDavNoteQueue", () => {
     expect(deleteTextFile).toHaveBeenCalledOnce()
     expect(result.notes).toEqual([])
     expect(result.errorMessage).toBeNull()
+  })
+
+  it("MKCOL 返回时 scope 失效，不再发送文件 MOVE 或 PUT", async () => {
+    let cancelled = false
+    const moveTextFile = vi.fn()
+    const writeTextFile = vi.fn()
+    const result = await syncWebDavNoteQueue({
+      adapter: adapter({
+        ensureDirectory: vi.fn(async () => { cancelled = true }),
+        moveTextFile,
+        writeTextFile,
+      }),
+      isCancelled: () => cancelled,
+      notes: [note("a", {
+        pendingOperation: "move",
+        previousRemotePath: "/Swell/old/a.md",
+        remotePath: "/Swell/new/a.md",
+      })],
+    })
+
+    expect(result.cancelled).toBe(true)
+    expect(moveTextFile).not.toHaveBeenCalled()
+    expect(writeTextFile).not.toHaveBeenCalled()
+  })
+
+  it("文件 MOVE 返回后 scope 失效，先保存来源库 moved 检查点且不继续 PUT", async () => {
+    let cancelled = false
+    const writeTextFile = vi.fn()
+    const onCheckpoint = vi.fn(async ({ note: checkpointNote }) => {
+      cancelled = true
+      return [checkpointNote]
+    })
+    const result = await syncWebDavNoteQueue({
+      adapter: adapter({
+        ensureDirectory: vi.fn(),
+        moveTextFile: vi.fn().mockResolvedValue({ revision: '"moved"' }),
+        writeTextFile,
+      }),
+      isCancelled: () => cancelled,
+      notes: [note("a", {
+        pendingOperation: "move",
+        previousRemotePath: "/Swell/old/a.md",
+        remotePath: "/Swell/new/a.md",
+      })],
+      onCheckpoint,
+    })
+
+    expect(onCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      note: expect.objectContaining({ pendingOperation: undefined, previousRemotePath: undefined, revision: '"moved"' }),
+      type: "moved",
+    }))
+    expect(writeTextFile).not.toHaveBeenCalled()
+    expect(result.cancelled).toBe(true)
+    expect(result.notes[0]).toMatchObject({ pendingOperation: undefined, revision: '"moved"' })
+  })
+
+  it("真实缓存检查点保留失败 a，成功 b 后重开仍只定向重试 a", async () => {
+    const cacheId = `mixed-two-${crypto.randomUUID()}`
+    const notes = [note("a"), note("b")]
+    await saveVaultCache({ activeNoteId: "a", id: cacheId, label: "混合结果", notes, savedAt: 1, sourceKind: "webdav" })
+    const writeTextFile = vi.fn(async (path: string) => {
+      if (path.endsWith("/a.md")) throw new Error("temporary a failure")
+      return { revision: '"v2"' }
+    })
+    const result = await syncWebDavNoteQueue({
+      adapter: adapter({ writeTextFile }),
+      notes,
+      onCheckpoint: async (checkpoint) => (await saveVaultNoteQueueCheckpoint(cacheId, checkpoint)).notes,
+    })
+    const reopened = await loadVaultCache(cacheId, { hydrate: "all" })
+    expect(result.notes).toEqual([
+      expect.objectContaining({ id: "a", syncError: "temporary a failure", syncStatus: "modified" }),
+      expect.objectContaining({ id: "b", syncStatus: "synced" }),
+    ])
+    expect(reopened?.notes.filter((item) => item.syncError)).toHaveLength(1)
+
+    const retryWrite = vi.fn().mockResolvedValue({ revision: '"v3"' })
+    await syncWebDavNoteQueue({
+      adapter: adapter({ writeTextFile: retryWrite }),
+      noteIds: new Set(["a"]),
+      notes: reopened!.notes,
+      onCheckpoint: async (checkpoint) => (await saveVaultNoteQueueCheckpoint(cacheId, checkpoint)).notes,
+    })
+    expect(retryWrite).toHaveBeenCalledOnce()
+    expect(retryWrite).toHaveBeenCalledWith("/Swell/a.md", "正文 a", '"v1"')
+  })
+
+  it("真实缓存检查点在失败 a 后连续成功 b、c 仍保留唯一失败", async () => {
+    const cacheId = `mixed-three-${crypto.randomUUID()}`
+    const notes = [note("a"), note("b"), note("c")]
+    await saveVaultCache({ activeNoteId: "a", id: cacheId, label: "三项混合", notes, savedAt: 1, sourceKind: "webdav" })
+    const result = await syncWebDavNoteQueue({
+      adapter: adapter({
+        writeTextFile: vi.fn(async (path: string) => {
+          if (path.endsWith("/a.md")) throw new Error("temporary a failure")
+          return { revision: '"v2"' }
+        }),
+      }),
+      notes,
+      onCheckpoint: async (checkpoint) => (await saveVaultNoteQueueCheckpoint(cacheId, checkpoint)).notes,
+    })
+    const reopened = await loadVaultCache(cacheId, { hydrate: "all" })
+    expect(result.notes.find((item) => item.id === "a")).toMatchObject({ syncError: "temporary a failure", syncStatus: "modified" })
+    expect(result.notes.filter((item) => item.syncStatus === "synced").map((item) => item.id)).toEqual(["b", "c"])
+    expect(reopened?.notes.filter((item) => item.syncError).map((item) => item.id)).toEqual(["a"])
+  })
+
+  it("真实缓存检查点在冲突 a 后成功 b 仍保留 a 的 conflict", async () => {
+    const cacheId = `mixed-conflict-${crypto.randomUUID()}`
+    const notes = [note("a"), note("b")]
+    await saveVaultCache({ activeNoteId: "a", id: cacheId, label: "冲突混合", notes, savedAt: 1, sourceKind: "webdav" })
+    const result = await syncWebDavNoteQueue({
+      adapter: adapter({
+        writeTextFile: vi.fn(async (path: string) => {
+          if (path.endsWith("/a.md")) throw new VaultConflictError(path)
+          return { revision: '"v2"' }
+        }),
+      }),
+      notes,
+      onCheckpoint: async (checkpoint) => (await saveVaultNoteQueueCheckpoint(cacheId, checkpoint)).notes,
+    })
+    const reopened = await loadVaultCache(cacheId, { hydrate: "all" })
+    expect(result.notes.find((item) => item.id === "a")).toMatchObject({ syncError: undefined, syncStatus: "conflict" })
+    expect(reopened?.notes.find((item) => item.id === "a")).toMatchObject({ syncError: undefined, syncStatus: "conflict" })
+    expect(reopened?.notes.find((item) => item.id === "b")).toMatchObject({ syncStatus: "synced" })
   })
 })

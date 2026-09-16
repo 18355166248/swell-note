@@ -76,7 +76,8 @@ export interface VaultAdapter {
   createDirectory?(path: string): Promise<void>
   deleteDirectory?(path: string): Promise<void>
   listDirectories?(): Promise<string[]>
-  moveDirectory?(path: string, targetPath: string): Promise<void>
+  moveDirectory?(path: string, targetPath: string, operationId?: string): Promise<void>
+  completeDirectoryMove?(targetPath: string, operationId: string): Promise<void>
   openSourceFile?(path: string): Promise<void>
   createBinaryFile?(path: string, data: Uint8Array, mimeType?: string): Promise<VaultCreateResult>
   createTextFile?(path: string, content: string): Promise<VaultCreateResult>

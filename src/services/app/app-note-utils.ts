@@ -59,16 +59,22 @@ export function formatFileTimestamp(date: Date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}-${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`
 }
 
-export async function readVaultDocuments(adapter: VaultAdapter, paths: string[]) {
+export async function readVaultDocuments(
+  adapter: VaultAdapter,
+  paths: string[],
+  isCancelled: () => boolean = () => false,
+) {
   const documents = new Map<string, Awaited<ReturnType<VaultAdapter["readTextFile"]>>>()
   const batchSize = adapter.kind === "webdav" ? 4 : 12
 
   // 坚果云有请求频率限制：批次内并行避免串行瀑布，批次之间收敛并发避免大量正文同时触发 429。
   for (let index = 0; index < paths.length; index += batchSize) {
+    if (isCancelled()) break
     const batch = await Promise.all(paths.slice(index, index + batchSize).map(async (path) => [
       path,
       await adapter.readTextFile(path),
     ] as const))
+    if (isCancelled()) break
     for (const [path, document] of batch) documents.set(path, document)
   }
 

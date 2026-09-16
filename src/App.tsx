@@ -49,6 +49,7 @@ import { WebDavAuthenticationError } from "@/services/webdav-client"
 import {
   cacheSyncedVaultAttachment,
   cacheVaultNoteDocuments,
+  commitVaultDirectoryRename,
   createVaultCacheId,
   deleteVaultCache,
   deleteSyncedVaultAttachments,
@@ -64,12 +65,14 @@ import {
   queueVaultAttachment,
   remapVaultAttachmentNoteId,
   saveVaultCache,
+  saveVaultNoteQueueCheckpoint,
   searchCachedNoteDocuments,
   hydrateNoteFromCachedDocument,
   isIndexedDbConnectionLostError,
   updateVaultAttachmentStatus,
   type VaultCacheSnapshot,
   type VaultCacheSummary,
+  type PendingWebDavDirectoryMove,
 } from "@/services/cache/vault-cache"
 import {
   loadCachePrivacyMode,
@@ -90,7 +93,15 @@ import {
   noteBelongsDirectlyToFolder,
   noteBelongsToFolder,
 } from "@/services/search/vault-folders"
-import { getFolderRenameTarget } from "@/services/search/folder-rename"
+import {
+  createFolderRenamePlan,
+  getFolderRenameTarget,
+  isPendingDirectoryTree,
+  remapWebDavNoteForDirectory,
+  remapWebDavTrashForDirectory,
+} from "@/services/search/folder-rename"
+import { syncWebDavDirectoryQueue } from "@/services/sync/webdav-directory-queue"
+import { resolveWebDavPhysicalPath } from "@/services/sync/webdav-physical-path"
 import {
   clearNativeSearchIndex,
   rebuildNativeSearchIndex,
@@ -179,6 +190,11 @@ import "./App.css"
 
 type ActiveCacheMeta = Pick<VaultCacheSnapshot, "id" | "label" | "lastSyncedAt" | "sourceKind">
 type SyncRun = { cancelled: boolean }
+type VaultSyncScope = {
+  adapterIdentity: string
+  cacheId: string
+  isCurrent: () => boolean
+}
 type MarkdownLinkRepair = {
   changedCount: number
   content: string
@@ -186,6 +202,7 @@ type MarkdownLinkRepair = {
   noteId: string
   oldPath: string
 }
+
 type FolderOrderSyncStartSource = "automatic" | "explicit" | "passive"
 type FolderOrderResolutionScope = {
   adapter: VaultAdapter
@@ -319,6 +336,7 @@ function App() {
   const [notes, setNotes] = useState<Note[]>([])
   const [vaultDirectories, setVaultDirectories] = useState<string[]>([])
   const [pendingWebDavDirectories, setPendingWebDavDirectories] = useState<string[]>([])
+  const [pendingWebDavDirectoryMoves, setPendingWebDavDirectoryMoves] = useState<PendingWebDavDirectoryMove[]>([])
   const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([])
   const [trashRetention, setTrashRetention] = useState<TrashRetentionDays>(loadTrashRetention)
   const [activeNoteId, setActiveNoteId] = useState("")
@@ -387,9 +405,13 @@ function App() {
   const revisionByPathRef = useRef(new Map<string, string | undefined>())
   const indexGenerationRef = useRef(0)
   const latestCacheSnapshotRef = useRef<VaultCacheSnapshot | null>(null)
+  const activeCacheIdRef = useRef<string | null>(null)
+  const pendingDirectoryMovesRef = useRef<PendingWebDavDirectoryMove[]>([])
   const notesRef = useRef(notes)
   const previousOnlineRef = useRef(isOnline)
   const activeSyncRunRef = useRef<SyncRun | null>(null)
+  const syncScopeSequenceRef = useRef(0)
+  const vaultMutationBarrierRef = useRef(0)
   const attemptedAutoSyncQueueRef = useRef<string | null>(null)
   const autoSyncQueueKeyRef = useRef("")
   const pendingWikiAnchorRef = useRef("")
@@ -409,6 +431,8 @@ function App() {
   const restoredCredentialCacheIdRef = useRef<string | null>(null)
   const refreshVaultRef = useRef<(noteIds?: ReadonlySet<string>, options?: { automatic?: boolean }) => Promise<void>>(async () => undefined)
   notesRef.current = notes
+  activeCacheIdRef.current = activeCacheMeta?.id ?? null
+  pendingDirectoryMovesRef.current = pendingWebDavDirectoryMoves
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)")
@@ -428,6 +452,8 @@ function App() {
 
   const applyCachedSnapshot = useCallback((snapshot: VaultCacheSnapshot) => {
     // 缓存恢复时主动断开运行时适配器，确保离线浏览不会误走本地文件或 WebDAV 写入链路。
+    // 新的库选择会使所有旧库异步同步作用域失效；旧库可落自己的检查点，但不能再改当前 UI。
+    syncScopeSequenceRef.current += 1
     invalidateLocalSaveContext()
     revisionByPathRef.current.clear()
     indexGenerationRef.current += 1
@@ -462,6 +488,7 @@ function App() {
     setNotes(cachedNotes)
     setVaultDirectories(snapshot.directories ?? [])
     setPendingWebDavDirectories(snapshot.pendingDirectories ?? [])
+    setPendingWebDavDirectoryMoves(snapshot.pendingDirectoryMoves ?? [])
     setTrashEntries(snapshot.trash ?? [])
     setActiveNoteId(restoredActiveId)
     setVaultNoteCount(cachedNotes.filter((note) => note.pendingOperation !== "delete").length)
@@ -531,14 +558,15 @@ function App() {
       activeNoteId,
       directories: vaultDirectories,
       pendingDirectories: pendingWebDavDirectories,
+      pendingDirectoryMoves: pendingWebDavDirectoryMoves,
       notes: prepareNotesForCache(notes, cachePrivacyMode),
       savedAt: Date.now(),
       trash: trashEntries,
     }
     latestCacheSnapshotRef.current = snapshot
     const timer = window.setTimeout(() => {
-      // 清除缓存会把 ref 置空；此时这批防抖写入必须作废，否则会把刚删掉的快照重新写回。
-      if (!latestCacheSnapshotRef.current) return
+      // 清除/切库/原子目录重命名都会替换 ref；旧闭包不得把过期快照重新写回。
+      if (latestCacheSnapshotRef.current !== snapshot) return
       // 内容读取、收藏和本地编辑后统一刷新离线快照；敏感凭据不属于 Note 模型，因此不会进入缓存。
       void saveVaultCache(snapshot)
         .then(listVaultCaches)
@@ -546,7 +574,7 @@ function App() {
         .catch((error) => setVaultError(error instanceof Error ? error.message : "保存离线缓存失败"))
     }, 450)
     return () => window.clearTimeout(timer)
-  }, [activeCacheMeta, activeNoteId, cachePrivacyMode, cacheReady, notes, pendingWebDavDirectories, trashEntries, vaultDirectories])
+  }, [activeCacheMeta, activeNoteId, cachePrivacyMode, cacheReady, notes, pendingWebDavDirectories, pendingWebDavDirectoryMoves, trashEntries, vaultDirectories])
 
   useEffect(() => {
     if (!activeCacheMeta || activeCacheMeta.sourceKind !== "webdav") {
@@ -771,14 +799,15 @@ function App() {
   const syncSummary = useMemo(() => summarizeWebDavSync(notes), [notes])
   // 一份排序配置算一个待处理项目（不按目录条目计数）；冲突单独展示，不计入待处理数。
   const folderOrderPendingCount = folderOrderSync && (folderOrderSync.status === "pending" || folderOrderSync.status === "error") ? 1 : 0
-  const pendingSyncCount = syncSummary.pending + syncSummary.failed + pendingWebDavDirectories.length + pendingAttachmentCount + folderOrderPendingCount
+  const pendingSyncCount = syncSummary.pending + syncSummary.failed + pendingWebDavDirectories.length + pendingWebDavDirectoryMoves.length + pendingAttachmentCount + folderOrderPendingCount
   const autoSyncQueueKey = useMemo(() => `${buildAutoSyncQueueKey(
     activeCacheMeta?.id,
     notes,
     pendingWebDavDirectories,
     pendingAttachmentCount,
+    pendingWebDavDirectoryMoves,
   )}|folder-order:${folderOrderSync?.queueSignature ?? ""}`,
-  [activeCacheMeta?.id, folderOrderSync?.queueSignature, notes, pendingAttachmentCount, pendingWebDavDirectories])
+  [activeCacheMeta?.id, folderOrderSync?.queueSignature, notes, pendingAttachmentCount, pendingWebDavDirectories, pendingWebDavDirectoryMoves])
   autoSyncQueueKeyRef.current = autoSyncQueueKey
   const conflictCount = syncSummary.conflicts
   const folderOrderHasConflict = folderOrderSync?.status === "conflict"
@@ -884,7 +913,7 @@ function App() {
         cacheId: scope.cacheId,
         choice,
         // “使用本机”同样受结构阻断约束：存在未完成的 MOVE/DELETE/create 时只允许拉取，不允许覆盖上传。
-        structureUploadBlocked: pendingWebDavDirectories.length > 0 || hasPendingStructureOperations(notes),
+        structureUploadBlocked: pendingWebDavDirectories.length > 0 || pendingWebDavDirectoryMoves.length > 0 || hasPendingStructureOperations(notes),
       }),
       showFailure: showSyncFailure,
     })
@@ -928,7 +957,8 @@ function App() {
     if (!assetReader?.readBinaryFile) return null
     let asset: VaultAsset
     try {
-      asset = await assetReader.readBinaryFile(assetPath)
+      const remoteAssetPath = resolveWebDavPhysicalPath(assetPath, pendingDirectoryMovesRef.current, assetReader)
+      asset = await assetReader.readBinaryFile(remoteAssetPath)
     } catch (error) {
       if (error instanceof WebDavAuthenticationError) {
         await authenticationFailureRef.current("坚果云应用密码已失效，请输入新密码后重试加载附件")
@@ -995,8 +1025,8 @@ function App() {
     const targetNote = notesRef.current.find((note) => note.id === noteId)
     if (!targetNote) return
     const touchesDocument = typeof patch.content === "string" || typeof patch.title === "string"
-    if (touchesDocument && isRefreshingVault) {
-      setVaultError("正在同步当前笔记库，请等待完成后继续编辑")
+    if (touchesDocument && (isRefreshingVault || vaultMutationBarrierRef.current > 0)) {
+      setVaultError(isRefreshingVault ? "正在同步当前笔记库，请等待完成后继续编辑" : "正在提交笔记库结构，请等待完成后继续编辑")
       return
     }
     if (typeof patch.content === "string" && patch.content !== targetNote.content && activeCacheMeta) {
@@ -1493,25 +1523,37 @@ function App() {
       .catch((error) => setVaultError(error instanceof Error ? error.message : "建立搜索索引失败"))
   }
 
-  // 返回仍未完成的目录数：排序上传需要在结构操作全部成功后才能放行。
-  const pushPendingWebDavDirectories = async (adapter: VaultAdapter, run?: SyncRun) => {
-    if (adapter.kind !== "webdav" || !adapter.ensureDirectory || pendingWebDavDirectories.length === 0) return 0
-    const completedPaths: string[] = []
-    for (const folderPath of pendingWebDavDirectories) {
-      if (run?.cancelled) break
-      const displayPath = toStorageDirectoryPath(folderPath)
-      const storagePath = adapter.getStoragePath?.(displayPath) ?? displayPath
-      setSyncProgress((current) => current ? { ...current, currentLabel: `创建文件夹 ${folderPath}` } : current)
-      // WebDAV 空目录没有对应笔记可触发建目录，因此显式同步时单独执行 MKCOL；失败时仍保留本地队列。
-      await adapter.ensureDirectory(storagePath)
-      completedPaths.push(folderPath)
-      setSyncProgress((current) => current ? { ...current, completed: Math.min(current.total, current.completed + 1) } : current)
-    }
-    if (completedPaths.length > 0) {
-      const completed = new Set(completedPaths)
-      setPendingWebDavDirectories((current) => current.filter((path) => !completed.has(path)))
-    }
-    return pendingWebDavDirectories.length - completedPaths.length
+  const pushPendingWebDavDirectories = async (
+    adapter: VaultAdapter,
+    snapshot: VaultCacheSnapshot,
+    scope: VaultSyncScope,
+    run?: SyncRun,
+  ) => {
+    let previousCount = (snapshot.pendingDirectories?.length ?? 0) + (snapshot.pendingDirectoryMoves?.length ?? 0)
+    return syncWebDavDirectoryQueue({
+      adapter,
+      adapterIdentity: scope.adapterIdentity,
+      cacheId: scope.cacheId,
+      isCancelled: () => Boolean(run?.cancelled),
+      isScopeCurrent: scope.isCurrent,
+      onLabel: (currentLabel) => {
+        if (scope.isCurrent()) setSyncProgress((current) => current ? { ...current, currentLabel } : current)
+      },
+      onSnapshot: (nextSnapshot) => {
+        if (activeCacheIdRef.current !== scope.cacheId) return
+        const nextCount = (nextSnapshot.pendingDirectories?.length ?? 0) + (nextSnapshot.pendingDirectoryMoves?.length ?? 0)
+        if (nextCount < previousCount) {
+          setSyncProgress((current) => current ? { ...current, completed: Math.min(current.total, current.completed + previousCount - nextCount) } : current)
+        }
+        previousCount = nextCount
+        latestCacheSnapshotRef.current = nextSnapshot
+        setNotes(nextSnapshot.notes)
+        setPendingWebDavDirectories(nextSnapshot.pendingDirectories ?? [])
+        setPendingWebDavDirectoryMoves(nextSnapshot.pendingDirectoryMoves ?? [])
+        setTrashEntries(nextSnapshot.trash ?? [])
+      },
+      snapshot,
+    })
   }
 
   // 排序同步与笔记同步共用同一条按库串行协调链；allowUpload=false 时是只读拉取，不写云端。
@@ -1549,21 +1591,50 @@ function App() {
     setFolderOrderConflictDismissed((current) => nextFolderOrderConflictDismissed(current, "explicit"))
     const adapter = createWebDavVaultAdapter(config, password)
     const cacheId = await createVaultCacheId(adapter.cacheIdentity)
-    const restoreWorkingCopy = activeCacheMeta?.id === cacheId
-    const previousLastSyncedAt = restoreWorkingCopy ? activeCacheMeta?.lastSyncedAt : undefined
-    // 同一笔记库重新输入密码后必须携带离线工作副本参与合并，不能把重连误当成首次导入。
-    const mergedNotes = await loadVault(adapter, restoreWorkingCopy, restoreWorkingCopy ? notes : [])
-    const remainingDirectories = await pushPendingWebDavDirectories(adapter)
+    const scopeToken = ++syncScopeSequenceRef.current
+    const scope: VaultSyncScope = {
+      adapterIdentity: adapter.cacheIdentity,
+      cacheId,
+      isCurrent: () => syncScopeSequenceRef.current === scopeToken,
+    }
+    const persistedTarget = await loadVaultCache(cacheId, { hydrate: "all" })
+    if (!scope.isCurrent()) return 0
+    const restoreWorkingCopy = Boolean(persistedTarget)
+    const previousLastSyncedAt = persistedTarget?.lastSyncedAt
+    const seedSnapshot: VaultCacheSnapshot = persistedTarget ?? {
+      activeNoteId: "",
+      directories: [],
+      id: cacheId,
+      label: adapter.cacheLabel,
+      notes: [],
+      pendingDirectories: [],
+      pendingDirectoryMoves: [],
+      savedAt: Date.now(),
+      sourceKind: "webdav",
+      trash: [],
+    }
+    // 连接只执行目标 cacheId 自己的结构队列；当前界面即使仍显示另一库，也不会借新 adapter 处理旧库动作。
+    const directoryResult = await pushPendingWebDavDirectories(adapter, seedSnapshot, scope)
+    if (directoryResult.interrupted) return 0
+    const mergedNotes = await loadVault(
+      adapter,
+      restoreWorkingCopy,
+      directoryResult.snapshot.notes,
+      { scope, structureSnapshot: directoryResult.snapshot },
+    )
+    if (!scope.isCurrent()) return 0
     const hasPendingChanges = mergedNotes.some((note) =>
       note.source === "webdav" && note.syncStatus === "modified",
     )
-    const attachmentResult = await pushPendingWebDavAttachments(adapter)
+    const attachmentResult = await pushPendingWebDavAttachments(adapter, cacheId, mergedNotes, scope)
+    if (!scope.isCurrent() || attachmentResult.cancelled) return 0
     if (!hasPendingChanges) {
       // 没有待上传笔记也要完成排序阶段：读取远端排序并上传本机排序意图。
       const folderOrderResult = await runFolderOrderSync(adapter, true, {
         rootVerified: true,
-        structureUploadBlocked: remainingDirectories > 0 || hasPendingStructureOperations(mergedNotes),
+        structureUploadBlocked: directoryResult.remainingCount > 0 || hasPendingStructureOperations(mergedNotes),
       })
+      if (!scope.isCurrent()) return 0
       if (folderOrderResult?.outcome === "conflict" || folderOrderResult?.outcome === "error") {
         revertLastSyncedAt(cacheId, previousLastSyncedAt)
       }
@@ -1577,12 +1648,16 @@ function App() {
     const eligibleNoteIds = attachmentResult.failedNoteIds.size > 0
       ? new Set(mergedNotes.filter((note) => !attachmentResult.failedNoteIds.has(note.id)).map((note) => note.id))
       : undefined
-    const syncResult = await pushPendingWebDavNotes(adapter, mergedNotes, eligibleNoteIds)
-    const refreshedNotes = await loadVault(adapter, true, syncResult.notes)
+    const syncResult = await pushPendingWebDavNotes(adapter, cacheId, mergedNotes, scope, eligibleNoteIds)
+    if (!scope.isCurrent() || syncResult.cancelled) return 0
+    const postSyncSnapshot = { ...directoryResult.snapshot, notes: syncResult.notes }
+    const refreshedNotes = await loadVault(adapter, true, syncResult.notes, { scope, structureSnapshot: postSyncSnapshot })
+    if (!scope.isCurrent()) return 0
     const folderOrderResult = await runFolderOrderSync(adapter, true, {
       rootVerified: true,
-      structureUploadBlocked: remainingDirectories > 0 || hasPendingStructureOperations(refreshedNotes),
+      structureUploadBlocked: directoryResult.remainingCount > 0 || hasPendingStructureOperations(refreshedNotes),
     })
+    if (!scope.isCurrent()) return 0
     if (folderOrderResult?.outcome === "conflict" || folderOrderResult?.outcome === "error") {
       revertLastSyncedAt(cacheId, previousLastSyncedAt)
     }
@@ -1596,12 +1671,14 @@ function App() {
     adapter: VaultAdapter,
     preserveContext = false,
     contextNotes: Note[] = notes,
+    options: { scope?: VaultSyncScope; structureSnapshot?: VaultCacheSnapshot } = {},
   ) => {
     const [files, directories] = await Promise.all([
       adapter.listMarkdownFiles(),
       adapter.listDirectories?.() ?? Promise.resolve([]),
     ])
-    if (files.length === 0 && adapter.kind === "webdav") {
+    if (options.scope && !options.scope.isCurrent()) return contextNotes
+    if (files.length === 0 && directories.length === 0 && adapter.kind === "webdav") {
       throw new Error(`${adapter.displayName} 中没有找到 Markdown 文件`)
     }
     const displayDirectories = directories.map((path) => deriveDirectoryPath(
@@ -1632,7 +1709,12 @@ function App() {
         remoteRevision: file.revision,
       }))
       .map((file) => file.path)
-    const loadedDocuments = await readVaultDocuments(adapter, pathsToRead)
+    const loadedDocuments = await readVaultDocuments(
+      adapter,
+      pathsToRead,
+      () => Boolean(options.scope && !options.scope.isCurrent()),
+    )
+    if (options.scope && !options.scope.isCurrent()) return contextNotes
     const remoteNotes: Note[] = files.map((file) => {
       const isCanvas = /\.canvas$/i.test(file.path)
       const previousNote = previousNotesByPath.get(normalizeVaultPathIdentity(file.path))
@@ -1733,17 +1815,13 @@ function App() {
     })
 
     const cacheId = await createVaultCacheId(adapter.cacheIdentity)
-    if (activeCacheMeta?.id !== cacheId) invalidateLocalSaveContext()
-
-    revisionByPathRef.current.clear()
-    for (const note of mergedNotes) {
-      if (note.remotePath) revisionByPathRef.current.set(note.remotePath, note.revision)
-    }
-
+    if (options.scope && !options.scope.isCurrent()) return contextNotes
     const persistedCache = activeCacheMeta?.id === cacheId ? null : await loadVaultCache(cacheId, { hydrate: "active" })
-    const nextTrashEntries = activeCacheMeta?.id === cacheId
+    if (options.scope && !options.scope.isCurrent()) return contextNotes
+    const nextTrashEntries = options.structureSnapshot?.trash ?? (activeCacheMeta?.id === cacheId
       ? trashEntries
       : persistedCache?.trash ?? []
+    )
     const hasUnresolvedSync = mergedNotes.some((note) => note.source === "webdav"
       && (note.syncStatus === "modified" || note.syncStatus === "conflict" || Boolean(note.syncError)))
     const cacheMeta: ActiveCacheMeta = {
@@ -1756,8 +1834,12 @@ function App() {
       sourceKind: adapter.kind,
     }
     const preservedPendingDirectories = adapter.kind === "webdav"
-      ? (preserveContext ? pendingWebDavDirectories : persistedCache?.pendingDirectories ?? [])
-        .filter((path) => !displayDirectories.includes(path))
+      ? options.structureSnapshot?.pendingDirectories
+        ?? (preserveContext ? pendingWebDavDirectories : persistedCache?.pendingDirectories ?? [])
+      : []
+    const preservedPendingDirectoryMoves = adapter.kind === "webdav"
+      ? options.structureSnapshot?.pendingDirectoryMoves
+        ?? (preserveContext ? pendingWebDavDirectoryMoves : persistedCache?.pendingDirectoryMoves ?? [])
       : []
     const mergedDirectories = [...new Set([...displayDirectories, ...preservedPendingDirectories])]
     const snapshot: VaultCacheSnapshot = {
@@ -1766,16 +1848,27 @@ function App() {
       directories: mergedDirectories,
       notes: mergedNotes,
       pendingDirectories: preservedPendingDirectories,
+      pendingDirectoryMoves: preservedPendingDirectoryMoves,
       savedAt: Date.now(),
       trash: nextTrashEntries,
     }
     // 首次读取成功就立刻落盘，避免用户在延迟保存触发前刷新导致这次远程列表丢失。
-    await saveVaultCache(snapshot)
+    if (options.scope && !options.scope.isCurrent()) return contextNotes
+    await saveVaultCache(snapshot, { updateLastCache: !options.scope })
+    if (options.scope && !options.scope.isCurrent()) return mergedNotes
 
+    const cacheSummaries = await listVaultCaches()
+    if (options.scope && !options.scope.isCurrent()) return mergedNotes
     // 适配器只保存在运行时；浏览器目录句柄和 WebDAV 密码都不会写入本地存储。
+    if (activeCacheMeta?.id !== cacheId) invalidateLocalSaveContext()
+    revisionByPathRef.current.clear()
+    for (const note of mergedNotes) {
+      if (note.remotePath) revisionByPathRef.current.set(note.remotePath, note.revision)
+    }
+    activeCacheIdRef.current = cacheId
     setVaultSession(adapter)
     setActiveCacheMeta(cacheMeta)
-    setVaultCaches(await listVaultCaches())
+    setVaultCaches(cacheSummaries)
     setSelectedFolder((current) => preserveContext && current
       && (mergedNotes.some((note) => noteBelongsToFolder(note, current))
         || mergedDirectories.includes(current))
@@ -1784,6 +1877,7 @@ function App() {
     setNotes(mergedNotes)
     setVaultDirectories(mergedDirectories)
     setPendingWebDavDirectories(preservedPendingDirectories)
+    setPendingWebDavDirectoryMoves(preservedPendingDirectoryMoves)
     setTrashEntries(nextTrashEntries)
     setActiveNoteId(nextActiveNoteId)
     // 远端列表已成功刷新，允许之前读取失败的正文再自动尝试一次；同一轮失败仍由路由守卫阻止循环重试。
@@ -1801,6 +1895,7 @@ function App() {
         title: note.title,
       }))
     await upsertNativeSearchIndex(cacheId, refreshedIndexEntries)
+    if (options.scope && !options.scope.isCurrent()) return mergedNotes
     // WebDAV 也建立全文索引，但降低并发并在批次间让出时间，避免触发坚果云频率限制。
     const filesToIndex = files.filter((file) => !mergedNotes.find((note) =>
       note.remotePath === file.path && typeof note.searchText === "string",
@@ -1811,22 +1906,31 @@ function App() {
 
   const pushPendingWebDavNotes = async (
     adapter: VaultAdapter,
+    cacheId: string,
     currentNotes: Note[],
+    scope: VaultSyncScope,
     noteIds?: ReadonlySet<string>,
     run?: SyncRun,
   ) => {
     const result = await syncWebDavNoteQueue({
       adapter,
-      isCancelled: () => Boolean(run?.cancelled),
+      isCancelled: () => Boolean(run?.cancelled) || !scope.isCurrent(),
       isFatalError: (error) => error instanceof WebDavAuthenticationError,
       noteIds,
       notes: currentNotes,
+      onCheckpoint: async (checkpoint) => {
+        // 不可逆的文件 MOVE/PUT/DELETE 直接写回来源 cacheId；切库后也不依赖旧 UI setter 才能恢复。
+        const persisted = await saveVaultNoteQueueCheckpoint(cacheId, checkpoint)
+        if (scope.isCurrent() && activeCacheIdRef.current === cacheId) latestCacheSnapshotRef.current = persisted
+        return persisted.notes
+      },
       onDeleteCommitted: async (pendingNote) => {
-        if (activeCacheMeta?.sourceKind !== "webdav") return
-        await discardPendingVaultAttachments(activeCacheMeta.id, new Set([pendingNote.id]))
-        setPendingAttachmentCount((await listPendingVaultAttachments(activeCacheMeta.id)).length)
+        await discardPendingVaultAttachments(cacheId, new Set([pendingNote.id]))
+        const remaining = await listPendingVaultAttachments(cacheId)
+        if (scope.isCurrent() && activeCacheIdRef.current === cacheId) setPendingAttachmentCount(remaining.length)
       },
       onEvent: (event) => {
+        if (!scope.isCurrent() || activeCacheIdRef.current !== cacheId) return
         if (event.type === "start") {
           setSyncProgress((current) => current ? { ...current, currentLabel: event.note.title, phase: "notes" } : current)
           setSaveStates((current) => ({ ...current, [event.note.id]: { status: "saving" } }))
@@ -1835,8 +1939,7 @@ function App() {
           setSaveStates((current) => ({ ...current, [event.note.id]: { status: "saved" } }))
         } else if (event.type === "moved") {
           revisionByPathRef.current.set(event.note.remotePath!, event.revision)
-          // MOVE 是不可重复的远端动作；先把新路径检查点写进 React 状态，后续 PUT 失败时可从新 revision 续传。
-          setNotes((current) => current.map((note) => note.id === event.note.id ? event.note : note))
+          // MOVE 检查点已由固定 cacheId 原子持久化；最终 result 会携带合并后的最新正文，事件本身不覆盖 UI。
         } else if (event.type === "deleted") {
           setSaveStates((current) => {
             const next = { ...current }
@@ -1856,32 +1959,35 @@ function App() {
     })
 
     // 认证失败前可能已有文件成功上传，先保存这部分状态，再由统一入口清理失效凭据。
-    setNotes(result.notes)
+    if (scope.isCurrent() && activeCacheIdRef.current === cacheId) setNotes(result.notes)
     if (result.fatalError) throw result.fatalError
     return result
   }
 
   const pushPendingWebDavAttachments = async (
     adapter: VaultAdapter,
+    cacheId: string,
+    currentNotes: Note[],
+    scope: VaultSyncScope,
     noteIds?: ReadonlySet<string>,
     run?: SyncRun,
   ) => {
     const failedNoteIds = new Set<string>()
-    if (adapter.kind !== "webdav" || !adapter.createBinaryFile || activeCacheMeta?.sourceKind !== "webdav") {
+    if (adapter.kind !== "webdav" || !adapter.createBinaryFile) {
       return { errorMessage: null as string | null, failedNoteIds }
     }
-    const deletedNoteIds = new Set(notes
+    const deletedNoteIds = new Set(currentNotes
       .filter((note) => note.pendingOperation === "delete")
       .map((note) => note.id))
-    const entries = (await listPendingVaultAttachments(activeCacheMeta.id))
+    const entries = (await listPendingVaultAttachments(cacheId))
       .filter((entry) => !deletedNoteIds.has(entry.noteId) && (!noteIds || noteIds.has(entry.noteId)))
     let errorMessage: string | null = null
     const ensuredDirectories = new Set<string>()
 
     // 二进制先于 Markdown 正文上传，保证其他设备读到引用时附件已经存在。
     for (const entry of entries) {
-      if (run?.cancelled) break
-      setSyncProgress((current) => current ? {
+      if (run?.cancelled || !scope.isCurrent()) break
+      if (activeCacheIdRef.current === cacheId) setSyncProgress((current) => current ? {
         ...current,
         currentLabel: entry.path.split("/").pop() ?? entry.path,
         phase: "attachments",
@@ -1889,10 +1995,14 @@ function App() {
       try {
         const directory = entry.path.split("/").slice(0, -1).join("/")
         if (directory && !ensuredDirectories.has(directory)) {
+          if (!scope.isCurrent()) break
           await adapter.ensureDirectory?.(directory)
+          if (!scope.isCurrent()) break
           ensuredDirectories.add(directory)
         }
+        if (!scope.isCurrent()) break
         await adapter.createBinaryFile(entry.path, new Uint8Array(entry.data), entry.mimeType)
+        if (!scope.isCurrent()) break
         await updateVaultAttachmentStatus(entry, "synced")
       } catch (error) {
         // 密码失效不是单个附件失败，保留当前队列状态并终止本轮同步，避免重复发出无效请求。
@@ -1914,13 +2024,38 @@ function App() {
         errorMessage = message
         await updateVaultAttachmentStatus(entry, "failed", message)
       } finally {
-        setSyncProgress((current) => current ? { ...current, completed: Math.min(current.total, current.completed + 1) } : current)
+        if (scope.isCurrent() && activeCacheIdRef.current === cacheId) {
+          setSyncProgress((current) => current ? { ...current, completed: Math.min(current.total, current.completed + 1) } : current)
+        }
       }
     }
-    const remainingEntries = await listPendingVaultAttachments(activeCacheMeta.id)
-    setPendingAttachmentCount(remainingEntries.length)
-    setFailedAttachmentCount(remainingEntries.filter((entry) => entry.status === "failed").length)
-    return { cancelled: Boolean(run?.cancelled), errorMessage, failedNoteIds }
+    const remainingEntries = await listPendingVaultAttachments(cacheId)
+    if (scope.isCurrent() && activeCacheIdRef.current === cacheId) {
+      setPendingAttachmentCount(remainingEntries.length)
+      setFailedAttachmentCount(remainingEntries.filter((entry) => entry.status === "failed").length)
+    }
+    return { cancelled: Boolean(run?.cancelled) || !scope.isCurrent(), errorMessage, failedNoteIds }
+  }
+
+  const flushActiveWebDavWorkingCopy = async (cacheId: string) => {
+    const latest = latestCacheSnapshotRef.current
+    if (!latest || latest.id !== cacheId || activeCacheIdRef.current !== cacheId) {
+      throw new Error("当前笔记库工作副本已失效")
+    }
+    const snapshot: VaultCacheSnapshot = {
+      ...latest,
+      activeNoteId,
+      directories: vaultDirectories,
+      notes: prepareNotesForCache(notesRef.current, cachePrivacyMode),
+      pendingDirectories: pendingWebDavDirectories,
+      pendingDirectoryMoves: pendingWebDavDirectoryMoves,
+      savedAt: Date.now(),
+      trash: trashEntries,
+    }
+    // 同步必须先越过 450ms 防抖窗口，把当前内存正文变成来源库的持久化工作副本。
+    latestCacheSnapshotRef.current = snapshot
+    await saveVaultCache(snapshot)
+    return snapshot
   }
 
   const refreshVault = async (noteIds?: ReadonlySet<string>, options: { automatic?: boolean } = {}) => {
@@ -1936,8 +2071,10 @@ function App() {
         }
         const config = loadWebDavConfig()
         setIsRefreshingVault(true)
+        vaultMutationBarrierRef.current += 1
         setVaultError(null)
         try {
+          if (activeCacheMeta) await flushActiveWebDavWorkingCopy(activeCacheMeta.id)
           let storedPassword: string | null
           try {
             storedPassword = await loadWebDavPassword(config)
@@ -1961,6 +2098,7 @@ function App() {
             showSyncFailure(error instanceof Error ? error.message : "连接坚果云失败，请稍后重试")
           }
         } finally {
+          vaultMutationBarrierRef.current = Math.max(0, vaultMutationBarrierRef.current - 1)
           setIsRefreshingVault(false)
         }
         return
@@ -1978,18 +2116,34 @@ function App() {
     // 手动同步和自动同步共用防重标记；同一份失败队列不能在后台无限重试并反复刷新当前页面。
     attemptedAutoSyncQueueRef.current = autoSyncQueueKeyRef.current
     setIsRefreshingVault(true)
+    vaultMutationBarrierRef.current += 1
     setVaultError(null)
     const run: SyncRun = { cancelled: false }
     activeSyncRunRef.current = run
+    const syncCacheId = activeCacheMeta?.id
+    const scopeToken = ++syncScopeSequenceRef.current
+    const scope: VaultSyncScope | null = syncCacheId ? {
+      adapterIdentity: vaultSession.cacheIdentity,
+      cacheId: syncCacheId,
+      isCurrent: () => syncScopeSequenceRef.current === scopeToken
+        && activeSyncRunRef.current === run
+        && activeCacheIdRef.current === syncCacheId,
+    } : null
     try {
+      if (!scope) throw new Error("当前笔记库缺少同步身份")
+      await flushActiveWebDavWorkingCopy(scope.cacheId)
+      if (!scope.isCurrent()) return
+      const persistedSnapshot = await loadVaultCache(scope.cacheId, { hydrate: "all" })
+      if (!persistedSnapshot || !scope.isCurrent()) throw new Error("当前笔记库同步上下文已失效")
       const pendingAttachments = activeCacheMeta?.sourceKind === "webdav"
-        ? (await listPendingVaultAttachments(activeCacheMeta.id))
+        ? (await listPendingVaultAttachments(scope.cacheId))
           .filter((entry) => !noteIds || noteIds.has(entry.noteId)).length
         : 0
-      const pendingNotes = notes.filter((note) => note.source === "webdav"
+      const pendingNotes = persistedSnapshot.notes.filter((note) => note.source === "webdav"
         && note.syncStatus === "modified"
         && (!noteIds || noteIds.has(note.id))).length
-      const pendingDirectories = noteIds ? 0 : pendingWebDavDirectories.length
+      const pendingDirectories = (persistedSnapshot.pendingDirectories?.length ?? 0)
+        + (persistedSnapshot.pendingDirectoryMoves?.length ?? 0)
       setSyncProgress({
         automatic: Boolean(options.automatic),
         completed: 0,
@@ -1998,38 +2152,42 @@ function App() {
         total: pendingDirectories + pendingAttachments + pendingNotes,
       })
       // 所有手动/自动同步都汇入同一条带版本校验的写入链路，避免不同入口产生覆盖差异。
-      const remainingDirectories = noteIds
-        ? pendingWebDavDirectories.length
-        : await pushPendingWebDavDirectories(vaultSession, run)
-      if (run.cancelled) {
-        setSyncLogs(appendSyncLog({ message: "同步已取消，未处理文件夹仍保留在本机队列", status: "error" }))
+      // 定向重试也必须先完成全库目录检查点；否则附件/正文会抢先在目标路径建文件，令随后 MOVE 永久冲突。
+      const directoryResult = await pushPendingWebDavDirectories(vaultSession, persistedSnapshot, scope, run)
+      if (run.cancelled || directoryResult.interrupted) {
+        if (scope.isCurrent()) setSyncLogs(appendSyncLog({ message: "同步已取消，未处理文件夹仍保留在本机队列", status: "error" }))
         return
       }
-      const attachmentResult = await pushPendingWebDavAttachments(vaultSession, noteIds, run)
-      if (run.cancelled) {
-        setSyncLogs(appendSyncLog({ message: "同步已取消，未处理项目仍保留在本机队列", status: "error" }))
+      const queueNotes = directoryResult.snapshot.notes
+      const attachmentResult = await pushPendingWebDavAttachments(vaultSession, scope.cacheId, queueNotes, scope, noteIds, run)
+      if (run.cancelled || attachmentResult.cancelled) {
+        if (scope.isCurrent()) setSyncLogs(appendSyncLog({ message: "同步已取消，未处理项目仍保留在本机队列", status: "error" }))
         return
       }
       const eligibleNoteIds = attachmentResult.failedNoteIds.size > 0
-        ? new Set(notes
+        ? new Set(queueNotes
             .filter((note) => (!noteIds || noteIds.has(note.id)) && !attachmentResult.failedNoteIds.has(note.id))
             .map((note) => note.id))
         : noteIds
-      const syncResult = await pushPendingWebDavNotes(vaultSession, notes, eligibleNoteIds, run)
+      const syncResult = await pushPendingWebDavNotes(vaultSession, scope.cacheId, queueNotes, scope, eligibleNoteIds, run)
       if (run.cancelled || syncResult.cancelled) {
-        setSyncLogs(appendSyncLog({ message: "同步已取消，已完成项目状态已保存", status: "error" }))
+        if (scope.isCurrent()) setSyncLogs(appendSyncLog({ message: "同步已取消，已完成项目状态已保存", status: "error" }))
         return
       }
+      if (!scope.isCurrent()) return
       setSyncProgress((current) => current ? { ...current, currentLabel: "刷新远端列表", phase: "refreshing" } : current)
       const previousLastSyncedAt = activeCacheMeta?.lastSyncedAt
-      const refreshedNotes = await loadVault(vaultSession, true, syncResult.notes)
+      const postSyncSnapshot = { ...directoryResult.snapshot, notes: syncResult.notes }
+      const refreshedNotes = await loadVault(vaultSession, true, syncResult.notes, { scope, structureSnapshot: postSyncSnapshot })
+      if (!scope.isCurrent()) return
       // 排序阶段：即使仅排序改变也完成三方判定与条件上传；结构操作未成功时暂停上传但允许拉取。
       setSyncProgress((current) => current ? { ...current, currentLabel: "同步文件夹排序", phase: "refreshing" } : current)
       const folderOrderResult = await runFolderOrderSync(vaultSession, true, {
         rootVerified: true,
         run,
-        structureUploadBlocked: remainingDirectories > 0 || hasPendingStructureOperations(refreshedNotes),
+        structureUploadBlocked: directoryResult.remainingCount > 0 || hasPendingStructureOperations(refreshedNotes),
       })
+      if (!scope.isCurrent()) return
       const folderOrderFailed = folderOrderResult?.outcome === "error"
       const folderOrderConflicts = folderOrderResult?.outcome === "conflict"
       // 未解决的排序冲突/失败不能让整轮看起来全部同步成功。
@@ -2052,6 +2210,7 @@ function App() {
         }))
       }
     } catch (error) {
+      if (scope && !scope.isCurrent()) return
       const authenticationFailed = error instanceof WebDavAuthenticationError
       const message = authenticationFailed
         ? "坚果云应用密码已失效，请输入新密码；未同步修改仍保留在本机"
@@ -2062,9 +2221,12 @@ function App() {
       showSyncFailure(message)
       setSyncLogs(appendSyncLog({ message: `同步失败：${message}`, status: "error" }))
     } finally {
-      if (activeSyncRunRef.current === run) activeSyncRunRef.current = null
-      setSyncProgress(null)
-      setIsRefreshingVault(false)
+      vaultMutationBarrierRef.current = Math.max(0, vaultMutationBarrierRef.current - 1)
+      if (activeSyncRunRef.current === run) {
+        activeSyncRunRef.current = null
+        setSyncProgress(null)
+        setIsRefreshingVault(false)
+      }
     }
   }
 
@@ -2167,11 +2329,14 @@ function App() {
   }, [vaultSession])
 
   const selectVaultCache = async (cacheId: string) => {
+    const selectionToken = ++syncScopeSequenceRef.current
     try {
       const snapshot = await loadVaultCache(cacheId, { hydrate: "active" })
+      if (selectionToken !== syncScopeSequenceRef.current) return
       if (!snapshot) throw new Error("缓存不存在，可能已被浏览器清理")
       // 重新保存一次只用于记录“最后使用的缓存”，快照内容不会发生改变。
       await saveVaultCache(snapshot)
+      if (selectionToken !== syncScopeSequenceRef.current) return
       applyCachedSnapshot(snapshot)
       setVaultCaches(await listVaultCaches())
     } catch (error) {
@@ -2195,6 +2360,7 @@ function App() {
   const clearActiveVaultCache = async () => {
     const target = activeCacheMeta
     if (!target) return
+    syncScopeSequenceRef.current += 1
 
     // 顺序不能调换：必须先切断所有写回通道再删库。
     // latestCacheSnapshotRef 同时服务于 450ms 防抖写入和 visibilitychange 立即 flush，
@@ -2212,6 +2378,7 @@ function App() {
     setNotes([])
     setVaultDirectories([])
     setPendingWebDavDirectories([])
+    setPendingWebDavDirectoryMoves([])
     setTrashEntries([])
     setActiveNoteId("")
     setVaultNoteCount(0)
@@ -2262,7 +2429,8 @@ function App() {
         ? await loadCachedNoteDocument(activeCacheMeta.id, note.id)
         : null
       if (!vaultSession && !cachedDocument) throw new Error("正文尚未缓存，请重新连接原笔记库")
-      const remoteDocument = cachedDocument ? null : await vaultSession!.readTextFile(note.remotePath)
+      const remotePath = resolveWebDavPhysicalPath(note.remotePath, pendingDirectoryMovesRef.current, vaultSession)
+      const remoteDocument = cachedDocument ? null : await vaultSession!.readTextFile(remotePath)
       const document = cachedDocument ?? remoteDocument!
       const contentIndex = cachedDocument
         ? {
@@ -2324,6 +2492,21 @@ function App() {
     void selectNote(note)
   }
 
+  const revealSearchResult = (note: Note) => {
+    const targetFolder = note.folder && note.folder !== "根目录" ? note.folder : null
+    // 全局搜索是一条原子导航意图：先清掉会隐藏目标的旧筛选，再把目录、返回路径和详情一次提交。
+    // 普通列表仍走 openNote，保留原有 recent/starred/目录返回语义。
+    setQuery("")
+    setSelectedTag(null)
+    setLibraryView("all")
+    setSelectedFolder(targetFolder)
+    setNestedFolderNotesPath(null)
+    navigate(`/notes/${encodeURIComponent(note.id)}`, {
+      state: { returnTo: getNotesListRoute("all", targetFolder) },
+    })
+    void selectNote(note)
+  }
+
   useEffect(() => {
     const routeNoteId = noteRouteMatch?.params.noteId
     if (!routeNoteId || !cacheReady) return
@@ -2371,7 +2554,8 @@ function App() {
     setSaveStates((current) => ({ ...current, [activeNote.id]: { status: "saving" } }))
 
     try {
-      const document = await vaultSession.readTextFile(path)
+      const physicalPath = resolveWebDavPhysicalPath(path, pendingDirectoryMovesRef.current, vaultSession)
+      const document = await vaultSession.readTextFile(physicalPath)
       revisionByPathRef.current.set(path, document.revision)
       setNotes((current) => current.map((note) =>
         note.id === activeNote.id
@@ -2413,7 +2597,8 @@ function App() {
     setVaultError(null)
     try {
       // 三种选择都先读取最新远端版本：后续上传会基于新的 ETag，避免冲突处理期间再次覆盖他人修改。
-      const remoteDocument = await vaultSession.readTextFile(path)
+      const physicalPath = resolveWebDavPhysicalPath(path, pendingDirectoryMovesRef.current, vaultSession)
+      const remoteDocument = await vaultSession.readTextFile(physicalPath)
       const mergeResult = strategy === "merge"
         ? mergeMarkdownVersions(note.baseContent, note.content, remoteDocument.content)
         : null
@@ -2516,7 +2701,8 @@ function App() {
       if (content === undefined) content = cachedById.get(note.id)?.content ?? cachedByPath.get(oldPath)?.content
       if (content === undefined && vaultSession?.readTextFile) {
         try {
-          content = (await vaultSession.readTextFile(oldPath)).content
+          const physicalPath = resolveWebDavPhysicalPath(oldPath, pendingDirectoryMovesRef.current, vaultSession)
+          content = (await vaultSession.readTextFile(physicalPath)).content
         } catch {
           unavailableCount += 1
           continue
@@ -3005,115 +3191,193 @@ function App() {
       setVaultError("当前版本先支持坚果云文件夹批量重命名")
       return
     }
-    const candidates = notes.filter((note) => note.source === "webdav"
-      && note.pendingOperation !== "delete"
-      && noteBelongsToFolder(note, folderPath))
-    if (candidates.length === 0) return
-    if (candidates.some((note) => !note.remotePath
+    const directoryPlan = createFolderRenamePlan({
+      directories: [...new Set([...vaultDirectories, ...folders.map((folder) => folder.path)])],
+      pendingDirectories: pendingWebDavDirectories,
+      requestedName,
+      sourceFolder: folderPath,
+    })
+    if (!directoryPlan) {
+      setVaultError("文件夹名称无效或目标文件夹已存在，请换一个名称")
+      return
+    }
+    if (directoryPlan.targetFolder === folderPath) return
+    // 路径迁移覆盖整棵子树，包括界面隐藏的 delete tombstone；是否修链接与是否迁移物理路径分开判断。
+    const initialCandidates = notes.filter((note) => note.source === "webdav" && noteBelongsToFolder(note, folderPath))
+    if (initialCandidates.some((note) => !note.remotePath
       || (note.pendingOperation !== "create" && !note.revision))) {
       setVaultError("该目录仍有远端版本信息尚未读取，请重新连接后再重命名")
       return
     }
 
+    const originCacheId = activeCacheMeta.id
     const webDavConfig = loadWebDavConfig()
-    const candidateIds = new Set(candidates.map((note) => note.id))
-    const occupiedPaths = new Set(notes
-      .filter((note) => !candidateIds.has(note.id) && note.pendingOperation !== "delete")
-      .map((note) => note.remotePath)
-      .filter((path): path is string => Boolean(path)))
-    const plans = new Map<string, { folder: string; id: string; remotePath: string }>()
-
-    for (const note of candidates) {
-      const pathSegments = note.remotePath!.split("/").filter(Boolean)
-      const filename = pathSegments[pathSegments.length - 1]
-      const target = filename
-        ? getFolderRenameTarget(note.folder, folderPath, requestedName, filename)
-        : null
-      if (!target) {
-        setVaultError("文件夹名称无效，请换一个名称")
-        return
-      }
-      const remotePath = vaultSession?.getStoragePath?.(target.relativePath)
-        ?? `${webDavConfig.remotePath.replace(/\/+$/g, "")}/${target.relativePath}`.replace(/\/{2,}/g, "/")
-      if (occupiedPaths.has(remotePath)) {
-        setVaultError(`目标目录已存在同名笔记：${filename}`)
-        return
-      }
-      plans.set(note.id, { folder: target.folder, id: `webdav:${remotePath}`, remotePath })
+    const sourceStorageDirectory = vaultSession?.getStoragePath?.(toStorageDirectoryPath(folderPath))
+      ?? `${webDavConfig.remotePath.replace(/\/+$/g, "")}/${toStorageDirectoryPath(folderPath)}`.replace(/\/{2,}/g, "/")
+    const targetStorageDirectory = vaultSession?.getStoragePath?.(toStorageDirectoryPath(directoryPlan.targetFolder))
+      ?? `${webDavConfig.remotePath.replace(/\/+$/g, "")}/${toStorageDirectoryPath(directoryPlan.targetFolder)}`.replace(/\/{2,}/g, "/")
+    const pathMove: MarkdownPathMove = {
+      fromPath: sourceStorageDirectory,
+      kind: "directory",
+      toPath: targetStorageDirectory,
     }
-
-    const { repairs: detectedRepairs, unavailableCount } = await prepareMarkdownLinkRepairs(
-      candidates.flatMap((note) => {
-        const plan = plans.get(note.id)
-        return note.remotePath && plan
-          ? [{ fromPath: note.remotePath, toPath: plan.remotePath }]
-          : []
-      }),
-    )
+    const { repairs: detectedRepairs, unavailableCount } = await prepareMarkdownLinkRepairs([pathMove])
     const affectedLinkCount = detectedRepairs.reduce((total, repair) => total + repair.changedCount, 0)
     const linkRepairs = detectedRepairs.length > 0 && window.confirm(
       `重命名文件夹后检测到 ${detectedRepairs.length} 篇笔记中的 ${affectedLinkCount} 个相对链接需要更新，是否一并修复？`,
     ) ? detectedRepairs : []
-    const repairsByNoteId = new Map(linkRepairs.map((repair) => [repair.noteId, repair]))
+    const selectedRepairIds = new Set(linkRepairs.map((repair) => repair.noteId))
 
     setIsManagingNote(true)
+    vaultMutationBarrierRef.current += 1
     setVaultError(null)
-    // 批量重命名只改 IndexedDB 工作副本；每篇 MOVE 仍在统一同步链路中串行执行并校验 ETag。
-    setNotes((current) => current.map((note) => {
-      const plan = plans.get(note.id)
-      const repaired = applyWebDavLinkRepairs(note, repairsByNoteId)
-      if (!plan) return repaired
-      return {
-        ...repaired,
-        ...plan,
-        pendingOperation: note.pendingOperation === "create" ? "create" : "move",
-        previousRemotePath: note.pendingOperation === "create"
-          ? undefined
-          : note.previousRemotePath ?? note.remotePath,
-        syncError: undefined,
-        syncStatus: "modified",
-        updatedAt: "文件夹已在本机重命名 · 待同步",
-        writeContentAfterMove: repairsByNoteId.has(note.id)
-          ? true
-          : note.pendingOperation === "create"
-          ? undefined
-          : note.pendingOperation === "move" ? note.writeContentAfterMove : false,
+    try {
+      if (activeCacheIdRef.current !== originCacheId) return
+      const latestSnapshot = latestCacheSnapshotRef.current
+      if (!latestSnapshot || latestSnapshot.id !== originCacheId) throw new Error("笔记库工作副本已变化，请重试重命名")
+      const currentNotes = notesRef.current
+      const currentDirectoryPlan = createFolderRenamePlan({
+        directories: latestSnapshot.directories ?? vaultDirectories,
+        pendingDirectories: latestSnapshot.pendingDirectories ?? [],
+        requestedName,
+        sourceFolder: folderPath,
+      })
+      if (!currentDirectoryPlan || currentDirectoryPlan.targetFolder !== directoryPlan.targetFolder) {
+        throw new Error("文件夹结构已变化，请重试重命名")
       }
-    }))
-    setSaveStates((current) => {
-      const next = { ...current }
-      for (const [oldId, plan] of plans) {
-        delete next[oldId]
-        next[plan.id] = { status: "pending" }
+      const candidates = currentNotes.filter((note) => note.source === "webdav" && noteBelongsToFolder(note, folderPath))
+      if (candidates.some((note) => !note.remotePath || (note.pendingOperation !== "create" && !note.revision))) {
+        throw new Error("该目录的笔记状态已变化，请重新连接后再重命名")
       }
-      for (const repair of linkRepairs) {
-        if (!plans.has(repair.noteId)) next[repair.noteId] = { status: "pending" }
+      const candidateIds = new Set(candidates.map((note) => note.id))
+      const occupiedPaths = new Set(currentNotes
+        .filter((note) => !candidateIds.has(note.id) && note.pendingOperation !== "delete")
+        .map((note) => note.remotePath)
+        .filter((path): path is string => Boolean(path)))
+      const plans = new Map<string, { folder: string; id: string; remotePath: string }>()
+      for (const note of candidates) {
+        const pathSegments = note.remotePath!.split("/").filter(Boolean)
+        const filename = pathSegments[pathSegments.length - 1]
+        const target = filename
+          ? getFolderRenameTarget(note.folder, folderPath, currentDirectoryPlan.targetFolder.split(" / ").slice(-1)[0] ?? requestedName, filename)
+          : null
+        if (!target) throw new Error("文件夹名称无效，请换一个名称")
+        const remotePath = vaultSession?.getStoragePath?.(target.relativePath)
+          ?? `${webDavConfig.remotePath.replace(/\/+$/g, "")}/${target.relativePath}`.replace(/\/{2,}/g, "/")
+        if (occupiedPaths.has(remotePath)) throw new Error(`目标目录已存在同名笔记：${filename}`)
+        plans.set(note.id, { folder: target.folder, id: `webdav:${remotePath}`, remotePath })
       }
-      return next
-    })
-    const activePlan = plans.get(activeNoteId)
-    if (activePlan) setActiveNoteId(activePlan.id)
-    if (activeCacheMeta?.sourceKind === "webdav") {
+      // 链接检查可能等待了 IndexedDB/远端读取；先把此刻最新正文落盘，再基于它计算路径迁移。
+      const currentSnapshot: VaultCacheSnapshot = {
+        ...latestSnapshot,
+        notes: prepareNotesForCache(currentNotes, cachePrivacyMode),
+        savedAt: Date.now(),
+      }
+      latestCacheSnapshotRef.current = currentSnapshot
+      await saveVaultCache(currentSnapshot, { updateLastCache: false })
+      if (activeCacheIdRef.current !== originCacheId) return
+      const moveRemoteDirectory = !isPendingDirectoryTree(folderPath, latestSnapshot.pendingDirectories ?? [])
+      const noteIdMap = new Map([...plans].map(([previousNoteId, plan]) => [previousNoteId, plan.id]))
+      const remapOptions = {
+        moveRemoteDirectory,
+        sourceDirectory: sourceStorageDirectory,
+        sourceFolder: folderPath,
+        targetDirectory: targetStorageDirectory,
+        targetFolder: currentDirectoryPlan.targetFolder,
+      }
+      const nextDirectoryMoves = moveRemoteDirectory
+        ? [...(latestSnapshot.pendingDirectoryMoves ?? []), {
+          id: globalThis.crypto?.randomUUID?.() ?? `move-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          sourceFolder: folderPath,
+          targetFolder: currentDirectoryPlan.targetFolder,
+        }]
+        : latestSnapshot.pendingDirectoryMoves ?? []
+      const nextNotes: Note[] = currentNotes.map((note) => {
+        let repaired = note
+        if (selectedRepairIds.has(note.id) && note.remotePath) {
+          const freshRepair = rewriteMarkdownLinksForMoves(note.content, note.remotePath, [pathMove])
+          if (freshRepair.changedCount > 0) {
+            repaired = applyWebDavLinkRepairs(note, new Map([[note.id, {
+              changedCount: freshRepair.changedCount,
+              content: freshRepair.content,
+              newPath: resolveMarkdownMovedPath(note.remotePath, [pathMove]),
+              noteId: note.id,
+              oldPath: note.remotePath,
+            }]]))
+          }
+        }
+        const remapped = remapWebDavNoteForDirectory(repaired, remapOptions)
+        if (remapped === repaired) return repaired
+        return {
+          ...remapped,
+          syncError: undefined,
+          // 目录级 MOVE 自己携带已同步文件；只有正文修复或原本未同步的笔记需要进入文件写入队列。
+          syncStatus: selectedRepairIds.has(note.id) || note.syncStatus === "modified" ? "modified" as const : note.syncStatus,
+          updatedAt: "文件夹已在本机重命名 · 待同步",
+        }
+      })
+      const nextTrashEntries = remapWebDavTrashForDirectory(latestSnapshot.trash ?? [], remapOptions)
+      const nextActiveNoteId = noteIdMap.get(latestSnapshot.activeNoteId) ?? latestSnapshot.activeNoteId
+      const snapshot: VaultCacheSnapshot = {
+        ...activeCacheMeta,
+        activeNoteId: nextActiveNoteId,
+        directories: currentDirectoryPlan.directories,
+        notes: prepareNotesForCache(nextNotes, cachePrivacyMode),
+        pendingDirectories: currentDirectoryPlan.pendingDirectories,
+        pendingDirectoryMoves: nextDirectoryMoves,
+        savedAt: Date.now(),
+        trash: nextTrashEntries,
+      }
+      // vault 元数据、正文、附件和结构队列在一个事务中改键；崩溃时不可能只剩孤立的新正文 key。
+      await commitVaultDirectoryRename({
+        expectedDocuments: new Map(currentNotes
+          .filter((note) => note.contentLoaded)
+          .map((note) => [note.id, note.content])),
+        noteIds: noteIdMap,
+        snapshot,
+        sourceDirectory: sourceStorageDirectory,
+        targetDirectory: targetStorageDirectory,
+      })
+      if (activeCacheIdRef.current !== originCacheId) return
+
+      latestCacheSnapshotRef.current = snapshot
+      setVaultDirectories(currentDirectoryPlan.directories)
+      setPendingWebDavDirectories(currentDirectoryPlan.pendingDirectories)
+      setPendingWebDavDirectoryMoves(nextDirectoryMoves)
+      setNotes(nextNotes)
+      setTrashEntries(nextTrashEntries)
+      setSaveStates((current) => {
+        const next = { ...current }
+        for (const [oldId, plan] of plans) {
+          const previous = next[oldId]
+          delete next[oldId]
+          next[plan.id] = selectedRepairIds.has(oldId) || previous?.status === "pending"
+            ? { status: "pending" }
+            : previous ?? { status: "saved" }
+        }
+        for (const repair of linkRepairs) if (!plans.has(repair.noteId)) next[repair.noteId] = { status: "pending" }
+        return next
+      })
+      if (nextActiveNoteId !== activeNoteId) setActiveNoteId(nextActiveNoteId)
       for (const [previousNoteId, plan] of plans) {
-        void remapVaultAttachmentNoteId(activeCacheMeta.id, previousNoteId, plan.id)
+        void remapNoteVersions(originCacheId, previousNoteId, plan.id)
+        const previous = candidates.find((note) => note.id === previousNoteId)
+        if (previous?.remotePath) {
+          revisionByPathRef.current.delete(previous.remotePath)
+          revisionByPathRef.current.set(plan.remotePath, previous.revision)
+        }
       }
-    }
-    if (activeCacheMeta) {
-      for (const [previousNoteId, plan] of plans) {
-        void remapNoteVersions(activeCacheMeta.id, previousNoteId, plan.id)
-      }
-    }
-    const firstPlan = plans.values().next().value as { folder: string } | undefined
-    if (firstPlan) {
-      const renamedFolder = firstPlan.folder.split(/\s*\/\s*/).slice(0, folderPath.split(/\s*\/\s*/).length).join(" / ")
-      // 前面的提前 return 已经挡住所有失败分支，走到这里说明本机重命名已生效，排序偏好同步迁移。
-      migrateFolderOrderPath(folderPath, renamedFolder, folderOrderOrigin)
-      setSelectedFolder(renamedFolder)
+      migrateFolderOrderPath(folderPath, currentDirectoryPlan.targetFolder, folderOrderOrigin)
+      setSelectedFolder(currentDirectoryPlan.targetFolder)
       setLibraryView("all")
-      navigate(getNotesListRoute("all", renamedFolder), { replace: true })
+      navigate(getNotesListRoute("all", currentDirectoryPlan.targetFolder), { replace: true })
+      if (unavailableCount > 0) setVaultError(`已重命名；另有 ${unavailableCount} 篇未缓存正文，暂无法检查其中的相对链接`)
+    } catch (error) {
+      setVaultError(error instanceof Error ? error.message : "重命名文件夹失败")
+    } finally {
+      vaultMutationBarrierRef.current = Math.max(0, vaultMutationBarrierRef.current - 1)
+      if (activeCacheIdRef.current === originCacheId) setIsManagingNote(false)
     }
-    setIsManagingNote(false)
-    if (unavailableCount > 0) setVaultError(`已重命名；另有 ${unavailableCount} 篇未缓存正文，暂无法检查其中的相对链接`)
   }
 
   const deleteWebDavFolder = (folderPath: string) => {
@@ -3643,7 +3907,10 @@ function App() {
         if (!note.remotePath || note.pendingOperation === "delete") continue
         let content = note.contentLoaded ? note.content : cachedById.get(note.id)
         if (content === undefined && vaultSession?.readTextFile) {
-          try { content = (await vaultSession.readTextFile(note.remotePath)).content } catch { missingNotes += 1 }
+          try {
+            const physicalPath = resolveWebDavPhysicalPath(note.remotePath, pendingDirectoryMovesRef.current, vaultSession)
+            content = (await vaultSession.readTextFile(physicalPath)).content
+          } catch { missingNotes += 1 }
         }
         if (content === undefined) continue
         backupNotes.push({ content, path: toBackupDisplayPath(note.remotePath), storagePath: note.remotePath })
@@ -4013,6 +4280,7 @@ function App() {
             onQueryChange={setQuery}
             onNoteSortChange={setNoteSort}
             onReloadNote={() => void reloadActiveNote()}
+            onRevealSearchResult={revealSearchResult}
             onRetryNoteLoad={() => {
               if (activeNote) void loadNoteDocument(activeNote)
             }}

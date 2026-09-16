@@ -3,7 +3,6 @@ import { CircleX, FileSearch, LoaderCircle, Search, X } from "lucide-react"
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { HighlightedText, useSearchMatch } from "@/components/workspace/note-search-match"
 import { searchCachedNoteDocuments } from "@/services/cache/vault-cache"
 import { sortNotes } from "@/services/search/note-sort"
@@ -32,6 +31,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   const [completedQuery, setCompletedQuery] = useState("")
   const listId = useId()
   const listRef = useRef<HTMLUListElement>(null)
+  const resultsRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -82,8 +82,16 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   useEffect(() => { setActiveIndex(0); setVisibleCount(RESULT_LIMIT); setCompletedQuery("") }, [normalizedQuery, open, cacheId])
   useEffect(() => { setActiveIndex((index) => Math.max(0, Math.min(index, matches.length - 1))) }, [matches])
   useEffect(() => {
-    // 焦点留在输入框，活动结果滚入视野；不能只更新颜色而让键盘用户丢失位置。
-    listRef.current?.querySelector<HTMLElement>(`[data-index="${activeIndex}"]`)?.scrollIntoView?.({ block: "nearest" })
+    const viewport = resultsRef.current
+    const active = listRef.current?.querySelector<HTMLElement>(`[data-index="${activeIndex}"]`)
+    if (!viewport || !active) return
+    // 搜索结果只有这一层是滚动宿主；直接调整它的 scrollTop，避免 scrollIntoView
+    // 把页面背景或弹窗外层一起带走，也便于键盘跨分页后稳定保持活动项可见。
+    const viewportRect = viewport.getBoundingClientRect()
+    const activeRect = active.getBoundingClientRect()
+    // offsetTop 属于弹窗定位祖先，不属于结果滚动区；用真实矩形差量才能在向上返回首项时正确归零。
+    if (activeRect.top < viewportRect.top) viewport.scrollTop += activeRect.top - viewportRect.top
+    else if (activeRect.bottom > viewportRect.bottom) viewport.scrollTop += activeRect.bottom - viewportRect.bottom
   }, [activeIndex, visibleCount, normalizedQuery, matches])
 
   const selectResult = (note: Note) => {
@@ -136,7 +144,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
         <div className="global-search-summary" role="status">
           {searching ? <><LoaderCircle className="animate-spin" />正在搜索正文…</> : normalizedQuery ? `找到 ${matches.length} 篇，已显示 ${results.length} 篇` : "最近更新"}
         </div>
-        <ScrollArea className="global-search-results">
+        <div className="global-search-results" data-search-scroll-viewport ref={resultsRef}>
           {results.length === 0 ? (
             <p className="global-search-empty">
               <FileSearch />
@@ -159,7 +167,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
             </ul>
           )}
           {results.length < matches.length && <button className="global-search-more" type="button" onClick={() => setVisibleCount((count) => count + RESULT_LIMIT)}>加载更多（剩余 {matches.length - results.length} 篇）</button>}
-        </ScrollArea>
+        </div>
         <div className="global-search-help">↑↓ 选择 · Enter 打开 · Esc 关闭</div>
       </DialogContent>
     </Dialog>

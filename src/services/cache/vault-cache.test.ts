@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import {
   cacheSyncedVaultAttachment,
   cacheVaultNoteDocuments,
+  commitVaultDirectoryRename,
   createVaultCacheId,
   deleteVaultCache,
   discardPendingVaultAttachments,
@@ -14,8 +15,12 @@ import {
   loadLastVaultCache,
   loadVaultCache,
   queueVaultAttachment,
+  remapVaultAttachmentsForDirectory,
+  remapCachedVaultDocumentsForDirectory,
   remapVaultAttachmentNoteId,
   saveVaultCache,
+  saveVaultDirectoryQueueCheckpoint,
+  saveVaultNoteQueueCheckpoint,
   searchCachedNoteDocuments,
   updateVaultAttachmentStatus,
 } from "./vault-cache"
@@ -90,6 +95,107 @@ describe("vault cache", () => {
       expect.objectContaining({ id: "two", noteCount: 0 }),
       expect.objectContaining({ id: "one", lastSyncedAt: 100, noteCount: 1 }),
     ])
+  })
+
+  it("后台来源库检查点不会改写当前库指针", async () => {
+    await saveVaultCache({ activeNoteId: "", id: "source", label: "来源库", notes: [], savedAt: 1, sourceKind: "webdav" })
+    await saveVaultCache({ activeNoteId: "", id: "current", label: "当前库", notes: [], savedAt: 2, sourceKind: "webdav" })
+    await saveVaultCache({
+      activeNoteId: "",
+      id: "source",
+      label: "来源库",
+      notes: [],
+      pendingDirectoryMoves: [{ id: "moved", moved: true, sourceFolder: "A", targetFolder: "B" }],
+      savedAt: 3,
+      sourceKind: "webdav",
+    }, { updateLastCache: false })
+
+    expect(await readLastCachePointer()).toBe("current")
+    await expect(loadVaultCache("source")).resolves.toMatchObject({
+      pendingDirectoryMoves: [expect.objectContaining({ id: "moved", moved: true })],
+    })
+  })
+
+  it("陈旧目录检查点只合并结构字段，不覆盖等待期间保存的新正文", async () => {
+    const old = {
+      content: "OLD",
+      contentLoaded: true,
+      folder: "Other",
+      id: "webdav:/Swell/Other/n.md",
+      preview: "OLD",
+      remotePath: "/Swell/Other/n.md",
+      source: "webdav" as const,
+      starred: false,
+      syncStatus: "modified" as const,
+      title: "n",
+      updatedAt: "待同步",
+    }
+    const stale = {
+      activeNoteId: old.id,
+      id: "checkpoint-merge",
+      label: "检查点合并",
+      notes: [old],
+      pendingDirectoryMoves: [{ id: "move", sourceFolder: "A", targetFolder: "B" }],
+      savedAt: 1,
+      sourceKind: "webdav" as const,
+    }
+    await saveVaultCache(stale)
+    await saveVaultCache({ ...stale, notes: [{ ...old, content: "NEW DURING MOVE", preview: "NEW" }], savedAt: 2 })
+    const merged = await saveVaultDirectoryQueueCheckpoint({
+      ...stale,
+      pendingDirectoryMoves: [{ id: "move", moved: true, sourceFolder: "A", targetFolder: "B" }],
+      savedAt: 3,
+    })
+
+    expect(merged.notes[0].content).toBe("NEW DURING MOVE")
+    await expect(loadVaultCache(stale.id, { hydrate: "all" })).resolves.toMatchObject({
+      notes: [expect.objectContaining({ content: "NEW DURING MOVE" })],
+      pendingDirectoryMoves: [expect.objectContaining({ moved: true })],
+    })
+  })
+
+  it("文件 MOVE 检查点保留后来正文，并把远端阶段推进为可恢复的普通修改", async () => {
+    const moved = {
+      content: "SYNC START",
+      contentLoaded: true,
+      folder: "Y",
+      id: "webdav:/Swell/Y/n.md",
+      pendingOperation: "move" as const,
+      preview: "SYNC START",
+      previousRemotePath: "/Swell/X/n.md",
+      remotePath: "/Swell/Y/n.md",
+      revision: '"old"',
+      source: "webdav" as const,
+      starred: false,
+      syncStatus: "modified" as const,
+      title: "n",
+      updatedAt: "待同步",
+    }
+    const base = { activeNoteId: moved.id, id: "note-checkpoint", label: "文件检查点", notes: [moved], savedAt: 1, sourceKind: "webdav" as const }
+    await saveVaultCache(base)
+    await saveVaultCache({ ...base, notes: [{ ...moved, content: "LATEST UI" }], savedAt: 2 })
+    const checkpoint = await saveVaultNoteQueueCheckpoint(base.id, {
+      note: { ...moved, pendingOperation: undefined, previousRemotePath: undefined, revision: '"moved"' },
+      type: "moved",
+    })
+    expect(checkpoint.notes[0]).toMatchObject({
+      content: "LATEST UI",
+      pendingOperation: undefined,
+      previousRemotePath: undefined,
+      revision: '"moved"',
+      syncStatus: "modified",
+    })
+
+    const synced = await saveVaultNoteQueueCheckpoint(base.id, {
+      note: { ...moved, content: "SYNC START", pendingOperation: undefined, previousRemotePath: undefined, revision: '"written"', syncStatus: "synced" },
+      type: "synced",
+    })
+    expect(synced.notes[0]).toMatchObject({
+      baseContent: "SYNC START",
+      content: "LATEST UI",
+      revision: '"written"',
+      syncStatus: "modified",
+    })
   })
 
   it("按需恢复当前正文，其他正文保留为可离线读取状态", async () => {
@@ -360,6 +466,208 @@ describe("vault cache", () => {
     ])
     await discardPendingVaultAttachments("cache", new Set(["next"]))
     await expect(listPendingVaultAttachments("cache")).resolves.toEqual([])
+  })
+
+  it("目录重命名同时迁移附件路径与笔记标识", async () => {
+    await queueVaultAttachment({ cacheId: "cache", data: new ArrayBuffer(1), noteId: "old", path: "/Swell/旧/attachments/a.png" })
+    await remapVaultAttachmentsForDirectory({
+      cacheId: "cache",
+      noteIds: new Map([["old", "next"]]),
+      sourceDirectory: "/Swell/旧",
+      targetDirectory: "/Swell/新",
+    })
+    await expect(loadVaultAttachment("cache", "/Swell/旧/attachments/a.png")).resolves.toBeNull()
+    await expect(loadVaultAttachment("cache", "/Swell/新/attachments/a.png")).resolves.toMatchObject({ noteId: "next", status: "pending" })
+  })
+
+  it("目录重命名保留尚未载入 React 的缓存正文", async () => {
+    await cacheVaultNoteDocuments("cache", [{ content: "离线正文", id: "old", remotePath: "/Swell/旧/a.md", title: "a" }])
+    await remapCachedVaultDocumentsForDirectory({
+      cacheId: "cache",
+      noteIds: new Map([["old", "next"]]),
+      sourceDirectory: "/Swell/旧",
+      targetDirectory: "/Swell/新",
+    })
+    await expect(loadCachedNoteDocument("cache", "old")).resolves.toBeNull()
+    await expect(loadCachedNoteDocument("cache", "next")).resolves.toMatchObject({ content: "离线正文", path: "/Swell/新/a.md" })
+  })
+
+  it("目录重命名在一个事务内提交快照、正文、附件和结构队列", async () => {
+    const oldId = "webdav:/Swell/旧/a.md"
+    const nextId = "webdav:/Swell/新/a.md"
+    await saveVaultCache({
+      activeNoteId: oldId,
+      directories: ["旧"],
+      id: "atomic-rename",
+      label: "原子重命名",
+      notes: [{
+        content: "未同步正文",
+        contentLoaded: true,
+        folder: "旧",
+        id: oldId,
+        preview: "未同步正文",
+        remotePath: "/Swell/旧/a.md",
+        source: "webdav",
+        starred: false,
+        syncStatus: "modified",
+        title: "a",
+        updatedAt: "待同步",
+      }],
+      pendingDirectoryMoves: [],
+      savedAt: 1,
+      sourceKind: "webdav",
+    })
+    await queueVaultAttachment({
+      cacheId: "atomic-rename",
+      data: new Uint8Array([7]).buffer,
+      noteId: oldId,
+      path: "/Swell/旧/attachments/a.png",
+    })
+
+    await commitVaultDirectoryRename({
+      noteIds: new Map([[oldId, nextId]]),
+      snapshot: {
+        activeNoteId: nextId,
+        directories: ["新"],
+        id: "atomic-rename",
+        label: "原子重命名",
+        notes: [{
+          content: "未同步正文",
+          contentLoaded: true,
+          folder: "新",
+          id: nextId,
+          preview: "未同步正文",
+          remotePath: "/Swell/新/a.md",
+          source: "webdav",
+          starred: false,
+          syncStatus: "modified",
+          title: "a",
+          updatedAt: "待同步",
+        }],
+        pendingDirectoryMoves: [{ id: "move-1", sourceFolder: "旧", targetFolder: "新" }],
+        savedAt: 2,
+        sourceKind: "webdav",
+      },
+      sourceDirectory: "/Swell/旧",
+      targetDirectory: "/Swell/新",
+    })
+
+    await expect(loadVaultCache("atomic-rename", { hydrate: "all" })).resolves.toMatchObject({
+      activeNoteId: nextId,
+      directories: ["新"],
+      notes: [expect.objectContaining({ content: "未同步正文", id: nextId, remotePath: "/Swell/新/a.md" })],
+      pendingDirectoryMoves: [expect.objectContaining({ id: "move-1" })],
+    })
+    await expect(loadCachedNoteDocument("atomic-rename", oldId)).resolves.toBeNull()
+    await expect(loadCachedNoteDocument("atomic-rename", nextId)).resolves.toMatchObject({
+      content: "未同步正文",
+      path: "/Swell/新/a.md",
+    })
+    await expect(loadVaultAttachment("atomic-rename", "/Swell/旧/attachments/a.png")).resolves.toBeNull()
+    await expect(loadVaultAttachment("atomic-rename", "/Swell/新/attachments/a.png")).resolves.toMatchObject({ noteId: nextId })
+  })
+
+  it("原子目录改名完整保留 modified、conflict、create 与未加载缓存正文", async () => {
+    const variants = [
+      { name: "modified", syncStatus: "modified" as const },
+      { name: "conflict", syncStatus: "conflict" as const },
+      { name: "create", pendingOperation: "create" as const, syncStatus: "modified" as const },
+      { name: "unloaded", syncStatus: "synced" as const },
+    ]
+    const oldNotes = variants.map((variant) => ({
+      content: `仅本机正文-${variant.name}`,
+      contentLoaded: true,
+      folder: "旧",
+      id: `webdav:/Swell/旧/${variant.name}.md`,
+      pendingOperation: variant.pendingOperation,
+      preview: variant.name,
+      remotePath: `/Swell/旧/${variant.name}.md`,
+      source: "webdav" as const,
+      starred: false,
+      syncStatus: variant.syncStatus,
+      title: variant.name,
+      updatedAt: "待同步",
+    }))
+    await saveVaultCache({
+      activeNoteId: oldNotes[0].id,
+      id: "atomic-variants",
+      label: "正文边界",
+      notes: oldNotes,
+      savedAt: 1,
+      sourceKind: "webdav",
+    })
+    const noteIds = new Map(oldNotes.map((note) => [note.id, note.id.replace("/旧/", "/新/")]))
+    const nextNotes = oldNotes.map((note) => {
+      const unloaded = note.title === "unloaded"
+      return {
+        ...note,
+        content: unloaded ? "" : note.content,
+        contentCached: unloaded ? true : undefined,
+        contentLoaded: unloaded ? false : note.contentLoaded,
+        folder: "新",
+        id: noteIds.get(note.id)!,
+        remotePath: note.remotePath.replace("/旧/", "/新/"),
+      }
+    })
+    await commitVaultDirectoryRename({
+      noteIds,
+      snapshot: {
+        activeNoteId: nextNotes[0].id,
+        id: "atomic-variants",
+        label: "正文边界",
+        notes: nextNotes,
+        pendingDirectoryMoves: [{ id: "variants", sourceFolder: "旧", targetFolder: "新" }],
+        savedAt: 2,
+        sourceKind: "webdav",
+      },
+      sourceDirectory: "/Swell/旧",
+      targetDirectory: "/Swell/新",
+    })
+
+    const reopened = await loadVaultCache("atomic-variants", { hydrate: "all" })
+    expect(reopened?.notes.map((note) => ({ content: note.content, id: note.id }))).toEqual(variants.map((variant) => ({
+      content: `仅本机正文-${variant.name}`,
+      id: `webdav:/Swell/新/${variant.name}.md`,
+    })))
+    for (const note of oldNotes) await expect(loadCachedNoteDocument("atomic-variants", note.id)).resolves.toBeNull()
+  })
+
+  it("目录改名提交发现正文版本已变化时拒绝旧输入并保留最新工作副本", async () => {
+    const oldId = "webdav:/Swell/A/n.md"
+    const nextId = "webdav:/Swell/B/n.md"
+    const original = {
+      content: "OLD",
+      contentLoaded: true,
+      folder: "A",
+      id: oldId,
+      preview: "OLD",
+      remotePath: "/Swell/A/n.md",
+      source: "webdav" as const,
+      starred: false,
+      syncStatus: "modified" as const,
+      title: "n",
+      updatedAt: "待同步",
+    }
+    const base = { activeNoteId: oldId, directories: ["A"], id: "rename-version", label: "版本校验", notes: [original], savedAt: 1, sourceKind: "webdav" as const }
+    await saveVaultCache(base)
+    await saveVaultCache({ ...base, notes: [{ ...original, content: "NEW WHILE WAITING" }], savedAt: 2 })
+
+    await expect(commitVaultDirectoryRename({
+      expectedDocuments: new Map([[oldId, "OLD"]]),
+      noteIds: new Map([[oldId, nextId]]),
+      snapshot: {
+        ...base,
+        activeNoteId: nextId,
+        directories: ["B"],
+        notes: [{ ...original, id: nextId, folder: "B", remotePath: "/Swell/B/n.md" }],
+      },
+      sourceDirectory: "/Swell/A",
+      targetDirectory: "/Swell/B",
+    })).rejects.toThrow("正文已在重命名期间变化")
+    await expect(loadVaultCache(base.id, { hydrate: "all" })).resolves.toMatchObject({
+      directories: ["A"],
+      notes: [expect.objectContaining({ content: "NEW WHILE WAITING", id: oldId })],
+    })
   })
 
   it("删除最后使用的缓存会一并清掉悬空指针", async () => {

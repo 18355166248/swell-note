@@ -2,12 +2,15 @@ import type { WebDavConfig } from "@/lib/webdav-config"
 import { FOLDER_ORDER_MAX_BYTES } from "@/services/preferences/folder-order-document"
 import {
   checkWebDavDirectoryExists,
+  completeWebDavDirectoryMove,
   createJsonDocument,
   createMarkdownFile,
   createWebDavBinaryFile,
   deleteMarkdownFile,
   ensureWebDavDirectory,
   listMarkdownFiles,
+  listWebDavDirectories,
+  moveWebDavDirectory,
   moveMarkdownFile,
   readJsonDocument,
   readMarkdownDocument,
@@ -81,6 +84,17 @@ export function createWebDavVaultAdapter(
         revision: file.revision,
         updatedAt: file.lastModified,
       }))
+    },
+    listDirectories() {
+      return listWebDavDirectories(config, password)
+    },
+    moveDirectory(path, targetPath, operationId) {
+      // 目录 MOVE 是唯一的远端结构动作；其下笔记和附件不再逐文件 MOVE，避免重复迁移。
+      if (!operationId) throw new Error("WebDAV 目录移动缺少操作标识")
+      return moveWebDavDirectory(config, password, path, targetPath, operationId)
+    },
+    completeDirectoryMove(targetPath, operationId) {
+      return completeWebDavDirectoryMove(config, password, targetPath, operationId)
     },
     async readTextFile(path) {
       return readMarkdownDocument(config, password, path)

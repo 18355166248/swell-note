@@ -850,6 +850,30 @@ describe("Enter continues blockquote / list markup", () => {
 })
 
 describe("toolbar block formatting", () => {
+  it("creates a task on an empty document or whitespace-only current line", () => {
+    for (const [doc, cursor, expected] of [["", 0, "- [ ] "], ["前文\n   ", 6, "前文\n   - [ ] "]] as const) {
+      const view = createView(doc, cursor)
+      toggleBlockFormat(view, "\n- [ ] ")
+      expect(view.state.doc.toString()).toBe(expected)
+      expect(view.state.selection.main.head).toBe(expected.length)
+      undo(view)
+      expect(view.state.doc.toString()).toBe(doc)
+      view.destroy()
+    }
+  })
+
+  it("keeps separator blanks in a multiline selection and does not format blank fenced-code lines", () => {
+    const selection = createView("第一段\n\n第二段", 0, 8)
+    toggleBlockFormat(selection, "\n- [ ] ")
+    expect(selection.state.doc.toString()).toBe("- [ ] 第一段\n\n- [ ] 第二段")
+    selection.destroy()
+
+    const fenced = createView("```\n\n```", 4)
+    toggleBlockFormat(fenced, "\n- [ ] ")
+    expect(fenced.state.doc.toString()).toBe("```\n\n```")
+    fenced.destroy()
+  })
+
   it("formats the whole current line, keeps the cursor, and toggles back", () => {
     const view = createView("记录今天的想法", 4)
     toggleBlockFormat(view, "\n## ")

@@ -838,7 +838,9 @@ export function toggleBlockFormat(view: EditorView, template: string) {
         if (!listKey) listKey = key
       }
     }
-    if (!line.text.trim()) {
+    if (!line.text.trim() && !(range.empty && number === selectedLastNumber && !protectedLine)) {
+      // 多行选区中的空行是段落分隔符，继续原样保留；只有单光标所在的可编辑空行
+      // 才接收块前缀，让空笔记/空格行可以直接开始任务或列表。
       segment += 1
       continue
     }

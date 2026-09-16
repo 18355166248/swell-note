@@ -12,18 +12,15 @@ vi.mock("./note-search-match", () => ({ HighlightedText: ({ text }: { text: stri
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let root: Root
 let container: HTMLDivElement
-const scroll = vi.fn()
 const notes: Note[] = Array.from({ length: 65 }, (_, i) => ({ id: `note-${i}`, title: `测试 ${i}`, content: "正文", preview: "测试正文", updatedAt: "刚刚", starred: false }))
 beforeEach(() => {
   vi.useFakeTimers()
-  HTMLElement.prototype.scrollIntoView = scroll
-  scroll.mockClear()
   cachedSearch.mockResolvedValue([])
   container = document.createElement("div")
   document.body.append(container)
   root = createRoot(container)
 })
-afterEach(() => { act(() => root.unmount()); container.remove(); vi.useRealTimers() })
+afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.useRealTimers() })
 function render(cacheId: string | null = null) {
   const onSelectNote = vi.fn(), onOpenChange = vi.fn()
   act(() => root.render(<GlobalSearchDialog cacheId={cacheId} notes={notes} onOpenChange={onOpenChange} onSelectNote={onSelectNote} open />))
@@ -43,8 +40,17 @@ function click(label: string) {
   act(() => { document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click() })
 }
 describe("global search interactions", () => {
-  it("paginates results without hiding the total and scrolls keyboard selection into view", () => {
+  it("paginates results without hiding the total and scrolls its own viewport for keyboard selection", () => {
     render(); query("测试")
+    const viewport = document.querySelector<HTMLElement>("[data-search-scroll-viewport]")!
+    Object.defineProperties(viewport, { clientHeight: { configurable: true, value: 240 }, scrollHeight: { configurable: true, value: 6000 } })
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute("data-search-scroll-viewport")) {
+        return { bottom: 340, height: 240, left: 0, right: 400, top: 100, width: 400, x: 0, y: 100, toJSON: () => ({}) }
+      }
+      const top = 100 + Number(this.dataset?.index ?? 0) * 80 - viewport.scrollTop
+      return { bottom: top + 80, height: 80, left: 0, right: 400, top, width: 400, x: 0, y: top, toJSON: () => ({}) }
+    })
     expect(document.querySelectorAll('[role="option"]')).toHaveLength(50)
     expect(document.body.textContent).toContain("找到 65 篇，已显示 50 篇")
     for (let i = 0; i < 50; i++) key("ArrowDown")
@@ -52,7 +58,8 @@ describe("global search interactions", () => {
     const active = document.querySelector('[aria-selected="true"]')!
     expect(active.getAttribute("data-index")).toBe("50")
     expect(input().getAttribute("aria-activedescendant")).toBe(active.id)
-    expect(scroll).toHaveBeenLastCalledWith({ block: "nearest" })
+    expect(viewport.scrollHeight).toBeGreaterThan(viewport.clientHeight)
+    expect(viewport.scrollTop).toBeGreaterThan(0)
   })
   it("loads the next page by button and preserves input navigation bounds", () => {
     render(); query("测试")

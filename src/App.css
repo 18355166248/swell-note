@@ -1234,7 +1234,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .note-editor[data-compact="true"] .editor-actions > [data-slot="dropdown-menu-trigger"] { min-width: 36px; height: 36px; }
   .note-editor[data-compact="true"] .saved-state[data-status="saved"] { display: none; }
   /* 居中弹窗（重命名笔记等）默认按整个布局视口居中，键盘打开后会有一半落在键盘下；按键盘高度的一半上移即可重新居中于可视区。 */
-  [data-slot="dialog-content"]:not(.mobile-action-sheet) { top: calc(50% - var(--keyboard-inset,0px) / 2); }
+  [data-slot="dialog-content"]:not(.mobile-action-sheet):not(.global-search-dialog) { top: calc(50% - var(--keyboard-inset,0px) / 2); }
   .mobile-outline-dialog { width: calc(100vw - 24px); max-height: min(76dvh,620px); padding: 18px 0 10px; overflow: hidden; }
   .mobile-outline-dialog [data-slot="dialog-header"] { padding: 0 18px 10px; }
   .mobile-outline-list { max-height: min(58dvh,480px); overflow-y: auto; border-top: 1px solid var(--border); }
@@ -1446,6 +1446,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   display: flex;
   width: min(600px, calc(100vw - 32px));
   max-width: 600px;
+  height: min(70dvh, 560px);
   max-height: min(70vh, 560px);
   flex-direction: column;
   padding: 0;
@@ -1458,7 +1459,15 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .global-search-input-wrap input { flex: 1; min-width: 0; height: 40px; padding-left: 36px; border-color: transparent; background: var(--muted); font-size: 13px; box-shadow: none; }
 .global-search-input-wrap input:focus { border-color: var(--ring); background: var(--background); }
 
-.global-search-results { flex: 1; min-height: 0; }
+.global-search-results {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
 .global-search-empty { display: flex; min-height: 160px; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--muted-foreground); font-size: 12.5px; }
 .global-search-empty > svg { width: 22px; height: 22px; }
 
@@ -1474,6 +1483,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .global-search-dialog {
     width: 100vw;
     max-width: none;
+    height: 78dvh;
     max-height: 78dvh;
   }
 }

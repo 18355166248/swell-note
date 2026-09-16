@@ -50,6 +50,26 @@ export async function listMarkdownFiles(
   )
 }
 
+export async function listWebDavDirectories(
+  config: WebDavConfig,
+  password: string,
+): Promise<string[]> {
+  const queue = [config.remotePath]
+  const visited = new Set<string>()
+  const directories: string[] = []
+  while (queue.length > 0 && visited.size < MAX_DIRECTORIES) {
+    const directoryPath = queue.shift()
+    if (!directoryPath || visited.has(directoryPath)) continue
+    visited.add(directoryPath)
+    for (const entry of await listDirectory(config, password, directoryPath)) {
+      if (!entry.directory || isIgnoredDirectory(entry.name)) continue
+      directories.push(entry.path.replace(/\/+$/g, ""))
+      queue.push(ensureTrailingSlash(entry.path))
+    }
+  }
+  return directories
+}
+
 export async function readMarkdownDocument(
   config: WebDavConfig,
   password: string,
@@ -146,6 +166,64 @@ export async function moveMarkdownFile(
     method: "MOVE",
   })
   return { revision: response.headers.get("etag") ?? expectedRevision }
+}
+
+export async function moveWebDavDirectory(
+  config: WebDavConfig,
+  password: string,
+  path: string,
+  targetPath: string,
+  operationId: string,
+) {
+  if (!/^[a-zA-Z0-9-]+$/.test(operationId)) throw new Error("目录移动操作标识无效")
+  const markerName = `.swell-move-${operationId}.json`
+  const sourceMarkerPath = `${path.replace(/\/+$/g, "")}/${markerName}`
+  const targetMarkerPath = `${targetPath.replace(/\/+$/g, "")}/${markerName}`
+  const marker = JSON.stringify({ operationId, path, targetPath })
+  const [sourceExists, targetExists] = await Promise.all([
+    checkWebDavDirectoryExists(config, password, path),
+    checkWebDavDirectoryExists(config, password, targetPath),
+  ])
+  if (!sourceExists && targetExists) {
+    // 只有随源目录一起移动的凭证能证明目标属于本操作；同名目录不能被误认成重试成功。
+    const response = await webDavRawFetch(config, password, targetMarkerPath, { method: "GET" })
+    if (!response.ok || await response.text() !== marker) throw new Error(`目录移动结果无法确认：${targetPath}`)
+    return
+  }
+  if (!sourceExists) throw new Error(`远端源目录不存在：${path}`)
+  if (targetExists) throw new Error(`目标文件夹已存在：${targetPath}`)
+  const markerResponse = await webDavRawFetch(config, password, sourceMarkerPath, {
+    body: marker,
+    headers: { "Content-Type": "application/json; charset=utf-8", "If-None-Match": "*" },
+    method: "PUT",
+  })
+  if (markerResponse.status === 412) {
+    const existing = await webDavRawFetch(config, password, sourceMarkerPath, { method: "GET" })
+    if (!existing.ok || await existing.text() !== marker) throw new Error(`目录移动凭证冲突：${path}`)
+  } else if (!markerResponse.ok) {
+    if (markerResponse.status === 401) throw new WebDavAuthenticationError()
+    throw new Error(`无法创建目录移动凭证（HTTP ${markerResponse.status}）`)
+  }
+  await webDavFetch(config, password, path, {
+    headers: {
+      Destination: buildRemoteUrl(config, targetPath),
+      Overwrite: "F",
+    },
+    method: "MOVE",
+  })
+}
+
+export async function completeWebDavDirectoryMove(
+  config: WebDavConfig,
+  password: string,
+  targetPath: string,
+  operationId: string,
+) {
+  const markerPath = `${targetPath.replace(/\/+$/g, "")}/.swell-move-${operationId}.json`
+  const response = await webDavRawFetch(config, password, markerPath, { method: "DELETE" })
+  if (response.status === 404 || response.ok) return
+  if (response.status === 401) throw new WebDavAuthenticationError()
+  throw new Error(`清理目录移动凭证失败（HTTP ${response.status}）`)
 }
 
 export async function ensureWebDavDirectory(

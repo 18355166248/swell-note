@@ -11,6 +11,7 @@ import {
   deleteMarkdownFile,
   ensureWebDavDirectory,
   moveMarkdownFile,
+  moveWebDavDirectory,
   readJsonDocument,
   updateJsonDocument,
   WebDavAuthenticationError,
@@ -128,6 +129,42 @@ describe("WebDAV queued file operations", () => {
       }),
       method: "MOVE",
     })
+  })
+
+  it("目录 MOVE 禁止覆盖，重试时以目标存在作为完成检查点", async () => {
+    const propfindBody = (exists: boolean) => new Response("", { status: exists ? 207 : 404 })
+    const marker = JSON.stringify({ operationId: "move-1", path: "/Swell/旧目录", targetPath: "/Swell/新目录" })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(propfindBody(true))
+      .mockResolvedValueOnce(propfindBody(false))
+      .mockResolvedValueOnce(new Response("", { status: 201 }))
+      .mockResolvedValueOnce(new Response("", { status: 201 }))
+      .mockResolvedValueOnce(propfindBody(false))
+      .mockResolvedValueOnce(propfindBody(true))
+      .mockResolvedValueOnce(new Response(marker, { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await moveWebDavDirectory(config, "app-password", "/Swell/旧目录", "/Swell/新目录", "move-1")
+    await moveWebDavDirectory(config, "app-password", "/Swell/旧目录", "/Swell/新目录", "move-1")
+
+    const moveRequest = fetchMock.mock.calls.find(([, request]) => request.method === "MOVE")?.[1]
+    expect(moveRequest).toMatchObject({
+      headers: expect.objectContaining({
+        Destination: "https://dav.jianguoyun.com/dav/Swell/%E6%96%B0%E7%9B%AE%E5%BD%95",
+        Overwrite: "F",
+      }),
+      method: "MOVE",
+    })
+    expect(fetchMock.mock.calls.filter(([, request]) => request.method === "MOVE")).toHaveLength(1)
+  })
+
+  it("源缺失且目标同名但没有本操作凭证时拒绝冒认成功", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response("", { status: 404 }))
+      .mockResolvedValueOnce(new Response("", { status: 207 }))
+      .mockResolvedValueOnce(new Response("other", { status: 200 })))
+    await expect(moveWebDavDirectory(config, "app-password", "/Swell/旧", "/Swell/新", "move-2"))
+      .rejects.toThrow("无法确认")
   })
 
   it("删除文件时携带原文件版本", async () => {

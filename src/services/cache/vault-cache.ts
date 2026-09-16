@@ -14,6 +14,7 @@ export type VaultCacheSnapshot = {
   activeNoteId: string
   directories?: string[]
   pendingDirectories?: string[]
+  pendingDirectoryMoves?: PendingWebDavDirectoryMove[]
   id: string
   label: string
   lastSyncedAt?: number
@@ -21,6 +22,18 @@ export type VaultCacheSnapshot = {
   savedAt: number
   sourceKind: VaultSourceKind
   trash?: TrashEntry[]
+}
+
+export type PendingWebDavDirectoryMove = {
+  id: string
+  // MOVE 已远端成功但子文件版本尚未核对时保留该阶段；重启后只做核对，不重复移动目录。
+  moved?: boolean
+  sourceFolder: string
+  targetFolder: string
+}
+
+type SaveVaultCacheOptions = {
+  updateLastCache?: boolean
 }
 
 export type VaultCacheSummary = Pick<
@@ -51,6 +64,13 @@ export type VaultNoteDocument = {
   path?: string
   tags?: string[]
   title: string
+}
+
+export type VaultDirectoryNoteCheckpoint = Pick<Note, "id"> & Partial<Pick<Note, "revision" | "syncError" | "syncStatus">>
+
+export type VaultNoteQueueCheckpoint = {
+  note: Note
+  type: "deleted" | "failed" | "moved" | "synced"
 }
 
 type LoadVaultCacheOptions = {
@@ -188,6 +208,67 @@ export async function remapVaultAttachmentNoteId(cacheId: string, previousNoteId
   database.close()
 }
 
+export async function remapVaultAttachmentsForDirectory({
+  cacheId,
+  noteIds,
+  sourceDirectory,
+  targetDirectory,
+}: {
+  cacheId: string
+  noteIds: ReadonlyMap<string, string>
+  sourceDirectory: string
+  targetDirectory: string
+}) {
+  const database = await openDatabase()
+  const transaction = database.transaction(ATTACHMENT_STORE, "readwrite")
+  const done = transactionDone(transaction)
+  const store = transaction.objectStore(ATTACHMENT_STORE)
+  const entries = await requestResult<VaultAttachmentCacheEntry[]>(store.index("cacheId").getAll(cacheId))
+  for (const entry of entries) {
+    const path = entry.path === sourceDirectory || entry.path.startsWith(`${sourceDirectory}/`)
+      ? `${targetDirectory}${entry.path.slice(sourceDirectory.length)}`
+      : entry.path
+    const noteId = noteIds.get(entry.noteId) ?? entry.noteId
+    const key = attachmentKey(cacheId, path)
+    if (key === entry.key && noteId === entry.noteId) continue
+    // key 由路径组成，先删旧记录再写新记录，目录 MOVE 后缓存和待上传附件都只指向新路径。
+    store.delete(entry.key)
+    store.put({ ...entry, key, noteId, path })
+  }
+  await done
+  database.close()
+}
+
+export async function remapCachedVaultDocumentsForDirectory({
+  cacheId,
+  noteIds,
+  sourceDirectory,
+  targetDirectory,
+}: {
+  cacheId: string
+  noteIds: ReadonlyMap<string, string>
+  sourceDirectory: string
+  targetDirectory: string
+}) {
+  if (noteIds.size === 0) return
+  const database = await openDatabase()
+  const transaction = database.transaction(DOCUMENT_STORE, "readwrite")
+  const done = transactionDone(transaction)
+  const store = transaction.objectStore(DOCUMENT_STORE)
+  const documents = await requestResult<VaultNoteDocument[]>(store.index("cacheId").getAll(cacheId))
+  for (const document of documents) {
+    const noteId = noteIds.get(document.noteId)
+    if (!noteId) continue
+    const path = document.path === sourceDirectory || document.path?.startsWith(`${sourceDirectory}/`)
+      ? `${targetDirectory}${document.path.slice(sourceDirectory.length)}`
+      : document.path
+    store.delete(document.key)
+    store.put({ ...document, key: documentKey(cacheId, noteId), noteId, path })
+  }
+  await done
+  database.close()
+}
+
 export async function createVaultCacheId(identity: string) {
   const subtle = globalThis.crypto?.subtle
   if (!subtle) {
@@ -203,7 +284,7 @@ export async function createVaultCacheId(identity: string) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
-export async function saveVaultCache(snapshot: VaultCacheSnapshot) {
+export async function saveVaultCache(snapshot: VaultCacheSnapshot, options: SaveVaultCacheOptions = {}) {
   const database = await openDatabase()
   const transaction = database.transaction([VAULT_STORE, SETTINGS_STORE, DOCUMENT_STORE], "readwrite")
   const documentStore = transaction.objectStore(DOCUMENT_STORE)
@@ -225,9 +306,191 @@ export async function saveVaultCache(snapshot: VaultCacheSnapshot) {
     return toMetadataNote(note, Boolean(note.contentLoaded || note.contentCached))
   })
   transaction.objectStore(VAULT_STORE).put({ ...snapshot, notes: metadataNotes })
-  transaction.objectStore(SETTINGS_STORE).put({ key: LAST_CACHE_KEY, value: snapshot.id })
+  // 后台旧库检查点可以继续落盘，但绝不能把当前库指针切回旧库。
+  if (options.updateLastCache !== false) {
+    transaction.objectStore(SETTINGS_STORE).put({ key: LAST_CACHE_KEY, value: snapshot.id })
+  }
   await transactionDone(transaction)
   database.close()
+}
+
+export async function saveVaultDirectoryQueueCheckpoint(
+  checkpoint: VaultCacheSnapshot,
+  noteUpdates: readonly VaultDirectoryNoteCheckpoint[] = [],
+) {
+  const database = await openDatabase()
+  const transaction = database.transaction([VAULT_STORE, DOCUMENT_STORE], "readwrite")
+  const vaultStore = transaction.objectStore(VAULT_STORE)
+  const documentStore = transaction.objectStore(DOCUMENT_STORE)
+  try {
+    const [stored, documents] = await Promise.all([
+      requestResult<VaultCacheSnapshot | undefined>(vaultStore.get(checkpoint.id)),
+      requestResult<VaultNoteDocument[]>(documentStore.index("cacheId").getAll(checkpoint.id)),
+    ])
+    const current = stored
+      ? hydrateSnapshot(stored, documents)
+      : checkpoint
+    const updates = new Map(noteUpdates.map((update) => [update.id, update]))
+    const notes = current.notes.map((note) => {
+      const update = updates.get(note.id)
+      if (!update) return note
+      return {
+        ...note,
+        revision: update.revision,
+        syncError: update.syncError,
+        syncStatus: update.syncStatus ?? note.syncStatus,
+      }
+    })
+    const merged: VaultCacheSnapshot = {
+      ...current,
+      pendingDirectories: checkpoint.pendingDirectories,
+      pendingDirectoryMoves: checkpoint.pendingDirectoryMoves,
+      notes,
+      savedAt: checkpoint.savedAt,
+    }
+    if (!stored) {
+      for (const note of notes) {
+        if (note.contentLoaded) documentStore.put(toVaultNoteDocument(checkpoint.id, note))
+      }
+    }
+    // 结构检查点只改自己拥有的字段；正文与无关笔记元数据以事务开始时的最新缓存为准。
+    vaultStore.put({ ...merged, notes: notes.map((note) => toMetadataNote(note, Boolean(note.contentLoaded || note.contentCached))) })
+    await transactionDone(transaction)
+    return merged
+  } finally {
+    database.close()
+  }
+}
+
+export async function saveVaultNoteQueueCheckpoint(cacheId: string, checkpoint: VaultNoteQueueCheckpoint) {
+  const database = await openDatabase()
+  const transaction = database.transaction([VAULT_STORE, DOCUMENT_STORE], "readwrite")
+  const vaultStore = transaction.objectStore(VAULT_STORE)
+  const documentStore = transaction.objectStore(DOCUMENT_STORE)
+  try {
+    const [stored, documents] = await Promise.all([
+      requestResult<VaultCacheSnapshot | undefined>(vaultStore.get(cacheId)),
+      requestResult<VaultNoteDocument[]>(documentStore.index("cacheId").getAll(cacheId)),
+    ])
+    if (!stored) throw new Error("文件同步检查点所属缓存不存在")
+    const current = hydrateSnapshot(stored, documents)
+    const currentNote = current.notes.find((note) => note.id === checkpoint.note.id)
+    let notes = current.notes
+    if (checkpoint.type === "deleted") {
+      // 只清理仍处于同一删除意图的墓碑；若用户已恢复则保留最新工作副本。
+      if (currentNote?.pendingOperation === "delete") {
+        notes = notes.filter((note) => note.id !== checkpoint.note.id)
+        documentStore.delete(documentKey(cacheId, checkpoint.note.id))
+      }
+    } else if (currentNote) {
+      const contentChangedAfterStart = currentNote.content !== checkpoint.note.content
+      const mergedNote: Note = checkpoint.type === "failed"
+        ? {
+            ...currentNote,
+            syncError: checkpoint.note.syncError,
+            syncStatus: checkpoint.note.syncStatus,
+          }
+        : checkpoint.type === "moved"
+        ? {
+            ...currentNote,
+            pendingOperation: undefined,
+            previousRemotePath: undefined,
+            revision: checkpoint.note.revision,
+            syncError: undefined,
+            syncStatus: "modified",
+            writeContentAfterMove: undefined,
+          }
+        : {
+            ...currentNote,
+            baseContent: checkpoint.note.content,
+            pendingOperation: undefined,
+            previousRemotePath: undefined,
+            revision: checkpoint.note.revision,
+            syncError: undefined,
+            syncStatus: contentChangedAfterStart ? "modified" : "synced",
+            updatedAt: contentChangedAfterStart ? currentNote.updatedAt : "刚刚同步",
+            writeContentAfterMove: undefined,
+          }
+      notes = notes.map((note) => note.id === mergedNote.id ? mergedNote : note)
+      if (mergedNote.contentLoaded) documentStore.put(toVaultNoteDocument(cacheId, mergedNote))
+    }
+    const merged = { ...current, notes, savedAt: Date.now() }
+    vaultStore.put({ ...merged, notes: notes.map((note) => toMetadataNote(note, Boolean(note.contentLoaded || note.contentCached))) })
+    await transactionDone(transaction)
+    return merged
+  } finally {
+    database.close()
+  }
+}
+
+export async function commitVaultDirectoryRename({
+  expectedDocuments,
+  noteIds,
+  snapshot,
+  sourceDirectory,
+  targetDirectory,
+}: {
+  expectedDocuments?: ReadonlyMap<string, string>
+  noteIds: ReadonlyMap<string, string>
+  snapshot: VaultCacheSnapshot
+  sourceDirectory: string
+  targetDirectory: string
+}) {
+  const database = await openDatabase()
+  const transaction = database.transaction([VAULT_STORE, ATTACHMENT_STORE, DOCUMENT_STORE], "readwrite")
+  const vaultStore = transaction.objectStore(VAULT_STORE)
+  const attachmentStore = transaction.objectStore(ATTACHMENT_STORE)
+  const documentStore = transaction.objectStore(DOCUMENT_STORE)
+  try {
+    // 两个 getAll 先并发挂到同一事务；后续改键和快照写入要么全部提交，要么全部回滚。
+    const [attachments, documents] = await Promise.all([
+      requestResult<VaultAttachmentCacheEntry[]>(attachmentStore.index("cacheId").getAll(snapshot.id)),
+      requestResult<VaultNoteDocument[]>(documentStore.index("cacheId").getAll(snapshot.id)),
+    ])
+    if (expectedDocuments) {
+      const documentsByNoteId = new Map(documents.map((document) => [document.noteId, document]))
+      for (const [noteId, expectedContent] of expectedDocuments) {
+        const current = documentsByNoteId.get(noteId)
+        if (current && current.content !== expectedContent) {
+          throw new Error("笔记正文已在重命名期间变化，请重试")
+        }
+      }
+    }
+    const validDocumentKeys = new Set(snapshot.notes.map((note) => documentKey(snapshot.id, note.id)))
+
+    for (const document of documents) {
+      const noteId = noteIds.get(document.noteId) ?? document.noteId
+      const path = replaceStorageDirectoryPrefix(document.path, sourceDirectory, targetDirectory)
+      const key = documentKey(snapshot.id, noteId)
+      if (key !== document.key) documentStore.delete(document.key)
+      if (validDocumentKeys.has(key)) documentStore.put({ ...document, key, noteId, path })
+      else documentStore.delete(key)
+    }
+
+    for (const note of snapshot.notes) {
+      const key = documentKey(snapshot.id, note.id)
+      if (note.contentLoaded) documentStore.put(toVaultNoteDocument(snapshot.id, note))
+      else if (!note.contentCached) documentStore.delete(key)
+    }
+
+    for (const attachment of attachments) {
+      const path = replaceStorageDirectoryPrefix(attachment.path, sourceDirectory, targetDirectory) ?? attachment.path
+      const noteId = noteIds.get(attachment.noteId) ?? attachment.noteId
+      const key = attachmentKey(snapshot.id, path)
+      if (key === attachment.key && noteId === attachment.noteId) continue
+      attachmentStore.delete(attachment.key)
+      attachmentStore.put({ ...attachment, key, noteId, path })
+    }
+
+    const metadataNotes = snapshot.notes.map((note) => toMetadataNote(
+      note,
+      Boolean(note.contentLoaded || note.contentCached),
+    ))
+    vaultStore.put({ ...snapshot, notes: metadataNotes })
+    await transactionDone(transaction)
+  } finally {
+    database.close()
+  }
 }
 
 export async function loadVaultCache(id: string, options: LoadVaultCacheOptions = {}) {
@@ -402,6 +665,14 @@ function documentKey(cacheId: string, noteId: string) {
   return `${cacheId}\u0000${noteId}`
 }
 
+function replaceStorageDirectoryPrefix(path: string | undefined, sourceDirectory: string, targetDirectory: string) {
+  if (!path) return path
+  if (path === sourceDirectory) return targetDirectory
+  return path.startsWith(`${sourceDirectory}/`)
+    ? `${targetDirectory}${path.slice(sourceDirectory.length)}`
+    : path
+}
+
 function toVaultNoteDocument(
   cacheId: string,
   note: Pick<Note, "baseContent" | "content" | "frontmatter" | "id" | "outgoingLinks" | "remotePath" | "tags" | "title">,
@@ -442,6 +713,17 @@ export function hydrateNoteFromCachedDocument(note: Note, document: VaultNoteDoc
     outgoingLinks: document.outgoingLinks ?? note.outgoingLinks,
     searchText: `${document.content} ${(document.tags ?? []).join(" ")}`.toLocaleLowerCase(),
     tags: document.tags ?? note.tags,
+  }
+}
+
+function hydrateSnapshot(snapshot: VaultCacheSnapshot, documents: readonly VaultNoteDocument[]): VaultCacheSnapshot {
+  const byNoteId = new Map(documents.map((document) => [document.noteId, document]))
+  return {
+    ...snapshot,
+    notes: snapshot.notes.map((note) => {
+      const document = byNoteId.get(note.id)
+      return document ? hydrateNoteFromCachedDocument(note, document) : note
+    }),
   }
 }
 

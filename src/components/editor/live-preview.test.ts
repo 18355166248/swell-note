@@ -474,6 +474,14 @@ describe("markdown live preview", () => {
     expect(hidden).toContainEqual({ from: listDoc.indexOf("- [ ]"), to: listDoc.indexOf("[ ]") })
   })
 
+  it("renders the checkbox for an empty task with the cursor at its content position", async () => {
+    const emptyTask = "- [ ] "
+    const view = createView({ anchor: emptyTask.length }, emptyTask)
+    const { checkboxes } = collect(await settleInlineDecorations(view))
+
+    expect(checkboxes).toEqual([{ checked: false, from: emptyTask.indexOf("[ ]"), to: emptyTask.length }])
+  })
+
   it("reveals the task marker source when the cursor enters the marker itself", async () => {
     // 光标落在 `- ` 与 `[ ]` 之间：用户要改的是标记本身，还原源码。
     const view = createView({ anchor: listDoc.indexOf("[ ]") }, listDoc)

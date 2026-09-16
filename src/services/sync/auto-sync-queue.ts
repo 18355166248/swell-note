@@ -1,4 +1,5 @@
 import type { Note } from "@/types/note"
+import type { PendingWebDavDirectoryMove } from "@/services/cache/vault-cache"
 
 function hashContent(value: string) {
   let hash = 2166136261
@@ -14,11 +15,17 @@ export function buildAutoSyncQueueKey(
   notes: Note[],
   pendingDirectories: string[],
   pendingAttachments: number,
+  pendingDirectoryMoves: readonly PendingWebDavDirectoryMove[] = [],
 ) {
   // 错误文案不属于队列内容，失败后只更新 syncError 不能生成新签名，否则会触发无限自动重试。
   const pendingNotes = notes
     .filter((note) => note.source === "webdav" && note.syncStatus === "modified")
     .map((note) => `${note.id}:${note.pendingOperation ?? "update"}:${hashContent(`${note.title}\u0000${note.content}`)}`)
     .sort()
-  return `${cacheId ?? "no-cache"}|${pendingDirectories.slice().sort().join("\u0001")}|${pendingAttachments}|${pendingNotes.join("\u0001")}`
+  const directoryMoves = pendingDirectoryMoves
+    // MOVE 已完成但核对失败是一个可恢复的新阶段；签名必须变化，自动同步才能再尝试一次核对而不重发 MOVE。
+    .map((move) => `${move.id}:${move.sourceFolder}>${move.targetFolder}:${move.moved ? "moved" : "pending"}`)
+    .sort()
+    .join("\u0001")
+  return `${cacheId ?? "no-cache"}|${pendingDirectories.slice().sort().join("\u0001")}|${directoryMoves}|${pendingAttachments}|${pendingNotes.join("\u0001")}`
 }

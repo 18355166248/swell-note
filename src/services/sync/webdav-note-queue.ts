@@ -15,6 +15,7 @@ type SyncWebDavNoteQueueOptions = {
   isFatalError?: (error: unknown) => boolean
   noteIds?: ReadonlySet<string>
   notes: Note[]
+  onCheckpoint?: (checkpoint: { note: Note; type: "deleted" | "failed" | "moved" | "synced" }) => Promise<Note[] | void>
   onDeleteCommitted?: (note: Note) => Promise<void>
   onEvent?: (event: WebDavNoteQueueEvent) => void
 }
@@ -25,6 +26,7 @@ export async function syncWebDavNoteQueue({
   isFatalError = () => false,
   noteIds,
   notes,
+  onCheckpoint,
   onDeleteCommitted,
   onEvent,
 }: SyncWebDavNoteQueueOptions) {
@@ -42,6 +44,14 @@ export async function syncWebDavNoteQueue({
     && note.remotePath
     && (!noteIds || noteIds.has(note.id)),
   )
+  const persistCheckpoint = async (type: "deleted" | "failed" | "moved" | "synced", note: Note) => {
+    try {
+      const persistedNotes = await onCheckpoint?.({ note, type })
+      if (persistedNotes) nextNotes = persistedNotes
+    } catch (error) {
+      throw new NoteCheckpointError(error)
+    }
+  }
 
   // 队列严格串行：坚果云有频率限制，并且移动后写正文依赖 MOVE 返回的新版本号。
   for (const pendingNote of pendingNotes) {
@@ -53,6 +63,7 @@ export async function syncWebDavNoteQueue({
         if (!adapter.deleteTextFile) throw new Error("当前 WebDAV 会话不支持删除")
         await adapter.deleteTextFile(pendingNote.previousRemotePath ?? path, pendingNote.revision)
         nextNotes = nextNotes.filter((note) => note.id !== pendingNote.id)
+        await persistCheckpoint("deleted", pendingNote)
         onEvent?.({ note: pendingNote, type: "deleted" })
         // 远端删除成功后才能清理附件队列，失败或取消时仍保留本地可恢复数据。
         // 清理本机附件失败不能把已经提交的远端 DELETE 重新放回队列，否则重试会变成 404。
@@ -68,8 +79,10 @@ export async function syncWebDavNoteQueue({
         const targetDirectory = path.split("/").slice(0, -1).join("/")
         if (targetDirectory && !ensuredDirectories.has(targetDirectory)) {
           await adapter.ensureDirectory?.(targetDirectory)
+          if (isCancelled()) break
           ensuredDirectories.add(targetDirectory)
         }
+        if (isCancelled()) break
         const moved = await adapter.moveTextFile(
           pendingNote.previousRemotePath ?? path,
           path,
@@ -87,7 +100,9 @@ export async function syncWebDavNoteQueue({
             writeContentAfterMove: undefined,
           }
           nextNotes = nextNotes.map((note) => note.id === pendingNote.id ? movedCheckpoint : note)
+          await persistCheckpoint("moved", movedCheckpoint)
           onEvent?.({ note: movedCheckpoint, revision: moved.revision, type: "moved" })
+          if (isCancelled()) break
           result = await adapter.writeTextFile(path, pendingNote.content, moved.revision)
         }
       } else {
@@ -95,32 +110,42 @@ export async function syncWebDavNoteQueue({
       }
       if (!result) throw new Error("当前 WebDAV 会话不支持此同步操作")
 
-      nextNotes = nextNotes.map((note) => note.id === pendingNote.id
-        ? {
-            ...note,
-            baseContent: pendingNote.content,
-            mergeConflictCount: undefined,
-            pendingOperation: undefined,
-            previousRemotePath: undefined,
-            revision: result.revision,
-            syncError: undefined,
-            syncStatus: "synced",
-            updatedAt: "刚刚同步",
-            writeContentAfterMove: undefined,
-          }
-        : note)
+      const syncedNote: Note = {
+        ...pendingNote,
+        baseContent: pendingNote.content,
+        mergeConflictCount: undefined,
+        pendingOperation: undefined,
+        previousRemotePath: undefined,
+        revision: result.revision,
+        syncError: undefined,
+        syncStatus: "synced",
+        updatedAt: "刚刚同步",
+        writeContentAfterMove: undefined,
+      }
+      nextNotes = nextNotes.map((note) => note.id === pendingNote.id ? syncedNote : note)
+      await persistCheckpoint("synced", syncedNote)
       onEvent?.({ note: pendingNote, revision: result.revision, type: "synced" })
     } catch (error) {
-      if (isFatalError(error)) {
-        fatalError = error
+      if (error instanceof NoteCheckpointError || isFatalError(error)) {
+        fatalError = error instanceof NoteCheckpointError ? error.cause : error
         break
       }
       const conflict = error instanceof VaultConflictError
       const message = error instanceof Error ? error.message : "同步笔记失败"
       errorMessage = message
-      nextNotes = nextNotes.map((note) => note.id === pendingNote.id
-        ? { ...note, syncError: conflict ? undefined : message, syncStatus: conflict ? "conflict" : "modified" }
-        : note)
+      const currentNote = nextNotes.find((note) => note.id === pendingNote.id) ?? pendingNote
+      const failedNote: Note = {
+        ...currentNote,
+        syncError: conflict ? undefined : message,
+        syncStatus: conflict ? "conflict" : "modified",
+      }
+      nextNotes = nextNotes.map((note) => note.id === pendingNote.id ? failedNote : note)
+      try {
+        await persistCheckpoint("failed", failedNote)
+      } catch (checkpointError) {
+        fatalError = checkpointError instanceof NoteCheckpointError ? checkpointError.cause : checkpointError
+        break
+      }
       onEvent?.({ conflict, message, note: pendingNote, type: "failed" })
     } finally {
       onEvent?.({ note: pendingNote, type: "complete" })
@@ -128,4 +153,10 @@ export async function syncWebDavNoteQueue({
   }
 
   return { cancelled: isCancelled(), errorMessage, fatalError, notes: nextNotes }
+}
+
+class NoteCheckpointError extends Error {
+  constructor(readonly cause: unknown) {
+    super("保存文件同步检查点失败")
+  }
 }

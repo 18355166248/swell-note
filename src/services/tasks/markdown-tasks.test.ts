@@ -30,6 +30,40 @@ describe("extractMarkdownTasks", () => {
     expect(setMarkdownTaskChecked(content, 2, true)).toBe("# 计划\n- [x] 完成路由\n正文")
     expect(() => setMarkdownTaskChecked(content, 3, true)).toThrow("来源已经变化")
   })
+
+  it("展示并切换没有正文的标准任务", () => {
+    expect(extractMarkdownTasks([note("- [ ] \n- [x] ")])).toEqual([
+      expect.objectContaining({ checked: false, line: 1, text: "" }),
+      expect.objectContaining({ checked: true, line: 2, text: "" }),
+    ])
+    expect(setMarkdownTaskChecked("- [ ] ", 1, true)).toBe("- [x] ")
+    expect(setMarkdownTaskChecked("- [x] ", 1, false)).toBe("- [ ] ")
+    expect(() => setMarkdownTaskChecked("- [x]", 1, false)).toThrow("来源已经变化")
+  })
+
+  it("共享语法树边界并支持引用、嵌套及有序任务", () => {
+    const content = [
+      "```md",
+      "- [ ] ",
+      "```",
+      "",
+      "    - [ ] 缩进代码",
+      "",
+      "> - [ ] 引用任务",
+      "- 父项",
+      "  - [x] 嵌套任务",
+      "1. [ ] 有序任务",
+    ].join("\n")
+
+    expect(extractMarkdownTasks([note(content)])).toEqual([
+      expect.objectContaining({ line: 7, text: "引用任务" }),
+      expect.objectContaining({ checked: true, line: 9, text: "嵌套任务" }),
+      expect.objectContaining({ line: 10, text: "有序任务" }),
+    ])
+    expect(() => setMarkdownTaskChecked(content, 2, true)).toThrow("来源已经变化")
+    expect(() => setMarkdownTaskChecked(content, 5, true)).toThrow("来源已经变化")
+    expect(setMarkdownTaskChecked(content, 7, true)).toContain("> - [x] 引用任务")
+  })
 })
 
 describe("resolveQuickTaskTarget", () => {
