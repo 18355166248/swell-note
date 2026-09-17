@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react"
 import { Bold, CheckCircle2, Code, Code2, Heading3, Image, Italic, Link, List, ListOrdered, LoaderCircle, Minus, MoreHorizontal, Quote, Redo2, Strikethrough, Table, Undo2 } from "lucide-react"
 
-import { TABLE_INSERT_TEMPLATE, type MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import { TABLE_INSERT_TEMPLATE, type MarkdownEditorHandle } from "@/components/editor/editor-contract"
 import type { EditorFormatState } from "@/components/editor/markdown-input"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 

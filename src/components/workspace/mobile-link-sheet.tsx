@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import { ChevronRight, ExternalLink, PencilLine, Unlink } from "lucide-react"
 
 import { isValidLinkLabel, type EditorLinkTarget } from "@/components/editor/markdown-input"
-import type { LinkCellSnapshot } from "@/components/editor/markdown-editor"
+import type { LinkCellSnapshot } from "@/components/editor/editor-contract"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"

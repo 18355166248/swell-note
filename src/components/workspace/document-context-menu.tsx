@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode, type RefObject } from "react"
 import { Bold, ClipboardPaste, Copy, Download, ExternalLink, History, Italic, Link, LockKeyhole, Redo2, Search, TextSelect, Undo2, Scissors, PencilLine, Star } from "lucide-react"
-import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import type { MarkdownEditorHandle } from "@/components/editor/editor-contract"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
 import { getNoteViewModeAction, type NoteViewMode } from "@/services/preferences/ui-preferences"

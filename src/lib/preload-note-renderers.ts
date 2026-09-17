@@ -11,7 +11,7 @@ let preloaded = false
 export function preloadNoteRenderers() {
   if (preloaded) return
   preloaded = true
-  void import("@/components/editor/markdown-editor")
+  void import("@/components/editor/milkdown-editor")
   void import("@/components/editor/markdown-preview")
   void import("@/components/editor/canvas-preview")
 }

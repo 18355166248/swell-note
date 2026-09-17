@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react"
 import { ClipboardPaste, Copy, Scissors, TextSelect } from "lucide-react"
 
-import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import type { MarkdownEditorHandle } from "@/components/editor/editor-contract"
 
 // iOS 只在点击已有选区时才给出系统的 Cut/Copy/Paste；长按选中的那一刻不弹，
 // 手机上选一段文字要点两次才能复制。选区非空时补一条自己的操作条，把这一步补回来。

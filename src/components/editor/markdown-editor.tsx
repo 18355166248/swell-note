@@ -18,61 +18,20 @@ import { buildLivePreviewDecorationsForRanges, markdownLivePreview, type EditorL
 import type { EmbeddedWikiNoteResult } from "./markdown-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import { ImageZoomOverlay } from "./image-zoom"
-import { activeTableEdit, type TableEditTarget } from "./table-edit-target"
+import { activeTableEdit } from "./table-edit-target"
 import { rememberEditorSession, restoreEditorSession } from "./editor-session"
 import { selectionRenderingExtensions } from "./selection-rendering"
 import "./markdown-table.css"
+
+import { TABLE_INSERT_TEMPLATE, type LinkCellSnapshot, type MarkdownEditorHandle, type MarkdownFindResult } from "./editor-contract"
+
+export { TABLE_INSERT_TEMPLATE }
+export type { LinkCellSnapshot, MarkdownEditorHandle, MarkdownFindResult }
 
 export { shouldDrawCodeMirrorSelection } from "./selection-rendering"
 
 // 链接面板在表格单元格编辑中打开时的现场快照：保存前校验单元格内容未变，
 // 取消时据此把焦点与选区还给单元格 textarea。
-export type LinkCellSnapshot = {
-  from: number
-  target: TableEditTarget
-  to: number
-  value: string
-}
-
-export type MarkdownEditorHandle = {
-  // 链接面板：target 为 null 表示新建（applyLink 用当前选区/光标），否则改写该链接；
-  // cell 存在时写入单元格 textarea（面板期间单元格靠 contextMenuActive 标记保持挂载）。
-  applyLink: (target: EditorLinkTarget | null, label: string, url: string, cell?: LinkCellSnapshot | null) => boolean
-  // position 是文件拖入的落点（文档偏移）；省略时插入点为表格末尾或当前选区起点。
-  captureInsertion: (position?: number) => { insert: (text: string) => boolean; dispose: () => void }
-  collapseSelection: () => void
-  copySelection: () => Promise<boolean>
-  cutSelection: () => Promise<boolean>
-  focus: () => void
-  findText: (query: string, direction?: "next" | "previous", fromStart?: boolean) => MarkdownFindResult
-  insertText: (text: string) => void
-  // 与阅读态互换视图时用来对齐阅读位置：一个按屏幕坐标问行号，一个把指定行顶到可视区顶端。
-  lineAtViewportTop: (clientY: number) => number | null
-  pasteAtSelection: () => Promise<boolean>
-  // 链接面板打开前的上下文：光标处已有链接、当前选中文本、编辑器是否持有焦点（取消后据此恢复）；
-  // 正在编辑单元格时改从单元格 textarea 读取，并附上面板期间需要的现场快照。
-  readLinkContext: () => { cell?: LinkCellSnapshot; hadFocus: boolean; selectedText: string; target: EditorLinkTarget | null } | null
-  redo: () => void
-  removeLink: (target: EditorLinkTarget, cell?: LinkCellSnapshot | null) => boolean
-  replaceAll: (query: string, replacement: string) => number
-  replaceCurrent: (query: string, replacement: string) => MarkdownFindResult
-  // 链接面板取消时调用：焦点与选区还给仍挂载的单元格，返回 false 表示没有可恢复的单元格。
-  restoreCellFocus: (cell?: LinkCellSnapshot | null) => boolean
-  revealLine: (line: number) => void
-  scrollLineToTop: (line: number) => boolean
-  selectAll: () => void
-  undo: () => void
-}
-
-export type MarkdownFindResult = {
-  current: number
-  total: number
-}
-
-// 工具栏「插入表格」按钮与 formatToolbarText 共用同一份模板字符串，
-// 插入完成后靠它识别出这次插入的是表格，从而自动聚焦到第一个单元格。
-export const TABLE_INSERT_TEMPLATE = "\n| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |\n"
-
 // 一次装饰更新里可能同时挂着好几张表格的 wrapper，用起点行号才能挑出这次刚插入的那一张。
 export function findTableWrapperAtLine(root: ParentNode, lineStart: number): HTMLElement | null {
   return Array.from(root.querySelectorAll<HTMLElement>(".cm-md-table-wrap"))

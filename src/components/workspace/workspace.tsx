@@ -105,7 +105,7 @@ import { sortNotes, type NoteSort } from "@/services/search/note-sort"
 import { noteMatchesLibraryQuery } from "@/services/search/note-list-filter"
 import { getNoteViewModeAction, loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
 import { SYSTEM_ROOT_FOLDER_PATH } from "@/services/preferences/folder-order-preferences"
-import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import type { MarkdownEditorHandle } from "@/components/editor/editor-contract"
 import type { EditorFormatState } from "@/components/editor/markdown-input"
 import { FormattingToolbar } from "@/components/workspace/formatting-toolbar"
 import { NoteVersionHistoryDialog } from "@/components/workspace/note-version-history-dialog"
@@ -141,10 +141,10 @@ import { shouldShowFloatingSyncProgress } from "@/services/sync/sync-progress"
 import { FolderSortDndContext } from "./folder-sort-dnd"
 import { SyncFailureToast } from "./sync-failure-toast"
 
-// CodeMirror 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
+// Milkdown/Crepe 体积较大，延迟到编辑区真正渲染时再加载，避免拖慢首屏资料库与列表。
 // 实际预取时机在应用启动阶段（见 preload-note-renderers.ts）：等 Workspace 挂载再预取
 // 已经太晚——cacheReady 一变 true，笔记多半已经激活，编辑器和 Workspace 在同一帧里就都要用到。
-const MarkdownEditor = lazyWithRetry(() => import("@/components/editor/markdown-editor"))
+const MarkdownEditor = lazyWithRetry(() => import("@/components/editor/milkdown-editor"))
 const MarkdownPreview = lazyWithRetry(() => import("@/components/editor/markdown-preview"))
 const CanvasPreview = lazyWithRetry(() => import("@/components/editor/canvas-preview"))
 
@@ -2669,7 +2669,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
           ) : (
             <div className="markdown-editor-shell">
               <Suspense fallback={<EditorLoadingState label="Markdown 编辑器" />}>
-                {/* CodeMirror 会在提交后同步受控 value；按笔记重建实例，避免切换瞬间残留上一份正文。 */}
+                {/* Milkdown 会在提交后同步受控 value；按笔记重建实例，避免切换瞬间残留上一份正文。 */}
                 <MarkdownEditor
                   compact={compact}
                   sessionKey={`${activeCacheId ?? "session"}:${note.editorSessionKey ?? note.id}`}
