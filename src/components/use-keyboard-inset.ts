@@ -17,11 +17,9 @@ export function useKeyboardInset() {
         visualOffsetTop: viewport.offsetTop,
         visualScale: viewport.scale,
       })
-      // iOS WebView 弹键盘会把整个文档向上顶（骨架 overflow:hidden，被顶出屏幕后导航消失），
-      // 骨架没有可滚空间，scrollTo(0,0) 幂等复位，不会与原生滚动拉锯。
-      // 只在键盘确实弹起（inset>0）且未捏合缩放（scale=1）时复位：缩放平移同样产生
-      // scrollY/offsetTop 与视口收缩，那是用户主动操作，不能误伤。
-      if (inset > 0 && shouldResetWindowScroll({ scrollY: window.scrollY, visualOffsetTop: viewport.offsetTop, visualScale: viewport.scale })) {
+      // iOS 在 contenteditable 挂载或切换页面时也可能移动 visualViewport，即使键盘尚未弹出。
+      // 根骨架本身没有可滚空间，任何非缩放位移都应幂等归零；否则每打开一篇笔记都会累计一段顶部白区。
+      if (shouldResetWindowScroll({ scrollY: window.scrollY, visualOffsetTop: viewport.offsetTop, visualScale: viewport.scale })) {
         window.scrollTo(0, 0)
       }
       root.style.setProperty("--keyboard-inset", `${inset}px`)

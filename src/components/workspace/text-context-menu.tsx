@@ -57,7 +57,7 @@ export function TextContextMenu() {
         pressed = null
       } else {
         // 行级菜单、编辑器和画布保留自身语义；普通阅读文字选区才提供复制。
-        if (element.closest('[data-slot="context-menu-trigger"], .ProseMirror, .excalidraw')) return
+        if (element.closest('[data-slot="context-menu-trigger"], .vditor-ir, .excalidraw')) return
         const selection = window.getSelection()
         if (!selection || selection.isCollapsed || !selection.containsNode(element, true)) return
         next = { value: selection.toString(), from: 0, to: selection.toString().length, range: selection.getRangeAt(0).cloneRange() }

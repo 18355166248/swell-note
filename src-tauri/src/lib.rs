@@ -553,6 +553,8 @@ fn stretch_webview_over_safe_area(app: &tauri::AppHandle) {
             msg_send![webview.inner() as *mut AnyObject, scrollView];
         scroll_view
             .setContentInsetAdjustmentBehavior(UIScrollViewContentInsetAdjustmentBehavior::Never);
+        // 编辑器内部有独立滚动容器，外层回弹只会把整页拉开并露出白色安全区。
+        scroll_view.setBounces(false);
     });
 }
 

@@ -90,7 +90,7 @@ function SelectionButton({ icon: Icon, label, onClick }: {
       aria-label={label}
       className="selection-action-button"
       onClick={onClick}
-      // 按钮一旦抢走焦点，CodeMirror 的选区就没了，复制的内容也跟着变空。
+      // 按钮一旦抢走焦点，编辑器选区就没了，复制的内容也跟着变空。
       onPointerDown={(event) => event.preventDefault()}
       type="button"
     >

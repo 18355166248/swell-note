@@ -1,4 +1,4 @@
-// 手机上选中文字后点别处应当收起选区，但这一下点击 iOS 会自己吞掉，Milkdown 等不到，
+// 手机上选中文字后点别处应当收起选区，但这一下点击 iOS 会自己吞掉，Vditor 等不到，
 // 只能在编辑器外层按指针轨迹判断。滑动看正文、拖选择手柄、长按选词都不能被误判成点击。
 
 export type PointerOrigin = { at: number; x: number; y: number }

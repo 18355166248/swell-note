@@ -102,13 +102,18 @@
 
 @layer base {
   * { @apply border-border outline-ring/50; }
+  /* 应用内部各面板自己负责滚动；锁住根滚动，避免 WebView 回弹时在顶部露出白底。 */
+  html, body, #root {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
   html { @apply font-sans; }
   body {
     @apply bg-background text-foreground;
     margin: 0;
     min-width: 320px;
-    min-height: 100dvh;
-    overflow: hidden;
   }
   button:not(:disabled), [role="button"]:not(:disabled) { cursor: pointer; }
   button, input, textarea { font: inherit; }
@@ -999,6 +1004,8 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 
 /* 手机端用显式页面状态保留层级感，并保证每一个主要控件达到 44px 触摸面积。 */
 @media (max-width: 767px), (pointer: coarse) and (hover: none) and (max-height: 500px) {
+  /* iOS 会为 contenteditable 主动滚动最外层文档；固定根页面，路由切换只能滚动各自的内容容器。 */
+  body { position: fixed; inset: 0; }
   .desktop-workspace { display: none; }
   /* viewport-fit=cover 会把真机 WebView 延伸到状态栏下方，页面骨架统一消化顶部安全区。 */
   /* 键盘弹出时布局视口不变，工作区按 visualViewport 实测的遮挡高度收缩，底部工具栏才会贴着键盘上沿。 */

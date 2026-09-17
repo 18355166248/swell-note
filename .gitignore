@@ -31,3 +31,6 @@ blob-report/
 
 # Tauri iOS 构建复制的前端产物
 /src-tauri/gen/apple/assets/
+
+# Vditor 运行时资源由 scripts/copy-vditor-assets.mjs 从依赖包生成，避免提交 20MB vendor 文件。
+/public/vendor/vditor/

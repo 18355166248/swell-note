@@ -3,6 +3,8 @@ import Vditor from "vditor"
 
 import "vditor/dist/index.css"
 
+const VDITOR_CDN = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/vendor/vditor`
+
 type VditorLabProps = {
   initialMarkdown: string
   onChange: (markdown: string, latencyMs: number | null) => void
@@ -29,27 +31,29 @@ export const VditorLab = memo(function VditorLab({ initialMarkdown, onChange, on
       try {
         // Vditor 自带完整工具栏和历史栈，IR 模式与 Swell Note 当前即时预览路线最接近。
         editor = new Vditor(host, {
-        after: () => {
-          if (!disposed && editor) callbacks.current.onReady(editor.getValue(), performance.now() - startedAt)
-        },
-        cache: { enable: false },
-        counter: { enable: true, type: "markdown" },
-        height: "100%",
-        input: (markdown) => {
-          if (disposed) return
-          const latency = pendingInputAt.current === null ? null : performance.now() - pendingInputAt.current
-          pendingInputAt.current = null
-          callbacks.current.onChange(markdown, latency)
-        },
-        lang: "zh_CN",
-        mode: "ir",
-        placeholder: "在这里测试 Vditor…",
-        toolbar: [
-          "undo", "redo", "|", "headings", "bold", "italic", "strike", "|",
-          "list", "ordered-list", "check", "table", "upload", "|", "edit-mode", "fullscreen",
-        ],
-        toolbarConfig: { pin: true },
-        value: initialMarkdown,
+          _lutePath: `${VDITOR_CDN}/dist/js/lute/lute.min.js`,
+          after: () => {
+            if (!disposed && editor) callbacks.current.onReady(editor.getValue(), performance.now() - startedAt)
+          },
+          cache: { enable: false },
+          cdn: VDITOR_CDN,
+          counter: { enable: true, type: "markdown" },
+          height: "100%",
+          input: (markdown) => {
+            if (disposed) return
+            const latency = pendingInputAt.current === null ? null : performance.now() - pendingInputAt.current
+            pendingInputAt.current = null
+            callbacks.current.onChange(markdown, latency)
+          },
+          lang: "zh_CN",
+          mode: "ir",
+          placeholder: "在这里测试 Vditor…",
+          toolbar: [
+            "undo", "redo", "|", "headings", "bold", "italic", "strike", "|",
+            "list", "ordered-list", "check", "table", "upload", "|", "edit-mode", "fullscreen",
+          ],
+          toolbarConfig: { pin: true },
+          value: initialMarkdown,
         })
       } catch (error) {
         callbacks.current.onError(error instanceof Error ? error.message : "Vditor 初始化失败")

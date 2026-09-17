@@ -5,8 +5,11 @@
   "packageManager": "pnpm@10.33.2",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/copy-vditor-assets.mjs",
+    "prebuild": "node scripts/copy-vditor-assets.mjs",
     "build:android:debug": "tauri android build --debug --apk --target aarch64 --ci",
     "build:ios: device": "tauri ios build --debug --target aarch64 --export-method debugging",
+    "prebuild:ios:sim": "node scripts/clean-ios-build-output.mjs",
     "build:ios:sim": "tauri ios build --debug --target aarch64-sim --ci",
     "build:mac": "tauri build --bundles app,dmg",
     "build:mac:universal": "tauri build --target universal-apple-darwin --bundles app,dmg",

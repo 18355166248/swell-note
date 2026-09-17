@@ -1,0 +1,36 @@
+/* Vditor 把图标 symbol SVG 插到 body 首位并依赖 inline style 隐藏；Tauri CSP 会拒绝该样式，
+   SVG 随即按默认 300×150 参与文档流，把整个应用向下推。用受信任的应用样式恢复其零尺寸。 */
+body > svg[style*="position: absolute"][style*="width: 0"] { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+.swell-vditor-editor { width: 100%; min-height: var(--editor-min-height); color: var(--foreground); }
+.swell-vditor-editor > div:last-child,.swell-vditor-editor .vditor { min-height: inherit; }
+.swell-vditor-editor .vditor { overflow: visible; border: 0; border-radius: 0; background: transparent; color: var(--foreground); font-family: "Geist Variable","PingFang SC",sans-serif; --border-color: var(--border); --panel-background-color: var(--popover); --toolbar-background-color: color-mix(in oklab,var(--background) 94%,transparent); --toolbar-icon-color: var(--muted-foreground); --toolbar-icon-hover-color: var(--primary); --textarea-background-color: transparent; --textarea-text-color: var(--foreground); --second-color: var(--border); }
+.swell-vditor-editor .vditor-toolbar { z-index: 55; display: flex; box-sizing: border-box; width: 100%; min-height: 42px; flex-wrap: wrap; align-items: center; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in oklab,var(--background) 90%,transparent); padding: 2px 7px; box-shadow: 0 6px 22px color-mix(in oklab,#000 8%,transparent); backdrop-filter: blur(16px); }
+.swell-vditor-editor .vditor-toolbar__item { float: none; }
+.swell-vditor-editor .vditor-toolbar__item .vditor-tooltipped { width: 32px; height: 36px; padding: 9px 7px; }
+.swell-vditor-editor .vditor-toolbar__divider { float: none; height: 20px; margin: 0 6px; }
+.swell-vditor-editor .vditor-content { min-height: calc(var(--editor-min-height) - 44px); overflow: visible; }
+.swell-vditor-editor .vditor-ir { box-sizing: border-box; min-height: calc(var(--editor-min-height) - 44px); overflow: visible; background: transparent; padding: 24px 22px 110px; color: var(--foreground); font: 15px/1.8 "Geist Variable","PingFang SC",sans-serif; caret-color: var(--primary); }
+.swell-vditor-editor .vditor-reset { color: var(--foreground); }
+.swell-vditor-editor .vditor-ir pre.vditor-reset { font-family: ui-monospace,SFMono-Regular,Menlo,monospace; }
+.swell-vditor-editor .vditor-ir__node--expand { background: color-mix(in oklab,var(--accent) 70%,transparent); }
+.swell-vditor-editor .vditor-panel--arrow { z-index: 90; border-color: var(--border); background: var(--popover); box-shadow: 0 12px 32px color-mix(in oklab,#000 24%,transparent); }
+.swell-vditor-editor[data-readonly="true"] .vditor-toolbar { display: none; }
+.swell-vditor-editor[data-readonly="true"] .vditor-content,.swell-vditor-editor[data-readonly="true"] .vditor-ir { min-height: var(--editor-min-height); }
+.swell-vditor-error { margin: 0 0 12px; border: 1px solid color-mix(in oklab,var(--destructive) 40%,var(--border)); border-radius: 8px; background: color-mix(in oklab,var(--destructive) 10%,transparent); padding: 10px 12px; color: var(--destructive); font-size: 12px; }
+
+@media (max-width:700px) {
+  .swell-vditor-editor .vditor-toolbar { display: grid; grid-template-columns: repeat(10,minmax(0,1fr)); min-height: 44px; border-right: 0; border-left: 0; border-radius: 0; padding: 0 2px; box-shadow: 0 4px 14px color-mix(in oklab,#000 8%,transparent); }
+  /* Vditor 会在每个 iPhone 实例上监听 visualViewport 并累计 translate；应用已自行处理键盘与安全区。 */
+  .swell-vditor-editor .vditor-toolbar { transform: none !important; }
+  .swell-vditor-editor .vditor-toolbar__divider,
+  .swell-vditor-editor .vditor-toolbar__item:has([data-type="strike"]),
+  .swell-vditor-editor .vditor-toolbar__item:has([data-type="ordered-list"]),
+  .swell-vditor-editor .vditor-toolbar__item:has([data-type="quote"]) { display: none; }
+  .swell-vditor-editor .vditor-toolbar__item { min-width: 0; padding: 0; }
+  .swell-vditor-editor .vditor-toolbar__item .vditor-tooltipped { width: 100%; height: 44px; padding: 12px 4px; touch-action: manipulation; }
+  .swell-vditor-editor .vditor-toolbar__item svg { width: 18px; height: 18px; }
+  .swell-vditor-editor .vditor-toolbar__item:has([data-type="more"]) .vditor-hint { right: 2px; left: auto; width: min(180px,calc(100vw - 16px)); }
+  .swell-vditor-editor .vditor-content { min-height: calc(var(--editor-min-height) - 44px); }
+  .swell-vditor-editor .vditor-ir { min-height: calc(var(--editor-min-height) - 44px); padding: 18px 14px calc(84px + env(safe-area-inset-bottom,0px)); font-size: 16px; line-height: 1.75; }
+}
