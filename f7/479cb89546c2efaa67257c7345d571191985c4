@@ -1,0 +1,21 @@
+src/App.css
+  s_a5622b4a0e6476::t_ab833bbbb1061c 438,755-756,1186-1188
+src/components/editor/milkdown-editor.tsx
+  s_a5622b4a0e6476::t_a9c8ac1d9052b2 108,116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "f7479cb89546c2efaa67257c7345d571191985c4",
+  "prompts": {},
+  "sessions": {
+    "s_a5622b4a0e6476": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0aa0f-bc7d-70a1-888b-f08940624633",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
