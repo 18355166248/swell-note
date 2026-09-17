@@ -38,12 +38,6 @@ describe("keepsSelectionAlive", () => {
     expect(keepsSelectionAlive(document.getElementById("copy"))).toBe(true)
   })
 
-  it("格式工具栏同样作用在选区上", () => {
-    document.body.innerHTML = `<div class="formatting-toolbar"><button id="bold">B</button></div>`
-
-    expect(keepsSelectionAlive(document.getElementById("bold"))).toBe(true)
-  })
-
   it("正文与留白不属于工具栏，点了就收起选区", () => {
     document.body.innerHTML = `<div class="markdown-editor-shell"><div id="blank"></div></div>`
 

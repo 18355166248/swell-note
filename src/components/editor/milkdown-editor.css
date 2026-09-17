@@ -39,7 +39,12 @@
 
 @media (max-width:700px) {
   .swell-milkdown-editor .milkdown { --crepe-base-font-size: 16px; }
-  .swell-milkdown-editor .ProseMirror { padding: 0 0 calc(120px + env(safe-area-inset-bottom,0px)) 72px; }
+  /* 触屏上拖拽句柄容易误触，只保留块插入入口，将正文左侧预留从 72px 压到 38px。 */
+  .swell-milkdown-editor .ProseMirror { padding: 0 0 calc(72px + env(safe-area-inset-bottom,0px)) 38px; }
+  .swell-milkdown-editor .milkdown-block-handle { gap: 0; border: 0; background: transparent; box-shadow: none; }
+  .swell-milkdown-editor .milkdown-block-handle .operation-item { width: 30px; height: 30px; padding: 5px; }
+  .swell-milkdown-editor .milkdown-block-handle .operation-item svg { width: 20px; height: 20px; }
+  .swell-milkdown-editor .milkdown-block-handle .operation-item + .operation-item { display: none; }
   .swell-milkdown-editor .milkdown-slash-menu { max-width: calc(100vw - 32px); }
   .swell-milkdown-editor .milkdown-slash-menu .menu-groups { max-height: min(52dvh,420px); }
 }

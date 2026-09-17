@@ -27,8 +27,8 @@ function isEditorSurface(target: EventTarget | null) {
   if (!(target instanceof Element)) return false
   // 起手未必正落在编辑器上：落在容器留白里同样会被夺焦——浏览器会把光标塞进这一片中
   // 最近的 contenteditable，所以容器自身也要算进来。
-  const surface = target.closest(".cm-editor, .document-canvas")
-  return Boolean(surface && (surface.matches(".cm-editor") || surface.querySelector(".cm-editor")))
+  const surface = target.closest(".ProseMirror, .document-canvas")
+  return Boolean(surface && (surface.matches(".ProseMirror") || surface.querySelector(".ProseMirror")))
 }
 
 // 跟手的关键是拖动期间不碰 React：位移/进度直接写工作区 DOM 上的 CSS 变量，

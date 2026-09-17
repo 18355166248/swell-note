@@ -27,8 +27,6 @@ import { writeClipboardText } from "@/services/clipboard/clipboard-text"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
 import type { MarkdownEditorHandle, MarkdownFindResult } from "./editor-contract"
-import type { EditorLinkTap } from "./live-preview"
-import type { EditorFormatState, EditorLinkTarget } from "./markdown-input"
 
 import "@milkdown/crepe/theme/common/style.css"
 import "./milkdown-editor.css"
@@ -36,22 +34,13 @@ import "./milkdown-editor.css"
 type MilkdownEditorProps = {
   sessionKey?: string
   onHistoryChange?: (undo: boolean, redo: boolean) => void
-  onEditingTargetChange?: (table: boolean) => void
-  compact?: boolean
   onChange: (value: string) => void
   onCursorChange?: (line: number, column: number) => void
-  onFormatStateChange?: (state: EditorFormatState | null) => void
   onInsertFiles?: (files: File[], position?: number) => void
   onPasteError?: (message: string) => void
-  onLinkMenu?: (tap: EditorLinkTap) => void
-  onLoadWikiNote?: (target: string) => void
-  onOpenWikiLink?: (target: string) => void
   onResolveAsset?: (source: string) => Promise<VaultAsset | null>
-  onResolveWikiNote?: (target: string) => unknown
   onSelectionChange?: (hasSelection: boolean) => void
-  getWikiLinkSuggestions?: () => unknown[]
   readOnly?: boolean
-  storageKey?: string
   value: string
 }
 
@@ -89,36 +78,6 @@ function textMatches(doc: ProseNode, query: string): TextMatch[] {
   return matches
 }
 
-function formatStateFromSelection(selection: TextSelection): EditorFormatState {
-  const { $from } = selection
-  const marks = $from.marks()
-  const hasMark = (name: string) => marks.some((mark) => mark.type.name === name)
-  let heading: EditorFormatState["heading"] = 0
-  let bulletList = false
-  let orderedList = false
-  let quote = false
-  let taskList = false
-  for (let depth = $from.depth; depth >= 0; depth -= 1) {
-    const node = $from.node(depth)
-    if (node.type.name === "heading") heading = Math.min(6, Math.max(1, Number(node.attrs.level))) as EditorFormatState["heading"]
-    if (node.type.name === "bullet_list") bulletList = true
-    if (node.type.name === "ordered_list") orderedList = true
-    if (node.type.name === "blockquote") quote = true
-    if (node.type.name === "list_item" && typeof node.attrs.checked === "boolean") taskList = true
-  }
-  return {
-    bulletList,
-    code: hasMark("inlineCode") || hasMark("inline_code"),
-    emphasis: hasMark("emphasis") || hasMark("em"),
-    heading,
-    orderedList,
-    quote,
-    strike: hasMark("strike_through") || hasMark("strikethrough"),
-    strong: hasMark("strong"),
-    taskList,
-  }
-}
-
 function lineAndColumn(markdown: string, offset: number) {
   const prefix = markdown.slice(0, Math.max(0, Math.min(offset, markdown.length)))
   const lines = prefix.split("\n")
@@ -135,13 +94,10 @@ function blockElementForLine(root: HTMLElement, markdown: string, line: number) 
 export const MilkdownEditor = forwardRef<MarkdownEditorHandle, MilkdownEditorProps>(function MilkdownEditor({
   sessionKey,
   onHistoryChange,
-  onEditingTargetChange,
   onChange,
   onCursorChange,
-  onFormatStateChange,
   onInsertFiles,
   onPasteError,
-  onOpenWikiLink,
   onResolveAsset,
   onSelectionChange,
   readOnly = false,
@@ -149,7 +105,7 @@ export const MilkdownEditor = forwardRef<MarkdownEditorHandle, MilkdownEditorPro
 }, ref) {
   const rootRef = useRef<HTMLDivElement>(null)
   const crepeRef = useRef<Crepe | null>(null)
-  const callbacks = useRef({ onChange, onCursorChange, onEditingTargetChange, onFormatStateChange, onHistoryChange, onInsertFiles, onOpenWikiLink, onPasteError, onResolveAsset, onSelectionChange })
+  const callbacks = useRef({ onChange, onCursorChange, onHistoryChange, onInsertFiles, onPasteError, onResolveAsset, onSelectionChange })
   const latestMarkdown = useRef(value)
   const appliedValue = useRef(value)
   const userEditPending = useRef(false)
@@ -157,7 +113,7 @@ export const MilkdownEditor = forwardRef<MarkdownEditorHandle, MilkdownEditorPro
   const findIndex = useRef(-1)
   const objectUrls = useRef(new Map<string, string>())
   const [error, setError] = useState<string | null>(null)
-  callbacks.current = { onChange, onCursorChange, onEditingTargetChange, onFormatStateChange, onHistoryChange, onInsertFiles, onOpenWikiLink, onPasteError, onResolveAsset, onSelectionChange }
+  callbacks.current = { onChange, onCursorChange, onHistoryChange, onInsertFiles, onPasteError, onResolveAsset, onSelectionChange }
 
   const withView = <T,>(run: (crepe: Crepe, view: EditorView) => T): T | undefined => {
     const crepe = crepeRef.current
@@ -199,22 +155,6 @@ export const MilkdownEditor = forwardRef<MarkdownEditorHandle, MilkdownEditorPro
   })) ?? false
 
   useImperativeHandle(ref, () => ({
-    applyLink(target, label, url) {
-      return withView((_crepe, view) => {
-        const from = target?.from ?? view.state.selection.from
-        const to = target?.to ?? view.state.selection.to
-        const mark = view.state.schema.marks.link
-        if (!mark || !url.trim()) return false
-        userEditPending.current = true
-        let tr = view.state.tr
-        if (from !== to && view.state.doc.textBetween(from, to, " ") !== label) tr = tr.insertText(label, from, to)
-        const end = from + label.length
-        tr = tr.addMark(from, end, mark.create({ href: url.trim() })).setSelection(TextSelection.near(tr.doc.resolve(end)))
-        view.dispatch(tr.scrollIntoView())
-        view.focus()
-        return true
-      }) ?? false
-    },
     captureInsertion(position) {
       const captured = withView((_crepe, view) => position ?? view.state.selection.from)
       const owner = crepeRef.current
@@ -276,32 +216,7 @@ export const MilkdownEditor = forwardRef<MarkdownEditorHandle, MilkdownEditorPro
         return false
       }
     },
-    readLinkContext() {
-      return withView((_crepe, view) => {
-        const { from, to, empty, $from } = view.state.selection
-        const link = (view.state.storedMarks ?? $from.marks()).find((mark) => mark.type.name === "link")
-        const selectedText = view.state.doc.textBetween(from, to, " ")
-        const target: EditorLinkTarget | null = link && !empty ? {
-          from,
-          label: selectedText,
-          source: selectedText,
-          to,
-          url: String(link.attrs.href ?? ""),
-        } : null
-        return { hadFocus: view.hasFocus(), selectedText, target }
-      }) ?? null
-    },
     redo: () => { withView((_crepe, view) => { userEditPending.current = true; redoCommand(view.state, view.dispatch, view); view.focus() }) },
-    removeLink(target) {
-      return withView((_crepe, view) => {
-        const mark = view.state.schema.marks.link
-        if (!mark) return false
-        userEditPending.current = true
-        view.dispatch(view.state.tr.removeMark(target.from, target.to, mark))
-        view.focus()
-        return true
-      }) ?? false
-    },
     replaceAll(query, replacement) {
       return withView((_crepe, view) => {
         const matches = textMatches(view.state.doc, query)
@@ -326,7 +241,6 @@ export const MilkdownEditor = forwardRef<MarkdownEditorHandle, MilkdownEditorPro
         return { current: remaining ? findIndex.current + 1 : 0, total: remaining }
       }) ?? { current: 0, total: 0 }
     },
-    restoreCellFocus: () => false,
     revealLine(line) { this.scrollLineToTop(line) },
     scrollLineToTop(line) {
       const root = rootRef.current
@@ -397,8 +311,6 @@ export const MilkdownEditor = forwardRef<MarkdownEditorHandle, MilkdownEditorPro
         listener.selectionUpdated((_ctx, selection) => {
           if (disposed) return
           callbacks.current.onSelectionChange?.(!selection.empty)
-          callbacks.current.onEditingTargetChange?.(selection.$from.parent.type.name.includes("table"))
-          callbacks.current.onFormatStateChange?.(formatStateFromSelection(selection as TextSelection))
           const position = lineAndColumn(latestMarkdown.current, selection.from)
           callbacks.current.onCursorChange?.(position.line, position.column)
         })
@@ -419,7 +331,6 @@ export const MilkdownEditor = forwardRef<MarkdownEditorHandle, MilkdownEditorPro
       for (const url of objectUrls.current.values()) URL.revokeObjectURL(url)
       objectUrls.current.clear()
       callbacks.current.onSelectionChange?.(false)
-      callbacks.current.onFormatStateChange?.(null)
     }
   }, [sessionKey])
 

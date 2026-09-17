@@ -60,22 +60,7 @@ export function DocumentContextMenu(props: Props) {
           return
         }
         setLink(null)
-        const cell = element.closest<HTMLElement>(".cm-md-table-cell-editable")
-        if (cell) {
-          // 先沿用单元格点击路径定位，再将右键交给输入框菜单，不能误用正文旧光标。
-          event.preventDefault()
-          const from = cell.closest<HTMLElement>(".cm-md-table-wrap")?.dataset.tableFrom
-          const row = cell.dataset.rowIndex
-          const column = cell.dataset.columnIndex
-          const container = event.currentTarget
-          cell.click()
-          window.setTimeout(() => {
-            const input = container.querySelector<HTMLElement>(`.cm-md-table-wrap[data-table-from="${from}"] [data-row-index="${row}"][data-column-index="${column}"] textarea`)
-            input?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: event.clientX, clientY: event.clientY, button: 2 }))
-          }, 0)
-          return
-        }
-        if (element.closest("input, textarea, button, a, [role='button'], .cm-md-table-wrap")) { event.preventDefault(); return }
+        if (element.closest("input, textarea, button, a, [role='button']")) { event.preventDefault(); return }
         root.current = event.currentTarget
         const selection = window.getSelection()
         range.current = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null

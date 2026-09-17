@@ -1420,15 +1420,6 @@ function App() {
     }
   }
 
-  const formatActiveNote = (syntax: string) => {
-    if (!activeNote || !syntax || activeNote.readOnly) return
-    const content = `${activeNote.content}${syntax}`
-    updateActiveNote({
-      content,
-      preview: buildNotePreview(content, activeNote.format),
-    })
-  }
-
   const formatNoteById = (noteId: string, syntax: string) => {
     const note = notesRef.current.find((candidate) => candidate.id === noteId)
     if (!note || !syntax || note.readOnly) return
@@ -4245,7 +4236,6 @@ function App() {
             onDeleteNoteById={(noteId) => void deleteNote(noteId, false)}
             onDeleteFolder={deleteFolder}
             onFolderOrderChange={updateFolderOrder}
-            onFormat={formatActiveNote}
             onFormatNote={formatNoteById}
             onInsertAttachments={insertActiveNoteAttachments}
             onIncludeNestedFolderNotesChange={(include) => {

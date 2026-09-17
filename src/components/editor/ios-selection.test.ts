@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { shouldDrawCodeMirrorSelection } from "./markdown-editor"
+import { shouldDrawCodeMirrorSelection } from "./selection-rendering"
 
 describe("CodeMirror selection rendering platform", () => {
   it("iPhone 和 iPadOS 使用系统原生光标与选区", () => {

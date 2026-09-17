@@ -46,7 +46,9 @@
 .editor-lab-inline-actions { position: absolute; z-index: 15; top: 7px; right: 8px; display: flex; gap: 4px; }
 .editor-lab-inline-actions button:disabled { opacity: .45; }
 .editor-lab-codemirror-scroll { box-sizing: border-box; height: 100%; min-height: 0; overflow: auto; padding: 44px 24px 38px; --editor-min-height: 100%; }
-.editor-lab-codemirror-scroll .cm-editor,.editor-lab-codemirror-scroll .cm-content { min-height: 100%; }
+.editor-lab-codemirror-scroll > div,.editor-lab-codemirror-scroll .cm-editor,.editor-lab-codemirror-scroll .cm-scroller,.editor-lab-codemirror-scroll .cm-content { min-height: 100%; }
+.editor-lab-codemirror-scroll .cm-editor { background: transparent; color: var(--foreground); font-size: 14px; }
+.editor-lab-codemirror-scroll .cm-gutters { background: transparent; color: var(--muted-foreground); }
 .editor-lab-milkdown-hint { position: absolute; z-index: 14; top: 13px; left: 16px; max-width: calc(100% - 150px); margin: 0; overflow: hidden; color: var(--muted-foreground); font-size: 10px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
 .editor-lab-milkdown-scroll { position: absolute; inset: 42px 0 0; overflow: auto; }
 .editor-lab-milkdown .milkdown {

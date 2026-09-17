@@ -1,6 +1,9 @@
 import { memo, useEffect, useRef, useState } from "react"
-
-import { MarkdownEditor, type MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror"
+import { markdown as markdownLanguageSupport } from "@codemirror/lang-markdown"
+import { languages } from "@codemirror/language-data"
+import { redo, undo } from "@codemirror/commands"
+import { EditorView } from "@codemirror/view"
 
 type CodeMirrorLabProps = {
   initialMarkdown: string
@@ -11,14 +14,14 @@ type CodeMirrorLabProps = {
 
 export const CodeMirrorLab = memo(function CodeMirrorLab({ initialMarkdown, onChange, onReady, startedAt }: CodeMirrorLabProps) {
   const [markdown, setMarkdown] = useState(initialMarkdown)
-  const editorRef = useRef<MarkdownEditorHandle>(null)
+  const editorRef = useRef<ReactCodeMirrorRef>(null)
   const pendingInputAt = useRef<number | null>(null)
+  const readyReported = useRef(false)
   const callbacks = useRef({ onChange, onReady })
   callbacks.current = { onChange, onReady }
 
   useEffect(() => {
-    const frame = requestAnimationFrame(() => callbacks.current.onReady(initialMarkdown, performance.now() - startedAt))
-    return () => cancelAnimationFrame(frame)
+    setMarkdown(initialMarkdown)
   }, [initialMarkdown, startedAt])
 
   return (
@@ -28,39 +31,29 @@ export const CodeMirrorLab = memo(function CodeMirrorLab({ initialMarkdown, onCh
       onPasteCapture={() => { pendingInputAt.current = performance.now() }}
     >
       <div className="editor-lab-inline-actions" aria-label="CodeMirror 历史操作">
-        <button onClick={() => editorRef.current?.undo()} type="button">撤销</button>
-        <button onClick={() => editorRef.current?.redo()} type="button">重做</button>
+        <button onClick={() => { const view = editorRef.current?.view; if (view) undo(view) }} type="button">撤销</button>
+        <button onClick={() => { const view = editorRef.current?.view; if (view) redo(view) }} type="button">重做</button>
       </div>
-      <div className="markdown-editor-shell editor-lab-codemirror-scroll" data-slot="scroll-area-viewport">
-        <MarkdownEditor
-          compact={window.matchMedia("(max-width: 900px)").matches}
+      <div className="editor-lab-codemirror-scroll" data-slot="scroll-area-viewport">
+        <CodeMirror
+          basicSetup={{ foldGutter: false, highlightActiveLineGutter: false }}
+          extensions={[markdownLanguageSupport({ codeLanguages: languages }), EditorView.lineWrapping]}
+          height="100%"
           onChange={(nextMarkdown) => {
             const latency = pendingInputAt.current === null ? null : performance.now() - pendingInputAt.current
             pendingInputAt.current = null
             setMarkdown(nextMarkdown)
             callbacks.current.onChange(nextMarkdown, latency)
           }}
-          onResolveAsset={resolveLabAsset}
+          onCreateEditor={() => {
+            if (readyReported.current) return
+            readyReported.current = true
+            callbacks.current.onReady(initialMarkdown, performance.now() - startedAt)
+          }}
           ref={editorRef}
-          sessionKey="editor-lab-codemirror"
-          storageKey="editor-lab"
           value={markdown}
         />
       </div>
     </div>
   )
 })
-
-async function resolveLabAsset(source: string) {
-  if (!source.startsWith("/")) return null
-  try {
-    const response = await fetch(source)
-    if (!response.ok) return null
-    return {
-      data: new Uint8Array(await response.arrayBuffer()),
-      mimeType: response.headers.get("content-type") ?? undefined,
-    }
-  } catch {
-    return null
-  }
-}

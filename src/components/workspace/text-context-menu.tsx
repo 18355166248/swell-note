@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { ClipboardPaste, Copy, Scissors, TextSelect } from "lucide-react"
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { readClipboardText, writeClipboardText } from "@/services/clipboard/clipboard-text"
 
 type TextTarget = {
@@ -9,11 +9,10 @@ type TextTarget = {
   from: number
   to: number
   range?: Range
-  tableActions?: HTMLButtonElement[]
   wholeValue?: boolean
 }
 
-// 输入框可能位于 Dialog Portal 中，因此在 document 捕获阶段分发；正文 CodeMirror 由自己的菜单接管。
+// 输入框可能位于 Dialog Portal 中，因此在 document 捕获阶段分发；正文由文档菜单接管。
 export function TextContextMenu() {
   const trigger = useRef<HTMLSpanElement>(null)
   const target = useRef<TextTarget | null>(null)
@@ -56,10 +55,9 @@ export function TextContextMenu() {
         next = pressed?.input === input && pressed.value === input.value
           ? pressed : { input, value: input.value, from: input.selectionStart ?? 0, to: input.selectionEnd ?? input.value.length, wholeValue: input.selectionStart === null }
         pressed = null
-        next.tableActions = Array.from(input.closest(".cm-md-table-wrap")?.querySelectorAll<HTMLButtonElement>("button[data-table-action]") ?? [])
       } else {
         // 行级菜单、编辑器和画布保留自身语义；普通阅读文字选区才提供复制。
-        if (element.closest('[data-slot="context-menu-trigger"], .cm-editor, .excalidraw')) return
+        if (element.closest('[data-slot="context-menu-trigger"], .ProseMirror, .excalidraw')) return
         const selection = window.getSelection()
         if (!selection || selection.isCollapsed || !selection.containsNode(element, true)) return
         next = { value: selection.toString(), from: 0, to: selection.toString().length, range: selection.getRangeAt(0).cloneRange() }
@@ -134,16 +132,6 @@ export function TextContextMenu() {
         <ContextMenuItem disabled={!selected || !writable} onSelect={() => void run("cut")}><Scissors />{snapshot?.wholeValue ? "剪切全部" : "剪切"}</ContextMenuItem>
         <ContextMenuItem disabled={!writable} onSelect={() => void run("paste")}><ClipboardPaste />{snapshot?.wholeValue ? "替换全部" : "粘贴"}</ContextMenuItem>
         <ContextMenuItem disabled={!snapshot?.input} onSelect={() => void run("all")}><TextSelect />全选</ContextMenuItem>
-        {snapshot?.tableActions?.length ? <>
-          <ContextMenuSeparator />
-          <ContextMenuLabel>当前单元格所在行 / 列</ContextMenuLabel>
-          {snapshot.tableActions.map((button) => <ContextMenuItem
-            key={`${button.dataset.tableAction}-${button.dataset.tableAlign ?? ""}`}
-            disabled={button.disabled}
-            variant={button.dataset.tableAction?.startsWith("delete") ? "destructive" : "default"}
-            onSelect={() => { if (button.isConnected && !button.disabled) button.click() }}
-          >{button.textContent}</ContextMenuItem>)}
-        </> : null}
       </ContextMenuContent>
     </ContextMenu>
     {hint ? <div role="status" className="fixed bottom-6 left-1/2 z-[100] -translate-x-1/2 rounded-lg bg-popover px-4 py-2 text-sm shadow-lg">{hint}</div> : null}

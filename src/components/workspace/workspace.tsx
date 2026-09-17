@@ -95,19 +95,15 @@ import {
 } from "@/services/search/vault-folders"
 import { buildNotePreview } from "@/services/markdown/note-preview"
 import { normalizeNoteTarget } from "@/services/search/note-index"
-import { openExternalUrl } from "@/services/open-external-url"
 import { HighlightedText, useSearchMatch } from "@/components/workspace/note-search-match"
 import { countWords, estimateReadingMinutes } from "@/services/markdown/note-stats"
 import { extractNoteOutline } from "@/services/markdown/note-outline"
-import { buildMarkdownNoteLink, buildRelativeMarkdownHref } from "@/services/markdown/markdown-link"
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
 import { sortNotes, type NoteSort } from "@/services/search/note-sort"
 import { noteMatchesLibraryQuery } from "@/services/search/note-list-filter"
 import { getNoteViewModeAction, loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
 import { SYSTEM_ROOT_FOLDER_PATH } from "@/services/preferences/folder-order-preferences"
 import type { MarkdownEditorHandle } from "@/components/editor/editor-contract"
-import type { EditorFormatState } from "@/components/editor/markdown-input"
-import { FormattingToolbar } from "@/components/workspace/formatting-toolbar"
 import { NoteVersionHistoryDialog } from "@/components/workspace/note-version-history-dialog"
 import { GlobalSearchDialog } from "@/components/workspace/global-search-dialog"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
@@ -115,7 +111,6 @@ import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
 import { resolveRouteNoteId, stableNoteRenderIdentity } from "@/lib/note-route-resolution"
 import { MobileNoteSearch } from "@/components/workspace/mobile-note-search"
 import { MobileFolderActionSheet, MobileNoteActionSheet } from "@/components/workspace/mobile-action-sheets"
-import { MobileLinkSheet, type LinkSheetState } from "@/components/workspace/mobile-link-sheet"
 import { SelectionActionBar } from "@/components/workspace/selection-action-bar"
 import { DocumentContextMenu } from "@/components/workspace/document-context-menu"
 import { PreviewSearch } from "@/components/workspace/preview-search"
@@ -197,7 +192,6 @@ type WorkspaceProps = {
   onCreateNote: () => void
   onCreateNoteInFolder: (folderPath: string) => void
   onCreateFolder: (name: string, parentFolder: string | null) => void
-  onFormat: (syntax: string) => void
   onFormatNote: (noteId: string, syntax: string) => void
   onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
   onIncludeNestedFolderNotesChange: (include: boolean) => void
@@ -459,7 +453,6 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
   // 这一组把它的入参全部固定下来，memo 才拦得住。
   const deleteNote = useStableCallback(props.onDeleteNote)
   const exportNote = useStableCallback(props.onExportNote)
-  const formatNote = useStableCallback(props.onFormat)
   const formatNoteById = useStableCallback(props.onFormatNote)
   const insertAttachments = useStableCallback(props.onInsertAttachments)
   const loadWikiNote = useStableCallback(props.onLoadWikiNote)
@@ -624,11 +617,9 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           moveTargets={props.folders}
           note={props.activeNote}
           // 补全候选取整库而不是当前筛选结果：搜索时列表被裁短，链接候选不该跟着一起消失。
-          wikiLinkNotes={props.allNotes}
           noteViewMode={props.noteViewMode}
           onDeleteNote={deleteNote}
           onExportNote={exportNote}
-          onFormat={formatNote}
           onFormatNote={formatNoteById}
           onInsertAttachments={insertAttachments}
           onLoadWikiNote={loadWikiNote}
@@ -1765,7 +1756,6 @@ type NoteEditorProps = {
   onBack?: () => void
   onDeleteNote: () => void
   onExportNote: () => void
-  onFormat: (syntax: string) => void
   onFormatNote: (noteId: string, syntax: string) => void
   onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
   onLoadWikiNote: (target: string) => void
@@ -1785,7 +1775,6 @@ type NoteEditorProps = {
   onUpdateNote: (patch: Partial<Note>) => void
   saveState: NoteSaveState
   syncing: boolean
-  wikiLinkNotes: Note[]
 }
 
 // 对位最多跟一秒：长笔记分帧铺完约需十几帧，懒加载的编辑器再慢也在这个范围内。
@@ -1827,7 +1816,7 @@ function alignPreviewToSourceLine(viewport: HTMLElement, article: HTMLElement | 
 
 // 搜索、切目录、展开侧栏统统与正文无关，但它们每一次都把编辑器整棵子树重画一遍
 // （实测搜索敲 6 个字，编辑器白渲染 11 次）。上面已经把入参固定住，这里收口。
-const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
+const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing }: NoteEditorProps) {
   const noteRenderIdentity = note.editorSessionKey ?? stableNoteRenderIdentity(note.id, note.remotePath)
   const assetScope = `${activeCacheId ?? "session"}:${noteRenderIdentity}`
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
@@ -1840,7 +1829,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
   const editorArticleRef = useRef<HTMLElement>(null)
   const dismissSelectionOriginRef = useRef<PointerOrigin | null>(null)
   const editorViewportRef = useRef<HTMLDivElement>(null)
-  // locked 只切换同一个 CodeMirror 的可写能力，不更换正文组件，滚动、选区与撤销历史因此都能保留。
+  // locked 只切换同一个 Milkdown 实例的可写能力，不更换正文组件，避免丢失滚动与选区。
   const viewLocked = noteViewMode === "locked"
   const editorReadOnly = resolveEditorReadOnly(fileReadOnly, note.source, noteViewMode, saveState.status)
   // 特殊画布始终使用专属预览；preview 仅承接旧偏好和低频兼容阅读入口。
@@ -1857,11 +1846,6 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
   const [cursorPosition, setCursorPosition] = useState({ column: 1, line: 1 })
   const [hasSelection, setHasSelection] = useState(false)
   const [historyState, setHistoryState] = useState({ undo: false, redo: false })
-  const [editingTable, setEditingTable] = useState(false)
-  // 光标 / 选区当前格式，供工具栏高亮；正文与表格单元格都会汇报。
-  const [formatState, setFormatState] = useState<EditorFormatState | null>(null)
-  // 移动端链接面板：非 null 时打开（工具栏「链接」或点按已有链接进入）。
-  const [linkSheet, setLinkSheet] = useState<LinkSheetState | null>(null)
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState("")
   const [findReplacement, setFindReplacement] = useState("")
@@ -1869,7 +1853,6 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
   const findInputRef = useRef<HTMLInputElement>(null)
   const previewSearchRef = useRef(new PreviewSearch())
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
-  const [insertingAttachment, setInsertingAttachment] = useState(false)
   const attachmentBusyRef = useRef(false)
   const currentNoteIdRef = useRef(note.id)
   currentNoteIdRef.current = note.id
@@ -2059,50 +2042,6 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
     onRenameNote(trimmed)
   }
 
-  const handleFormat = useCallback((syntax: string) => {
-    if (!syntax) return
-    // 手机上手动拼 [文字](地址) 成本太高：工具栏「链接」改为打开面板，分别填文字与地址；
-    // 有选区自动带入文字，光标落在已有链接上则预填并按编辑保存。
-    if (compact && syntax === "[链接](https://)") {
-      const context = editorRef.current?.readLinkContext()
-      if (context) {
-        setLinkSheet({
-          cell: context.cell,
-          hadFocus: context.hadFocus,
-          label: context.target?.label ?? context.selectedText.trim(),
-          menu: false,
-          target: context.target,
-          url: context.target?.url ?? "",
-        })
-        return
-      }
-    }
-    if (editorRef.current) {
-      editorRef.current.insertText(syntax)
-      return
-    }
-    onFormat(syntax)
-  }, [compact, onFormat])
-
-  // 面板自身不写正文：保存/移除都交给编辑器 handle 完成（内部会校验原文、映射选区并恢复焦点），
-  // 这里只负责关掉面板。焦点归还不能在点击事件里同步做（modal 面板的 inert 还没解除，
-  // focus 会静默失败），由面板的 onRestoreFocus 在卸载流程里调：优先还给仍在编辑的单元格，
-  // 否则按打开前的焦点状态归还键盘。
-  const closeLinkSheet = useCallback(() => {
-    setLinkSheet(null)
-  }, [])
-
-  const restoreLinkSheetFocus = useCallback((sheet: LinkSheetState) => {
-    if (editorRef.current?.restoreCellFocus(sheet.cell ?? null)) return
-    if (sheet.hadFocus) editorRef.current?.focus()
-  }, [])
-
-  const openLinkSheetTarget = useCallback((sheet: LinkSheetState) => {
-    setLinkSheet(null)
-    if (sheet.noteTarget) onOpenWikiLink(sheet.noteTarget)
-    else if (sheet.href) void openExternalUrl(sheet.href)
-  }, [onOpenWikiLink])
-
   const handleInsertFiles = useCallback(async (files: File[], position?: number) => {
     if (files.length === 0 || editorReadOnly || !canInsertAttachment) return
     // 远端写入要求串行；并发的第二批不排队也不静默吞掉，明确提示后由用户重试。
@@ -2114,7 +2053,6 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
     const insertion = editorRef.current?.captureInsertion(position)
     attachmentBusyRef.current = true
     setAttachmentError(null)
-    setInsertingAttachment(true)
     try {
       const { errors, markdown } = await onInsertAttachments(files)
       // 部分文件失败时仍插入已写入成功的附件，避免用户重复拖拽整批文件。
@@ -2129,18 +2067,8 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
     } finally {
       insertion?.dispose()
       attachmentBusyRef.current = false
-      setInsertingAttachment(false)
     }
   }, [canInsertAttachment, editorReadOnly, note.id, onFormatNote, onInsertAttachments])
-
-  const getWikiLinkSuggestions = useCallback(() => wikiLinkNotes
-    .filter((candidate) => candidate.pendingOperation !== "delete" && Boolean(candidate.remotePath))
-    .map((candidate) => {
-      const title = candidate.title || "未命名笔记"
-      const target = candidate.remotePath!
-      const href = noteRelativeHref(note, target)
-      return { detail: target, markdown: buildMarkdownNoteLink(title, href), target, title }
-    }), [note.remotePath, wikiLinkNotes])
 
   const runFind = useCallback((direction: "next" | "previous" = "next", fromStart = false) => {
     setFindResult(previewing
@@ -2476,23 +2404,11 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
         </div>
       ) : null}
 
-      {!compact && !previewing ? editorReadOnly ? (
-        <div className="formatting-toolbar formatting-toolbar-locked" role="status">
+      {!compact && !previewing && editorReadOnly ? (
+        <div className="editor-locked-banner" role="status">
           <LockKeyhole />
           <span>{fileReadOnly ? "源文件只读" : viewLocked ? "只读阅读已锁定" : "正在同步，暂不可编辑"}</span>
         </div>
-      ) : (
-        <FormattingToolbar
-          attachmentBusy={insertingAttachment}
-          canInsertAttachment={canInsertAttachment}
-          editorRef={editorRef}
-          canUndo={historyState.undo}
-          canRedo={historyState.redo}
-          editingTable={editingTable}
-          formatState={formatState}
-          onFormat={handleFormat}
-          onInsertFiles={handleInsertFiles}
-        />
       ) : null}
 
       {noteViewMode === "preview" && !isSpecialPreview ? (
@@ -2671,12 +2587,8 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
               <Suspense fallback={<EditorLoadingState label="Markdown 编辑器" />}>
                 {/* Milkdown 会在提交后同步受控 value；按笔记重建实例，避免切换瞬间残留上一份正文。 */}
                 <MarkdownEditor
-                  compact={compact}
                   sessionKey={`${activeCacheId ?? "session"}:${note.editorSessionKey ?? note.id}`}
                   onHistoryChange={(undo, redo) => setHistoryState((current) => current.undo === undo && current.redo === redo ? current : { undo, redo })}
-                  onEditingTargetChange={setEditingTable}
-                  onFormatStateChange={setFormatState}
-                  getWikiLinkSuggestions={getWikiLinkSuggestions}
                   key={noteRenderIdentity}
                   onChange={(content) => onUpdateNote({
                     content,
@@ -2685,23 +2597,10 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
                   onCursorChange={(line, column) => setCursorPosition({ column, line })}
                   onInsertFiles={canInsertAttachment ? handleInsertFiles : undefined}
                   onPasteError={setAttachmentError}
-                  onLinkMenu={(tap) => setLinkSheet({
-                    hadFocus: tap.hadFocus,
-                    href: tap.href,
-                    label: tap.target.label,
-                    menu: true,
-                    noteTarget: tap.noteTarget,
-                    target: tap.target,
-                    url: tap.target.url,
-                  })}
-                  onLoadWikiNote={onLoadWikiNote}
-                  onOpenWikiLink={onOpenWikiLink}
                   onResolveAsset={onResolveAsset}
-                  onResolveWikiNote={onResolveWikiNote}
                   onSelectionChange={setHasSelection}
                   readOnly={editorReadOnly}
                   ref={editorRef}
-                  storageKey={note.id}
                   value={note.content}
                 />
               </Suspense>
@@ -2725,31 +2624,17 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
       </aside>}
       </div>}
 
-      {/* 只读笔记没有格式工具栏，选区操作仍需要独立一条（复制/全选可用）；
-          可编辑时选区操作并入格式栏同一行，不再额外堆叠 46px。 */}
+      {/* 可编辑态的格式与块操作已由 Milkdown 自带 UI 承担；
+          只读态没有这些入口，仅在有选区时保留复制/全选。 */}
       {compact && !previewing && editorReadOnly ? hasSelection ? (
         <SelectionActionBar editorRef={editorRef} readOnly />
       ) : (
-        <div className="formatting-toolbar formatting-toolbar-locked" data-mobile="true" role="status">
+        <div className="editor-locked-banner" data-mobile="true" role="status">
           <LockKeyhole />
           <span>{fileReadOnly ? "源文件只读" : viewLocked ? "只读阅读已锁定" : "正在同步"}</span>
         </div>
       ) : null}
-      {compact && !previewing && !editorReadOnly ? (
-        <FormattingToolbar
-          attachmentBusy={insertingAttachment}
-          canInsertAttachment={canInsertAttachment}
-          editorRef={editorRef}
-          canUndo={historyState.undo}
-          canRedo={historyState.redo}
-          editingTable={editingTable}
-          formatState={formatState}
-          hasSelection={hasSelection}
-          mobile
-          onFormat={handleFormat}
-          onInsertFiles={handleInsertFiles}
-        />
-      ) : !compact && !isExcalidraw ? (
+      {!compact && !isExcalidraw ? (
         <footer className="editor-statusbar">
           <span>{documentSize}</span>
           {readingHint ? <span>{readingHint}</span> : null}
@@ -2767,25 +2652,6 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
         onOpenChange={setHistoryDialogOpen}
         onRestore={onRestoreNoteVersion}
         open={historyDialogOpen}
-      />
-      <MobileLinkSheet
-        sheet={linkSheet}
-        onClose={closeLinkSheet}
-        onOpenLink={() => { if (linkSheet) openLinkSheetTarget(linkSheet) }}
-        onRemoveLink={() => {
-          // 成功才关闭；失败（原文在面板期间被改动）时面板保留，由面板提示用户。
-          if (!linkSheet?.target) return true
-          const removed = editorRef.current?.removeLink(linkSheet.target, linkSheet.cell ?? null) ?? false
-          if (removed) setLinkSheet(null)
-          return removed
-        }}
-        onRestoreFocus={() => { if (linkSheet) restoreLinkSheetFocus(linkSheet) }}
-        onSaveLink={(label, url) => {
-          if (!linkSheet) return false
-          const applied = editorRef.current?.applyLink(linkSheet.target, label, url, linkSheet.cell ?? null) ?? false
-          if (applied) setLinkSheet(null)
-          return applied
-        }}
       />
       <Dialog onOpenChange={setOutlineDialogOpen} open={outlineDialogOpen}>
         <DialogContent className="mobile-outline-dialog">
@@ -3211,7 +3077,6 @@ function MobileRouteEntryPage({ active, backLabel, canGoBack, entry, navigationO
       onBack={() => { void routeProps.onMobileBack(fallback, canGoBack) }}
       onDeleteNote={routeProps.onDeleteNote}
       onExportNote={routeProps.onExportNote}
-      onFormat={routeProps.onFormat}
       onFormatNote={routeProps.onFormatNote}
       onInsertAttachments={routeProps.onInsertAttachments}
       onLoadWikiNote={routeProps.onLoadWikiNote}
@@ -3234,7 +3099,6 @@ function MobileRouteEntryPage({ active, backLabel, canGoBack, entry, navigationO
       onUpdateNote={routeProps.onUpdateNote}
       saveState={routeProps.saveState}
       syncing={routeProps.isRefreshingVault}
-      wikiLinkNotes={routeProps.allNotes}
     />
   )
 }
@@ -4113,12 +3977,4 @@ function deriveFolder(note: Note) {
   if (!note.remotePath) return "产品规划 / 跨端产品"
   const segments = note.remotePath.split("/").filter(Boolean)
   return segments.slice(0, -1).join(" / ") || "坚果云"
-}
-
-function noteRelativeHref(activeNote: Note, targetPath: string) {
-  if (activeNote.remotePath) {
-    const relative = buildRelativeMarkdownHref(activeNote.remotePath, targetPath)
-    if (relative) return relative
-  }
-  return targetPath.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/")
 }
