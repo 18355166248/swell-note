@@ -888,6 +888,52 @@ describe("MarkdownEditor", () => {
     })
   })
 
+  describe("同会话回写 origin 区分", () => {
+    function beginComposition() {
+      editorView().contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }))
+    }
+    function endComposition() {
+      editorView().contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }))
+    }
+
+    it("组合期间同会话远端合并被挂起，结束后正文不丢", () => {
+      const onChange = vi.fn()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey="cache:a" value="本地正文" />,
+      )
+      beginComposition()
+
+      // 同会话、正文确实变化（远端合并 / 版本恢复 / 重新加载）：origin 必须是 external 而非 echo，
+      // 否则 flush 时被当作 echo 短路、只补身份与设置，远端正文会被悄悄丢掉。
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" value="远端合并正文" />)
+      expect(editorView().state.doc.toString()).toBe("本地正文")
+
+      endComposition()
+      expect(editorView().state.doc.toString()).toBe("远端合并正文")
+      // 外部回写不发用户 onChange，宿主不会把合并结果再存一遍。
+      expect(onChange).not.toHaveBeenCalled()
+    })
+
+    it("组合期间同会话 echo 回传不覆盖 IME 已提交的正文", () => {
+      const onChange = vi.fn()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey="cache:a" value="拼音" />,
+      )
+      beginComposition()
+
+      // IME 提交最终字符：onChange 把最终正文发出去，lastEmittedDocRef 随之更新为 "你好"。
+      act(() => { editorView().dispatch({ changes: { from: 0, to: 2, insert: "你好" }, userEvent: "input.type.compose" }) })
+      expect(onChange).toHaveBeenLastCalledWith("你好", expect.anything())
+
+      // 宿主 setState 后原样回传（echo）：正文早已在状态里，组合结束后不得覆盖。
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" value="你好" />)
+      expect(editorView().state.doc.toString()).toBe("你好")
+
+      endComposition()
+      expect(editorView().state.doc.toString()).toBe("你好")
+    })
+  })
+
   describe("异步附件不写入已切走的笔记", () => {
     it("书签属于切换前的笔记时拒绝插入", () => {
       const handle = createRef<MarkdownEditorHandle>()
@@ -1005,15 +1051,16 @@ describe("MarkdownEditor", () => {
         <MarkdownEditor onChange={onChange} sessionKey="cache:a" readOnly={false} value="初始正文" />,
       )
       beginComposition()
-      // 多次挂起：旧正文回写、只读切换来回、最终只读落定。
+      // 多次挂起：同会话外部正文回写（value 变化且不等于上次发出的正文，故是 external 而非 echo）、
+      // 只读切换来回，最终只读落定、正文落到最后一次挂起的外部正文。
       rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" readOnly value="回写一" />)
       rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" readOnly={false} value="回写二" />)
       rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" readOnly value="回写三" />)
 
       endComposition()
-      // 只读取最后一次挂起的值；正文不被外部回写覆盖（echo 语义）。
+      // 只读取最后一次挂起的值：正文落到最后一次外部回写，不丢内容。
       expect(editorView().state.readOnly).toBe(true)
-      expect(editorView().state.doc.toString()).toBe("初始正文")
+      expect(editorView().state.doc.toString()).toBe("回写三")
     })
   })
 

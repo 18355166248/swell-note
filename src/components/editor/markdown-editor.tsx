@@ -139,6 +139,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     // 上一次渲染看到的 sessionKey。判定「用户确实切走了」必须跟它比：
     // sessionKeyRef 在渲染期就已被赋成新值，拿它自比恒为真，会让每次同笔记回写都被当成切走。
     const previousSessionKeyRef = useRef(sessionKey)
+    // 最后一次由编辑器发出的正文（用户输入经 onChange 出去的字符串）。区分「受控 echo」与
+    // 「同笔记的外部正文变化」的唯一依据：value 与它相等才是用户输入的回传，其余（远端合并、
+    // 版本恢复、重新加载）都是外部回写，composition 期间必须挂起而不能当 echo 短路掉。
+    const lastEmittedDocRef = useRef(value)
     // 下面几个 ref 供 effect 与异步回调读取最新值：写进依赖会让每次渲染都重挂编辑器。
     const onChangeRef = useRef(onChange)
     onChangeRef.current = onChange
@@ -498,6 +502,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           if (event.external) return
           // 第二参数沿用 @uiw/react-codemirror 的 onChange(value, viewUpdate) 签名。
           onChangeRef.current(event.doc, event.update)
+          // 记下这次发出去的正文：下次 value 回传时用它判断是 echo 还是外部正文。
+          lastEmittedDocRef.current = event.doc
         }),
         // 切换会话走 setState，绕过 updateListener：这里补发一次历史/光标/格式/选区，
         // 让撤销按钮、行号与格式高亮在切换后立即落到目标笔记，不等下一次用户输入。
@@ -545,8 +551,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         // 同一篇笔记的外部回写不置位，由 control 挂起到 compositionend，不打断正在拼的中文。
         forceSwitch: switching,
         // 区分「切换」与「受控回写」。切换瞬间 value 可能还是上一篇（尚未就绪），
-        // 必须按切换路径落空占位，不能当成旧正文的外部回写；同笔记回写是 echo，直接短路。
-        origin: switching ? "switch" : "echo",
+        // 必须按切换路径落空占位，不能当成旧正文的外部回写；同笔记回写再按 value 是否等于
+        // 上次发出的正文区分 echo（用户输入原样回传）与 external（远端合并 / 版本恢复 / 重新加载）。
+        origin: switching ? "switch" : value === lastEmittedDocRef.current ? "echo" : "external",
         settings: {
           assetScope: storageKey,
           platform: compact ? "mobile" : "desktop",

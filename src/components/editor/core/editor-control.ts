@@ -183,16 +183,19 @@ export class EditorControl {
       this.applyIdentityAndSettings(identity, options.settings)
       return
     }
-    if (!switching && origin === "echo" && doc === this.getDocument()) {
-      // 内容相同但字符串不是同一个：仍属受控回传，不能重建状态，否则会清掉当前撤销栈。
+    if (!switching && doc === this.getDocument()) {
+      // 内容相同但字符串不是同一个（echo 原样回传、或 external 恰好内容未变，如重新加载 /
+      // 远端合并后与本地一致）：都不能重建状态，否则会清掉当前撤销栈；只补身份与设置。
       this.lastKnownDoc = doc
       this.applyIdentityAndSettings(identity, options.settings)
       return
     }
-    // 会走到重建状态这条路：设置先落地，由 buildEditorState 一次性按新设置产出扩展。
-    // 若晚于重建，新笔记会先带着上一篇的只读 / 主题渲染一次。
-    // 同会话的正文替换不重建配置，把设置透传给 applyDocument 让它补一次 reconfigure。
-    if (options.settings) this.settings = { ...this.settings, ...options.settings }
+    // 会走到重建状态这条路：只有切换会话才先把设置合并进 this.settings，由 buildEditorState
+    // 一次性按新设置产出扩展（若晚于重建，新笔记会先带着上一篇的只读 / 主题渲染一次）。
+    // 同会话的正文替换不重建配置，绝不能提前合并设置——否则 applyDocument 里的
+    // updateSettings 会看到 previous 与 next 相同而不派发任何 Compartment effects，
+    // 造成 getSettings、EditorState 与 contenteditable 三者状态分裂。
+    if (switching && options.settings) this.settings = { ...this.settings, ...options.settings }
     this.applyDocument(doc, identity, switching, switching ? undefined : options.settings)
   }
 

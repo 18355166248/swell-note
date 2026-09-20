@@ -286,6 +286,21 @@ describe("EditorControl 配置经 Compartment 生效", () => {
     expect(platforms).toEqual(["desktop", "mobile"])
     expect(control.getView().dom.isConnected).toBe(true)
   })
+
+  it("同会话正文替换携带设置时，设置仍经 Compartment 真正重配置", () => {
+    const control = createControl({ doc: "旧正文", identity: identity("a") })
+    expect(control.getState().readOnly).toBe(false)
+
+    // 同会话正文替换（远端合并）+ 只读翻转一起到达。修复前设置被提前合并进 this.settings，
+    // applyDocument 里的 updateSettings 会因 previous === next 而不派发任何 Compartment effect，
+    // 导致 EditorState.readOnly、contenteditable 与 getSettings() 三者状态分裂。
+    control.updateDocument("新正文", identity("a"), { settings: { readOnly: true } })
+
+    expect(control.getDocument()).toBe("新正文")
+    expect(control.getSettings().readOnly).toBe(true)
+    expect(control.getState().readOnly).toBe(true)
+    expect(control.getView().contentDOM.getAttribute("contenteditable")).toBe("false")
+  })
 })
 
 describe("EditorControl 事件", () => {
