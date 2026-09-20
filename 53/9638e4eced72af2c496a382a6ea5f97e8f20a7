@@ -1,0 +1,25 @@
+src/components/editor/core/editor-control.test.ts
+  s_7fcbd8ca6b6314::t_c014c32c465024 289-303
+src/components/editor/core/editor-control.ts
+  s_7fcbd8ca6b6314::t_cd58650ad7399d 186-188,193-198
+src/components/editor/markdown-editor.test.tsx
+  s_7fcbd8ca6b6314::t_33debba2d86ad9 891-936,1054-1055,1061,1063
+src/components/editor/markdown-editor.tsx
+  s_7fcbd8ca6b6314::t_f4261075f5b16e 142-145,505-506,554-556
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "539638e4eced72af2c496a382a6ea5f97e8f20a7",
+  "prompts": {},
+  "sessions": {
+    "s_7fcbd8ca6b6314": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_7fcbd8ca6b6314",
+        "model": "unknown"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
