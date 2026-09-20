@@ -1,25 +1,27 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react"
-import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror"
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { syntaxTree } from "@codemirror/language"
 import { languages } from "@codemirror/language-data"
-import { undo, redo, undoDepth, redoDepth } from "@codemirror/commands"
-import type { EditorState, SelectionRange } from "@codemirror/state"
-import { EditorView, type DecorationSet } from "@codemirror/view"
+import { undoDepth, redoDepth } from "@codemirror/commands"
+import type { EditorState, Extension, SelectionRange } from "@codemirror/state"
+import { EditorView, type DecorationSet, type ViewUpdate } from "@codemirror/view"
 
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
 import { collectClipboardFiles, readClipboardContent, readClipboardEvent, validateClipboardFiles } from "@/services/clipboard/clipboard-content"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
+import { EditorControl } from "./core/editor-control"
+import type { EditorExtensionContext } from "./core/create-editor"
+import type { EditorSettings } from "./core/editor-types"
+import { editorSessionStore, sessionFields } from "./editor-session"
 import { bottomOverlayHeight, scrollCursorIntoView } from "./cursor-visibility"
 import { applyLinkTarget, detectFormatState, focusExistingLinkUrl, linkInsertion, linkTargetAt, linkTargetInText, removeLinkTarget, type EditorFormatState, type EditorLinkTarget, type InlineMarkKind, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
 import { htmlToMarkdown, isInlineMarkdownFragment } from "./html-to-markdown"
-import { buildLivePreviewDecorationsForRanges, markdownLivePreview, type EditorLinkTap } from "./live-preview"
+import { buildLivePreviewDecorationsForRanges, markdownLivePreviewBase, markdownTableEditing, type EditorLinkTap, type LivePreviewOptions } from "./live-preview"
 import type { EmbeddedWikiNoteResult } from "./markdown-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import { ImageZoomOverlay } from "./image-zoom"
 import { activeTableEdit, type TableEditTarget } from "./table-edit-target"
-import { rememberEditorSession, restoreEditorSession } from "./editor-session"
 import { selectionRenderingExtensions } from "./selection-rendering"
 import "./markdown-table.css"
 
@@ -106,7 +108,8 @@ type MarkdownEditorProps = {
   onHistoryChange?: (undo: boolean, redo: boolean) => void
   onEditingTargetChange?: (table: boolean) => void
   compact?: boolean
-  onChange: (value: string) => void
+  // 第二参数是本次变更的 ViewUpdate，与改造前 @uiw/react-codemirror 的签名一致。
+  onChange: (value: string, update?: ViewUpdate) => void
   onCursorChange?: (line: number, column: number) => void
   // 光标 / 选区的格式状态（工具栏高亮）；表格单元格编辑时由单元格汇报行内格式。
   onFormatStateChange?: (state: EditorFormatState | null) => void
@@ -122,16 +125,31 @@ type MarkdownEditorProps = {
   getWikiLinkSuggestions?: () => WikiLinkSuggestion[]
   readOnly?: boolean
   storageKey?: string
+  /** 打开笔记时已知的远端修订号。异步附件回写前核对，避免写到已被同步改写的版本上。 */
+  revision?: string
   value: string
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ sessionKey, onHistoryChange, onEditingTargetChange, onFormatStateChange, onLinkMenu, onPasteError, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onLoadWikiNote, onOpenWikiLink, onResolveAsset, onResolveWikiNote, onSelectionChange, readOnly = false, storageKey, value }, ref) {
-    const editorRef = useRef<ReactCodeMirrorRef>(null)
+  function MarkdownEditor({ sessionKey, revision, onHistoryChange, onEditingTargetChange, onFormatStateChange, onLinkMenu, onPasteError, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onLoadWikiNote, onOpenWikiLink, onResolveAsset, onResolveWikiNote, onSelectionChange, readOnly = false, storageKey, value }, ref) {
+    const hostRef = useRef<HTMLDivElement | null>(null)
+    const controlRef = useRef<EditorControl | null>(null)
     const sessionKeyRef = useRef(sessionKey)
     sessionKeyRef.current = sessionKey
+    // 上一次渲染看到的 sessionKey。判定「用户确实切走了」必须跟它比：
+    // sessionKeyRef 在渲染期就已被赋成新值，拿它自比恒为真，会让每次同笔记回写都被当成切走。
+    const previousSessionKeyRef = useRef(sessionKey)
+    // 下面几个 ref 供 effect 与异步回调读取最新值：写进依赖会让每次渲染都重挂编辑器。
+    const onChangeRef = useRef(onChange)
+    onChangeRef.current = onChange
+    const onEditingTargetChangeRef = useRef(onEditingTargetChange)
+    onEditingTargetChangeRef.current = onEditingTargetChange
+    const storageKeyRef = useRef(storageKey)
+    storageKeyRef.current = storageKey
+    // 异步附件回写前核对：上传期间被同步合并过就不能按旧偏移落笔。
+    const revisionRef = useRef(revision)
+    revisionRef.current = revision
     const insertionMarks = useRef(new Set<{ anchor?: number; from: number; head?: number; to: number }>())
-    const [initialState] = useState(() => restoreEditorSession(sessionKey, value))
     const [theme, setTheme] = useState<"dark" | "light">(() => document.documentElement.classList.contains("dark") ? "dark" : "light")
     useEffect(() => {
       const observer = new MutationObserver(() => setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light"))
@@ -139,26 +157,29 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       return () => observer.disconnect()
     }, [])
 
-    // CodeMirror 的扩展数组一旦换引用就会整体重配置（语言也会重新解析）；
-    // 调用方传入的回调多为内联函数，用 ref 中转后扩展只在只读状态切换时重建。
+    // 调用方传入的回调多为内联函数。它们只被扩展里的闭包读取，
+    // 放进 ref 后 props 变化不会改变扩展引用，也就不会触发整体重配置。
     const handlers = useRef({ getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onLinkMenu, onLoadWikiNote, onOpenWikiLink, onPasteError, onResolveAsset, onResolveWikiNote, onSelectionChange, onHistoryChange })
     useEffect(() => {
       handlers.current = { getWikiLinkSuggestions, onCursorChange, onFormatStateChange, onInsertFiles, onLinkMenu, onLoadWikiNote, onOpenWikiLink, onPasteError, onResolveAsset, onResolveWikiNote, onSelectionChange, onHistoryChange }
     })
 
-    // 切换笔记会按 key 重建编辑器，卸载时要撤回选区状态，新笔记才不会带着上一篇的选区操作条打开。
+    // 编辑器所在区域被卸载 / 隐藏时要撤回选区状态，
+    // 否则切回来时选区操作条会带着上一次的选区状态出现。
     useEffect(() => () => handlers.current.onSelectionChange?.(false), [])
 
+    // 键盘升起会把可视区压掉一半，此前落在下半屏的光标就藏到了键盘后面。
+    // 布局要等 --keyboard-inset 写入后才是最终高度，所以推迟一帧再量。
+    // 监听器只随 compact 变化增删一次，绝不在每次渲染时重复注册——
+    // 重复注册的 resize 监听会让每次键盘升降叠加一次滚动补偿，手机上表现为页面不断下移。
     useEffect(() => {
       const viewport = window.visualViewport
       if (!compact || !viewport) return
-      // 键盘升起会把可视区压掉一半，此前落在下半屏的光标就藏到了键盘后面。
-      // 布局要等 --keyboard-inset 写入后才是最终高度，所以推迟一帧再量。
       let frame = 0
       const follow = () => {
         frame = 0
-        const view = editorRef.current?.view
-        if (view?.hasFocus) scrollCursorIntoView(view)
+        const control = controlRef.current
+        if (control?.hasFocus()) scrollCursorIntoView(control.getView())
       }
       const schedule = () => {
         if (frame) return
@@ -171,32 +192,19 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       }
     }, [compact])
 
-    const extensions = useMemo(() => [
+    // 固定扩展：语言与选区渲染等不随设置变化的基座。
+    // 每次挂载只算一次，EditorView 的整个生命周期里引用不变。
+    const languageExtensions = useMemo<Extension>(() => [
       // GFM 基座：表格、删除线与任务列表才能进入语法树，供语法高亮与即时渲染装饰使用。
       // codeLanguages 让围栏代码块按 info 字符串套用对应语言的高亮，与阅读态保持一致；
       // 各语言由官方的 language-data 按需动态加载，不写代码块的笔记不会为此付出代价。
       markdown({ base: markdownLanguage, codeLanguages: languages }),
-      markdownLivePreview({
-        assetScope: storageKey,
-        onLoadWikiNote: (target) => handlers.current.onLoadWikiNote?.(target),
-        onOpenWikiLink: (target) => handlers.current.onOpenWikiLink?.(target),
-        // 移动端点按链接交给宿主菜单（打开/编辑/移除），桌面端与只读笔记维持单击直接打开。
-        onLinkTap: compact && !readOnly ? (tap) => {
-          const menu = handlers.current.onLinkMenu
-          if (!menu) return false
-          menu(tap)
-          return true
-        } : undefined,
-        onResolveAsset: (source) => handlers.current.onResolveAsset?.(source) ?? Promise.resolve(null),
-        onResolveWikiNote: (target) => handlers.current.onResolveWikiNote?.(target) ?? { status: "missing" },
-        onTableFormatState: (state) => handlers.current.onFormatStateChange?.(state ? { ...state, heading: 0 } : null),
-        tableStorageKey: storageKey,
-      }),
-      // 列表 / 引用回车续写、结构行 Tab 缩进、选中文字敲 * ` ~ 即包裹。
-      markdownInputEnhancements(),
-      wikiLinkCompletion(() => handlers.current.getWikiLinkSuggestions?.() ?? []),
       selectionRenderingExtensions(),
       EditorView.lineWrapping,
+    ], [])
+
+    // 平台扩展：桌面与移动的差异集中在链接点按与滚动跟随，随 compact 经 Compartment 重配置。
+    const buildPlatformExtensions = useCallback(({ settings }: EditorExtensionContext): Extension => [
       EditorView.scrollHandler.of((view, range, options) => {
         const viewport = view.dom.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')
         if (!viewport) return false
@@ -207,7 +215,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const bottom = top + block.height
         const visible = viewport.getBoundingClientRect()
         // 手机上键盘之上有格式栏/选区条压底，固定边距会把文末行留在条子后面。
-        const bottomMargin = compact ? 24 + bottomOverlayHeight(view.dom) : 24
+        const bottomMargin = settings.platform === "mobile" ? 24 + bottomOverlayHeight(view.dom) : 24
         let delta = 0
         if (options.y === "start") delta = top - visible.top - options.yMargin
         else if (options.y === "end") delta = bottom - visible.bottom + options.yMargin
@@ -217,6 +225,25 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         if (delta) viewport.scrollTop += delta
         return true
       }),
+    ], [])
+
+    // 实时预览与表格编辑拆成两个 Compartment 的工厂：两者开关互不影响。
+    // 选项里的回调全部经 handlers 中转，平台与只读一律从 settings 读——
+    // 工厂因此不依赖任何易变的 props，平台切换只走 reconfigure，不重建 EditorView。
+    const buildLivePreviewExtensions = useCallback(({ settings }: EditorExtensionContext): Extension => settings.livePreview
+      ? markdownLivePreviewBase(livePreviewOptionsFor(settings, handlers, settings.platform))
+      : [], [])
+
+    const buildTableEditingExtensions = useCallback(({ settings }: EditorExtensionContext): Extension => settings.tableEditing
+      ? markdownTableEditing()
+      : [], [])
+
+    // 行为扩展：输入增强、补全、剪贴板与滚动转发。
+    // 这部分必须能访问 EditorControl 实例（事件外发、命令入口），因此由 control 反向注入。
+    const buildBehaviorExtensions = useCallback((control: EditorControl): Extension => [
+      // 列表 / 引用回车续写、结构行 Tab 缩进、选中文字敲 * ` ~ 即包裹。
+      markdownInputEnhancements(),
+      wikiLinkCompletion(() => handlers.current.getWikiLinkSuggestions?.() ?? []),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) for (const mark of insertionMarks.current) {
           mark.from = update.changes.mapPos(mark.from, 1)
@@ -225,7 +252,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           if (mark.anchor !== undefined) mark.anchor = update.changes.mapPos(mark.anchor, 1)
           if (mark.head !== undefined) mark.head = update.changes.mapPos(mark.head, -1)
         }
-        rememberEditorSession(sessionKey, update.state)
+        // 会话快照（撤销历史、选区、滚动）统一由 control 负责，事件外发也在其中判定文档身份。
+        control.notifyViewUpdate(update)
         if (update.docChanged) handlers.current.onHistoryChange?.(undoDepth(update.state) > 0, redoDepth(update.state) > 0)
         if (!update.selectionSet && !update.docChanged) return
         const position = update.state.selection.main.head
@@ -235,7 +263,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         // 工具栏高亮跟随光标与选区；表格单元格编辑时由单元格自己的汇报接管。
         if (!activeTableEdit(update.view)) handlers.current.onFormatStateChange?.(detectFormatState(update.state))
         // 打字打到可视区边缘、或光标跳到远处时同样要跟过去，否则又落到键盘后面。
-        if (compact && update.view.hasFocus) scrollCursorIntoView(update.view)
+        if (control.getSettings().platform === "mobile" && update.view.hasFocus) scrollCursorIntoView(update.view)
       }),
       EditorView.domEventHandlers({
         copy(event, view) {
@@ -298,7 +326,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         drop(event, view) {
           const onInsertFiles = handlers.current.onInsertFiles
           const files = collectClipboardFiles(event.dataTransfer)
-          if (!onInsertFiles || readOnly || files.length === 0) return false
+          if (!onInsertFiles || control.getSettings().readOnly || files.length === 0) return false
           event.preventDefault()
           // 附件落在拖放指向的位置（与 CodeMirror dropCursor 的指示一致），不用旧光标。
           const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false)
@@ -310,9 +338,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           const text = clipboard.text
           // 代码范围中的粘贴必须保持字面内容：URL 不能包成链接，HTML 也不能转换成强调/列表。
           // 返回 false 交给 CodeMirror 原生粘贴，可保留一次撤销且不改动选区之外的文本。
-          if (!readOnly && shouldPasteAsPlainText(view.state)) return false
+          if (!control.getSettings().readOnly && shouldPasteAsPlainText(view.state)) return false
           // 选中文字时粘一个链接，直接包成 [选中文字](URL)。
-          if (text && !readOnly && wrapSelectionAsLink(view, text)) {
+          if (text && !control.getSettings().readOnly && wrapSelectionAsLink(view, text)) {
             event.preventDefault()
             return true
           }
@@ -320,7 +348,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           const onInsertFiles = handlers.current.onInsertFiles
           const files = clipboard.files
           if (files.length > 0 && ((!text && !clipboard.html) || isImageClipboardWithIncidentalName(files, text, clipboard.html))) {
-            if (!onInsertFiles || readOnly) return false
+            if (!onInsertFiles || control.getSettings().readOnly) return false
             try { validateClipboardFiles(files) }
             catch (error) {
               event.preventDefault()
@@ -334,7 +362,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           // 网页/Office 的混合剪贴板继续进入 HTML 转 Markdown；其中附带的资源文件不是用户要插入的附件。
           // 富文本（网页 / Word / Excel）粘贴：HTML 转成 Markdown 后插入；
           // 转换失败或没有可用结构时返回 null，走原生纯文本粘贴，内容不丢。
-          if (!readOnly) {
+          if (!control.getSettings().readOnly) {
             const html = clipboard.html
             const markdown = html ? htmlToMarkdown(html) : null
             if (markdown) {
@@ -372,16 +400,16 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           }
           // macOS WebView 的 paste 事件可能完全不暴露图片；仅在事件确实为空时才显式读原生剪贴板，
           // 普通文字粘贴不会触发权限调用。异步结果会在落笔前核验原文、选区和编辑器实例。
-          if (!readOnly && !text && !clipboard.html && handlers.current.onInsertFiles) {
+          if (!control.getSettings().readOnly && !text && !clipboard.html && handlers.current.onInsertFiles) {
             event.preventDefault()
             const onInsertFiles = handlers.current.onInsertFiles
-            const pasteSessionKey = sessionKey
+            const pasteSessionKey = sessionKeyRef.current
             const pasteState = view.state
             void pasteClipboardAtSnapshot(
               view,
               onInsertFiles,
               handlers.current.onPasteError,
-              () => editorRef.current?.view === view
+              () => controlRef.current === control
                 && sessionKeyRef.current === pasteSessionKey
                 && handlers.current.onInsertFiles === onInsertFiles
                 && view.dom.isConnected
@@ -424,17 +452,107 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           return toggleInlineMark(view, key === "b" ? "strong" : "emphasis", key === "b" ? "加粗文字" : "斜体文字")
         },
       }),
-    ], [compact, readOnly, storageKey, sessionKey])
+    ], [])
+
+    // 唯一一次创建 EditorView。此后只读、主题、平台与预览开关都走 reconfigure，
+    // 切换笔记走 updateDocument——视图实例在组件挂载期间保持不变。
+    //
+    // 依赖刻意留空：初始值经 ref 读取，后续的正文与设置变化由各自的 effect 推进视图。
+    // 若把 value 放进依赖，React 会在正文变化的每次渲染上重建编辑器，正是要消除的行为。
+    const initialRef = useRef({ sessionKey, revision, value, readOnly, compact, storageKey, settings: null as EditorSettings | null })
+    initialRef.current.settings = {
+      assetScope: storageKey,
+      livePreview: true,
+      placeholder: "开始记录你的想法…",
+      platform: compact ? "mobile" : "desktop",
+      readOnly,
+      tableEditing: true,
+      theme,
+    }
+    useEffect(() => {
+      const host = hostRef.current
+      if (!host) return
+      const initial = initialRef.current
+      const control = new EditorControl({
+        buildBehaviorExtensions,
+        doc: initial.value,
+        identity: { noteId: initial.storageKey ?? "note", revision: initial.revision, sessionKey: initial.sessionKey ?? "" },
+        languageExtensions,
+        livePreviewExtensions: buildLivePreviewExtensions,
+        parent: host,
+        platformExtensions: buildPlatformExtensions,
+        sessionFields,
+        sessionStore: editorSessionStore,
+        settings: initial.settings!,
+        tableEditingExtensions: buildTableEditingExtensions,
+      })
+      controlRef.current = control
+      // 选区、历史与光标位置统一由事件驱动：宿主不再需要在每次渲染里比对编辑器状态。
+      const disposers = [
+        control.on("selectionChange", (event) => {
+          if (controlRef.current !== control) return
+          handlers.current.onSelectionChange?.(event.hasSelection)
+        }),
+        control.on("documentChange", (event) => {
+          if (controlRef.current !== control) return
+          if (event.external) return
+          // 第二参数沿用 @uiw/react-codemirror 的 onChange(value, viewUpdate) 签名。
+          onChangeRef.current(event.doc, event.update)
+        }),
+        control.on("formatStateChange", (event) => {
+          if (controlRef.current !== control) return
+          handlers.current.onFormatStateChange?.(event.state as EditorFormatState | null)
+        }),
+        control.on("focusChange", (event) => {
+          if (controlRef.current !== control || event.focused) return
+          onEditingTargetChangeRef.current?.(Boolean(activeTableEdit(control.getView())))
+        }),
+      ]
+      // 初次挂载也要把历史按钮状态摆正，此时还没有任何事务可监听。
+      handlers.current.onHistoryChange?.(undoDepth(control.getState()) > 0, redoDepth(control.getState()) > 0)
+      return () => {
+        for (const dispose of disposers) dispose()
+        controlRef.current = null
+        control.destroy()
+      }
+    }, [buildBehaviorExtensions, buildLivePreviewExtensions, buildPlatformExtensions, buildTableEditingExtensions, languageExtensions])
+
+    // 正文与身份变化：切换笔记在这里变成一次受控事务，不再经 React key 重建组件。
+    useEffect(() => {
+      const control = controlRef.current
+      if (!control) return
+      control.updateDocument(value, {
+        noteId: storageKey ?? "note",
+        revision,
+        sessionKey: sessionKey ?? "",
+      }, {
+        // 用户已经明确切走（本次的 sessionKey 与上次渲染不同）：组合态不能拦住新笔记的正文。
+        // 同一篇笔记的外部回写不置位，由 control 挂起到 compositionend，不打断正在拼的中文。
+        forceSwitch: previousSessionKeyRef.current !== sessionKey,
+        settings: {
+          assetScope: storageKey,
+          platform: compact ? "mobile" : "desktop",
+          readOnly,
+        },
+      })
+      previousSessionKeyRef.current = sessionKey
+    }, [compact, readOnly, revision, sessionKey, storageKey, value])
+
+    // 主题经 Compartment 重配置：切换深色模式不重建视图，焦点与滚动都保持。
+    useEffect(() => {
+      controlRef.current?.updateSettings({ theme })
+    }, [theme])
 
     useImperativeHandle(ref, () => ({
       applyLink(target, label, url, cell) {
-        const view = editorRef.current?.view
-        if (!view || readOnly) return false
+        const control = controlRef.current
+        const view = control?.getView()
+        if (!view || control!.getSettings().readOnly) return false
         if (cell) return applyCellLink(view, cell, target, label, url)
         return applyLinkTarget(view, target, label, url)
       },
       captureInsertion(position) {
-        const view = editorRef.current?.view
+        const view = controlRef.current?.getView()
         const target = view ? activeTableEdit(view) : undefined
         const tableEnd = target?.input.closest<HTMLElement>(".cm-md-table-wrap")?.dataset.tableTo
         const oldLength = view?.state.doc.length ?? 0
@@ -447,6 +565,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const mark = { anchor: end === undefined && position === undefined ? range?.anchor : undefined, from: at, head: end === undefined && position === undefined ? range?.head : undefined, to: at }
         // 上传期间按每次文档变化映射书签，单纯移动光标不会改变上传发起的位置。
         insertionMarks.current.add(mark)
+        // 书签同时记住发起时的笔记身份与编辑器实例：异步附件完成时据此判断
+        // 「这篇笔记是否还是当前笔记」「视图是否还是同一个」。
+        const ownerSessionKey = sessionKeyRef.current
+        const ownerNoteId = storageKeyRef.current
+        // 发起时的远端修订号。上传期间若被同步合并过，文档偏移与书签的映射关系
+        // 已经不可信，落笔会插到语义错误的位置。
+        const ownerRevision = revisionRef.current
+
         const dispose = () => { insertionMarks.current.delete(mark) }
         let settled = false
         return { dispose, insert(text: string) {
@@ -454,35 +580,42 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           // 书签只许落笔一次：迟到的重复回调（重试、双回调）不能重复插入。
           if (settled) return false
           settled = true
-          if (!view?.dom.isConnected || view.state.readOnly) return false
+          const current = controlRef.current
+          const currentView = current?.getView()
+          if (!currentView?.dom.isConnected || currentView.state.readOnly) return false
+          // 已经切到别的笔记：书签里的文档偏移属于上一篇，写进去会插到错误位置。
+          // 返回 false 让调用方走「追加到原笔记末尾」的安全降级，而不是污染当前笔记。
+          if (ownerSessionKey !== sessionKeyRef.current || ownerNoteId !== storageKeyRef.current) return false
+          // 上传期间这篇笔记被同步合并过（revision 变了）：偏移映射已不可信，
+          // 同样走安全降级，绝不按旧偏移落笔。
+          if (ownerRevision !== undefined && revisionRef.current !== ownerRevision) return false
           const { from, to } = mark
-          const gap = paragraphSeparatorAt(view.state, from)
+          // 锚点有效性：书签按变更映射而来，偏移必须仍落在当前文档范围内。
+          // （用户在上传期间继续打字是合法场景，正文变化本身不算失效。）
+          if (from < 0 || to > currentView.state.doc.length) return false
+          const gap = paragraphSeparatorAt(currentView.state, from)
           const insert = "\n".repeat(Math.max(0, gap.length - (text.match(/^\n*/)?.[0].length ?? 0))) + text
           // 用户没动过选区（粘贴后等待）才把光标带到图片之后并滚动聚焦；
           // 等待期间已移到别处写作时只做正文变更，选区随事务映射，不打断输入。
           const selectionUntouched = mark.anchor !== undefined
-            && view.state.selection.main.anchor === mark.anchor
-            && view.state.selection.main.head === mark.head
+            && currentView.state.selection.main.anchor === mark.anchor
+            && currentView.state.selection.main.head === mark.head
           // 路由栈会保活上一页编辑器；异步附件可以继续写回它绑定的文档，
           // 但隐藏页绝不能在完成时抢焦点或滚动，否则当前笔记会突然跳动。
-          const editorIsActive = !view.dom.closest("[inert]")
+          const editorIsActive = !currentView.dom.closest("[inert]")
           if (selectionUntouched && editorIsActive) {
-            view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: "input.attachment", scrollIntoView: true })
-            view.focus()
+            currentView.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: "input.attachment", scrollIntoView: true })
           } else {
-            view.dispatch({ changes: { from, to, insert }, userEvent: "input.attachment" })
+            currentView.dispatch({ changes: { from, to, insert }, userEvent: "input.attachment" })
           }
           return true
         } }
       },
       collapseSelection() {
-        const view = editorRef.current?.view
-        if (!view || view.state.selection.main.empty) return
-        // 不抢焦点：点空白与点标题输入框都会走到这里，抢回来会把刚给出去的焦点又夺走。
-        view.dispatch({ selection: { anchor: view.state.selection.main.head } })
+        controlRef.current?.dispatchCommand({ type: "selection.collapse" })
       },
       async copySelection() {
-        const view = editorRef.current?.view
+        const view = controlRef.current?.getView()
         const input = activeTableEdit(view)?.input
         const selected = input
           ? input.value.slice(input.selectionStart, input.selectionEnd)
@@ -491,13 +624,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         return writeClipboardText(selected, "text")
       },
       async cutSelection() {
-        const view = editorRef.current?.view
+        const control = controlRef.current
+        const view = control?.getView()
         const target = activeTableEdit(view)
         const ranges = target ? [] : selectedMarkdownRanges(view)
         const selected = target
           ? target.input.value.slice(target.input.selectionStart, target.input.selectionEnd)
           : ranges.map((range) => range.text).join("\n")
-        if (!view || readOnly || !selected) return false
+        if (!view || control!.getSettings().readOnly || !selected) return false
         const state = view.state
         const inputValue = target?.input.value
         const inputFrom = target?.input.selectionStart
@@ -520,14 +654,15 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         return true
       },
       focus() {
-        editorRef.current?.view?.focus()
+        controlRef.current?.focus()
       },
       findText(query, direction = "next", fromStart = false) {
-        return findTextInView(editorRef.current?.view, query, direction, fromStart)
+        return findTextInView(controlRef.current?.getView(), query, direction, fromStart)
       },
       insertText(text) {
-        const view = editorRef.current?.view
-        if (!view || readOnly || !text) return
+        const control = controlRef.current
+        const view = control?.getView()
+        if (!view || control!.getSettings().readOnly || !text) return
 
         const tableTarget = activeTableEdit(view)
         if (tableTarget) { tableTarget.format(text); return }
@@ -565,7 +700,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         if (text === TABLE_INSERT_TEMPLATE) focusFirstTableHeaderCell(view, insertFrom + leading + 1)
       },
       lineAtViewportTop(clientY) {
-        const view = editorRef.current?.view
+        const view = controlRef.current?.getView()
         if (!view) return null
         // 编辑器本身不滚动，可视区由外层容器决定，所以按屏幕坐标反查位置而不是读编辑器的滚动量。
         const bounds = view.contentDOM.getBoundingClientRect()
@@ -573,14 +708,15 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         return position === null ? null : view.state.doc.lineAt(position).number
       },
       async pasteAtSelection() {
-        const view = editorRef.current?.view
-        if (!view || readOnly) return false
+        const control = controlRef.current
+        const view = control?.getView()
+        if (!view || control!.getSettings().readOnly) return false
         const target = activeTableEdit(view)
         const state = view.state
         const onInsertFiles = handlers.current.onInsertFiles
-        const pasteSessionKey = sessionKey
+        const pasteSessionKey = sessionKeyRef.current
         const inputSnapshot = target ? { value: target.input.value, from: target.input.selectionStart, to: target.input.selectionEnd } : undefined
-        const isCurrentPaste = () => editorRef.current?.view === view
+        const isCurrentPaste = () => controlRef.current === control
           && sessionKeyRef.current === pasteSessionKey
           && handlers.current.onInsertFiles === onInsertFiles
           && view.dom.isConnected
@@ -633,8 +769,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         return true
       },
       readLinkContext() {
-        const view = editorRef.current?.view
-        if (!view || readOnly) return null
+        const control = controlRef.current
+        const view = control?.getView()
+        if (!view || control!.getSettings().readOnly) return null
         // 单元格编辑中 CodeMirror 的选区是进入单元格前的旧位置，链接必须写进单元格
         // textarea；面板输入框会抢走焦点，先挂 contextMenuActive 标记抑制 blur 时的
         // 自动提交，让未保存内容与选区在面板期间都留在原单元格里。
@@ -659,11 +796,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         }
       },
       redo() {
-        runHistory(editorRef.current?.view, true)
+        runHistory(controlRef.current, true)
       },
       removeLink(target, cell) {
-        const view = editorRef.current?.view
-        if (!view || readOnly) return false
+        const control = controlRef.current
+        const view = control?.getView()
+        if (!view || control!.getSettings().readOnly) return false
         if (cell) {
           if (activeTableEdit(view) !== cell.target || cell.target.input.value !== cell.value) return false
           delete cell.target.input.dataset.contextMenuActive
@@ -683,8 +821,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         return true
       },
       replaceAll(query, replacement) {
-        const view = editorRef.current?.view
-        if (!view || readOnly || !query) return 0
+        const control = controlRef.current
+        const view = control?.getView()
+        if (!view || control!.getSettings().readOnly || !query) return 0
         const matches = findPlainTextMatches(view.state.doc.toString(), query)
         if (matches.length === 0) return 0
         // CodeMirror 以同一个 transaction 应用全部变更，整次替换可被一次撤销恢复。
@@ -695,8 +834,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         return matches.length
       },
       replaceCurrent(query, replacement) {
-        const view = editorRef.current?.view
-        if (!view || readOnly || !query) return { current: 0, total: 0 }
+        const control = controlRef.current
+        const view = control?.getView()
+        if (!view || control!.getSettings().readOnly || !query) return { current: 0, total: 0 }
         const selection = view.state.selection.main
         const selected = view.state.sliceDoc(selection.from, selection.to)
         if (selected.toLocaleLowerCase() !== query.toLocaleLowerCase()) {
@@ -709,73 +849,74 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         return findTextInView(view, query, "next", false)
       },
       revealLine(line) {
-        const view = editorRef.current?.view
-        if (!view) return
-        const target = view.state.doc.line(Math.max(1, Math.min(line, view.state.doc.lines)))
-        view.dispatch({ selection: { anchor: target.from }, scrollIntoView: true })
-        view.focus()
+        const control = controlRef.current
+        control?.revealLine(line, { focus: true })
         // 键盘未升起时格式栏也占着底部，dispatch 的滚动不感知它；下一帧按可视带再校正一次。
         requestAnimationFrame(() => {
-          const current = editorRef.current?.view
-          if (current?.hasFocus) scrollCursorIntoView(current)
+          const current = controlRef.current
+          if (current?.hasFocus()) scrollCursorIntoView(current.getView())
         })
       },
       scrollLineToTop(line) {
-        const view = editorRef.current?.view
-        if (!view) return false
-        const target = view.state.doc.line(Math.max(1, Math.min(line, view.state.doc.lines)))
-        // 不动选区也不抢焦点：这是切换视图时的对位，手机上抢焦点会顺带把键盘顶起来。
-        view.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: "start" }) })
-        return true
+        if (!controlRef.current) return false
+        return controlRef.current.dispatchCommand({ line, type: "navigation.scrollLineToTop" })
       },
       selectAll() {
-        const view = editorRef.current?.view
-        if (!view) return
+        const control = controlRef.current
+        const view = control?.getView()
+        if (!view || !control) return
         const table = activeTableEdit(view)
         if (table) { table.input.select(); return }
-        view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } })
-        view.focus()
+        control.dispatchCommand({ type: "selection.all" })
       },
       undo() {
-        runHistory(editorRef.current?.view, false)
+        runHistory(controlRef.current, false)
       },
-    }), [readOnly])
+    }), [])
 
     return (
       <>
       <ImageZoomOverlay />
-      <CodeMirror
+      {/*
+        挂载点上不再有 React 管理的编辑器子节点：EditorView 自己拥有这段 DOM。
+        容器保留 aria-label 与高度链，使「正文区域」在可访问性树与既有测试里仍是同一个节点。
+      */}
+      <div
+        ref={hostRef}
         aria-label="Markdown 编辑器"
-        basicSetup={{
-          bracketMatching: true,
-          closeBrackets: true,
-          drawSelection: false,
-          foldGutter: false,
-          highlightActiveLine: false,
-          highlightActiveLineGutter: false,
-          lineNumbers: false,
-        }}
-        editable={!readOnly}
-        extensions={extensions}
-        height="100%"
-        initialState={initialState}
-        theme={theme}
-        onCreateEditor={(view) => {
-          rememberEditorSession(sessionKey, view.state)
-          handlers.current.onHistoryChange?.(undoDepth(view.state) > 0, redoDepth(view.state) > 0)
-        }}
-        onFocusCapture={(event) => onEditingTargetChange?.(Boolean((event.target as HTMLElement).closest(".cm-md-table-cell-input")))}
-        onBlurCapture={() => queueMicrotask(() => onEditingTargetChange?.(Boolean(activeTableEdit(editorRef.current?.view))))}
-        onChange={onChange}
-        placeholder="开始记录你的想法…"
-        readOnly={readOnly}
-        ref={editorRef}
-        value={value}
+        className="markdown-editor-host"
+        onFocusCapture={(event) => onEditingTargetChangeRef.current?.(Boolean((event.target as HTMLElement).closest(".cm-md-table-cell-input")))}
+        onBlurCapture={() => queueMicrotask(() => onEditingTargetChangeRef.current?.(Boolean(activeTableEdit(controlRef.current?.getView()))))}
       />
       </>
     )
   },
 )
+
+// 实时预览的选项。回调一律经 handlers 中转，因此这份选项只在作用域或平台变化时才需要重算，
+// 不会因为父组件的每次渲染换引用而触发装饰整体重建。
+function livePreviewOptionsFor(
+  settings: EditorSettings,
+  handlers: { current: { onLinkMenu?: (tap: EditorLinkTap) => void; onLoadWikiNote?: (target: string) => void; onOpenWikiLink?: (target: string) => void; onResolveAsset?: (source: string) => Promise<VaultAsset | null>; onResolveWikiNote?: (target: string) => EmbeddedWikiNoteResult; onFormatStateChange?: (state: EditorFormatState | null) => void } },
+  platform: "desktop" | "mobile",
+): LivePreviewOptions {
+  return {
+    assetScope: settings.assetScope,
+    onLoadWikiNote: (target) => handlers.current.onLoadWikiNote?.(target),
+    onOpenWikiLink: (target) => handlers.current.onOpenWikiLink?.(target),
+    // 移动端点按链接交给宿主菜单（打开/编辑/移除），桌面端与只读笔记维持单击直接打开。
+    onLinkTap: platform === "mobile" && !settings.readOnly ? (tap) => {
+      const menu = handlers.current.onLinkMenu
+      if (!menu) return false
+      menu(tap)
+      return true
+    } : undefined,
+    onResolveAsset: (source) => handlers.current.onResolveAsset?.(source) ?? Promise.resolve(null),
+    onResolveWikiNote: (target) => handlers.current.onResolveWikiNote?.(target) ?? { status: "missing" },
+    onTableFormatState: (state) => handlers.current.onFormatStateChange?.(state ? { ...state, heading: 0 } : null),
+    tableStorageKey: settings.assetScope,
+  }
+}
 
 function isImageClipboardWithIncidentalName(files: File[], text: string | null, html: string | null) {
   if (html || files.some((file) => !file.type.startsWith("image/"))) return false
@@ -1078,13 +1219,12 @@ export function formatToolbarText(template: string, selected: string) {
   return { text: template }
 }
 
-function runHistory(view: EditorView | undefined, forward: boolean) {
-  if (!view || view.state.readOnly) return
-  const target = activeTableEdit(view)
+function runHistory(control: EditorControl | null | undefined, forward: boolean) {
+  if (!control || control.getSettings().readOnly) return
   // 未提交的单元格先形成同一份文档历史，再执行撤销；不能只撤销正文而留下悬空的 textarea。
-  target?.commit()
-  ;(forward ? redo : undo)(view)
-  view.focus()
+  activeTableEdit(control.getView())?.commit()
+  if (forward) control.redo()
+  else control.undo()
 }
 
 export default MarkdownEditor

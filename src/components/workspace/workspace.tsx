@@ -2669,15 +2669,18 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
           ) : (
             <div className="markdown-editor-shell">
               <Suspense fallback={<EditorLoadingState label="Markdown 编辑器" />}>
-                {/* CodeMirror 会在提交后同步受控 value；按笔记重建实例，避免切换瞬间残留上一份正文。 */}
+                {/*
+                  不再按笔记重建编辑器实例。切换笔记由编辑器内部的一次受控事务完成，
+                  焦点、输入法组合态、滚动容器与撤销栈因此都能各自按笔记正确保留/隔离。
+                */}
                 <MarkdownEditor
                   compact={compact}
                   sessionKey={`${activeCacheId ?? "session"}:${note.editorSessionKey ?? note.id}`}
+                  revision={note.revision}
                   onHistoryChange={(undo, redo) => setHistoryState((current) => current.undo === undo && current.redo === redo ? current : { undo, redo })}
                   onEditingTargetChange={setEditingTable}
                   onFormatStateChange={setFormatState}
                   getWikiLinkSuggestions={getWikiLinkSuggestions}
-                  key={noteRenderIdentity}
                   onChange={(content) => onUpdateNote({
                     content,
                     preview: buildNotePreview(content, note.format),

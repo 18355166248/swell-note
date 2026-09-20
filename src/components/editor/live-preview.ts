@@ -34,13 +34,21 @@ type MdSyntaxNode = {
 }
 
 // 打开链接是宿主行为：笔记内链交给工作区路由，外部链接默认走浏览器新窗口。
-export type LivePreviewOptions = TableInlineOptions & CompatibilityBlockOptions
+export type LivePreviewOptions = TableInlineOptions & CompatibilityBlockOptions & {
+  /**
+   * 表格编辑开关。关闭时 tableDecorationsField 不注册（见 markdownLivePreview 的调用方），
+   * 表格退回源码形态。这里同时作为「字段可能缺失」的判据，避免读字段时抛错。
+   */
+  tableEditing?: boolean
+}
 
 export type { EditorLinkTap }
 
 export { TableWidget }
 
-const livePreviewOptions = Facet.define<LivePreviewOptions, LivePreviewOptions>({
+// 导出 facet 供上层按 Compartment 分组注册：实时预览与表格装饰分属两个开关，
+// 必须能拆开注册，否则关表格会连带关掉整份即时预览。
+export const livePreviewOptions = Facet.define<LivePreviewOptions, LivePreviewOptions>({
   combine: (values) => values[0] ?? {},
 })
 
@@ -544,8 +552,11 @@ function tableBlocksKey(blocks: TableBlock[], readOnly: boolean) {
 // 新起的一行会被留在 Widget 里，既看不见也落不下光标。原文没变时 key 是相同的，
 // 因此还要比对装饰的实际范围，错位就重建。
 function tableDecorationsDrifted(state: EditorState, blocks: TableBlock[]) {
+  // 表格编辑被 Compartment 关掉时该字段不存在，此时没有可漂移的装饰。
+  const current = state.field(tableDecorationsField, false)
+  if (!current) return false
   const ranges: DocRange[] = []
-  state.field(tableDecorationsField).between(0, state.doc.length, (from, to) => {
+  current.between(0, state.doc.length, (from, to) => {
     ranges.push({ from, to })
   })
   if (ranges.length !== blocks.length) return true
@@ -1018,6 +1029,8 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
     // 表格装饰变化时经 effect 写入 StateField，内容不变则跳过，避免无意义的重绘。
     // 插件 update 期间不允许同步 dispatch，延迟到当前更新结束后提交。
     syncTableDecorations(view: EditorView) {
+      // 表格编辑关闭时不注册该字段，装饰也无处安放——直接不产出。
+      if (view.state.field(tableDecorationsField, false) === undefined) return
       const current = collectTableBlocks(view.state)
       if (tableBlocksKey(current, view.state.readOnly) === this.tableBlocksKey && !tableDecorationsDrifted(view.state, current)) return
       window.setTimeout(() => {
@@ -1095,4 +1108,18 @@ export { markdownLivePreviewPlugin, richBlockDecorationsField, tableDecorationsF
 // 表格块替换必须经 StateField 提供，与行内装饰插件一起注册。
 export function markdownLivePreview(options: LivePreviewOptions = {}) {
   return [livePreviewOptions.of(options), markdownLivePreviewPlugin, tableDecorationsField, richBlockDecorationsField]
+}
+
+/**
+ * 只有即时预览本身（离开该分组表格仍按源码编辑）。
+ * 与 markdownLivePreview 的区别是拆开了 tableDecorationsField，
+ * 使「实时预览」与「表格编辑」能各自独立地经 Compartment 开关。
+ */
+export function markdownLivePreviewBase(options: LivePreviewOptions = {}) {
+  return [livePreviewOptions.of(options), markdownLivePreviewPlugin, richBlockDecorationsField]
+}
+
+/** 表格网格 widget。注册它才会出现可编辑的表格；不注册则表格保持 Markdown 源码。 */
+export function markdownTableEditing() {
+  return [tableDecorationsField]
 }

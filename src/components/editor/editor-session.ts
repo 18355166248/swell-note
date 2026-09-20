@@ -1,18 +1,18 @@
 import { historyField } from "@codemirror/commands"
-import type { EditorState } from "@codemirror/state"
 
-const sessions = new Map<string, EditorState>()
+import { createMemorySessionStore } from "./core/editor-session-store"
+
 export const sessionFields = { history: historyField }
 
-// 内存中保留最近 20 篇的状态引用，避免每次按键序列化全文；重新挂载时才还原当前扩展下的历史。
-export function rememberEditorSession(key: string | undefined, state: EditorState) {
-  if (!key) return
-  sessions.delete(key)
-  sessions.set(key, state)
-  if (sessions.size > 20) sessions.delete(sessions.keys().next().value!)
-}
-export function restoreEditorSession(key: string | undefined, value: string) {
-  const state = key ? sessions.get(key) : undefined
-  // 外部同步或恢复版本已改变正文时，不能把旧内容和撤销栈覆盖回来。
-  return state?.doc.toString() === value ? { json: state.toJSON(sessionFields), fields: sessionFields } : undefined
-}
+/**
+ * 进程内共享的会话快照存储，按 sessionKey 隔离。
+ *
+ * 快照必须跨编辑器卸载存活：切到阅读态再切回来、移动端路由保活切换，
+ * 都要求撤销历史、选区和滚动位置原样还在。改造前由模块级 Map 承担这件事，
+ * 现在由 core 的存储实现持有。
+ *
+ * 快照的读写全部由 EditorControl 负责（rememberSnapshot / buildRestoredState），
+ * 这里只提供那份共享实例，不再对外暴露独立的存取函数——两条路径并存会让
+ * 「谁写的快照生效」变得不确定。
+ */
+export const editorSessionStore = createMemorySessionStore()

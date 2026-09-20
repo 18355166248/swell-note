@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
+import { undoDepth } from "@codemirror/commands"
 import { ensureSyntaxTree } from "@codemirror/language"
 import { EditorSelection, EditorState } from "@codemirror/state"
 import { EditorView, getDrawSelectionConfig } from "@codemirror/view"
@@ -32,6 +33,22 @@ function mount(element: React.ReactElement) {
   document.body.appendChild(container)
   root = createRoot(container)
   act(() => { root!.render(element) })
+}
+
+/**
+ * 需要「同一棵树里换 props」的用例（切换笔记、只读开关）。
+ * mount 每次都会新建根节点，看不出视图是否被复用，因此单列一个返回 rerender 的版本。
+ */
+function mountWithRerender(element: React.ReactElement) {
+  container = document.createElement("div")
+  document.body.appendChild(container)
+  root = createRoot(container)
+  act(() => { root!.render(element) })
+  return {
+    rerender(next: React.ReactElement) {
+      act(() => { root!.render(next) })
+    },
+  }
 }
 
 afterEach(() => {
@@ -734,6 +751,176 @@ describe("MarkdownEditor", () => {
     `
     expect(findTableWrapperAtLine(root, 42)?.querySelector("th")?.textContent).toBe("列 1")
     expect(findTableWrapperAtLine(root, 999)).toBeNull()
+  })
+
+  // 稳定 EditorView 的组件层契约：切换笔记不再经 key 重建，
+  // 因此焦点、输入法状态、滚动容器与 DOM 都必须是同一份。
+  describe("稳定 EditorView", () => {
+    it("切换笔记复用同一个 EditorView 与 DOM 节点", () => {
+      const onChange = vi.fn()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey="cache:a" value="第一篇正文" />,
+      )
+      const view = editorView()
+      const dom = view.dom
+      const contentDOM = view.contentDOM
+
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:b" value="第二篇正文" />)
+
+      expect(editorView().dom).toBe(dom)
+      expect(editorView().contentDOM).toBe(contentDOM)
+      expect(editorView().state.doc.toString()).toBe("第二篇正文")
+    })
+
+    it("切换笔记不把上一篇正文写回宿主（避免旧正文闪现后被存成新内容）", () => {
+      const onChange = vi.fn()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey="cache:a" value="第一篇正文" />,
+      )
+      onChange.mockClear()
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:b" value="第二篇正文" />)
+      // 外部更新（切换笔记）标记为 external，宿主据此跳过「用户输入」的副作用。
+      expect(onChange).not.toHaveBeenCalled()
+      expect(editorView().state.doc.toString()).toBe("第二篇正文")
+    })
+
+    it("在多篇笔记之间快速切换，每一帧都只显示目标笔记的正文", () => {
+      const onChange = vi.fn()
+      const notes = [["cache:a", "A 正文"], ["cache:b", "B 正文"], ["cache:c", "C 正文"]] as const
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey={notes[0][0]} value={notes[0][1]} />,
+      )
+      const view = editorView()
+      // 每次切换后立刻读 DOM 文本与视图正文：两者都必须已是新笔记，
+      // 不能出现「上一篇正文还挂在屏幕上一帧」的中间态。
+      for (let round = 0; round < 3; round += 1) {
+        for (const [sessionKey, content] of notes) {
+          rerender(<MarkdownEditor onChange={onChange} sessionKey={sessionKey} value={content} />)
+          expect(editorView()).toBe(view)
+          expect(editorView().state.doc.toString()).toBe(content)
+          expect(editorView().contentDOM.textContent).toBe(content)
+        }
+      }
+      // 允许切换补发的 external 事件，但用户输入路径不应被这些切换触发。
+      expect(onChange).not.toHaveBeenCalled()
+    })
+
+    it("只读与主题变化不重建 EditorView", () => {
+      const onChange = vi.fn()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey="cache:a" readOnly={false} value="正文" />,
+      )
+      const view = editorView()
+      const dom = view.dom
+
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" readOnly value="正文" />)
+      expect(editorView().dom).toBe(dom)
+      expect(editorView().state.readOnly).toBe(true)
+
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" readOnly={false} value="正文" />)
+      expect(editorView().dom).toBe(dom)
+      expect(editorView().state.readOnly).toBe(false)
+    })
+
+    it("重复挂载/卸载十次不残留编辑器 DOM", () => {
+      for (let round = 0; round < 10; round += 1) {
+        mount(<MarkdownEditor onChange={() => {}} sessionKey="cache:a" value="正文" />)
+        expect(container!.querySelectorAll(".cm-editor")).toHaveLength(1)
+        act(() => { root!.unmount() })
+        expect(container!.querySelectorAll(".cm-editor")).toHaveLength(0)
+        // 重新挂载下一个实例，复用同一容器。
+        root = createRoot(container!)
+      }
+    })
+
+    it("返回原笔记时选区与撤销历史按会话恢复", () => {
+      const onChange = vi.fn()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey="cache:a" value={"甲\n乙\n丙"} />,
+      )
+      // 在 A 里产生一次可撤销的编辑。
+      act(() => { editorView().dispatch({ changes: { from: 0, insert: "新" } }) })
+      const editedA = editorView().state.doc.toString()
+      expect(editedA).toBe("新甲\n乙\n丙")
+
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:b" value="另一篇" />)
+      expect(editorView().state.doc.toString()).toBe("另一篇")
+      expect(undoDepth(editorView().state)).toBe(0)
+
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" value={editedA} />)
+      expect(editorView().state.doc.toString()).toBe(editedA)
+      // 撤销历史随会话恢复，但绝不能串到 B 上。
+      expect(undoDepth(editorView().state)).toBe(1)
+      act(() => { editorView().dispatch({ changes: { from: 0, insert: "" } }) })
+    })
+  })
+
+  describe("异步附件不写入已切走的笔记", () => {
+    it("书签属于切换前的笔记时拒绝插入", () => {
+      const handle = createRef<MarkdownEditorHandle>()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={() => {}} ref={handle} sessionKey="cache:a" storageKey="note-a" value="第一篇" />,
+      )
+      const insertion = handle.current!.captureInsertion()
+
+      rerender(<MarkdownEditor onChange={() => {}} ref={handle} sessionKey="cache:b" storageKey="note-b" value="第二篇" />)
+
+      // 返回 false 让调用方走「追加到原笔记末尾」的安全降级，而不是污染当前笔记。
+      expect(insertion.insert("![图](x.png)\n")).toBe(false)
+      expect(editorView().state.doc.toString()).toBe("第二篇")
+    })
+
+    it("上传期间笔记被同步合并过（revision 变化）时拒绝插入", () => {
+      const handle = createRef<MarkdownEditorHandle>()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={() => {}} ref={handle} revision={'"r1"'} sessionKey="cache:a" storageKey="note-a" value="第一篇" />,
+      )
+      const insertion = handle.current!.captureInsertion()
+
+      // 同一篇笔记，但远端 revision 已经变了：偏移映射不再可信。
+      rerender(<MarkdownEditor onChange={() => {}} ref={handle} revision={'"r2"'} sessionKey="cache:a" storageKey="note-a" value="第一篇" />)
+
+      expect(insertion.insert("![图](x.png)\n")).toBe(false)
+      expect(editorView().state.doc.toString()).toBe("第一篇")
+    })
+
+    it("revision 未变化时正常插入", () => {
+      const handle = createRef<MarkdownEditorHandle>()
+      mount(<MarkdownEditor onChange={() => {}} ref={handle} revision={'"r1"'} sessionKey="cache:a" storageKey="note-a" value="第一篇" />)
+      const insertion = handle.current!.captureInsertion()
+      expect(insertion.insert("![图](x.png)\n")).toBe(true)
+    })
+
+    it("书签仍属于当前笔记时正常插入", () => {
+      const handle = createRef<MarkdownEditorHandle>()
+      mount(<MarkdownEditor onChange={() => {}} ref={handle} sessionKey="cache:a" storageKey="note-a" value="第一篇" />)
+      const insertion = handle.current!.captureInsertion()
+      expect(insertion.insert("![图](x.png)\n")).toBe(true)
+      expect(editorView().state.doc.toString()).toContain("![图](x.png)")
+    })
+  })
+
+  describe("composition 期间的正文保护", () => {
+    it("外部 value 回写不覆盖正在组合的中文，组合结束后补上", () => {
+      const onChange = vi.fn()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey="cache:a" value="拼音" />,
+      )
+      // 模拟输入法组合开始（真实 IME 会先派发 compositionstart）。
+      act(() => {
+        editorView().contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }))
+      })
+
+      // 保存回写此刻到达：正文不得被覆盖。
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" value="外部保存的旧正文" />)
+      expect(editorView().state.doc.toString()).toBe("拼音")
+
+      act(() => {
+        editorView().contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }))
+      })
+      // 组合结束把挂起的回写补上，内容不丢。
+      expect(editorView().state.doc.toString()).toBe("外部保存的旧正文")
+    })
   })
 
   describe("在正文末尾补落点", () => {
