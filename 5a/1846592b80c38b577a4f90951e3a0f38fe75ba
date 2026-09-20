@@ -1,0 +1,33 @@
+docs/editor-joplin-evaluation.md
+  s_950204c3441381::t_141431cb0b186e 184-225,238,242-243
+src/components/editor/core/editor-control.test.ts
+  s_950204c3441381::t_261b38891602d0 168,173-191,194-195,198,201-203,214-237,318-331
+src/components/editor/core/editor-control.ts
+  s_950204c3441381::t_a0ab64492167bd 13,44-54,60,92-93,158,161-162,164-167,170-174,179-181,183-189,201,221-234,282-285,287,290-298,306-329,506
+src/components/editor/core/editor-events.ts
+  s_950204c3441381::t_a9ebdd9a2756c5 38-43,53-55,61
+src/components/editor/core/editor-types.ts
+  s_950204c3441381::t_463a2585c148e8 50-60
+src/components/editor/editor-session.ts
+  s_950204c3441381::t_215b6329f247d5 11-12
+src/components/editor/markdown-editor.test.tsx
+  s_950204c3441381::t_ea228a230f6639 836-868,937-948,953-956,958,961-963,965-1016
+src/components/editor/markdown-editor.tsx
+  s_950204c3441381::t_81da7b2cca9eff 1,502-504,506-514,531-536,546-549,556-559,561
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "5a1846592b80c38b577a4f90951e3a0f38fe75ba",
+  "prompts": {},
+  "sessions": {
+    "s_950204c3441381": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_950204c3441381",
+        "model": "unknown"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
