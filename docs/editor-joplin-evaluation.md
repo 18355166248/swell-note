@@ -181,6 +181,48 @@ Joplin 为规避 Android 兼容问题禁用了 CodeMirror EditContext。Swell No
 - `live-preview.ts` 拆出 `markdownLivePreviewBase()`（选项 + 插件 + `richBlockDecorationsField`）与 `markdownTableEditing()`（仅 `tableDecorationsField`），使表格装饰可独立卸载；`syncTableDecorations` / `tableDecorationsDrifted` 增加 `state.field(field, false)` 存在性判断，避免字段缺失时抛错。
 - 会话快照改为按 `sessionKey` 隔离，由 `EditorControl` 内部的 `rememberSnapshot` / `buildRestoredState` 独占读写；`editor-session.ts` 只导出共享的 `editorSessionStore` 实例与 `sessionFields`。
 
+### P1 定向审查与修复（`fix(editor): harden note switching and IME state synchronization`）
+
+针对评审提出的三个 P1 问题逐一复核，全部**确认成立**并已修复。
+
+#### 一、composition 挂起更新的状态一致性与丢字风险（确认）
+
+**根因**：旧 `updateDocument` 在组合期间把**所有**回写（含用户输入的 echo 回传）塞进 `pending.doc`，`compositionend` 时 `flushPendingDocument` 直接 `applyDocument(pending.doc)`。而 `pending.doc` 是 React 受控 value 慢一拍的旧值，会覆盖 IME 刚提交的最后一个字符；且组合期间收到的 settings 只改 `this.settings`，不经过 `updateSettings/reconfigure`，导致 `getSettings().readOnly` 与 `EditorState`/DOM 状态分裂。
+
+**修复**：
+- 引入 `UpdateDocumentOptions.origin`（`"echo" | "switch" | "external"`）区分三类更新来源；组合期间统一挂起，`flushPendingDocument` 按 `origin` 分流——echo 只补身份与设置、绝不覆盖正文，external 才真正落外部正文，switch 按切换重建。
+- `flushPendingDocument` 对「正文相同」不再直接 return：先经新增的 `applyIdentityAndSettings` 落地 identity（含 revision）与 settings（走 Compartment reconfigure）。
+- settings 在组合期间一并挂起（`readOnly` 翻转会打断候选词），结束后经 `updateSettings` 真正生效。
+- `endComposition` 在 `blur()` 前先清空 `pending`/`pendingSettings`，避免 `blur` 同步派发的 `compositionend` 把旧会话挂起反扑到新笔记。
+
+#### 二、切换笔记闪现旧正文（确认）
+
+**根因**：`markdown-editor.tsx` 用普通 `useEffect` 调 `updateDocument`，React 提交新笔记 UI 后、effect 更新 EditorView 前，浏览器可能先绘制一次旧 `EditorView`。jsdom 的 `rerender + act` 会同步冲刷 effect，因此旧测试「每一帧都显示目标笔记」并不能证明浏览器无闪现。
+
+**修复**：正文同步改走 `useLayoutEffect`（DOM 变更后、绘制前同步执行），笔记身份与正文切换落在同一帧内；`sessionKey` 的推进拆到独立的普通 `useEffect`，`forceSwitch` 与 `origin` 在渲染期按 `previousSessionKeyRef` 计算。保持 EditorView 实例与外层 DOM 稳定，未加回 `key={noteRenderIdentity}`。
+
+#### 三、切换笔记后派生 UI 状态残留（确认）
+
+**根因**：`EditorView.setState()` 绕过普通 transaction 路径、不触发 `updateListener`（已核对 `@codemirror/view` 6.43 源码：`setState` 走 `plugin.destroy + 重建 ViewState/DocView`，从不 dispatch transaction）。切换后 `applyDocument` 虽补发 `documentChange`，但适配层对 `external` 直接 return，`onHistoryChange` 只在普通 docChanged 监听与初次挂载执行，因此 undo/redo、光标、格式高亮在切换后不刷新。
+
+**修复**：删除死抽象 `formatStateChange`（有订阅无 emit），新增 `sessionChange` 事件；`applyDocument` 在切换时（且非组合态）补发 `sessionChange`，适配层订阅它一次性重读 `undoDepth/redoDepth`、选区、`editingTable=false`、光标行列与 `detectFormatState`。切换后撤销按钮、光标、格式状态立即落到目标笔记，不依赖下一次用户输入。
+
+#### 同时收敛的架构项
+
+- `owns()` 现按完整 `isSameDocumentIdentity`（含 revision）判断，适配层的 `controlRef.current !== control` 保留为「实例归属」守卫——两套职责不同：前者判文档身份（可跨实例复用），后者判「这个 control 是否还是当前挂载的」。保留双守卫但职责已澄清。
+- 修正 `editor-session.ts` / `editor-control.ts` 中仍声称「会话快照保存滚动位置」的过期注释：滚动实际由 `noteEditorScrollMemory` 管理。
+
+#### 新增/改写测试
+
+`markdown-editor.test.tsx`：
+- 改写「外部 value 回写不覆盖正在组合的中文」为「组合结束旧 value 不覆盖最终正文」。
+- 新增：composition 期间 readOnly 改变后 EditorState 与 contenteditable 一致；切换笔记旧 pending 不覆盖新笔记；多次 value/settings 更新只应用最终状态；切换经 layout effect 且不触发 onChange；快速 A→B→C 不串正文不触发保存。
+
+`editor-control.test.ts`：
+- 改写两个旧 composition 测试，新增「旧 value 不覆盖 IME 已提交正文」「挂起的外部正文组合后落地」「切走不反扑」「revision 变化后身份落地」「readOnly 状态一致」「sessionChange 只在切换时发」。
+
+测试边界：jsdom 无法观测真实 paint 时序，「无闪现」依赖 `useLayoutEffect` 的 React 语义（绘制前同步执行），已明确标注；layout effect 路径与 external 不触发 onChange 已由测试覆盖。
+
 ### 与计划的偏差
 
 1. **命令表比计划小得多。** `EditorCommand` 目前只有 6 条：`history.undo`、`history.redo`、`selection.all`、`selection.collapse`、`navigation.revealLine`、`navigation.scrollLineToTop`。格式化、搜索、剪贴板等命令依赖表格单元格、链接面板等 UI 现场，仍在 `MarkdownEditorHandle` 兼容层内实现。
@@ -193,10 +235,12 @@ Joplin 为规避 Android 兼容问题禁用了 CodeMirror EditContext。Swell No
 
 ### 尚未验证 / 已知风险
 
+- **本轮三个 P1 修复的 iOS 真机项未验证。** composition 状态机、`useLayoutEffect` 切换无闪现、`sessionChange` 后的派生状态刷新，全部只在 jsdom 单测与 tsc/vite 构建下验证。**不得宣称在 WKWebView 上问题已解决**——Chromium e2e 只能作页面结构旁证，无法复现 WKWebView 的键盘、safe-area、composition 时序。
 - **iOS 真机项全部未验证。** 验收标准中「反复进出同一笔记 20 次不累积位移」「键盘弹收循环」「输入法切换」「旋转屏幕」「返回列表对位」在真机/模拟器上都**没有得到有效结论**。
   此前一次脚本化测量曾得出「20 轮无漂移」，该结果是**假通过**：`drift-02.png` 至 `drift-20.png` 的 md5 完全相同（`7a452f83…`），即第 2 轮之后截图根本没变，合成点击被前台其他应用（zed、企业微信、Chrome）接收，未进入模拟器。该测量已在获知用户正在使用电脑后停止，不再重跑。**不得把这次读数当作通过。**
 - 可作参考但**不能替代真机**的旁证：`e2e/mobile-editor-drift.spec.ts` 在 Chromium 下给出 `hostTop` 恒为 162、`scrollerCount` 恒为 1。Chromium 无法复现 WKWebView 的 safe-area 与键盘行为，只能说明页面层没有累积位移的代码路径。
-- **`owns()` 与实例比较两套守卫并存。** `EditorControl` 提供了 `owns()`，但适配层目前用 `controlRef.current !== control` 判断「这个 control 还是不是我的」。两套机制同时存在，属于待收敛项，本次未单方面改动，留给 review 决定保留哪一套。
+- **`owns()` 与实例比较两套守卫并存。** 已收敛职责：`owns()` 按 `isSameDocumentIdentity`（含 revision）判文档身份，适配层 `controlRef.current !== control` 判「当前挂载的实例是否还是这个」。两者语义不同，均保留。
+- **`formatStateChange` 死抽象**：有订阅无 emit，已删除，切换后的格式刷新改由 `sessionChange` 承接。
 - **`@uiw/react-codemirror` 传递依赖**：如上，未处理。
 - **e2e 并行启动偶发超时**：`mobile-editor-drift.spec.ts` 与 `table-editing.spec.ts` 并行跑时出现过 `browserType.launch: Timeout 180000ms exceeded`；单独以 `--workers=1` 重跑均通过，判定为并行启动 Chrome 的抖动，非本次改动引入的回归。
 

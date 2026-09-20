@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react"
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { syntaxTree } from "@codemirror/language"
 import { languages } from "@codemirror/language-data"
@@ -499,9 +499,19 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           // 第二参数沿用 @uiw/react-codemirror 的 onChange(value, viewUpdate) 签名。
           onChangeRef.current(event.doc, event.update)
         }),
-        control.on("formatStateChange", (event) => {
+        // 切换会话走 setState，绕过 updateListener：这里补发一次历史/光标/格式/选区，
+        // 让撤销按钮、行号与格式高亮在切换后立即落到目标笔记，不等下一次用户输入。
+        control.on("sessionChange", () => {
           if (controlRef.current !== control) return
-          handlers.current.onFormatStateChange?.(event.state as EditorFormatState | null)
+          const view = control.getView()
+          const state = view.state
+          handlers.current.onHistoryChange?.(undoDepth(state) > 0, redoDepth(state) > 0)
+          handlers.current.onSelectionChange?.(!state.selection.main.empty)
+          onEditingTargetChangeRef.current?.(false)
+          const selection = state.selection.main
+          const line = state.doc.lineAt(selection.head)
+          handlers.current.onCursorChange?.(line.number, selection.head - line.from + 1)
+          handlers.current.onFormatStateChange?.(detectFormatState(state))
         }),
         control.on("focusChange", (event) => {
           if (controlRef.current !== control || event.focused) return
@@ -518,7 +528,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     }, [buildBehaviorExtensions, buildLivePreviewExtensions, buildPlatformExtensions, buildTableEditingExtensions, languageExtensions])
 
     // 正文与身份变化：切换笔记在这里变成一次受控事务，不再经 React key 重建组件。
-    useEffect(() => {
+    //
+    // 用 useLayoutEffect 而非 useEffect：普通 effect 在浏览器绘制之后才跑，React 提交新笔记的
+    // UI 后、effect 更新 EditorView 前，浏览器可能先绘制一次旧正文，用户会看到旧笔记闪现。
+    // layout effect 在 DOM 变更后、浏览器绘制前同步执行，正文切换因此落在同一帧内。
+    const switching = previousSessionKeyRef.current !== sessionKey
+    useLayoutEffect(() => {
       const control = controlRef.current
       if (!control) return
       control.updateDocument(value, {
@@ -528,15 +543,22 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       }, {
         // 用户已经明确切走（本次的 sessionKey 与上次渲染不同）：组合态不能拦住新笔记的正文。
         // 同一篇笔记的外部回写不置位，由 control 挂起到 compositionend，不打断正在拼的中文。
-        forceSwitch: previousSessionKeyRef.current !== sessionKey,
+        forceSwitch: switching,
+        // 区分「切换」与「受控回写」。切换瞬间 value 可能还是上一篇（尚未就绪），
+        // 必须按切换路径落空占位，不能当成旧正文的外部回写；同笔记回写是 echo，直接短路。
+        origin: switching ? "switch" : "echo",
         settings: {
           assetScope: storageKey,
           platform: compact ? "mobile" : "desktop",
           readOnly,
         },
       })
+    }, [compact, readOnly, revision, sessionKey, storageKey, switching, value])
+    // 同步上次渲染的 sessionKey。放 effect 里推进：layout effect 执行后本次渲染已生效，
+    // 下一轮渲染才能据此判定「又切走了」。
+    useEffect(() => {
       previousSessionKeyRef.current = sessionKey
-    }, [compact, readOnly, revision, sessionKey, storageKey, value])
+    }, [sessionKey])
 
     // 主题经 Compartment 重配置：切换深色模式不重建视图，焦点与滚动都保持。
     useEffect(() => {

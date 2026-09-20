@@ -35,10 +35,13 @@ export type EditorFocusChangeEvent = {
   focused: boolean
 }
 
-/** 光标 / 选区的格式状态；由宿主注入的检测器产出，core 不关心其字段含义。 */
-export type EditorFormatStateChangeEvent<TState = unknown> = {
+/**
+ * 会话切换完成。切换笔记用 `EditorView.setState()`，它绕过普通 transaction 路径、
+ * 不会触发 `updateListener`，因此历史按钮、光标、格式高亮这些由 updateListener 驱动的
+ * 派生状态在切换后不会自动刷新。宿主据此事件立即重读状态，不必等到下一次用户输入。
+ */
+export type EditorSessionChangeEvent = {
   identity: EditorDocumentIdentity
-  state: TState | null
 }
 
 /**
@@ -47,12 +50,15 @@ export type EditorFormatStateChangeEvent<TState = unknown> = {
  * 滚动刻意不在其中：滚动容器由工作区持有（外层 ScrollArea），阅读位置的记录与
  * 恢复也由工作区的 noteEditorScrollMemory 按「缓存库:笔记ID」完成。core 再发一份
  * 自己的 scrollChange 不会有订阅方，只会让人以为滚动位置由编辑器负责保存。
+ *
+ * 格式状态同样不在此列：它由宿主注入的检测器在 updateListener 里就地产出并上报，
+ * 走事件总线只会多一份没有订阅方的抽象（切换会话后的格式刷新由 sessionChange 承接）。
  */
 export type EditorEventMap = {
   documentChange: EditorDocumentChangeEvent
   selectionChange: EditorSelectionChangeEvent
   focusChange: EditorFocusChangeEvent
-  formatStateChange: EditorFormatStateChangeEvent
+  sessionChange: EditorSessionChangeEvent
 }
 
 export type EditorEventType = keyof EditorEventMap

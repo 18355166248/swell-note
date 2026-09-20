@@ -165,23 +165,42 @@ describe("EditorControl composition 保护", () => {
     control.getView().contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }))
   }
 
-  it("组合期间的外部回写被挂起，不覆盖正在输入的中文", () => {
+  it("组合期间的旧 value 回写不覆盖 IME 已提交的最终正文", () => {
     const control = createControl({ doc: "拼音", identity: identity("a") })
     beginComposition(control)
     expect(control.isComposing()).toBe(true)
 
-    // 同一篇笔记的保存回写：必须挂起。若当场落笔，用户正在拼的字会被冲掉。
-    control.updateDocument("外部保存的旧正文", identity("a"))
-    expect(control.getDocument()).toBe("拼音")
+    // IME 把最终字符写进 CodeMirror 状态。
+    control.getView().dispatch({ changes: { from: 0, to: 2, insert: "你好" }, userEvent: "input.type.compose" })
+
+    // 慢一拍的受控回传（echo）：正文早已在状态里，不得覆盖。
+    control.updateDocument("拼音", identity("a"), { origin: "echo" })
+    expect(control.getDocument()).toBe("你好")
 
     endComposition(control)
-    // 组合结束后补上挂起的回写，内容不丢。
-    expect(control.getDocument()).toBe("外部保存的旧正文")
+    // 组合结束后最终正文仍是完整输入，旧 value 没有覆盖。
+    expect(control.getDocument()).toBe("你好")
   })
 
-  it("组合期间显式切走笔记时结束组合，新笔记不停留在旧正文", () => {
+  it("组合期间挂起的外部正文（远端合并）在组合结束后落笔，不丢内容", () => {
+    const control = createControl({ doc: "本地正文", identity: identity("a") })
+    beginComposition(control)
+
+    // 远端合并回写（external）：正文确实被外部改写，必须挂起。
+    control.updateDocument("远端合并后的正文", identity("a"))
+    expect(control.getDocument()).toBe("本地正文")
+
+    endComposition(control)
+    // 组合结束后外部正文落地，不丢。
+    expect(control.getDocument()).toBe("远端合并后的正文")
+  })
+
+  it("组合期间显式切走笔记时结束组合，旧回写不反扑新笔记", () => {
     const control = createControl({ doc: "旧笔记", identity: identity("a") })
     beginComposition(control)
+    // 先挂起一次旧笔记的外部回写，再切走。
+    control.updateDocument("旧笔记的外部回写", identity("a"))
+    expect(control.getDocument()).toBe("旧笔记")
 
     control.updateDocument("新笔记正文", identity("b"), { forceSwitch: true })
     expect(control.getDocument()).toBe("新笔记正文")
@@ -190,6 +209,30 @@ describe("EditorControl composition 保护", () => {
     // 切换过程中被挂起的那次旧回写不能事后反扑。
     endComposition(control)
     expect(control.getDocument()).toBe("新笔记正文")
+  })
+
+  it("组合期间 revision 改变但正文相同，结束后身份 revision 已更新", () => {
+    const control = createControl({ doc: "正文", identity: identity("a", { revision: '"r1"' }) })
+    beginComposition(control)
+    control.updateDocument("正文", identity("a", { revision: '"r2"' }))
+
+    endComposition(control)
+    expect(control.owns({ identity: identity("a", { revision: '"r2"' }) })).toBe(true)
+    expect(control.owns({ identity: identity("a", { revision: '"r1"' }) })).toBe(false)
+  })
+
+  it("组合期间 readOnly 改变，结束后 EditorState 与 contenteditable 一致", () => {
+    const control = createControl({ doc: "正文", identity: identity("a") })
+    beginComposition(control)
+    control.updateDocument("正文", identity("a"), { settings: { readOnly: true } })
+
+    // 组合未结束，只读被挂起，DOM 仍可编辑。
+    expect(control.getState().readOnly).toBe(false)
+    expect(control.getView().contentDOM.getAttribute("contenteditable")).toBe("true")
+
+    endComposition(control)
+    expect(control.getState().readOnly).toBe(true)
+    expect(control.getView().contentDOM.getAttribute("contenteditable")).toBe("false")
   })
 
   it("组合期间外部 dispatch 被拒绝，结束后恢复", () => {
@@ -270,6 +313,20 @@ describe("EditorControl 事件", () => {
 
     control.updateDocument("外部正文", identity("a"))
     expect(events).toEqual([{ external: true }])
+  })
+
+  it("切换会话发 sessionChange，同会话正文替换不发", () => {
+    const control = createControl({ doc: "正文", identity: identity("a") })
+    const seen: string[] = []
+    control.on("sessionChange", (event) => { seen.push(event.identity.sessionKey) })
+
+    // 同会话正文替换：不触发 sessionChange。
+    control.updateDocument("同会话新正文", identity("a"))
+    expect(seen).toEqual([])
+
+    // 切换会话：触发一次。
+    control.updateDocument("B 正文", identity("b"), { forceSwitch: true })
+    expect(seen).toEqual(["b"])
   })
 
   it("用户输入的事件标记为非 external，宿主据此触发保存", () => {

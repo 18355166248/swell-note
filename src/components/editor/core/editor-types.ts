@@ -48,6 +48,17 @@ export type EditorSelectionSnapshot = {
 }
 
 /**
+ * 两份身份是否等价。sessionKey 决定「是否切换笔记」，revision 决定「异步回写是否已过期」，
+ * noteId 决定「同名缓存下是否是同一篇」。sessionKey 通常已包含 noteId，这里也把 noteId 纳入，
+ * 纯属防御：任何字段漂移都视为身份变化。
+ */
+export function isSameDocumentIdentity(left: EditorDocumentIdentity, right: EditorDocumentIdentity): boolean {
+  return left.sessionKey === right.sessionKey
+    && left.noteId === right.noteId
+    && left.revision === right.revision
+}
+
+/**
  * 命令集合。只包含与 UI 实现无关的通用能力。
  *
  * 刻意只声明 core 里真能执行的命令：`dispatchCommand` 的返回类型是按命令派生的，

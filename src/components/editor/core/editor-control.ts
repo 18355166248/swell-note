@@ -10,6 +10,7 @@ import {
   type EditorDocumentIdentity,
   type EditorSelectionSnapshot,
   type EditorSettings,
+  isSameDocumentIdentity,
 } from "./editor-types"
 import {
   buildEditorState,
@@ -40,11 +41,23 @@ export type UpdateDocumentOptions = {
    * 因此不必先 reconfigure 一次再重建状态——实时预览的装饰重建代价很高，能省一次就省一次。
    */
   settings?: Partial<EditorSettings>
+  /**
+   * 这次 value 的来源。宿主按「上上次渲染的 sessionKey 是否等于本次」判定切换，
+   * 但切换笔记之外还有「切换瞬间 value 尚未更新」的情况：那一次 sessionKey 已是新值、
+   * 正文还是旧笔记的，必须按切换（重建状态、落空）处理，不能当成旧正文的外部回写。
+   *
+   * - `"external"`（默认）：正文来自保存/同步/版本恢复的受控回写。
+   * - `"switch"`：笔记身份切换，无论正文是否已就绪都按切换路径走。
+   * - `"echo"`：用户输入经 onChange → 宿主 state → value 原样回传。正文已由 CodeMirror
+   *   写进状态，绝不能再按外部正文落笔，否则会把刚输入的字符（尤其 IME 提交）回滚。
+   */
+  origin?: "external" | "switch" | "echo"
 }
 
 type PendingDocumentUpdate = {
   doc: string
   identity: EditorDocumentIdentity
+  origin: NonNullable<UpdateDocumentOptions["origin"]>
 }
 
 export type EditorControlOptions = {
@@ -76,7 +89,8 @@ export type EditorControlOptions = {
  * 生命周期契约：
  * - 一个挂载中的编辑区域只有一个 EditorView。切换笔记走 updateDocument，
  *   不重建视图，因此焦点、输入法状态、DOM 与滚动容器都得以保留。
- * - 每个笔记的撤销历史、选区与滚动按 sessionKey 隔离，互不串联。
+ * - 每个笔记的撤销历史与选区按 sessionKey 隔离，互不串联（滚动由工作区的
+ *   noteEditorScrollMemory 负责，不在此列）。
  * - EditorView 只在 destroy() 里销毁；只读、主题、平台、预览与表格开关走 reconfigure。
  */
 export class EditorControl {
@@ -141,35 +155,38 @@ export class EditorControl {
    */
   updateDocument(doc: string, identity: EditorDocumentIdentity, options: UpdateDocumentOptions = {}): void {
     if (this.destroyed) return
+    const origin = options.origin ?? "external"
     const switching = identity.sessionKey !== this.identity.sessionKey
     if (this.composing) {
+      // 用户已经明确切到别的笔记：组合态不能再拦住新笔记的正文。结束组合不会丢已上屏的字
+      // （那些早已由 CodeMirror 写进文档），只丢掉尚未上屏的拼音串——而它属于用户已离开的那篇笔记。
       if (switching && options.forceSwitch) {
-        // 用户已经明确切到别的笔记：组合态不能再拦住新笔记的正文。
-        // 结束组合不会丢已上屏的字（那些早已由 CodeMirror 写进文档），
-        // 只丢掉尚未上屏的拼音串——而它属于用户已经离开的那篇笔记。
+        this.endComposition()
+      } else if (origin === "switch") {
+        // 切换瞬间正文可能还没就绪（仍是上一篇的 value），但身份已经是新笔记：
+        // 同样结束组合态并按切换落笔，让新笔记占位，绝不能当旧正文的外部回写挂起来。
         this.endComposition()
       } else {
-        // 换笔记时不结束组合态：用户可能只是敲了空格让候选框展开、正文其实还没变，
-        // 就此中断输入法会丢掉正在拼的字。挂起到 compositionend 再落笔即可。
-        // 设置同样挂起——连同 assetScope 一起在 compositionend 落地，
-        // 避免刚重配置完实时预览又因重建状态再算一遍。
-        this.pending = { doc, identity }
+        // 同一篇笔记的受控回写统一挂起到 compositionend，等 IME 提交完再落笔。
+        // echo 的正文早已写进状态，flush 时只补身份与设置；external 才真正补正文。
+        // settings（readOnly / platform / assetScope）也必须一起挂起：组合期间重配置只读
+        // 会立刻翻转 contenteditable，把正在拼的候选词打断。
+        this.pending = { doc, identity, origin }
         this.pendingSettings = { ...this.pendingSettings, ...options.settings }
         return
       }
     }
-    // 正文是否一致先看引用：宿主的 value 由 onChange 原样回传，因此同一次编辑的回传
-    // 命中同一份字符串，O(1) 短路掉全文序列化。引用不同再退回逐字比较，
-    // 保证「内容确实相同但字符串不是同一个」也不会白重建一次状态。
-    if (!switching && (doc === this.lastKnownDoc || doc === this.getDocument())) {
+    if (!switching && doc === this.lastKnownDoc) {
+      // 引用命中的热路径：宿主把 onChange 出去的字符串原样回传（echo），正文一字未动，
+      // 但身份（noteId / revision）可能已变，设置（readOnly / platform）也可能已变，都必须落地。
       this.lastKnownDoc = doc
-      // 不重建状态：设置必须走 reconfigure，否则只读 / 主题之类的开关不会生效。
-      if (options.settings) this.updateSettings(options.settings)
-      // 正文没变但身份可能变了（同一份内容被重新指派给另一篇笔记）；
-      // 身份是异步回写的判据，必须跟着更新，否则后续的迟到结果守卫会判错。
-      if (identity.noteId !== this.identity.noteId || identity.revision !== this.identity.revision) {
-        this.identity = identity
-      }
+      this.applyIdentityAndSettings(identity, options.settings)
+      return
+    }
+    if (!switching && origin === "echo" && doc === this.getDocument()) {
+      // 内容相同但字符串不是同一个：仍属受控回传，不能重建状态，否则会清掉当前撤销栈。
+      this.lastKnownDoc = doc
+      this.applyIdentityAndSettings(identity, options.settings)
       return
     }
     // 会走到重建状态这条路：设置先落地，由 buildEditorState 一次性按新设置产出扩展。
@@ -181,6 +198,7 @@ export class EditorControl {
 
   private applyDocument(doc: string, identity: EditorDocumentIdentity, switching: boolean, reconfigure?: Partial<EditorSettings>): void {
     this.pending = null
+    this.pendingSettings = {}
     const previous = this.identity
     this.identity = identity
     // 切换前先存档旧会话，返回时才有选区、滚动与撤销历史可恢复。
@@ -200,13 +218,20 @@ export class EditorControl {
     } finally {
       this.suppressEvents = false
     }
-    // 切换后补发一次：宿主据此刷新工具栏与历史按钮。
-    this.events.emit("documentChange", { composing: false, doc, external: true, identity })
-    this.events.emit("selectionChange", {
-      hasSelection: !this.view.state.selection.main.empty,
-      identity,
-      selection: this.readSelection(this.view.state),
-    })
+    // 补发一次：外部更新不经 updateListener（setState / 标记事务），宿主据此刷新历史按钮、
+    // 光标与格式高亮。若此时仍在组合（切换被 forceSwitch 打断前残留），这些派生状态晚到一步
+    // 也无妨，真正的稳定刷新落在 compositionend 的 flush。
+    if (!this.composing) {
+      this.events.emit("documentChange", { composing: false, doc, external: true, identity })
+      this.events.emit("selectionChange", {
+        hasSelection: !this.view.state.selection.main.empty,
+        identity,
+        selection: this.readSelection(this.view.state),
+      })
+      // 切换会话用 setState，绕过了 updateListener；sessionChange 是适配层刷新历史/光标/格式的
+      // 唯一时机，否则这些派生状态要等下一次用户输入才更新。
+      if (switching) this.events.emit("sessionChange", { identity })
+    }
   }
 
   /**
@@ -254,20 +279,54 @@ export class EditorControl {
    */
   private endComposition(): void {
     if (!this.composing && !this.view.compositionStarted) return
-    this.view.contentDOM.blur()
+    // blur 会同步派发 compositionend，onCompositionEnd 若看到残留的 pending 会先 flush 一次，
+    // 把旧会话的挂起更新写进「即将切换」的状态。这里先清空挂起态，再交给 updateDocument 落新会话。
+    this.pending = null
+    this.pendingSettings = {}
     this.composing = false
+    this.view.contentDOM.blur()
   }
 
+  /**
+   * 组合结束落地挂起的受控更新。此时 IME 已把最终字符写进 CodeMirror 状态，
+   * 挂起的 doc 是「组合期间慢一拍的受控回传」——它必然落后于当前正文，因此：
+   *
+   * - 正文相同（echo 回传 / 内容恰好一致）→ 不重建状态，但身份与设置必须照常落地，
+   *   否则 revision 更新、只读切换会在组合期间被悄悄吞掉。
+   * - 正文不同且确实是被挂起的外部正文（远端合并 / 保存前快照）→ 这才是真正需要落笔的
+   *   外部正文替换；切换会话则按切换路径重建。
+   */
   private flushPendingDocument(): void {
     const pending = this.pending
     if (!pending) return
     this.pending = null
     const settings = this.pendingSettings
     this.pendingSettings = {}
-    if (Object.keys(settings).length) this.settings = { ...this.settings, ...settings }
     const switching = pending.identity.sessionKey !== this.identity.sessionKey
-    if (!switching && pending.doc === this.getDocument()) return
-    this.applyDocument(pending.doc, pending.identity, switching)
+    if (pending.origin === "echo") {
+      // 用户输入的回传：正文早已在状态里，只补身份与设置，绝不覆盖 IME 刚提交的字。
+      this.applyIdentityAndSettings(pending.identity, settings)
+      return
+    }
+    if (switching) {
+      // 被挂起的旧会话切换：先补设置再按切换路径重建，旧 pending 不会反扑新笔记。
+      if (Object.keys(settings).length) this.settings = { ...this.settings, ...settings }
+      this.applyDocument(pending.doc, pending.identity, true, undefined)
+      return
+    }
+    if (pending.doc === this.getDocument()) {
+      // 同会话、正文相同：不重建状态，只补身份与设置。
+      this.applyIdentityAndSettings(pending.identity, settings)
+      return
+    }
+    // 同会话、正文确实不同：真正的外部正文替换（远端合并），沿 reconfigure 路径落地。
+    this.applyDocument(pending.doc, pending.identity, false, settings)
+  }
+
+  /** 正文未变时落地身份与设置：设置走 reconfigure，身份字段逐一同步，不重建状态。 */
+  private applyIdentityAndSettings(identity: EditorDocumentIdentity, settings?: Partial<EditorSettings>): void {
+    if (settings) this.updateSettings(settings)
+    if (!isSameDocumentIdentity(identity, this.identity)) this.identity = identity
   }
 
   // ---------------------------------------------------------------------------
@@ -444,7 +503,7 @@ export class EditorControl {
 
   /** 判定事件是否仍属于当前笔记。宿主用它在异步回调里做迟到结果守卫。 */
   owns(event: { identity: EditorDocumentIdentity }): boolean {
-    return event.identity.sessionKey === this.identity.sessionKey
+    return isSameDocumentIdentity(event.identity, this.identity)
   }
 
   /**

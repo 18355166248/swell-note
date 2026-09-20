@@ -833,6 +833,39 @@ describe("MarkdownEditor", () => {
       }
     })
 
+    it("切换笔记的正文同步走 layout effect，绘制前即已落到目标正文", () => {
+      // jsdom 里 act + rerender 会同步冲刷所有 effect，无法观测真实的 paint 时序，
+      // 本用例只能验证「正文同步经 layout effect 路径、切换本身不触发用户 onChange」。
+      // 真实浏览器的无闪现保证依赖 useLayoutEffect 在绘制前同步执行——这属于 React 语义，
+      // 测试环境无法直接断言 paint，但可断言 layout effect 路径产生的副作用与 external 语义。
+      const onChange = vi.fn()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey="cache:a" value="第一篇正文" />,
+      )
+      const view = editorView()
+      onChange.mockClear()
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:b" value="第二篇正文" />)
+
+      // 正文已同步；且切换是 external 更新，绝不调用用户 onChange 保存回调。
+      expect(view.state.doc.toString()).toBe("第二篇正文")
+      expect(onChange).not.toHaveBeenCalled()
+    })
+
+    it("快速 A→B→C 切换不把 A 或 B 的正文写进 C，也不触发保存", () => {
+      const onChange = vi.fn()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey="cache:a" value="A 正文" />,
+      )
+      const view = editorView()
+      onChange.mockClear()
+
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:b" value="B 正文" />)
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:c" value="C 正文" />)
+
+      expect(view.state.doc.toString()).toBe("C 正文")
+      expect(onChange).not.toHaveBeenCalled()
+    })
+
     it("返回原笔记时选区与撤销历史按会话恢复", () => {
       const onChange = vi.fn()
       const { rerender } = mountWithRerender(
@@ -901,25 +934,86 @@ describe("MarkdownEditor", () => {
   })
 
   describe("composition 期间的正文保护", () => {
-    it("外部 value 回写不覆盖正在组合的中文，组合结束后补上", () => {
+    function beginComposition() {
+      act(() => {
+        editorView().contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }))
+      })
+    }
+    function endComposition() {
+      act(() => {
+        editorView().contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }))
+      })
+    }
+
+    it("外部 value 回写不覆盖正在组合的中文，组合结束后旧 value 不覆盖最终正文", () => {
       const onChange = vi.fn()
       const { rerender } = mountWithRerender(
         <MarkdownEditor onChange={onChange} sessionKey="cache:a" value="拼音" />,
       )
-      // 模拟输入法组合开始（真实 IME 会先派发 compositionstart）。
+      const view = editorView()
+      beginComposition()
+
+      // 用户组合输入：CodeMirror 正文被 IME 改写（真实浏览器里这是 mutation 观察驱动的）。
       act(() => {
-        editorView().contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }))
+        view.dispatch({ changes: { from: 0, to: 2, insert: "你好" }, userEvent: "input.type.compose" })
       })
 
-      // 保存回写此刻到达：正文不得被覆盖。
-      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" value="外部保存的旧正文" />)
-      expect(editorView().state.doc.toString()).toBe("拼音")
+      // 保存回写此刻到达，正文是「慢一拍」的旧值：不得覆盖用户正在输入的中文。
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" value="拼音" />)
+      expect(view.state.doc.toString()).toBe("你好")
 
-      act(() => {
-        editorView().contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }))
-      })
-      // 组合结束把挂起的回写补上，内容不丢。
-      expect(editorView().state.doc.toString()).toBe("外部保存的旧正文")
+      endComposition()
+      // 组合结束后最终正文仍包含完整输入，旧 value 不得覆盖。
+      expect(view.state.doc.toString()).toBe("你好")
+    })
+
+    it("composition 期间 readOnly 改变，结束后 EditorState 与 contenteditable 一致", () => {
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={() => {}} sessionKey="cache:a" readOnly={false} value="正文" />,
+      )
+      beginComposition()
+      rerender(<MarkdownEditor onChange={() => {}} sessionKey="cache:a" readOnly value="正文" />)
+
+      // 组合未结束，只读切换被挂起，此刻仍可编辑。
+      expect(editorView().state.readOnly).toBe(false)
+      expect(editorView().contentDOM.getAttribute("contenteditable")).toBe("true")
+
+      endComposition()
+      // 组合结束后只读落地，EditorState 与 DOM 不再分裂。
+      expect(editorView().state.readOnly).toBe(true)
+      expect(editorView().contentDOM.getAttribute("contenteditable")).toBe("false")
+    })
+
+    it("composition 期间切换笔记，旧 pending 不会覆盖新笔记", () => {
+      const onChange = vi.fn()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey="cache:a" value="第一篇正文" />,
+      )
+      beginComposition()
+      // 组合期间挂起一次旧笔记的外部回写，再切走。
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" value="外部回写旧正文" />)
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:b" value="第二篇正文" />)
+
+      endComposition()
+      // 旧 pending 不得反扑：新笔记正文保持第二篇。
+      expect(editorView().state.doc.toString()).toBe("第二篇正文")
+    })
+
+    it("composition 期间多次 value/settings 更新，只应用正确的最终状态", () => {
+      const onChange = vi.fn()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey="cache:a" readOnly={false} value="初始正文" />,
+      )
+      beginComposition()
+      // 多次挂起：旧正文回写、只读切换来回、最终只读落定。
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" readOnly value="回写一" />)
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" readOnly={false} value="回写二" />)
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" readOnly value="回写三" />)
+
+      endComposition()
+      // 只读取最后一次挂起的值；正文不被外部回写覆盖（echo 语义）。
+      expect(editorView().state.readOnly).toBe(true)
+      expect(editorView().state.doc.toString()).toBe("初始正文")
     })
   })
 
