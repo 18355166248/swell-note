@@ -1,0 +1,30 @@
+docs/editor-joplin-evaluation.md
+  s_17b297a30f4387::t_ebc3ef717e9d5e 161-207,209,211-225
+  s_17b297a30f4387::t_a42e5846133fef 3,5
+  s_a5622b4a0e6476::t_3e0ed7bd15b9c2 1-2,4,6-160,226-237
+  s_17b297a30f4387::t_ac1ee6dfef5db8 208,210
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "96edef57739e80ef59f430b736d8961444739ccb",
+  "prompts": {},
+  "sessions": {
+    "s_17b297a30f4387": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "237f4135-94b4-49d6-bf1d-e6a2d6435613",
+        "model": "deepseek-v4-flash-vision-tencent"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    },
+    "s_a5622b4a0e6476": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0aa0f-bc7d-70a1-888b-f08940624633",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
