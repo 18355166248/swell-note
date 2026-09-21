@@ -1,0 +1,28 @@
+e2e/editor-link-click.spec.ts
+  s_d95265c1b2e24d::t_6fcfc614b40932 1,5-15
+  s_d95265c1b2e24d::t_6a460f71acf1ed 387-389,391
+  s_d95265c1b2e24d::t_64f483edca9594 383,386,390,397,403,406
+  s_d95265c1b2e24d::t_2452542d61a02d 458-460
+  s_d95265c1b2e24d::t_86dc84623b251d 16
+src/components/editor/markdown-table-widget.ts
+  s_d95265c1b2e24d::t_ff091772192502 1618-1621
+src/components/ui/context-menu.tsx
+  s_d95265c1b2e24d::t_97710bf5fd3883 29
+  s_d95265c1b2e24d::t_c01a8a0760b9fa 119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "e381020ecc07375f01e18202aeec766c38349fc2",
+  "prompts": {},
+  "sessions": {
+    "s_d95265c1b2e24d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b866f5e5-d563-4163-a6ca-347bdce33307",
+        "model": "deepseek-v4-flash-vision-tencent"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
