@@ -1,0 +1,91 @@
+src/components/editor/markdown-editor.tsx
+  s_acbca13b9657cf::t_c65443b46de9b1 489,491
+  s_acbca13b9657cf::t_6844efa98f160c 501
+  s_acbca13b9657cf::t_6cfa3f94d75add 1062-1092
+  s_acbca13b9657cf::t_fce23ced2ca3d4 475-486
+  s_acbca13b9657cf::t_47e0835e96e730 156-157
+  s_acbca13b9657cf::t_be667db4124a33 488,490,493-500,502-507
+  s_acbca13b9657cf::t_8fcbe06390f365 370-389
+src/components/editor/markdown-table.css
+  s_acbca13b9657cf::t_576e8ee3fd5283 170-171
+src/components/workspace/document-context-menu.tsx
+  s_acbca13b9657cf::t_49f194d45942bc 37-41
+  s_acbca13b9657cf::t_b10cb17d5db7bf 94-95
+  s_acbca13b9657cf::t_36cfcdf3d52144 52
+src/components/editor/markdown-table-widget.ts
+  s_acbca13b9657cf::t_be670d32bea920 1852-1853
+  s_acbca13b9657cf::t_b3a4bf408b0fd4 1942
+  s_acbca13b9657cf::t_85c0c0e0aa317c 1843-1851,1854-1863
+src/components/editor/html-to-markdown.ts
+  s_acbca13b9657cf::t_4a0af35dfd3d12 168
+  s_b95fda476ecd13::t_9976e1e79fdb6e 192,194-196,201-203,205-207,210-214
+  s_acbca13b9657cf::t_4dbdc743fae8dd 221
+  s_acbca13b9657cf::t_3655685d6a973c 190-191,193,197-198,217-220,222,227-231
+  s_acbca13b9657cf::t_fd4bc3c8fbfd53 293,304,313-319
+  s_acbca13b9657cf::t_2cf4ad4566d515 199-200,204
+  s_acbca13b9657cf::t_a088f3c975438d 215,298-303
+  s_acbca13b9657cf::t_ef802525c7e10a 284-287,292
+  s_acbca13b9657cf::t_3c0a0f903d299a 254,256-257,259-261
+  s_acbca13b9657cf::t_1e77d5bae36912 89
+  s_acbca13b9657cf::t_6c06e6c6e770b9 242-243
+  s_acbca13b9657cf::t_69ac24898a77a3 169
+  s_acbca13b9657cf::t_fb74dde6064015 88
+  s_acbca13b9657cf::t_38f7e19eb6b72d 290-291,294-297,305-312
+  s_acbca13b9657cf::t_1288e8fa8cbae2 288-289
+  s_acbca13b9657cf::t_c98d2d71a5a98a 216
+src/components/editor/markdown-editor.test.tsx
+  s_acbca13b9657cf::t_8173cb469d3f91 487,489-490,492-507,511-512,514-519,529-531,545,547,552-567
+  s_acbca13b9657cf::t_d6b49f10ab3a97 488,491,520-528,532-544,546,548-551,568-570
+  s_acbca13b9657cf::t_ee20dc1286ea42 508-510,513
+src/components/workspace/table-context-menu.tsx
+  s_acbca13b9657cf::t_317625a768b196 64-68,74-98
+  s_acbca13b9657cf::t_ce869538911af0 99
+  s_acbca13b9657cf::t_732674908bf31b 17
+  s_acbca13b9657cf::t_e37cadc19d3fa4 58-63
+  s_acbca13b9657cf::t_314b5ca55d8dcf 73
+e2e/paste-plain.spec.ts
+  s_acbca13b9657cf::t_62bc5777de3e1e 1-100,107-109,111,113,118,147-158,166-168,170-172
+  s_acbca13b9657cf::t_5576401e563aeb 169
+  s_acbca13b9657cf::t_b45a2f216ed7a5 110,112,114-117,119-146,159-165
+  s_acbca13b9657cf::t_53ca99a1c6fdd0 101-106
+e2e/copy-selection.spec.ts
+  s_acbca13b9657cf::t_1df957a1c20f25 1-138,140,144,146,155,162-165,167-168,191
+  s_acbca13b9657cf::t_50a68b2d2e21ed 182-183,187
+  s_acbca13b9657cf::t_ed95ccb4b15238 169-177,186,190
+  s_acbca13b9657cf::t_42f75552269171 178-180,184-185
+  s_acbca13b9657cf::t_5e1e0dc20eed0d 139,141-143,145,147-150,152-154,156-161,166,192-213,215,218-226
+  s_acbca13b9657cf::t_a266d0e48d57cf 181
+  s_acbca13b9657cf::t_cfaf4d9fd243ff 188-189
+  s_acbca13b9657cf::t_ccf6272e7ec48c 151
+  s_acbca13b9657cf::t_8091775f4872c0 214,216-217
+src/components/editor/html-to-markdown.test.ts
+  s_acbca13b9657cf::t_60c308d274e393 210-211,214-216,218-219,222-223,225-236
+  s_acbca13b9657cf::t_0aa55f7c5f27fb 212-213,217,220-221,224
+  s_acbca13b9657cf::t_8ef0e70db712cf 237-243,245-251,255-264
+  s_acbca13b9657cf::t_99451154e17acb 244,252-254
+  s_b95fda476ecd13::t_9976e1e79fdb6e 265-273
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "080e787e711c1cacd6cd1985b64b734ef680a60f",
+  "prompts": {},
+  "sessions": {
+    "s_acbca13b9657cf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7fbf2d51-a65a-4cbe-9753-618c0f04b60a",
+        "model": "deepseek-v4-flash-vision-tencent"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    },
+    "s_b95fda476ecd13": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c3a9-6935-7603-8c12-40cf2e3c3c26",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
