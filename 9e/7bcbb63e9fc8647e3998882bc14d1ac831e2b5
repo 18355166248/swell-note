@@ -1,0 +1,22 @@
+src/components/workspace/workspace.tsx
+  s_d109e1065fab5e::t_d9fa745f69e097 2638
+src/components/workspace/document-context-menu.tsx
+  s_d109e1065fab5e::t_245fc5a79a2bcb 12-13
+  s_d109e1065fab5e::t_e24370c2e4058b 53-57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "9e7bcbb63e9fc8647e3998882bc14d1ac831e2b5",
+  "prompts": {},
+  "sessions": {
+    "s_d109e1065fab5e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "94b86c5b-99b1-44e6-a5b9-c2360057cbf6",
+        "model": "deepseek-v4-flash-vision-tencent"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
