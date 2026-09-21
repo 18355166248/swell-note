@@ -683,15 +683,26 @@ export class TableWidget extends WidgetType {
     trigger.addEventListener("mousedown", (event) => event.preventDefault())
     const panel = document.createElement("div")
     panel.className = "cm-md-table-menu-panel"
-    const supportsPopover = typeof panel.showPopover === "function"
-    if (supportsPopover) panel.setAttribute("popover", "manual")
-    else panel.style.display = "none"
+    // 项数多的菜单（行列共八项）在触屏上竖排会占掉大半屏，交给 CSS 排两列；
+    // 三项的对齐菜单排成 2+1 反而更难看，仍保持单列。
+    if (buttons.length > 4) panel.dataset.menuColumns = "2"
+    panel.style.display = "none"
     panel.append(...buttons)
     panel.addEventListener("click", (event) => {
       if (event.target instanceof HTMLButtonElement && !event.target.disabled) menu.open = false
     })
+    const sizePanel = () => {
+      const coarsePointer = prefersExplicitTableToolbar()
+      const columns = coarsePointer && buttons.length > 4 ? 2 : 1
+      const rows = Math.ceil(buttons.length / columns)
+      const rowHeight = coarsePointer ? 44 : 30
+      // WKWebView 的顶层 Popover 可能把 auto/max-content 高度扩成整个可视区，
+      // 这里按 CSS 的 2px gap、5px padding 和 1px border 写死内容高度作为兼容兜底。
+      panel.style.height = `${rows * rowHeight + Math.max(0, rows - 1) * 2 + 12}px`
+    }
     const position = () => {
       if (!menu.open) return
+      sizePanel()
       const rect = trigger.getBoundingClientRect()
       const viewport = window.visualViewport
       const bottom = (viewport?.height ?? window.innerHeight) + (viewport?.offsetTop ?? 0)
@@ -701,14 +712,11 @@ export class TableWidget extends WidgetType {
       panel.style.top = `${Math.max(8, rect.bottom + height + 8 < bottom ? rect.bottom + 5 : rect.top - height - 5)}px`
     }
     menu.addEventListener("toggle", () => {
-      if (!supportsPopover) {
-        panel.style.display = menu.open ? "grid" : "none"
-        if (menu.open) document.body.append(panel)
-        else menu.append(panel)
-      }
-      if (!menu.open) { if ((typeof panel.showPopover === "function" && panel.matches(":popover-open"))) panel.hidePopover(); return }
-      // 原生 top layer 可越过所有滚动祖先的裁切；定位按可视视口计算，软键盘升起后同样可用。
-      if (panel.showPopover && !(typeof panel.showPopover === "function" && panel.matches(":popover-open"))) panel.showPopover()
+      panel.style.display = menu.open ? "grid" : "none"
+      if (menu.open) document.body.append(panel)
+      else menu.append(panel)
+      if (!menu.open) return
+      // 统一挂到 body，既避开滚动祖先裁切，也绕过 WKWebView 原生 Popover 拉伸整屏的问题。
       position()
       for (const sibling of menu.parentElement?.querySelectorAll<HTMLDetailsElement>(".cm-md-table-menu[open]") ?? []) {
         if (sibling !== menu) sibling.open = false
@@ -725,10 +733,9 @@ export class TableWidget extends WidgetType {
     window.addEventListener("resize", position)
     this.cleanupCallbacks.add(() => {
       document.removeEventListener("keydown", closeOnEscape, true)
-      if (!supportsPopover) panel.remove()
+      panel.remove()
       window.removeEventListener("scroll", position, true)
       window.removeEventListener("resize", position)
-      if ((typeof panel.showPopover === "function" && panel.matches(":popover-open"))) panel.hidePopover()
     })
     document.addEventListener("pointerdown", closeOnOutside)
     this.cleanupCallbacks.add(() => document.removeEventListener("pointerdown", closeOnOutside))

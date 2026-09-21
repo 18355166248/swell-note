@@ -78,8 +78,15 @@
 .markdown-editor-shell .cm-md-table-menu > summary { min-height: 26px; border-radius: 5px; padding: 5px 7px; color: var(--muted-foreground); font-size: 11px; cursor: pointer; user-select: none; }
 .markdown-editor-shell .cm-md-table-menu[open] > summary,
 .markdown-editor-shell .cm-md-table-menu > summary:hover { background: var(--blue-soft); color: var(--primary); }
-.markdown-editor-shell .cm-md-table-menu-panel { position: fixed; inset: auto; margin: 0; z-index: 100; display: grid; min-width: 112px; gap: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--popover); color: var(--popover-foreground); padding: 5px; box-shadow: 0 10px 30px rgb(15 23 42 / 14%); }
-.markdown-editor-shell .cm-md-table-menu-panel button { min-height: 30px; text-align: left; white-space: nowrap; }
+/* 菜单统一挂到 body，选择器不能依赖 editor-shell；显式收敛 Grid 行高，避免浮层均分可视区。 */
+.cm-md-table-menu-panel { position: fixed; inset: auto; margin: 0; z-index: 100; display: grid; box-sizing: border-box; width: max-content; min-width: 112px; height: max-content; max-height: calc(100dvh - 16px); align-content: start; grid-auto-rows: max-content; gap: 2px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--popover); color: var(--popover-foreground); padding: 5px; box-shadow: 0 10px 30px rgb(15 23 42 / 14%); }
+.cm-md-table-menu-panel button { min-height: 30px; border: 0; border-radius: 5px; background: transparent; padding: 3px 7px; color: var(--muted-foreground); font: inherit; font-size: 11px; text-align: left; white-space: nowrap; cursor: pointer; }
+.cm-md-table-menu-panel button:hover { background: var(--blue-soft); color: var(--primary); }
+.cm-md-table-menu-panel button:disabled { opacity: .4; cursor: not-allowed; }
+.cm-md-table-menu-panel button:disabled:hover { background: transparent; color: var(--muted-foreground); }
+.cm-md-table-menu-panel [data-table-action^="delete"]:not(:disabled):hover { background: #fff0f0; color: #c93636; }
+.dark .cm-md-table-menu-panel [data-table-action^="delete"]:not(:disabled):hover { background: color-mix(in oklab,var(--destructive) 16%,var(--background)); color: var(--destructive); }
+.cm-md-table-menu-panel [data-table-vertical][data-active="true"] { background: var(--blue-soft); color: var(--primary); }
 .markdown-editor-shell .cm-md-table-selection-status { min-width: 0; overflow: hidden; color: var(--muted-foreground); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .markdown-editor-shell .cm-md-table { border-collapse: collapse; font-size: .95em; line-height: 1.6; }
 .markdown-editor-shell .cm-md-table tr { height: calc(1.6em + 13px); }
@@ -123,6 +130,11 @@
   .markdown-editor-shell .cm-md-table-toolbar-panel::after { display: none; }
   .markdown-editor-shell .cm-md-table-selection-status { margin-left: auto; }
   .markdown-editor-shell .cm-md-table-resize-handle { display: none; }
+}
+
+/* 触摸目标的放大只看指针精度，不跟窗口宽度：桌面端把窗口拖窄到 640px 以下
+   用的是鼠标，套上移动端尺寸只会让表格操作菜单撑成一屏高。 */
+@media (pointer: coarse) {
   /* 触屏没有悬停，收起态的细条加高到可点按的命中区。 */
   .markdown-editor-shell .cm-md-table-toolbar { height: 28px; }
   /* 触屏上 26px/11px 的入口太难点，触发器与按钮一并放大到可用触摸目标。 */
@@ -130,10 +142,14 @@
   .markdown-editor-shell .cm-md-table-toolbar button { min-height: 36px; padding: 6px 10px; font-size: 13px; }
 }
 
-/* 表格菜单进入 top layer 后仍保留组件样式；隐藏时不能被 display:grid 覆盖。 */
-.cm-md-table-menu-panel[popover]:not(:popover-open) { display: none; }
-@media (max-width: 640px) {
-  .markdown-editor-shell .cm-md-table-menu-panel button { min-height: 44px; font-size: 14px; }
+/* 触屏上八个操作竖排要占掉大半屏，改两列：面板高度减半，每项仍保住 44px 触摸目标。
+   只对项数多的菜单生效（widget 置 data-menu-columns），三项的对齐菜单排 2+1 更难看。 */
+@media (pointer: coarse) {
+  .cm-md-table-menu-panel { max-width: calc(100vw - 24px); }
+  .cm-md-table-menu-panel[data-menu-columns="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cm-md-table-menu-panel button { min-height: 44px; font-size: 14px; }
+  /* 面板里的按钮不再需要工具栏内联按钮那一套分组左间距，否则两列对不齐。 */
+  .cm-md-table-menu-panel button { margin-left: 0; }
 }
 
 /* 矩形选区：拖选/Shift 扩展出的多格选择只用背景标示（不写入文档），
