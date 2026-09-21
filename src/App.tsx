@@ -345,7 +345,6 @@ function App() {
   const [query, setQuery] = useState("")
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null)
   const [nestedFolderNotesPath, setNestedFolderNotesPath] = useState<string | null>(null)
-  const includeNestedFolderNotes = Boolean(selectedFolder && nestedFolderNotesPath === selectedFolder)
   const [libraryView, setLibraryView] = useState<LibraryView>("all")
   const [noteSort, setNoteSort] = useState<NoteSort>("updated-desc")
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
@@ -686,17 +685,40 @@ function App() {
     () => notes.filter((note) => note.pendingOperation !== "delete"),
     [notes],
   )
+  const activeNote = notes.find((note) => note.id === activeNoteId) ?? null
   const folders = useMemo(
     () => buildVaultFolders(availableNotes, vaultDirectories),
     [availableNotes, vaultDirectories],
   )
+  // 侧栏选中项与列表内容的唯一来源，都不直接读 selectedFolder。
+  // 跟随当前打开的笔记所在目录（打开的是哪个文件，左边就选中哪个目录）：
+  // 进入详情前残留的 selectedFolder 代表上一次的浏览位置，此时让位给笔记自身的目录。
+  // 笔记的目录可能已被重命名或删除，必须确认它仍在目录树里，否则会选中一个不存在的行。
+  // recent/starred 是用户显式选择的跨目录视图，不跟随，免得打开一篇笔记就把视图切走。
+  const followedFolder = libraryView === "all" && activeNote?.folder
+    && folders.some((folder) => folder.path === activeNote.folder)
+    ? activeNote.folder
+    : null
+  // `/notes` 是启动落点：恢复出来的笔记在右栏开着，左侧就跟随它所在的目录。
+  // 只有确实没有可跟随的笔记时才落回未选中——那才是空态引导要出场的场合，
+  // 不能按 URL 一律判空，否则启动时会一边开着笔记一边清空侧栏和列表。
+  // 列表路由沿用用户当次点击的结果，不能用 `selectedFolder ?? followedFolder`：
+  // 从目录进入、但笔记属于另一个目录时，残留的 selectedFolder 会盖住跟随结果。
+  const effectiveFolder = noteRouteMatch || isNotesLibraryRoute
+    ? followedFolder
+    : selectedFolder
+  // 空态只认「没有目录上下文」这一件事，与它是不是 `/notes` 无关：
+  // `/notes` 有笔记可跟随时照常展示列表，`/notes/view/all` 也永远不会命中这里。
+  const hasNoFolderSelection = isNotesLibraryRoute && effectiveFolder === null
+  // 聚合偏好绑定到具体路径：切目录时无需等待 effect 即可恢复“仅当前层”，避免旧内容闪现。
+  const includeNestedFolderNotes = Boolean(effectiveFolder && nestedFolderNotesPath === effectiveFolder)
   // 目录筛选、标签筛选、视图筛选和排序都要扫全库，随手一个菜单开合都重算的话，
   // 笔记一多就会拖慢每一次交互；这里逐层缓存，只有真正相关的输入变了才重跑。
-  const folderNotes = useMemo(() => selectedFolder
+  const folderNotes = useMemo(() => effectiveFolder
     ? availableNotes.filter((note) => includeNestedFolderNotes
-      ? noteBelongsToFolder(note, selectedFolder)
-      : noteBelongsDirectlyToFolder(note, selectedFolder))
-    : availableNotes, [availableNotes, includeNestedFolderNotes, selectedFolder])
+      ? noteBelongsToFolder(note, effectiveFolder)
+      : noteBelongsDirectlyToFolder(note, effectiveFolder))
+    : availableNotes, [availableNotes, effectiveFolder, includeNestedFolderNotes])
   const taggedNotes = useMemo(() => selectedTag
     ? folderNotes.filter((note) => note.tags?.includes(selectedTag))
     : folderNotes, [folderNotes, selectedTag])
@@ -716,7 +738,6 @@ function App() {
     ? libraryNotes.filter((note) => noteMatchesLibraryQuery(note, normalizedQuery, nativeSearchPaths))
     : libraryNotes, [libraryNotes, nativeSearchPaths, normalizedQuery])
   const visibleNotes = useMemo(() => sortNotes(filteredNotes, noteSort), [filteredNotes, noteSort])
-  const activeNote = notes.find((note) => note.id === activeNoteId) ?? null
   const requestedNoteId = resolveRouteNoteId(noteRouteMatch?.params.noteId, notes.map((note) => note.id))
   const missingNoteRoute = Boolean(cacheReady && requestedNoteId && !notes.some((note) => note.id === requestedNoteId) && pendingNoteRouteMove.current?.from !== requestedNoteId)
   const missingNoteSuggestions = useMemo(
@@ -1240,7 +1261,7 @@ function App() {
       const timestamp = formatFileTimestamp(now)
       const title = ""
       // 右键文件夹新建时目标目录由菜单指定；其余入口仍沿用当前选中的目录。
-      const noteFolder = targetFolder === undefined ? selectedFolder : targetFolder
+      const noteFolder = targetFolder === undefined ? effectiveFolder : targetFolder
       const directory = noteFolder?.split(/\s*\/\s*/).filter(Boolean).join("/")
       const displayPath = `${directory ? `${directory}/` : ""}新笔记-${timestamp}-${now.getMilliseconds().toString().padStart(3, "0")}.md`
       const config = loadWebDavConfig()
@@ -1331,7 +1352,7 @@ function App() {
     const imported: Note[] = []
     const errors: string[] = []
     try {
-      const directory = selectedFolder?.split(/\s*\/\s*/).filter(Boolean).join("/") ?? ""
+      const directory = effectiveFolder?.split(/\s*\/\s*/).filter(Boolean).join("/") ?? ""
       const config = loadWebDavConfig()
       const isWebDav = adapter?.kind === "webdav" || canCreateOfflineWebDav
       const resolveStoragePath = (displayPath: string) => adapter?.getStoragePath?.(displayPath)
@@ -2485,12 +2506,26 @@ function App() {
 
   const openNote = (note: Note) => {
     // 路由状态记录来源列表，刷新详情后依然能返回原目录，而不是退回一个含旧筛选的伪 `/notes`。
+    // 用 effectiveFolder 而不是 selectedFolder：从跟随态进入另一篇笔记时，
+    // 返回目标应是当前实际显示的目录，而不是详情路由留下来的空值。
     const returnTo = noteRouteMatch
-      ? getNoteReturnRoute(location.state, libraryView, selectedFolder)
-      : getNotesListRoute(libraryView, selectedFolder)
+      ? getNoteReturnRoute(location.state, libraryView, effectiveFolder)
+      : getNotesListRoute(libraryView, effectiveFolder)
     navigate(`/notes/${encodeURIComponent(note.id)}`, { state: { returnTo } })
     void selectNote(note)
   }
+
+  // 侧栏菜单与空态引导共用一个实现：切换视图时一并清掉目录、关键词和标签，
+  // 否则新视图会带着与它无关的旧筛选渲染。
+  const selectLibraryView = useCallback((view: LibraryView) => {
+    setQuery("")
+    setLibraryView(view)
+    setSelectedFolder(null)
+    navigate(getNotesListRoute(view, null), {
+      replace: hasMobileNavigationOverlay(locationRef.current.state),
+      state: hasMobileNavigationOverlay(locationRef.current.state) ? { mobileOverlayTarget: true } : undefined,
+    })
+  }, [navigate])
 
   const revealSearchResult = (note: Note) => {
     const targetFolder = note.folder && note.folder !== "根目录" ? note.folder : null
@@ -4250,11 +4285,12 @@ function App() {
             onInsertAttachments={insertActiveNoteAttachments}
             onIncludeNestedFolderNotesChange={(include) => {
               // 聚合偏好绑定到当前路径，切换目录时无需等待 effect 即可恢复“仅当前层”，避免旧内容闪现。
-              setNestedFolderNotesPath(include ? selectedFolder : null)
+              setNestedFolderNotesPath(include ? effectiveFolder : null)
             }}
             onImportNotes={(files) => void importMarkdownFiles(files)}
+            onBrowseAllNotes={() => selectLibraryView("all")}
             onMobileBack={navigateMobileBack}
-            onMobileScreenChange={(screen) => { void navigateMobileBack(screen === "library" ? "/notes" : getNoteReturnRoute(location.state, libraryView, selectedFolder), false) }}
+            onMobileScreenChange={(screen) => { void navigateMobileBack(screen === "library" ? "/notes" : getNoteReturnRoute(location.state, libraryView, effectiveFolder), false) }}
             onNavigate={(path) => navigate(path, hasMobileNavigationOverlay(location.state)
               ? { replace: true, state: { mobileOverlayTarget: true } }
               : undefined)}
@@ -4310,22 +4346,15 @@ function App() {
                 state: hasMobileNavigationOverlay(location.state) ? { mobileOverlayTarget: true } : undefined,
               })
             }}
-            onSelectLibraryView={(view) => {
-              setQuery("")
-              setLibraryView(view)
-              setSelectedFolder(null)
-              navigate(getNotesListRoute(view, null), {
-                replace: hasMobileNavigationOverlay(location.state),
-                state: hasMobileNavigationOverlay(location.state) ? { mobileOverlayTarget: true } : undefined,
-              })
-            }}
+            onSelectLibraryView={selectLibraryView}
             onSelectNote={openNote}
             onSelectTag={setSelectedTag}
             onSelectVaultCache={(cacheId) => void selectVaultCache(cacheId)}
             onUpdateNote={updateActiveNote}
             onUpdateNoteById={updateNoteById}
+            hasNoFolderSelection={hasNoFolderSelection}
             query={query}
-            selectedFolder={selectedFolder}
+            selectedFolder={effectiveFolder}
             selectedTag={selectedTag}
             saveState={activeSaveState}
             saveStates={saveStates}

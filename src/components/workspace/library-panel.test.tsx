@@ -36,6 +36,7 @@ function createProps(overrides: Partial<LibraryPanelProps> = {}): LibraryPanelPr
     isManagingFolder: false,
     isOpeningVault: false,
     isRefreshingVault: false,
+    hasNoFolderSelection: false,
     libraryView: "all",
     localVaultSupported: true,
     noteCount: 102,
@@ -118,6 +119,22 @@ describe("LibraryPanel", () => {
     expect(panel.querySelector("[aria-label='当前浏览：最近更新']")).not.toBeNull()
     expect(panel.querySelector<HTMLButtonElement>("[aria-label='新建笔记']")?.disabled).toBe(true)
     expect(panel.querySelector<HTMLInputElement>("input[type='file']")).not.toBeNull()
+  })
+
+  // 未选中的 `/notes` 与「显式进入全部笔记」共用 (selectedFolder=null, libraryView="all")，
+  // 只有路由能区分；若这里退回默认，侧栏会一边说「当前浏览：全部笔记」一边给菜单项打勾，
+  // 而中间的列表区正在显示「从左侧选择目录」，两处互相打脸。
+  it("未选中任何视图时不自称全部笔记", () => {
+    const panel = mount(createProps({ hasNoFolderSelection: true, selectedFolder: null }))
+
+    expect(panel.querySelector("[aria-label='当前浏览：选择目录']")).not.toBeNull()
+    expect(panel.querySelector("[aria-label='当前浏览：全部笔记']")).toBeNull()
+  })
+
+  it("显式进入全部笔记后仍正常展示", () => {
+    const panel = mount(createProps({ hasNoFolderSelection: false, selectedFolder: null }))
+
+    expect(panel.querySelector("[aria-label='当前浏览：全部笔记']")).not.toBeNull()
   })
 })
 

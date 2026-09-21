@@ -204,8 +204,10 @@ test.describe("文件夹排序", () => {
 
     expect(await desktopHandleOrder(page)).toEqual(["拖动排序 Gamma", "拖动排序 Alpha", "拖动排序 Beta"])
     expect(await readWorkingCopyOrder(page, "e2e-vault")).toEqual(["Gamma", "Alpha", "Beta"])
-    // 拖动释放不会误触发行点击：仍然停留在全部笔记视图。
-    await expect(page.getByRole("heading", { name: "全部笔记" })).toBeVisible()
+    // 拖动释放不会误触发行点击：仍然停在进入时的笔记库路由，没有被改写成某个目录。
+    // 侧栏此时跟随打开的那篇笔记（种子里是根目录笔记），所以标题写的是目录名而不是「全部笔记」。
+    await expect(page).toHaveURL(/#\/notes$/)
+    await expect(page.getByRole("heading", { name: "根目录" })).toBeVisible()
 
     // 退出管理模式：子树随父目录整体移动，Alpha 的展开状态保留。
     await panel.getByRole("button", { name: "完成文件夹排序" }).click()

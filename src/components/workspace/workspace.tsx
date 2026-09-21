@@ -176,6 +176,9 @@ type WorkspaceProps = {
   isCreatingNote: boolean
   canInsertAttachment: boolean
   isManagingNote: boolean
+  // 没有任何目录上下文时中间列表显示空态引导。它与 `selectedFolder === null` 不同：
+  // `/notes` 若恢复出了上次打开的笔记，selectedFolder 同样是 null，但那时应跟随笔记的目录。
+  hasNoFolderSelection: boolean
   isNoteDetailRoute: boolean
   missingNoteRoute: boolean
   missingNoteSuggestions: Note[]
@@ -202,6 +205,7 @@ type WorkspaceProps = {
   onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
   onIncludeNestedFolderNotesChange: (include: boolean) => void
   onImportNotes: (files: File[]) => void
+  onBrowseAllNotes: () => void
   onMobileBack: (fallback: string, canGoBack: boolean) => boolean | Promise<boolean>
   onMobileScreenChange: (screen: MobileScreen) => void
   onNoteViewModeChange: (mode: NoteViewMode) => void
@@ -547,6 +551,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         isOpeningVault={props.isOpeningVault}
         isCreatingNote={props.isCreatingNote}
         isRefreshingVault={props.isRefreshingVault}
+        hasNoFolderSelection={props.hasNoFolderSelection}
         localVaultSupported={props.localVaultSupported}
         syncLabel={props.syncLabel}
         vaultError={props.vaultError}
@@ -571,8 +576,10 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         includeNestedFolderNotes={props.includeNestedFolderNotes}
         notes={props.notes}
         noteSort={props.noteSort}
-        folderLabel={props.selectedFolder ?? (props.libraryView === "recent" ? "最近更新" : props.libraryView === "starred" ? "收藏" : "全部笔记")}
+        folderLabel={getLibraryLabel(props.libraryView, props.selectedFolder)}
         folderManagementMode={props.folderManagementMode}
+        noSelection={props.hasNoFolderSelection}
+        onBrowseAllNotes={props.onBrowseAllNotes}
         onOpenGlobalSearch={props.onOpenGlobalSearch}
         onOpenSettings={props.onOpenSettings}
         onCreateNote={props.onCreateNote}
@@ -796,6 +803,8 @@ export type LibraryPanelProps = {
   isOpeningVault: boolean
   isCreatingNote: boolean
   isRefreshingVault: boolean
+  // 没有任何目录上下文时切换器不当自己是「全部笔记」，也不给该菜单项打勾。
+  hasNoFolderSelection: boolean
   libraryView: LibraryView
   localVaultSupported: boolean
   noteCount: number
@@ -833,6 +842,7 @@ export const LibraryPanel = memo(function LibraryPanel({
   isOpeningVault,
   isCreatingNote,
   isRefreshingVault,
+  hasNoFolderSelection,
   libraryView,
   localVaultSupported,
   noteCount,
@@ -868,7 +878,11 @@ export const LibraryPanel = memo(function LibraryPanel({
       ? { count: starredNoteCount, icon: Star, label: "收藏" }
       : selectedFolder
         ? { count: activeFolder?.count, icon: FolderOpen, label: activeFolder?.label ?? selectedFolder }
-        : { count: noteCount, icon: FileText, label: "全部笔记" }
+        // 未选中的 `/notes` 也走 all 分支，但它并没有在浏览全部笔记，
+        // 这里必须让位给空态引导，否则切换器与列表区会各说各话。
+        : hasNoFolderSelection
+          ? { count: noteCount, icon: FileText, label: "选择目录" }
+          : { count: noteCount, icon: FileText, label: "全部笔记" }
   const CurrentViewIcon = currentView.icon
 
   // 顶层目录在传入前已在完整目录树上排好序（含根目录置顶）；这里只负责裁剪出可拖动的那部分。
@@ -1066,7 +1080,7 @@ export const LibraryPanel = memo(function LibraryPanel({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="library-view-menu">
             <DropdownMenuItem onClick={() => onSelectLibraryView("all")}>
-              <FileText /><span>全部笔记</span><small>{noteCount}</small>{selectedFolder === null && libraryView === "all" ? <Check /> : null}
+              <FileText /><span>全部笔记</span><small>{noteCount}</small>{selectedFolder === null && libraryView === "all" && !hasNoFolderSelection ? <Check /> : null}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => onSelectLibraryView("recent")}>
               <CheckCircle2 /><span>最近更新</span><small>{Math.min(noteCount, 32)}</small>{libraryView === "recent" ? <Check /> : null}
@@ -1262,6 +1276,10 @@ type NoteListPanelProps = {
   noteSort: NoteSort
   isManagingFolder: boolean
   isLoading: boolean
+  noSelection: boolean
+  // 空态引导的出口：768–1099px 宽度区间桌面布局不渲染侧栏，那里侧栏菜单点不到，
+  // 只能靠这个按钮进入全部笔记；更宽时它只是冗余，不是错误。
+  onBrowseAllNotes: () => void
   onCreateNote: () => void
   onIncludeNestedFolderNotesChange: (include: boolean) => void
   onOpenGlobalSearch: () => void
@@ -1291,8 +1309,10 @@ function NoteListPanel({
   includeNestedFolderNotes,
   isManagingFolder,
   isLoading,
+  noSelection,
   notes,
   noteSort,
+  onBrowseAllNotes,
   onCreateNote,
   onIncludeNestedFolderNotesChange,
   onOpenGlobalSearch,
@@ -1320,6 +1340,20 @@ function NoteListPanel({
     () => selectedFolder ? getDirectChildVaultFolders(folders, selectedFolder) : [],
     [folders, selectedFolder],
   )
+
+  // 未选中任何目录时没有“当前目录”可搜，整块换成空态引导；
+  // 标题栏保留，右侧的排序/标签入口在不选中时也没有意义，一并收起。
+  if (noSelection) {
+    return (
+      <section className="note-list-panel">
+        <ScrollArea className="note-list-scroll">
+          <div className="note-groups">
+            <NoSelectionNoteList onBrowseAll={onBrowseAllNotes} />
+          </div>
+        </ScrollArea>
+      </section>
+    )
+  }
 
   return (
     <section className="note-list-panel">
@@ -1444,6 +1478,20 @@ function EmptyNoteList({
       <strong>{selectedFolder ? "这个文件夹还是空的" : localEmptyState ? "笔记库还是空的" : "还没有远程笔记"}</strong>
       <p>{localEmptyState ? "可以直接在当前目录新建第一篇 Markdown 笔记。" : "连接坚果云后，这里只展示远端 Vault 中的 Markdown。"}</p>
       <Button onClick={localEmptyState ? onCreateNote : onOpenSettings} size="sm" variant="outline">{localEmptyState ? "新建笔记" : "连接坚果云"}</Button>
+    </div>
+  )
+}
+
+// `/notes` 的落点：没有选中任何目录，也不默认展示全库。
+// 引导用户去左侧目录树（那是唯一能获得明确上下文的地方），并给出一个直达全库的显式入口——
+// 窄桌面窗口下侧栏整个被隐藏，没有这个按钮就走不出去了。
+function NoSelectionNoteList({ onBrowseAll }: { onBrowseAll: () => void }) {
+  return (
+    <div className="note-list-empty" data-variant="no-selection">
+      <FolderTree />
+      <strong>从左侧选择目录</strong>
+      <p>选择目录查看其中的笔记，或直接浏览全部笔记。</p>
+      <Button onClick={onBrowseAll} size="sm" variant="outline">浏览全部笔记</Button>
     </div>
   )
 }
@@ -3719,8 +3767,7 @@ function MobileNoteList(props: MobileNoteListProps) {
   const folderSegments = props.selectedFolder?.split(/\s*\/\s*/).filter(Boolean) ?? []
   const folderPaths = folderSegments.map((_, index) => folderSegments.slice(0, index + 1).join(" / "))
   const parentFolder = props.selectedFolder ? getParentFolderPath(props.selectedFolder) : null
-  const title = folderSegments[folderSegments.length - 1]
-    ?? (props.libraryView === "recent" ? "最近更新" : props.libraryView === "starred" ? "收藏" : "全部笔记")
+  const title = getLibraryLabel(props.libraryView, props.selectedFolder)
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current
@@ -4103,12 +4150,22 @@ const FolderListRow = memo(function FolderListRow({
   return contextActions ? <FolderRowContextMenu actions={contextActions} folder={folder}>{row}</FolderRowContextMenu> : row
 })
 
-function getMobileBackLabel(libraryView: LibraryView, selectedFolder: string | null) {
+// 列表标题与移动端返回标签共用的文案：选中目录时用目录名，跨目录视图用视图名。
+// (all, null) 只可能是显式进入的 `/notes/view/all`：未选中态（`/notes`）要么跟随了
+// 打开的笔记——那时 selectedFolder 非空，要么由 `noSelection` 提前 return 掉标题栏，
+// 根本走不到这里。
+function getLibraryLabel(libraryView: LibraryView, selectedFolder: string | null) {
   if (selectedFolder) {
     const segments = getNoteBreadcrumbSegments(selectedFolder)
-    return segments[segments.length - 1] ?? "全部笔记"
+    return segments[segments.length - 1] ?? selectedFolder
   }
-  return libraryView === "recent" ? "最近更新" : libraryView === "starred" ? "收藏" : "全部笔记"
+  if (libraryView === "recent") return "最近更新"
+  if (libraryView === "starred") return "收藏"
+  return "全部笔记"
+}
+
+function getMobileBackLabel(libraryView: LibraryView, selectedFolder: string | null) {
+  return getLibraryLabel(libraryView, selectedFolder)
 }
 
 function deriveFolder(note: Note) {
