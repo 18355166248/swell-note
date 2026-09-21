@@ -1,0 +1,34 @@
+src/components/editor/markdown-table.css
+  s_6130f77a51f4cb::t_7a6c7d956a537c 145-146
+  s_6130f77a51f4cb::t_504dae01445bee 133-137,147,151
+  s_a5622b4a0e6476::t_d44c16af88c01c 81,83-89
+  s_a5622b4a0e6476::t_6b1745741d05f5 82,148-150,152
+src/components/editor/markdown-table-widget.ts
+  s_a5622b4a0e6476::t_d44c16af88c01c 689,715-719,736
+  s_6130f77a51f4cb::t_2caa6f528ddeb1 686-688
+  s_a5622b4a0e6476::t_84baeb3a3f7aba 694-702,705
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "525dc7be48d671e7bd18410caf7da7d63335d9f3",
+  "prompts": {},
+  "sessions": {
+    "s_6130f77a51f4cb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c38ce0ea-bc9a-47ea-b678-1c326a8e2fcf",
+        "model": "deepseek-v4-flash-vision-tencent"
+      },
+      "human_author": null
+    },
+    "s_a5622b4a0e6476": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0aa0f-bc7d-70a1-888b-f08940624633",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": null
+    }
+  }
+}
