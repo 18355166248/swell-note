@@ -866,6 +866,36 @@ describe("MarkdownEditor", () => {
       expect(onChange).not.toHaveBeenCalled()
     })
 
+    it("切换会话后立即刷新历史、光标、格式与表格编辑状态", () => {
+      const onHistoryChange = vi.fn()
+      const onCursorChange = vi.fn()
+      const onFormatStateChange = vi.fn()
+      const onEditingTargetChange = vi.fn()
+      const props = { onCursorChange, onEditingTargetChange, onFormatStateChange, onHistoryChange }
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor {...props} onChange={() => {}} sessionKey="cache:a" value="# 标题" />,
+      )
+
+      // A 产生一条可撤销历史；切换时应保存并与 B 隔离。
+      act(() => { editorView().dispatch({ changes: { from: editorView().state.doc.length, insert: "新" } }) })
+      const editedA = editorView().state.doc.toString()
+      onHistoryChange.mockClear()
+      onCursorChange.mockClear()
+      onFormatStateChange.mockClear()
+      onEditingTargetChange.mockClear()
+
+      rerender(<MarkdownEditor {...props} onChange={() => {}} sessionKey="cache:b" value="普通段落" />)
+
+      expect(onHistoryChange).toHaveBeenLastCalledWith(false, false)
+      expect(onCursorChange).toHaveBeenLastCalledWith(1, 1)
+      expect(onFormatStateChange.mock.calls[onFormatStateChange.mock.calls.length - 1]?.[0]).toMatchObject({ heading: 0 })
+      expect(onEditingTargetChange).toHaveBeenLastCalledWith(false)
+
+      onHistoryChange.mockClear()
+      rerender(<MarkdownEditor {...props} onChange={() => {}} sessionKey="cache:a" value={editedA} />)
+      expect(onHistoryChange).toHaveBeenLastCalledWith(true, false)
+    })
+
     it("返回原笔记时选区与撤销历史按会话恢复", () => {
       const onChange = vi.fn()
       const { rerender } = mountWithRerender(
@@ -931,6 +961,31 @@ describe("MarkdownEditor", () => {
 
       endComposition()
       expect(editorView().state.doc.toString()).toBe("你好")
+    })
+
+    it("echo 凭证只消费一次且不跨会话误认相同正文", () => {
+      const onChange = vi.fn()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey="cache:a" value="A 正文" />,
+      )
+
+      // A 发出一个尚未回传的 echo 凭证。
+      act(() => {
+        editorView().dispatch({
+          changes: { from: 0, to: editorView().state.doc.length, insert: "相同正文" },
+          userEvent: "input.type",
+        })
+      })
+      expect(onChange).toHaveBeenLastCalledWith("相同正文", expect.anything())
+
+      // 切到 B 会使 A 的凭证失效；B 随后的外部正文即使字符串相同，也不能当成 echo 丢弃。
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:b" value="B 正文" />)
+      beginComposition()
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:b" value="相同正文" />)
+      expect(editorView().state.doc.toString()).toBe("B 正文")
+
+      endComposition()
+      expect(editorView().state.doc.toString()).toBe("相同正文")
     })
   })
 

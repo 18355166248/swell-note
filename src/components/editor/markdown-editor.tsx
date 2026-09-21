@@ -139,10 +139,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     // 上一次渲染看到的 sessionKey。判定「用户确实切走了」必须跟它比：
     // sessionKeyRef 在渲染期就已被赋成新值，拿它自比恒为真，会让每次同笔记回写都被当成切走。
     const previousSessionKeyRef = useRef(sessionKey)
-    // 最后一次由编辑器发出的正文（用户输入经 onChange 出去的字符串）。区分「受控 echo」与
-    // 「同笔记的外部正文变化」的唯一依据：value 与它相等才是用户输入的回传，其余（远端合并、
-    // 版本恢复、重新加载）都是外部回写，composition 期间必须挂起而不能当 echo 短路掉。
-    const lastEmittedDocRef = useRef(value)
+    // 编辑器发出用户正文后，下一次同会话、同内容的 value 才是受控 echo。
+    // 凭证只消费一次并绑定 sessionKey，避免另一篇笔记或历史版本恰好内容相同而误命中。
+    const pendingEchoRef = useRef<{ doc: string; sessionKey: string } | null>(null)
     // 下面几个 ref 供 effect 与异步回调读取最新值：写进依赖会让每次渲染都重挂编辑器。
     const onChangeRef = useRef(onChange)
     onChangeRef.current = onChange
@@ -500,10 +499,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         control.on("documentChange", (event) => {
           if (controlRef.current !== control) return
           if (event.external) return
+          // 必须在调用宿主前登记：即使宿主同步刷新受控 value，也能识别这次回传。
+          pendingEchoRef.current = { doc: event.doc, sessionKey: event.identity.sessionKey }
           // 第二参数沿用 @uiw/react-codemirror 的 onChange(value, viewUpdate) 签名。
           onChangeRef.current(event.doc, event.update)
-          // 记下这次发出去的正文：下次 value 回传时用它判断是 echo 还是外部正文。
-          lastEmittedDocRef.current = event.doc
         }),
         // 切换会话走 setState，绕过 updateListener：这里补发一次历史/光标/格式/选区，
         // 让撤销按钮、行号与格式高亮在切换后立即落到目标笔记，不等下一次用户输入。
@@ -542,24 +541,31 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     useLayoutEffect(() => {
       const control = controlRef.current
       if (!control) return
+      const currentSessionKey = sessionKey ?? ""
+      const pendingEcho = pendingEchoRef.current
+      const echo = !switching
+        && pendingEcho?.sessionKey === currentSessionKey
+        && pendingEcho.doc === value
       control.updateDocument(value, {
         noteId: storageKey ?? "note",
         revision,
-        sessionKey: sessionKey ?? "",
+        sessionKey: currentSessionKey,
       }, {
         // 用户已经明确切走（本次的 sessionKey 与上次渲染不同）：组合态不能拦住新笔记的正文。
         // 同一篇笔记的外部回写不置位，由 control 挂起到 compositionend，不打断正在拼的中文。
         forceSwitch: switching,
         // 区分「切换」与「受控回写」。切换瞬间 value 可能还是上一篇（尚未就绪），
-        // 必须按切换路径落空占位，不能当成旧正文的外部回写；同笔记回写再按 value 是否等于
-        // 上次发出的正文区分 echo（用户输入原样回传）与 external（远端合并 / 版本恢复 / 重新加载）。
-        origin: switching ? "switch" : value === lastEmittedDocRef.current ? "echo" : "external",
+        // 必须按切换路径落空占位，不能当成旧正文的外部回写；同笔记只有命中一次性凭证
+        // 才是 echo，其余均为 external（远端合并 / 版本恢复 / 重新加载）。
+        origin: switching ? "switch" : echo ? "echo" : "external",
         settings: {
           assetScope: storageKey,
           platform: compact ? "mobile" : "desktop",
           readOnly,
         },
       })
+      // echo 只允许消费一次；切换或外部正文同样会使旧凭证失效，不能跨会话/版本复用。
+      pendingEchoRef.current = null
     }, [compact, readOnly, revision, sessionKey, storageKey, switching, value])
     // 同步上次渲染的 sessionKey。放 effect 里推进：layout effect 执行后本次渲染已生效，
     // 下一轮渲染才能据此判定「又切走了」。
