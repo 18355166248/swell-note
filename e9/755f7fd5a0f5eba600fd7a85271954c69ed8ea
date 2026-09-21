@@ -1,0 +1,22 @@
+src/components/editor/markdown-editor.test.tsx
+  s_a5622b4a0e6476::t_31ae3381725f42 869-890,892-898,965-989
+  s_a5622b4a0e6476::t_328a685152183d 891
+src/components/editor/markdown-editor.tsx
+  s_a5622b4a0e6476::t_53dcbd531a1045 142-144,502-503,544-548,552,558-560,567-568
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "e9755f7fd5a0f5eba600fd7a85271954c69ed8ea",
+  "prompts": {},
+  "sessions": {
+    "s_a5622b4a0e6476": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0aa0f-bc7d-70a1-888b-f08940624633",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
