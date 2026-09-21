@@ -9,6 +9,8 @@ type Props = {
   disabled?: boolean
   children: ReactNode
   editorRef: RefObject<MarkdownEditorHandle | null>
+  // 手机工作区：正文不用自定义右键菜单，见下方 mobile 分支说明。
+  mobile?: boolean
   previewing: boolean
   readOnly: boolean
   viewMode: NoteViewMode
@@ -48,6 +50,11 @@ export function DocumentContextMenu(props: Props) {
     if (!done) setHint(action === "paste" ? "无法读取剪贴板，请使用 ⌘V / Ctrl+V 粘贴" : "操作失败，请使用键盘快捷键")
   }
   if (props.disabled) return children
+  // 手机端不挂 Radix 触发器：它的指针长按在 pointerType 非鼠标时按住 700ms 会自己弹菜单，
+  // 手指几乎不动才触发，于是偶发误弹；这条路不派发 contextmenu，onContextMenu 里的
+  // 选区状态根本没算过，弹出来也是复制/剪切全灰的空壳。
+  // 正文的格式与剪贴板操作手机上已由格式工具栏和顶栏「更多操作」覆盖，长按留给系统文字选择。
+  if (props.mobile) return children
   return <>
     <ContextMenu modal={false}>
       <ContextMenuTrigger asChild onContextMenu={(event) => {

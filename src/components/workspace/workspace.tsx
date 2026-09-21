@@ -2635,6 +2635,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
       ) : <div className="editor-body"><ScrollArea className="editor-scroll" viewportRef={editorViewportRef}>
         <DocumentContextMenu
           disabled={isCanvas}
+          mobile={compact}
           editorRef={editorRef}
           previewing={previewing}
           readOnly={editorReadOnly}
