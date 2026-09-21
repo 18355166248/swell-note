@@ -1,0 +1,20 @@
+src/components/editor/markdown-editor.tsx
+  s_d95265c1b2e24d::t_85fe43f444c106 6-7,271-296,1159-1181
+  s_d95265c1b2e24d::t_93156a525cc63e 1182-1183
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "c09bc4ecce9fe08f020d6c3c40dfbd7e9e3a9d2e",
+  "prompts": {},
+  "sessions": {
+    "s_d95265c1b2e24d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b866f5e5-d563-4163-a6ca-347bdce33307",
+        "model": "deepseek-v4-flash-vision-tencent"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
