@@ -140,7 +140,7 @@ describe("Markdown preview integration", () => {
     expect(output).not.toContain('href="#目标小节"')
   })
 
-  it("truncates long link labels inside tables but keeps the full href", () => {
+  it("shows long link labels inside tables in full, wrapping instead of truncating", () => {
     const longUrl = "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/wx-%E8%AE%BE%E8%AE%A1%E7%A8%BF?node-id=1234-5678&t=abcdef123456"
     const escapedUrl = longUrl.replace(/&/g, "&amp;")
     const output = renderToStaticMarkup(
@@ -151,10 +151,10 @@ describe("Markdown preview integration", () => {
       />,
     )
 
-    // 显示文本被中段省略，完整地址仍保留在 href 与 title 里。
-    expect(output).not.toContain(`>${escapedUrl}<`)
+    // 完整地址既在 href 里，也原样作为显示文本（含协议头），不再中段省略。
     expect(output).toContain(`href="${escapedUrl}"`)
-    expect(output).toContain("…")
+    expect(output).toContain(`>${escapedUrl}<`)
+    expect(output).not.toContain("…")
   })
 
   it("keeps long link labels intact outside tables", () => {

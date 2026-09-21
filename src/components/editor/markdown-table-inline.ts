@@ -21,34 +21,6 @@ export type MarkdownImageLoadState = "loading" | "loaded" | "error"
 const LINK_HINT = "点击打开链接"
 const WIKI_HINT = "点击打开笔记"
 
-// 表格列宽有限，完整 URL（尤其带大段编码参数的设计稿链接）会任意断行、把整行撑到
-// 十几行高。显示文本超过阈值时先剥协议头，再中段省略；完整地址保留在 title 与点击行为里。
-// 编辑态与阅读态共用这一套规则，两态看到同一截断结果。
-// 头尾长度同时被 rawOffsetInLinkLabel 用于点击定位，调整阈值时两边必须保持一致。
-const LINK_LABEL_MAX = 40
-const LINK_LABEL_TAIL = Math.min(10, Math.floor((LINK_LABEL_MAX - 1) / 3))
-const LINK_LABEL_HEAD = LINK_LABEL_MAX - 1 - LINK_LABEL_TAIL
-
-export function truncateLinkLabel(label: string, max = LINK_LABEL_MAX): string {
-  const text = label.replace(/^https?:\/\//i, "")
-  if (text.length <= max) return text
-  const tailLength = Math.min(10, Math.floor((max - 1) / 3))
-  const headLength = max - 1 - tailLength
-  return `${text.slice(0, headLength)}…${text.slice(-tailLength)}`
-}
-
-// 剥协议头与中段省略都会让显示偏移与原文偏移脱节：显示 example.com 末尾是第 11 位，
-// 原文里却是第 19 位。点击定位沿 truncateLinkLabel 的同一套规则把显示偏移还原回原文：
-// 头部 1:1，省略号右侧落到尾部在原文中的起点，尾部按剩余偏移 1:1。
-function rawOffsetInLinkLabel(label: string, displayOffset: number): number {
-  const protocol = label.match(/^https?:\/\//i)?.[0].length ?? 0
-  const strippedLength = label.length - protocol
-  if (strippedLength <= LINK_LABEL_MAX) return Math.min(label.length, protocol + displayOffset)
-  if (displayOffset <= LINK_LABEL_HEAD) return protocol + displayOffset
-  const tailStart = label.length - LINK_LABEL_TAIL
-  return Math.min(label.length, tailStart + Math.max(0, displayOffset - LINK_LABEL_HEAD - 1))
-}
-
 // 行内内容始终使用 DOM API 和 textContent 装配，不解析原始 HTML，避免云端笔记形成注入面。
 // 下划线强调要求两侧不是字母数字，避免把 snake_case_name 错误渲染成强调。
 const tableInlinePattern
@@ -74,13 +46,10 @@ export function rawOffsetForDisplayOffset(text: string, displayOffset: number): 
     }
     if (displayOffset <= shown + inner.text.length) {
       const within = Math.max(0, displayOffset - shown)
-      // 链接显示文本经过截短，段内偏移要按截断规则还原；其余标记只是吃掉两侧符号，1:1 即可。
+      // 标记只是吃掉两侧符号，段内偏移 1:1 即可；链接标签还要递归还原标签内部的行内标记。
       if (inner.rawEnd !== undefined) return index + (within > 0 ? inner.rawEnd : 0)
-      if (inner.innerRaw !== undefined) {
-        const decodedOffset = inner.label !== undefined ? rawOffsetInLinkLabel(inner.label, within) : within
-        return index + inner.start + rawOffsetForDisplayOffset(inner.innerRaw, decodedOffset)
-      }
-      return index + inner.start + (inner.label !== undefined ? rawOffsetInLinkLabel(inner.label, within) : within)
+      if (inner.innerRaw !== undefined) return index + inner.start + rawOffsetForDisplayOffset(inner.innerRaw, within)
+      return index + inner.start + within
     }
     shown += inner.text.length
     raw = index + match[0].length
@@ -89,17 +58,16 @@ export function rawOffsetForDisplayOffset(text: string, displayOffset: number): 
 }
 
 // 返回 token 的显示文字及其在原文中的相对起点；无显示文字的 token（图片、换行）返回 null。
-// 链接附带原始 label：显示文字是 truncateLinkLabel 的截断结果，点击定位需要原文才能还原偏移。
-function inlineTokenDisplaySegment(match: RegExpMatchArray): { innerRaw?: string; label?: string; rawEnd?: number; start: number; text: string } | null {
+// 链接标签保留 innerRaw：显示文字是标签内部行内标记渲染后的结果，点击定位要递归还原偏移。
+function inlineTokenDisplaySegment(match: RegExpMatchArray): { innerRaw?: string; rawEnd?: number; start: number; text: string } | null {
   const groups = match.groups ?? {}
   if (groups.escape !== undefined) return { start: 1, text: groups.escape.slice(1) }
   if (groups.entity !== undefined) return { rawEnd: match[0].length, start: 0, text: decodeMarkdownEntity(match[0]) }
   if (groups.imageSource !== undefined || groups.break !== undefined) return null
   if (groups.linkLabel !== undefined) {
-    const label = tableInlineDisplayText(groups.linkLabel)
-    return { innerRaw: groups.linkLabel, label, start: 1, text: truncateLinkLabel(label) }
+    return { innerRaw: groups.linkLabel, start: 1, text: tableInlineDisplayText(groups.linkLabel) }
   }
-  if (groups.bareHref !== undefined) return { label: groups.bareHref, start: 0, text: truncateLinkLabel(groups.bareHref) }
+  if (groups.bareHref !== undefined) return { start: 0, text: groups.bareHref }
   const marked = groups.strike ?? groups.strongStar ?? groups.strongUnder ?? groups.emStar ?? groups.emUnder
   if (marked !== undefined) return { innerRaw: marked, start: groups.strike !== undefined || groups.strongStar !== undefined || groups.strongUnder !== undefined ? 2 : 1, text: tableInlineDisplayText(marked) }
   if (groups.codeText !== undefined) return { start: groups.codeFence.length, text: groups.codeText }
@@ -180,14 +148,11 @@ function tableInlineDisplayText(source: string): string {
 function appendLink(parent: HTMLElement, label: string, href: string, options: TableInlineOptions) {
   const link = document.createElement("a")
   link.className = "cm-md-table-link"
-  const display = truncateLinkLabel(label)
-  link.textContent = display
+  link.textContent = label
   const noteTarget = parseMarkdownNoteHref(href)
   if (noteTarget) link.dataset.mdNoteTarget = noteTarget
   else if (/^(?:https?|mailto):/i.test(href)) link.dataset.mdHref = href
-  const hint = noteTarget ? WIKI_HINT : link.dataset.mdHref ? LINK_HINT : href
-  // 截短后悬停要能看到完整原文。
-  link.title = display !== label ? `${label}\n${hint}` : hint
+  link.title = noteTarget ? WIKI_HINT : link.dataset.mdHref ? LINK_HINT : href
   link.addEventListener("click", (event) => {
     event.preventDefault()
     event.stopPropagation()

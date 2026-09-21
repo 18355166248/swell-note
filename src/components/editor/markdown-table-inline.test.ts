@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest"
 
-import { rawOffsetForDisplayOffset, renderTableInlineMarkdown, truncateLinkLabel } from "./markdown-table-inline"
+import { rawOffsetForDisplayOffset, renderTableInlineMarkdown } from "./markdown-table-inline"
 
 function renderInline(source: string) {
   const element = document.createElement("div")
@@ -9,29 +9,25 @@ function renderInline(source: string) {
   return element
 }
 
-describe("truncateLinkLabel（表格内长链接显示文本截短）", () => {
-  it("短文本原样返回", () => {
-    expect(truncateLinkLabel("示例")).toBe("示例")
-    expect(truncateLinkLabel("https://example.com")).toBe("example.com")
+describe("表格内链接完整展示（不截短、不剥协议头，超出列宽换行）", () => {
+  it("带标签的链接原样显示标签文字", () => {
+    const element = renderInline("[示例](https://example.com)")
+    expect(element.querySelector("a")?.textContent).toBe("示例")
   })
 
-  it("剥掉协议头后仍超长时中段省略", () => {
+  it("超长 URL 完整显示，不打省略号", () => {
     const url = "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/wx-%E8%AE%BE%E8%AE%A1%E7%A8%BF?node-id=1234-5678&t=abcdef"
-    const display = truncateLinkLabel(url)
-    expect(display.length).toBe(40)
-    expect(display).toContain("…")
-    expect(display.startsWith("www.figma.com/design/")).toBe(true)
+    const element = renderInline(url)
+    const link = element.querySelector("a")
+    expect(link?.textContent).toBe(url)
+    expect(link?.textContent).not.toContain("…")
+    expect(link?.dataset.mdHref).toBe(url)
   })
 
-  it("剥协议头后已不超长则直接返回", () => {
-    expect(truncateLinkLabel("https://example.com/some/path?a=1&b=2")).toBe("example.com/some/path?a=1&b=2")
-  })
-
-  it("非 URL 的长标签同样中段省略", () => {
+  it("非 URL 的长标签同样完整显示", () => {
     const label = "这是一段被用户刻意写得很长很长的链接标签文字，已经超过四十个字符的显示限制长度了，还需要继续截短"
-    const display = truncateLinkLabel(label)
-    expect(display.length).toBe(40)
-    expect(display).toContain("…")
+    const element = renderInline(`[${label}](https://example.com)`)
+    expect(element.querySelector("a")?.textContent).toBe(label)
   })
 })
 
@@ -115,29 +111,24 @@ describe("rawOffsetForDisplayOffset（展示层偏移 → 原文偏移）", () =
     expect(rawOffsetForDisplayOffset("**加粗**", 99)).toBe(6)
   })
 
-  it("剥掉协议头的裸链接按原文偏移还原", () => {
-    // 展示 "example.com"（11 位），点末尾应落到原文 "https://example.com" 的第 19 位。
-    expect(rawOffsetForDisplayOffset("https://example.com", 0)).toBe(8)
-    expect(rawOffsetForDisplayOffset("https://example.com", 11)).toBe(19)
-    // 前面还有普通文本时，段内偏移同样要补上协议头。
-    expect(rawOffsetForDisplayOffset("见 https://example.com 收尾", 13)).toBe(21)
+  it("裸链接完整展示，显示偏移与原文逐位对应", () => {
+    // 展示与原文都是 "https://example.com"，起点越过 0 位、末尾落在原文第 19 位。
+    expect(rawOffsetForDisplayOffset("https://example.com", 0)).toBe(0)
+    expect(rawOffsetForDisplayOffset("https://example.com", 11)).toBe(11)
+    expect(rawOffsetForDisplayOffset("https://example.com", 19)).toBe(19)
+    // 前面还有普通文本时段内偏移同样 1:1。
+    expect(rawOffsetForDisplayOffset("见 https://example.com 收尾", 13)).toBe(13)
   })
 
-  it("中段省略的长链接：头部 1:1、省略号落到尾部起点、尾部对应原文末尾", () => {
+  it("长链接不做截短，显示偏移一直落到原文末尾", () => {
     const url = "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/wx-%E8%AE%BE%E8%AE%A1%E7%A8%BF?node-id=1234-5678&t=abcdef"
-    const display = truncateLinkLabel(url)
-    expect(display.length).toBe(40)
-    // 头部 29 位与原文逐位对应（含剥掉的 8 位协议头）。
-    expect(rawOffsetForDisplayOffset(url, 0)).toBe(8)
-    expect(rawOffsetForDisplayOffset(url, 29)).toBe(37)
-    // 省略号右侧是尾部在显示层的起点（第 30 位），应映射到尾部在原文中的起点。
-    expect(rawOffsetForDisplayOffset(url, 30)).toBe(url.length - 10)
-    // 点显示末尾（第 40 位）应落到原文末尾，而不是第 40 位。
-    expect(rawOffsetForDisplayOffset(url, 40)).toBe(url.length)
+    expect(rawOffsetForDisplayOffset(url, 0)).toBe(0)
+    expect(rawOffsetForDisplayOffset(url, 40)).toBe(40)
+    expect(rawOffsetForDisplayOffset(url, url.length)).toBe(url.length)
   })
 
-  it("带标签的长链接同样在标签段内还原", () => {
-    // 原文 "[https://example.com](https://a.com)"，展示 "example.com"，起始要越过 "[" 一位。
-    expect(rawOffsetForDisplayOffset("[https://example.com](https://a.com)", 11)).toBe(20)
+  it("带标签的长链接在标签段内 1:1 还原", () => {
+    // 原文 "[https://example.com](https://a.com)"，展示 "https://example.com"，起始要越过 "[" 一位。
+    expect(rawOffsetForDisplayOffset("[https://example.com](https://a.com)", 11)).toBe(12)
   })
 })

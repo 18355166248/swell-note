@@ -103,7 +103,8 @@
 .markdown-editor-shell .cm-md-table-resizing { cursor: col-resize; user-select: none; }
 .markdown-editor-shell .cm-md-table code { border-radius: 4px; background: var(--muted); padding: .1em .32em; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; }
 .markdown-editor-shell .cm-md-table del { color: var(--muted-foreground); }
-.markdown-editor-shell .cm-md-table-link { color: var(--primary); text-decoration: underline; text-decoration-color: color-mix(in oklab,var(--primary) 52%,transparent); text-underline-offset: 3px; cursor: pointer; }
+/* 链接显示完整地址，长 URL 里没有可断行的空格，靠 overflow-wrap 在任意字符处折行。 */
+.markdown-editor-shell .cm-md-table-link { color: var(--primary); text-decoration: underline; text-decoration-color: color-mix(in oklab,var(--primary) 52%,transparent); text-underline-offset: 3px; cursor: pointer; overflow-wrap: anywhere; }
 .markdown-editor-shell .cm-md-table-link:hover { text-decoration-color: currentColor; }
 .markdown-editor-shell .cm-md-table-image { display: block; width: auto; max-width: 100%; max-height: 220px; border-radius: 6px; object-fit: contain; }
 .markdown-editor-shell .cm-md-table-asset-state { color: var(--muted-foreground); font-size: .9em; }

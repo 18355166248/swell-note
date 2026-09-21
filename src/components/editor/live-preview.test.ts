@@ -877,8 +877,8 @@ describe("markdown live preview table cells", () => {
     const dom = await tableDom(content)
 
     expect(dom.querySelector("del")?.textContent).toBe("旧内容")
-    // 裸链接显示文本会剥掉协议头（truncateLinkLabel），点击行为不变。
-    expect([...dom.querySelectorAll("a")].map((link) => link.textContent)).toEqual(["官网", "example.com/docs"])
+    // 链接显示文本原样呈现（含协议头），点击行为不变。
+    expect([...dom.querySelectorAll("a")].map((link) => link.textContent)).toEqual(["官网", "https://example.com/docs"])
     const image = dom.querySelector("img") as HTMLImageElement
     expect(image.alt).toBe("示意图")
     expect(image.src).toBe("https://example.com/a.png")

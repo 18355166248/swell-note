@@ -1,4 +1,4 @@
-import { Component, isValidElement, lazy, memo, Suspense, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
+import { Component, lazy, memo, Suspense, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type KeyboardEvent, type MouseEvent, type ReactNode } from "react"
 import { ImageZoomOverlay, openImageZoom } from "./image-zoom"
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import rehypeHighlight from "rehype-highlight"
@@ -25,7 +25,6 @@ import { openExternalUrl } from "@/services/open-external-url"
 import { extractFrontmatter } from "@/services/search/note-index"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
-import { truncateLinkLabel } from "./markdown-table-inline"
 import { parseMarkdownTable, tableColumnWidths } from "./markdown-table-model"
 import { loadTableColumnPreference, MIN_TABLE_COLUMN_WIDTH, tableColumnPercentages, type TableWidthMode } from "./markdown-table-width"
 
@@ -56,10 +55,6 @@ const rehypePlugins = [rehypeHighlight, rehypeSelectionText]
 
 // 任务勾选框由 remark-gfm 合成、自身没有源码位置，行号从所属任务列表项（li）经 Context 传入。
 const TaskItemLineContext = createContext<number | null>(null)
-
-// 表格内的链接显示文本要做截短（完整 URL 会任意断行撑高整行），标记当前是否处于表格里；
-// 与编辑态共用 truncateLinkLabel，两态截断结果一致。
-const PreviewTableContext = createContext(false)
 
 // 阅读态表格的列宽对齐编辑态：同一份内容推导算法 + 同一份 localStorage 列宽偏好。
 // tableStartLines 是正文里各表格起始行（1 起），用来把 hast 里的第几张表换算成
@@ -323,7 +318,6 @@ function buildMarkdownComponents(
       return <li id={id} data-source-line={previewLine + sourceLineOffset}><TaskItemLineContext.Provider value={previewLine}>{children}</TaskItemLineContext.Provider></li>
     },
     a({ children, href, id, "aria-label": label }: { id?: string; "aria-label"?: string; children?: ReactNode; href?: string }) {
-      const inTable = useContext(PreviewTableContext)
       const embedTarget = parseWikiEmbedHref(href)
       if (embedTarget) return <button className="wiki-link" onClick={() => handlersRef.current.onWikiLink(embedTarget)} type="button">{children}</button>
       const wikiTarget = parseWikiHref(href)
@@ -335,11 +329,6 @@ function buildMarkdownComponents(
       if (href?.startsWith("#")) return <MarkdownAnchorLink href={href} id={id} label={label}>{children}</MarkdownAnchorLink>
       // Tauri WebView 默认拒绝 target=_blank 的新窗口请求，点击统一交给 openExternalUrl；
       // href 保留给悬停预览与右键菜单。
-      // rehype-selection-text 会把链接文字包一层 span（正文查找高亮依赖这个 class），
-      // 表格内截短要替换 span 里的文本而不是丢掉这层包裹。
-      const selectionSpan = isValidElement<{ className?: string, children?: ReactNode }>(children) && children.props.className === "markdown-selection-text" ? children : null
-      const rawLabel = typeof children === "string" ? children : selectionSpan && typeof selectionSpan.props.children === "string" ? selectionSpan.props.children : null
-      const truncated = inTable && rawLabel ? truncateLinkLabel(rawLabel) : null
       return (
         <a
           className="markdown-external-link"
@@ -351,10 +340,8 @@ function buildMarkdownComponents(
           }}
           rel="noreferrer noopener"
           target="_blank"
-          // 截短后悬停要能看到完整原文。
-          title={truncated !== null && truncated !== rawLabel ? `${rawLabel ?? ""}\n${href ?? ""}` : undefined}
         >
-          {truncated === null ? children : selectionSpan ? <span className="markdown-selection-text">{truncated}</span> : truncated}
+          {children}
         </a>
       )
     },
@@ -510,7 +497,7 @@ function ScrollableMarkdownTable({ children, node, sourceLineOffset, text }: {
               {columnWidths.map((width, index) => <col key={index} style={{ width }} />)}
             </colgroup>
           ) : null}
-          <PreviewTableContext.Provider value={true}>{children}</PreviewTableContext.Provider>
+          {children}
         </table>
       </div>
       <span aria-hidden="true" className="markdown-table-scroll-hint">左右滑动</span>
