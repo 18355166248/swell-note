@@ -14,6 +14,7 @@ export function TableContextMenu() {
   const trigger = useRef<HTMLSpanElement>(null)
   const target = useRef<Snapshot | null>(null)
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
+  const [hint, setHint] = useState("")
 
   useEffect(() => {
     const open = (event: MouseEvent) => {
@@ -54,33 +55,47 @@ export function TableContextMenu() {
     if (!saved) return
     action(saved.api)
   }
+  // 复制走异步剪贴板写入，失败（iOS 未授权等）必须让用户看见，否则会以为复制成功了。
+  const copy = () => {
+    const saved = target.current
+    if (!saved) return
+    void saved.api.copySelection().then((done) => { if (!done) setHint("复制失败，请使用 ⌘/Ctrl+C") })
+  }
+  useEffect(() => {
+    if (!hint) return
+    const timer = window.setTimeout(() => setHint(""), 3000)
+    return () => window.clearTimeout(timer)
+  }, [hint])
   const state = snapshot?.state
   const rangeSuffix = state?.hasRangeSelection ? "选中区域" : null
 
   return (
-    <ContextMenu modal={false}>
-      <ContextMenuTrigger ref={trigger} className="fixed size-0 pointer-events-none" aria-hidden />
-      <ContextMenuContent onCloseAutoFocus={(event) => {
-        // 隐藏触发器不接收焦点；编辑中的单元格已在打开前提交，焦点留在正文即可。
-        event.preventDefault()
-      }}>
-        <ContextMenuItem onSelect={() => run((api) => void api.copySelection())}><Copy />{rangeSuffix ? "复制选中区域" : "复制"}</ContextMenuItem>
-        {state && !state.readOnly ? (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem disabled={!state.canInsertRowAbove} onSelect={() => run((api) => api.insertRow("above"))}><ArrowUp />在上方插入行</ContextMenuItem>
-            <ContextMenuItem onSelect={() => run((api) => api.insertRow("below"))}><ArrowDown />在下方插入行</ContextMenuItem>
-            <ContextMenuItem onSelect={() => run((api) => api.insertColumn("left"))}><ArrowLeft />在左侧插入列</ContextMenuItem>
-            <ContextMenuItem onSelect={() => run((api) => api.insertColumn("right"))}><ArrowRight />在右侧插入列</ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem disabled={!state.canClear} onSelect={() => run((api) => api.clearContents())}><Eraser />{rangeSuffix ? "清空选中区域" : "清空内容"}</ContextMenuItem>
-            <ContextMenuItem disabled={!state.canDeleteRow} variant="destructive" onSelect={() => run((api) => api.deleteRows())}><Trash2 />{rangeSuffix ? "删除选中行" : "删除行"}</ContextMenuItem>
-            <ContextMenuItem disabled={!state.canDeleteColumn} variant="destructive" onSelect={() => run((api) => api.deleteColumns())}><Trash2 />{rangeSuffix ? "删除选中列" : "删除列"}</ContextMenuItem>
-            <ContextMenuSeparator />
-            <ContextMenuItem variant="destructive" onSelect={() => run((api) => api.deleteWholeTable())}><Trash2 />删除表格</ContextMenuItem>
-          </>
-        ) : null}
-      </ContextMenuContent>
-    </ContextMenu>
+    <>
+      <ContextMenu modal={false}>
+        <ContextMenuTrigger ref={trigger} className="fixed size-0 pointer-events-none" aria-hidden />
+        <ContextMenuContent onCloseAutoFocus={(event) => {
+          // 隐藏触发器不接收焦点；编辑中的单元格已在打开前提交，焦点留在正文即可。
+          event.preventDefault()
+        }}>
+          <ContextMenuItem onSelect={copy}><Copy />{rangeSuffix ? "复制选中区域" : "复制"}</ContextMenuItem>
+          {state && !state.readOnly ? (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem disabled={!state.canInsertRowAbove} onSelect={() => run((api) => api.insertRow("above"))}><ArrowUp />在上方插入行</ContextMenuItem>
+              <ContextMenuItem onSelect={() => run((api) => api.insertRow("below"))}><ArrowDown />在下方插入行</ContextMenuItem>
+              <ContextMenuItem onSelect={() => run((api) => api.insertColumn("left"))}><ArrowLeft />在左侧插入列</ContextMenuItem>
+              <ContextMenuItem onSelect={() => run((api) => api.insertColumn("right"))}><ArrowRight />在右侧插入列</ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem disabled={!state.canClear} onSelect={() => run((api) => api.clearContents())}><Eraser />{rangeSuffix ? "清空选中区域" : "清空内容"}</ContextMenuItem>
+              <ContextMenuItem disabled={!state.canDeleteRow} variant="destructive" onSelect={() => run((api) => api.deleteRows())}><Trash2 />{rangeSuffix ? "删除选中行" : "删除行"}</ContextMenuItem>
+              <ContextMenuItem disabled={!state.canDeleteColumn} variant="destructive" onSelect={() => run((api) => api.deleteColumns())}><Trash2 />{rangeSuffix ? "删除选中列" : "删除列"}</ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem variant="destructive" onSelect={() => run((api) => api.deleteWholeTable())}><Trash2 />删除表格</ContextMenuItem>
+            </>
+          ) : null}
+        </ContextMenuContent>
+      </ContextMenu>
+      {hint ? <div role="status" className="fixed bottom-6 left-1/2 z-[100] -translate-x-1/2 rounded-lg bg-popover px-4 py-2 text-sm shadow-lg">{hint}</div> : null}
+    </>
   )
 }

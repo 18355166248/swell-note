@@ -1840,7 +1840,27 @@ export class TableWidget extends WidgetType {
         ? tableCellAt(current, target.row, target.column)
         : ""
     if (!text) return false
-    return writeClipboardText(text)
+    // 必须用 "text" 回退：表格多格选区是用 CSS class 画的，DOM 选区早被清空，
+    // 默认的 "selection" 回退读不到任何内容，授权被拒时会静默失败（看起来像点了没反应）。
+    return writeClipboardText(text, "text")
+  }
+
+  // 浮层与右键菜单的复制失败没有事件可以回报，只能自己给出可见反馈，
+  // 否则用户以为已复制，粘出来却是上一次的旧内容。
+  private reportCopyFailure() {
+    const bar = this.floatingBar
+    // 等待剪贴板授权期间表格可能已被重建（回退路径会临时移走焦点），浮层随之销毁。
+    if (!bar?.isConnected) return
+    const existing = bar.querySelector<HTMLElement>("[data-float-notice]")
+    if (existing) return
+    const notice = document.createElement("span")
+    notice.dataset.floatNotice = "true"
+    notice.className = "cm-md-table-floatbar-notice"
+    notice.setAttribute("role", "status")
+    notice.textContent = "复制失败"
+    bar.append(notice)
+    const timer = window.setTimeout(() => notice.remove(), 2200)
+    this.cleanupCallbacks.add(() => window.clearTimeout(timer))
   }
 
   private opToggleRangeMark(mark: "**" | "*" | "~~" | "`") {
@@ -1919,7 +1939,7 @@ export class TableWidget extends WidgetType {
       bar.append(button)
       return button
     }
-    addButton("复制", "copy", () => void this.opCopySelection(), "复制选中单元格（⌘/Ctrl+C）")
+    addButton("复制", "copy", () => { void this.opCopySelection().then((done) => { if (!done) this.reportCopyFailure() }) }, "复制选中单元格（⌘/Ctrl+C）")
     addButton("清空", "clear", () => this.opClearContents(), "清空选中单元格内容（Delete）")
     addButton("加粗", "bold", () => this.opToggleRangeMark("**"))
     addButton("斜体", "italic", () => this.opToggleRangeMark("*"))

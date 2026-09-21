@@ -34,6 +34,11 @@ export function DocumentContextMenu(props: Props) {
   const [link, setLink] = useState<{ element: HTMLElement; address: string } | null>(null)
   const range = useRef<Range | null>(null)
   const root = useRef<HTMLElement | null>(null)
+  // 阅读态取文本必须走 Selection.toString()，不能用保存的 Range 克隆：
+  // Range.toString() 只是把范围内的文本节点原样拼起来，会把 App.css 里 user-select:none
+  // 排除掉的界面文字（代码块语言名与「复制」按钮、表格「左右滑动」提示）当成正文带出去，
+  // 表格单元格之间的制表符也会丢；Selection.toString() 给的是渲染后的可见文字，与 ⌘C 一致。
+  const previewSelectionText = () => window.getSelection()?.toString() ?? ""
   const restore = () => {
     if (!previewing) { editorRef.current?.focus(); return }
     if (!range.current?.startContainer.isConnected) return
@@ -44,7 +49,7 @@ export function DocumentContextMenu(props: Props) {
   const run = async (action: "copy" | "cut" | "paste") => {
     restore()
     const editor = editorRef.current
-    const done = previewing ? await writeClipboardText(range.current?.toString() ?? "")
+    const done = previewing ? await writeClipboardText(previewSelectionText())
       : action === "copy" ? await editor?.copySelection()
       : action === "cut" ? await editor?.cutSelection() : await editor?.pasteAtSelection()
     if (!done) setHint(action === "paste" ? "无法读取剪贴板，请使用 ⌘V / Ctrl+V 粘贴" : "操作失败，请使用键盘快捷键")
@@ -86,7 +91,8 @@ export function DocumentContextMenu(props: Props) {
         root.current = event.currentTarget
         const selection = window.getSelection()
         range.current = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null
-        setSelected(previewing ? Boolean(range.current?.toString()) : props.hasSelection)
+        // 阅读态的可复制内容同样只看可见文字：整段只框住了被排除的界面文字时不该点亮「复制」。
+        setSelected(previewing ? Boolean(range.current && previewSelectionText()) : props.hasSelection)
         setHint("")
       }}>
         {children}

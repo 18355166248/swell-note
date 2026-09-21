@@ -167,6 +167,8 @@
 .cm-md-table-floatbar button:disabled { opacity: .4; cursor: not-allowed; }
 .cm-md-table-floatbar button:disabled:hover { background: transparent; color: var(--muted-foreground); }
 .cm-md-table-floatbar [data-float-action^="delete"]:not(:disabled):hover { background: #fff0f0; color: #c93636; }
+/* 复制失败提示：并入浮层行尾，不额外定位，跟着浮层一起随选区移动。 */
+.cm-md-table-floatbar-notice { padding: 0 6px; color: var(--destructive); font-size: 12px; white-space: nowrap; }
 .dark .cm-md-table-floatbar [data-float-action^="delete"]:not(:disabled):hover { background: color-mix(in oklab, var(--destructive) 16%, var(--background)); color: var(--destructive); }
 @media (max-width: 640px) {
   .cm-md-table-floatbar button { min-height: 36px; padding: 3px 10px; font-size: 13px; }

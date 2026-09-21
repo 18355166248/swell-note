@@ -484,6 +484,90 @@ describe("MarkdownEditor", () => {
     Reflect.deleteProperty(navigator, "clipboard")
   })
 
+  it("Cmd-Shift-V 走 paste 事件的 text/plain，不做 HTML 转 Markdown", async () => {
+    // 剪贴板里同时有富文本与纯文本：默认粘贴会把 HTML 转成 Markdown，
+    // 纯文本粘贴必须原样落地 text/plain。优先用 paste 事件里现成的文本，
+    // 不申请剪贴板读取权限——这里把 clipboard.read 设成会失败，一旦被迫走读取就会暴露。
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      read: () => Promise.reject(new Error("不应读取剪贴板")),
+      readText: () => Promise.reject(new Error("不应读取剪贴板")),
+    } })
+    mount(<MarkdownEditor onChange={() => {}} value="原文" />)
+    const view = editorView()
+    act(() => { view.dispatch({ selection: { anchor: view.state.doc.length } }) })
+
+    // 按键序列与真实一致：Meta → Shift → v，中途不能被当成「新按键」清掉标记。
+    const held = () => ({ bubbles: true, cancelable: true, metaKey: true, shiftKey: true })
+    act(() => { view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { ...held(), key: "Meta" })) })
+    act(() => { view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { ...held(), key: "Shift" })) })
+    const event = new KeyboardEvent("keydown", { ...held(), key: "v" })
+    act(() => { view.contentDOM.dispatchEvent(event) })
+    // 不能吞掉按键：拦掉之后 paste 事件根本不会派发，剪贴板里的 text/plain 就浪费了。
+    expect(event.defaultPrevented).toBe(false)
+
+    // html 与 text 刻意写成不同内容：走了 HTML 转换会落地「加粗内容」，
+    // 只有真的取 text/plain 才会是下面这串字面星号。
+    const paste = pasteEvent({ html: "<p><strong>加粗内容</strong></p>", text: "原样**星号**文字" })
+    act(() => { view.contentDOM.dispatchEvent(paste) })
+    expect(paste.defaultPrevented).toBe(true)
+    expect(view.state.doc.toString()).toBe("原文原样**星号**文字")
+    Reflect.deleteProperty(navigator, "clipboard")
+  })
+
+  it("没有 paste 事件时由 keyup 兜底读取剪贴板", async () => {
+    // macOS 的 ⌘⇧V 不是粘贴命令，浏览器不会派发 paste 事件；此时只能主动读剪贴板。
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      read: vi.fn().mockResolvedValue([{
+        getType: vi.fn((type: string) => Promise.resolve(type === "text/plain" ? { text: () => Promise.resolve("**不转义** 的字面文字") } : new Blob(["<strong>不转义</strong> 的字面文字"], { type: "text/html" }))),
+        types: ["text/html", "text/plain"],
+      }]),
+    } })
+    mount(<MarkdownEditor onChange={() => {}} value="原文" />)
+    const view = editorView()
+    act(() => { view.dispatch({ selection: { anchor: view.state.doc.length } }) })
+
+    act(() => { view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "v", metaKey: true, shiftKey: true })) })
+    // 没有 paste 事件，直接松开按键。
+    act(() => { view.contentDOM.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key: "v", metaKey: true, shiftKey: true })) })
+
+    await act(async () => { for (let attempt = 0; attempt < 30 && !view.state.doc.toString().includes("字面文字"); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10)) })
+    expect(view.state.doc.toString()).toBe("原文**不转义** 的字面文字")
+    Reflect.deleteProperty(navigator, "clipboard")
+  })
+
+  it("剪贴板里没有纯文本时提示，不改动正文", async () => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      read: vi.fn().mockResolvedValue([{ getType: vi.fn().mockResolvedValue(new Blob(["png"], { type: "image/png" })), types: ["image/png"] }]),
+    } })
+    const onPasteError = vi.fn()
+    mount(<MarkdownEditor onChange={() => {}} onPasteError={onPasteError} value="原文" />)
+    const view = editorView()
+    // 同上：走 keyup 兜底这条会真正读剪贴板的路径。
+    act(() => { view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "v", metaKey: true, shiftKey: true })) })
+    act(() => { view.contentDOM.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, cancelable: true, key: "v", metaKey: true, shiftKey: true })) })
+
+    await act(async () => { for (let attempt = 0; attempt < 30 && !onPasteError.mock.calls.length; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10)) })
+    expect(onPasteError).toHaveBeenCalledWith("剪贴板里没有纯文本内容")
+    expect(view.state.doc.toString()).toBe("原文")
+    Reflect.deleteProperty(navigator, "clipboard")
+  })
+
+  it("剪贴板被拒时普通粘贴仍走 paste 事件，不依赖 Clipboard API", async () => {
+    // 审阅指出的退化路径：Web / Windows / iOS 上 Clipboard API 可能被拒或不可用。
+    // 只要 paste 事件带着 text/plain 到达，默认粘贴就必须照常工作。
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      read: () => Promise.reject(new DOMException("denied", "NotAllowedError")),
+      readText: () => Promise.reject(new DOMException("denied", "NotAllowedError")),
+    } })
+    mount(<MarkdownEditor onChange={() => {}} value="原文" />)
+    const view = editorView()
+    act(() => { view.dispatch({ selection: { anchor: view.state.doc.length } }) })
+
+    act(() => { view.contentDOM.dispatchEvent(pasteEvent({ text: "贴进来的纯文字" })) })
+    expect(view.state.doc.toString()).toBe("原文贴进来的纯文字")
+    Reflect.deleteProperty(navigator, "clipboard")
+  })
+
   it("菜单异步读取期间选区变化会取消图片插入", async () => {
     const handle = createRef<MarkdownEditorHandle>()
     let resolveRead!: (value: ClipboardItem[]) => void

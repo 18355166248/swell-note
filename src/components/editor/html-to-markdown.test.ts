@@ -207,4 +207,68 @@ describe("htmlToMarkdown", () => {
     expect(item.textContent?.trim()).toBe("首\n中间\n尾")
     expect(Array.from(item.querySelectorAll("p"), (node) => node.textContent)).toEqual(["首", "中间", "尾"])
   })
+
+  it("行内的破折号、小数点与百分号不转义，粘贴后能按原文搜索", () => {
+    const html = "<p>价格 100-200 元，版本 v1.2.3 于 2026.09.21 发布，完成 50% ，见 a_b_c 。</p>"
+    expect(htmlToMarkdown(html)).toBe("价格 100-200 元，版本 v1.2.3 于 2026.09.21 发布，完成 50% ，见 a_b_c 。")
+    // 预览仍须是同一段文字，不能因为少了反斜杠被拆成标题、列表或表格。
+    const body = renderMarkdown(htmlToMarkdown(html)!)
+    expect(body.querySelector("h1, ul, ol, table, hr")).toBeNull()
+    expect(body.textContent).toBe("价格 100-200 元，版本 v1.2.3 于 2026.09.21 发布，完成 50% ，见 a_b_c 。")
+  })
+
+  it("行内的 ` * [ < ~ 仍然转义，不生成代码、强调、链接与删除线", () => {
+    const html = "<p>a `b` c *d* e [f] g 1 < 2 与 i~j~k 还有 l~~m</p>"
+    const body = renderMarkdown(htmlToMarkdown(html)!)
+    expect(body.querySelector("code, strong, em, a, del")).toBeNull()
+    expect(body.textContent).toBe("a `b` c *d* e [f] g 1 < 2 与 i~j~k 还有 l~~m")
+  })
+
+  it("文本节点以块级标记开头时仍按字面渲染", () => {
+    const html = "<p># 井号开头</p><p>- 短横开头</p><p>1. 序号开头</p><p>&gt; 引用开头</p>"
+    const body = renderMarkdown(htmlToMarkdown(html)!)
+    expect(body.querySelector("h1, ul, ol, blockquote")).toBeNull()
+    expect(Array.from(body.querySelectorAll("p"), (node) => node.textContent)).toEqual(["# 井号开头", "- 短横开头", "1. 序号开头", "> 引用开头"])
+  })
+
+  it("词中的下划线不转义，snake_case 保持可搜索", () => {
+    expect(htmlToMarkdown("<p>字段 user_name 与 file_path_2 未变</p>")).toBe("字段 user_name 与 file_path_2 未变")
+  })
+
+  it("段落中间的块级标记不转义，富文本切分文本节点后仍能按原文搜索", () => {
+    // 富文本常用 span/strong 把一句话切成多个文本节点。若按「文本节点开头」判断行首，
+    // # 与 - 会被平白塞进反斜杠，粘贴后按原文搜索就搜不到了。
+    expect(htmlToMarkdown("<p>前缀<strong>粗体</strong># 标签</p>")).toBe("前缀**粗体**# 标签")
+    expect(htmlToMarkdown("<p>说明<span>-</span> 后缀</p>")).toBe("说明- 后缀")
+    expect(htmlToMarkdown("<p>甲<span>1. </span>乙</p>")).toBe("甲1. 乙")
+    expect(htmlToMarkdown("<p>见 <span>a|b</span> 与 <em>c</em> 号</p>")).toBe("见 a|b 与 *c* 号")
+  })
+
+  it("真正的行首仍转义块级标记，不生成标题与列表", () => {
+    // 反例的另一面：标记确实落在行首时必须照旧转义，否则内容会被解析成结构。
+    const body = renderMarkdown(htmlToMarkdown("<p><span># 井号开头</span></p>")!)
+    expect(body.querySelector("h1")).toBeNull()
+    expect(body.textContent).toBe("# 井号开头")
+    expect(htmlToMarkdown("<p><span>- 短横开头</span></p>")).toContain("\\-")
+    // 前面已经带上 ** 前缀时 - 不在行首，不该多转义。
+    expect(htmlToMarkdown("<p><strong>- 短横开头</strong></p>")).toBe("**- 短横开头**")
+  })
+
+  it("硬换行之后重新算行首，换行后的标记仍转义", () => {
+    // <br> 之后的文字落在新的一行上，行首标记重新成为结构。
+    const markdown = htmlToMarkdown("<p>首行<br># 次行</p>")!
+    expect(markdown).toContain("\\# 次行")
+    const body = renderMarkdown(markdown)
+    expect(body.querySelector("h1")).toBeNull()
+    expect(body.textContent?.replace(/\s+/g, " ").trim()).toBe("首行 # 次行")
+  })
+
+  it("嵌套行内节点的硬换行也会恢复行首状态", () => {
+    // span 开始时位于段落中间，但它内部的 <br> 会开启新行；行首状态不能被父级的 false 锁死。
+    const markdown = htmlToMarkdown("<p>首行<span><br> # 次行</span></p>")!
+    expect(markdown).toContain("\\# 次行")
+    const body = renderMarkdown(markdown)
+    expect(body.querySelector("h1")).toBeNull()
+    expect(body.textContent?.replace(/\s+/g, " ").trim()).toBe("首行 # 次行")
+  })
 })

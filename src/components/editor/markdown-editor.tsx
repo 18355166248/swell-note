@@ -153,6 +153,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     const revisionRef = useRef(revision)
     revisionRef.current = revision
     const insertionMarks = useRef(new Set<{ anchor?: number; from: number; head?: number; to: number }>())
+    // ⌘/Ctrl+⇧+V 按下后置位，交给紧随其后的 paste 事件消费；keyup 时仍未消费则主动读剪贴板。
+    const plainPastePendingRef = useRef(false)
     const [theme, setTheme] = useState<"dark" | "light">(() => document.documentElement.classList.contains("dark") ? "dark" : "light")
     useEffect(() => {
       const observer = new MutationObserver(() => setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light"))
@@ -365,6 +367,26 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         paste(event, view) {
           const clipboard = readClipboardEvent(event.clipboardData)
           const text = clipboard.text
+          // ⌘/Ctrl+⇧+V 的那一次粘贴：剪贴板里现成的 text/plain 就是结果，
+          // 既不转 HTML，也不做链接包裹与附件插入，因此放在所有分支之前。
+          if (plainPastePendingRef.current) {
+            plainPastePendingRef.current = false
+            // 输入框（如表格单元格）本来就只接受纯文本，交回原生即可。
+            if (isEditableFormControl(event.target) || view.state.readOnly) return false
+            event.preventDefault()
+            if (!text) {
+              handlers.current.onPasteError?.("剪贴板里没有纯文本内容")
+              return true
+            }
+            const range = view.state.selection.main
+            view.dispatch({
+              changes: { from: range.from, to: range.to, insert: text },
+              selection: { anchor: range.from + text.length },
+              scrollIntoView: true,
+              userEvent: "input.paste",
+            })
+            return true
+          }
           // 代码范围中的粘贴必须保持字面内容：URL 不能包成链接，HTML 也不能转换成强调/列表。
           // 返回 false 交给 CodeMirror 原生粘贴，可保留一次撤销且不改动选区之外的文本。
           if (!control.getSettings().readOnly && shouldPasteAsPlainText(view.state)) return false
@@ -450,9 +472,39 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           }
           return false
         },
+        // ⌘/Ctrl+⇧+V 在本机 Chrome 上不派发 paste 事件（macOS 的「粘贴并匹配样式」是
+        // ⌥⇧⌘V，⌘⇧V 根本不是粘贴命令），只设标记会让快捷键彻底失效。paste 事件总在
+        // keyup 之前到达，所以 keyup 时标记仍在，就说明这次没有 paste 可取，改为主动读
+        // 剪贴板。这条路径需要权限，但此时它是唯一出路。
+        keyup(event, view) {
+          if (!plainPastePendingRef.current) return false
+          if (event.key.toLocaleLowerCase() !== "v") return false
+          plainPastePendingRef.current = false
+          if (view.state.readOnly) return false
+          void pastePlainTextAtSnapshot(view, (message) => handlers.current.onPasteError?.(message), () => controlRef.current === control && view.dom.isConnected)
+          return false
+        },
         keydown(event, view) {
-          if (event.isComposing || !(event.metaKey || event.ctrlKey) || event.altKey) return false
+          // 标记只服务于紧随 ⌘⇧V 的那一次粘贴，任何新按键都说明那一趟已经结束。
+          // 必须放在最前面（含无修饰键的按键）：否则标记会一直挂着，被后来的普通粘贴误消费。
+          plainPastePendingRef.current = false
+          if (event.isComposing || !(event.metaKey || event.ctrlKey)) return false
           const key = event.key.toLocaleLowerCase()
+          // ⌘/Ctrl+⇧+V：粘贴为纯文本。网页/Office 的富文本剪贴板默认会被转成 Markdown，
+          // 想原样保留一段带 * 或列表符号的文字时没有别的入口。macOS 的「粘贴并匹配样式」
+          // ⌥⇧⌘V 语义相同，一并接管。
+          //
+          // 这里刻意不 preventDefault：实测在本机 Chrome 上拦掉按键后 paste 事件根本不会
+          // 派发，剪贴板里现成的 text/plain 就白白浪费，还得额外申请读取权限。改为只留一个
+          // 一次性标记，由下面的 paste 处理器取用 event.clipboardData；没有 paste 事件的
+          // 平台（macOS 的 ⌘⇧V 不是粘贴命令）由 keyup 兜底主动读取。
+          // 判断放在 altKey 之前：⌥⇧⌘V 是 macOS 原生的同义快捷键。其余组合键仍要求无 alt。
+          if (key === "v" && event.shiftKey) {
+            if (view.state.readOnly) return false
+            plainPastePendingRef.current = true
+            return false
+          }
+          if (event.altKey) return false
           if (key === "s") {
             // 文档变化已实时进入本地工作副本；拦截浏览器“保存网页”即可避免误操作。
             event.preventDefault()
@@ -1005,6 +1057,37 @@ async function pasteClipboardAtSnapshot(view: EditorView, onInsertFiles: (files:
     if (isCurrent()) onError?.(error instanceof Error ? error.message : "读取剪贴板失败")
   }
   return false
+}
+
+// 粘贴为纯文本：只取剪贴板的 text/plain，完全不看 HTML，也不做链接包裹与附件插入。
+// 与 pasteAtSelection 的区别就在这里——那条路径面向「贴进来还要保留格式」，
+// 这条面向「贴进来必须是我复制的字符本身」。
+async function pastePlainTextAtSnapshot(
+  view: EditorView,
+  onError?: (message: string) => void,
+  isCurrent: () => boolean = () => true,
+) {
+  const state = view.state
+  try {
+    const content = await readClipboardContent()
+    // 读取剪贴板需要授权，是异步的；期间用户可能已经切走笔记或改了选区。
+    if (!isCurrent() || !view.dom.isConnected || view.state.doc !== state.doc || !view.state.selection.eq(state.selection) || view.state.readOnly) return false
+    if (!content.text) {
+      onError?.("剪贴板里没有纯文本内容")
+      return false
+    }
+    const range = state.selection.main
+    view.dispatch({
+      changes: { from: range.from, to: range.to, insert: content.text },
+      selection: { anchor: range.from + content.text.length },
+      scrollIntoView: true,
+      userEvent: "input.paste",
+    })
+    return true
+  } catch (error) {
+    if (isCurrent()) onError?.(error instanceof Error ? error.message : "读取剪贴板失败")
+    return false
+  }
 }
 
 export function selectedMarkdownRange(view: EditorView | undefined) {

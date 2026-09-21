@@ -85,7 +85,8 @@ function renderBlockChildren(parent: ParentNode, indent: string): string[] {
         continue
       }
     }
-    inlineBuffer += renderInline(node)
+    // 行首标记只在段落真正开头生效：缓冲区已有内容时，这个节点落在段落中间。
+    inlineBuffer += renderInline(node, stillAtLineStart(inlineBuffer))
   }
   flushInline()
   return blocks
@@ -164,7 +165,8 @@ function renderList(list: Element, indent: string): string {
           continue
         }
       }
-      inline += renderInline(node)
+      // 条目内容虽然接在列表标记之后，但独立成分块时会另起一行，行首标记仍需转义。
+      inline += renderInline(node, stillAtLineStart(inline))
     }
     flushInline()
     // 任务勾选框追加在列表标记之后（- [x] 项），单独输出 "[x]" 会被当成普通段落。
@@ -185,19 +187,48 @@ function renderList(list: Element, indent: string): string {
   return lines.join("\n")
 }
 
-function renderInlineChildren(element: Element): string {
-  return Array.from(element.childNodes, renderInline).join("")
+function renderInlineChildren(element: Element, atLineStart = true): string {
+  let rendered = ""
+  let lineStart = atLineStart
+  for (const node of Array.from(element.childNodes)) {
+    const part = renderInline(node, lineStart)
+    rendered += part
+    lineStart = lineStartAfter(part, lineStart)
+  }
+  return rendered
 }
 
-function renderInline(node: Node): string {
-  if (node.nodeType === Node.TEXT_NODE) return escapeMarkdownText(collapseWhitespace(node.textContent ?? ""))
+// 已渲染内容是否仍停在当前行开头：硬换行后的缩进空白不改变行首状态。
+// 这样 <p>首<span><br> # 次行</span></p> 即使进入 span 时不在行首，<br> 之后
+// 也会重新识别出真正的行首，避免把次行误解析成标题。
+function stillAtLineStart(rendered: string): boolean {
+  const lastBreak = rendered.lastIndexOf(HARD_BREAK)
+  const currentLine = lastBreak >= 0 ? rendered.slice(lastBreak + HARD_BREAK.length) : rendered
+  return currentLine.trim() === ""
+}
+
+function lineStartAfter(rendered: string, previous: boolean): boolean {
+  if (!rendered) return previous
+  const lastBreak = rendered.lastIndexOf(HARD_BREAK)
+  if (lastBreak >= 0) return rendered.slice(lastBreak + HARD_BREAK.length).trim() === ""
+  return previous && rendered.trim() === ""
+}
+
+function renderInline(node: Node, atLineStart: boolean): string {
+  if (node.nodeType === Node.TEXT_NODE) {
+    // 行首标记只在真正的行首转义。富文本会用 span/strong 把一句话切成多个文本节点，
+    // 段落中间恰好以 # 或 - 开头的节点不是结构，转义只会给原文平白塞进反斜杠。
+    return escapeText(collapseWhitespace(node.textContent ?? ""), atLineStart)
+  }
   if (!(node instanceof Element)) return ""
   const tag = node.tagName
   if (tag === "SCRIPT" || tag === "STYLE" || tag === "NOSCRIPT" || tag === "TEMPLATE" || tag === "IFRAME" || tag === "OBJECT") return ""
   if (tag === "BR") return HARD_BREAK
-  if (tag === "STRONG" || tag === "B") return wrapInline("**", renderInlineChildren(node))
-  if (tag === "EM" || tag === "I") return wrapInline("*", renderInlineChildren(node))
-  if (tag === "DEL" || tag === "S" || tag === "STRIKE") return wrapInline("~~", renderInlineChildren(node))
+  // 格式标记各自带前缀（**、*、~~、[、![），行首标记在它们内部不可能成为结构，
+  // 因此一律按「不在行首」传给子节点，避免多余的反斜杠。
+  if (tag === "STRONG" || tag === "B") return wrapInline("**", renderInlineChildren(node, false))
+  if (tag === "EM" || tag === "I") return wrapInline("*", renderInlineChildren(node, false))
+  if (tag === "DEL" || tag === "S" || tag === "STRIKE") return wrapInline("~~", renderInlineChildren(node, false))
   if (tag === "CODE" && node.parentElement?.tagName !== "PRE") {
     const text = node.textContent ?? ""
     if (!text.trim()) return collapseWhitespace(text)
@@ -208,7 +239,8 @@ function renderInline(node: Node): string {
     return `${fence}${padding}${text}${padding}${fence}`
   }
   if (tag === "A") {
-    const label = normalizeInlineWhitespace(renderInlineChildren(node)) || (node.textContent ?? "").trim()
+    // 标签文字前面已经有 "["，永远不在行首。
+    const label = normalizeInlineWhitespace(renderInlineChildren(node, false)) || (node.textContent ?? "").trim()
     const visibleLabel = normalizeInlineWhitespace(node.textContent ?? "")
     const href = (node.getAttribute("href") ?? "").trim()
     if (!label) return ""
@@ -219,12 +251,14 @@ function renderInline(node: Node): string {
   if (tag === "IMG") {
     const source = (node.getAttribute("src") ?? "").trim()
     const alt = (node.getAttribute("alt") ?? "").trim()
+    // alt 落在 "![" 之后（或被降级成裸文字时可能位于行首），按行首参数决定是否转义行首标记。
     // 非 http(s) 图片（data:、file: 等）不引入笔记，只保留 alt 文字以免静默丢内容。
-    if (!SAFE_IMAGE_PATTERN.test(source)) return escapeMarkdownText(alt)
-    return `![${escapeMarkdownText(alt)}](${serializeLinkDestination(source)})`
+    if (!SAFE_IMAGE_PATTERN.test(source)) return escapeText(alt, atLineStart)
+    return `![${escapeText(alt, false)}](${serializeLinkDestination(source)})`
   }
-  // 其余行内标签（span、font、mark 等）不对应 Markdown 结构，剥掉标签保留文字。
-  return renderInlineChildren(node)
+  // 其余行内标签（span、font、mark 等）不对应 Markdown 结构，剥掉标签保留文字，
+  // 行首状态原样传给子节点——剥掉标签不会改变内容是否落在行首。
+  return renderInlineChildren(node, atLineStart)
 }
 
 function wrapInline(mark: string, content: string): string {
@@ -247,10 +281,42 @@ function normalizeInlineWhitespace(text: string): string {
   return text.replace(/ *\n */g, "\n").replace(/[ \t]+/g, " ").trim().split(HARD_BREAK).join("  \n")
 }
 
-// 这里只转义来自 HTML 文本节点的 Markdown 标点；转换器自己生成的链接、强调、表格语法
-// 不经过此函数，因此既能保留字面符号，又不会出现整段二次转义。
-function escapeMarkdownText(text: string): string {
-  return text.replace(/[\\`*{}\[\]()#+\-.!_|<>~&]/g, "\\$&")
+// 只转义真的会改变解析的字符。反斜杠、行内代码的反引号、强调星号、方括号（方括号必须成对
+// 转义，只转义左括号会让标签与链接文本的配对错位）、尖括号（HTML 标签、自动链接）、
+// 波浪号在任何位置都成语法，一律转义；下划线只在词首词尾成强调，snake_case 里的 _ 是字面量；
+// & 只在构成实体引用时才被解析。
+// 星号与波浪号不收窄：星号允许词内成对（a*b*c 会被解析成强调），波浪号更是单个就能配成
+// 删除线（remark-gfm 的 singleTilde 默认开启，x~y~z 里的 ~y~ 同样成语法），都不能靠两侧判断。
+// 行首标记（- + # > 数字序号 表格竖线）另由 escapeLineStartMarks 按真实行首判断——
+// 正文中间的它们都是字面量，「100-200」「v1.2.3」不该被塞进反斜杠，粘贴后 ⌘F 才能搜到原文。
+const INLINE_MARK_PATTERN = /[\\`*\[\]<~]|(?<![A-Za-z0-9])_|_(?![A-Za-z0-9])|&(?=[A-Za-z][A-Za-z0-9]{1,31};|#[0-9]{1,7};|#[xX][0-9a-fA-F]{1,6};)/g
+
+function escapeInlineMarks(text: string): string {
+  return text.replace(INLINE_MARK_PATTERN, "\\$&")
+}
+
+// 落在一段内容开头的裸文字：行内标记与行首标记都要转义。
+function escapeText(text: string, atLineStart: boolean): string {
+  const escaped = escapeInlineMarks(text)
+  return atLineStart ? escapeLineStartMarks(escaped) : escaped
+}
+
+// 行首标记要同时满足「在行首」与「后面跟空白（或整行只有它）」才是结构：
+// `--flag`、`2.3.4`、`#标签` 都不满足，因此保持原样。缩进空白要一并吃掉再判断，
+// 否则 HTML 源里 <p>\n  - x\n</p> 的缩进会漏判。
+//
+// 「在行首」不能按文本节点判断：富文本会用 span/strong 把一句话切成多个文本节点，
+// <p>前缀<strong>粗</strong># 标签</p> 里的 # 落在段落中间，按节点判断会平白多一个
+// 反斜杠，粘贴后按原文搜索就被打断。真正的行首状态由 renderInlineChildren 累积已渲染
+// 内容得出，只有确实空着的那一行才调用本函数。
+function escapeLineStartMarks(text: string): string {
+  return text
+    .replace(/^([ \t]*)(#{1,6})(?=\s|$)/, "$1\\$2")
+    .replace(/^([ \t]*)>/, "$1\\>")
+    .replace(/^([ \t]*)([-+])(?=\s|$)/, "$1\\$2")
+    .replace(/^([ \t]*\d+)([.)])(?=\s|$)/, "$1\\$2")
+    .replace(/^([ \t]*)(-{3,})[ \t]*$/, "$1\\$2")
+    .replace(/^([ \t]*)\|/, "$1\\|")
 }
 
 function longestBacktickRun(text: string): number {
