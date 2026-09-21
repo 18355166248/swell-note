@@ -1,0 +1,42 @@
+src/components/editor/markdown-table-inline.ts
+  s_61d63aa4b358f8::t_fed3b961cdfe99 49,51-52
+  s_61d63aa4b358f8::t_3d88cef51f09e0 61-62,68,70
+  s_61d63aa4b358f8::t_29c41452e1286a 151,155
+src/components/editor/markdown-preview.tsx
+  s_61d63aa4b358f8::t_27458df036ff54 1
+  s_61d63aa4b358f8::t_be048fce9db644 344
+  s_61d63aa4b358f8::t_f343fcbaad7bce 500
+src/components/editor/live-preview.test.ts
+  s_61d63aa4b358f8::t_5f4000395dc65a 880-881
+src/components/editor/markdown-table-inline.test.ts
+  s_61d63aa4b358f8::t_8a0cc0b1fd94ab 4,12-15,18,20-24,27,29-30
+  s_61d63aa4b358f8::t_d1e1b536630dfc 114-120,123,125-127,130-132
+src/components/editor/markdown-preview.test.tsx
+  s_61d63aa4b358f8::t_750cf9b7e410ec 143,154,156-157
+src/components/editor/markdown-table.css
+  s_d95265c1b2e24d::t_33ae9afb05e0c5 106-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "d2081515ba3c42b47d45565246e906def9e49145",
+  "prompts": {},
+  "sessions": {
+    "s_61d63aa4b358f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8c35d93e-5a8d-49aa-bcf2-b647e4677219",
+        "model": "deepseek-v4-flash-vision-tencent"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    },
+    "s_d95265c1b2e24d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b866f5e5-d563-4163-a6ca-347bdce33307",
+        "model": "deepseek-v4-flash-vision-tencent"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
