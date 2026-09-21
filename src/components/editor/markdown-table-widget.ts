@@ -1615,6 +1615,10 @@ export class TableWidget extends WidgetType {
       if (target && (wrapper.contains(target) || this.floatingBar?.contains(target))) return
       // 右键菜单面板在 Portal 里，不属于 wrapper；菜单打开时保留选区。
       if (target instanceof Element && target.closest('[data-slot="context-menu-content"]')) return
+      // 表格工具条的菜单面板展开时会被移到 body（见 createToolbarMenu），同样不属于 wrapper。
+      // 不豁免的话，点「添加行」的 pointerdown 会先把选区清掉，等 click 处理器读选区时
+      // 已是 null，pin 不上去——重建后高亮消失，隐藏选区却仍在响应清空/复制。
+      if (target instanceof Element && target.closest(".cm-md-table-menu-panel")) return
       this.clearCellRange(wrapper)
     }
     const onKeyDown = (event: KeyboardEvent) => {

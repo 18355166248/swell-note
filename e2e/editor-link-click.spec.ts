@@ -1,6 +1,18 @@
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test, type Locator, type Page } from "@playwright/test"
 
 import { useCompatibilityPreview } from "./note-view-mode"
+
+// 右键 → 点某一项，两步之间必须等上一轮菜单从 DOM 里消失。
+// 关闭的浮层在退场动画（约 100ms）期间仍挂在 body 上，此时右键的 pointerup 会被
+// 它或刚展开的新菜单的菜单项接走（Radix 在 pointerdown 落在别处时，pointerup 会补发该项的 click），
+// 于是一次右键就误触发了别的操作。人手右键不可能快到这个窗口里，只有测试会。
+function awaitContextMenuOpener(page: Page, target: Locator) {
+  return async (itemName: string) => {
+    await expect(page.getByRole("menuitem")).toHaveCount(0)
+    await target.click({ button: "right" })
+    await page.getByRole("menuitem", { name: itemName, exact: true }).click()
+  }
+}
 
 async function seedCachedVault(page: Page, noteContent?: string, readOnly = false, secondNoteContent = "# 第二篇\n\n正文 B") {
   await page.goto("/#/notes")
@@ -368,32 +380,30 @@ test.describe("编辑细节", () => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page, "记录今天的想法")
     const editor = page.locator(".cm-content")
+    const openMenu = awaitContextMenuOpener(page, editor)
     await editor.click()
     await editor.press("ControlOrMeta+a")
-    await editor.click({ button: "right" })
-    await page.getByRole("menuitem", { name: "加粗", exact: true }).click()
-    await expect(editor).toHaveText("**记录今天的想法**")
-    await editor.click({ button: "right" })
-    await page.getByRole("menuitem", { name: "撤销", exact: true }).click()
-    await expect(editor).toHaveText("记录今天的想法")
+    await openMenu("加粗")
+    // 实时预览把 `**` 星号渲染隐藏了，DOM 文本在加粗前后都是「记录今天的想法」，
+    // 不能拿它断言格式是否生效——必须数加粗标记节点，否则加粗没生效这条也会通过。
+    await expect(editor.locator(".cm-md-strong")).toHaveCount(1)
+    await openMenu("撤销")
+    await expect(editor.locator(".cm-md-strong")).toHaveCount(0)
     await page.evaluate(() => {
       Object.defineProperty(navigator, "clipboard", { configurable: true, value: { readText: async () => "新的正文", writeText: async () => {} } })
     })
     await editor.click()
     await editor.press("ControlOrMeta+a")
-    await editor.click({ button: "right" })
-    await page.getByRole("menuitem", { name: "粘贴", exact: true }).click()
+    await openMenu("粘贴")
     await expect(editor).toHaveText("新的正文")
     await page.evaluate(() => {
       Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { sessionStorage.setItem("copied", text) } } })
     })
     await editor.press("ControlOrMeta+a")
-    await editor.click({ button: "right" })
-    await page.getByRole("menuitem", { name: "剪切", exact: true }).click()
+    await openMenu("剪切")
     await expect(editor.locator(".cm-placeholder")).toBeVisible()
     expect(await page.evaluate(() => sessionStorage.getItem("copied"))).toBe("新的正文")
-    await editor.click({ button: "right" })
-    await page.getByRole("menuitem", { name: "粘贴", exact: true }).click()
+    await openMenu("粘贴")
     await expect(page.getByRole("status").filter({ hasText: "无法读取剪贴板" })).toBeVisible()
     await expect(editor.locator(".cm-placeholder")).toBeVisible()
   })
@@ -445,6 +455,9 @@ test.describe("编辑细节", () => {
   test("右键列表空白与阅读正文显示各自操作", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page, "用于阅读的正文")
+    // 默认视图是一体化编辑画布，`.markdown-preview` 只在兼容阅读视图里存在，
+    // 不先切过去就永远等不到那个元素。
+    await useCompatibilityPreview(page)
     const viewport = page.locator(".note-list-scroll")
     const bounds = await viewport.boundingBox()
     await viewport.click({ button: "right", position: { x: 20, y: bounds!.height - 20 } })
