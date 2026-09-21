@@ -1,0 +1,55 @@
+src/components/workspace/workspace.tsx
+  s_d95265c1b2e24d::t_c2592faff95a4b 4154-4156,4164
+  s_d95265c1b2e24d::t_b56fe34a8dc69f 4153,4157,4160,4162-4163,4165-4168
+  s_d95265c1b2e24d::t_5206cc79657d28 1344-1350,1352-1357
+  s_d95265c1b2e24d::t_561b5333bbd727 208
+  s_d95265c1b2e24d::t_d5601d3bc685a3 582
+  s_d95265c1b2e24d::t_6ab6136b7e1eb6 1315
+  s_d95265c1b2e24d::t_754a124e8bab3d 1485-1498
+  s_d95265c1b2e24d::t_34bcdeb8adcd5d 1312
+  s_d95265c1b2e24d::t_41cc1283bf3b8b 179-181
+  s_d95265c1b2e24d::t_f48abf96965c84 579
+  s_d95265c1b2e24d::t_1c3d6c2a85bcda 881-882,884-885
+  s_d95265c1b2e24d::t_07edca2d2411e1 3770
+  s_d95265c1b2e24d::t_e034a6d984461b 1279
+  s_d95265c1b2e24d::t_000033d713a710 1280-1282
+  s_d95265c1b2e24d::t_da5695de9c2303 554,581,806-807,845,883,1083
+  s_d95265c1b2e24d::t_5a8c616d96dc0c 1351
+e2e/library-default-selection.spec.ts
+  s_d95265c1b2e24d::t_8a41ad5f68defe 3-6,10-12,14,16,25,31,52-53,57,67,71-76,78,80,83-92,94,99,101,104-105,107,112,114,117-119,121,123,130,133-134,136,143-160
+  s_d95265c1b2e24d::t_95284ac9c82036 95-96
+  s_d95265c1b2e24d::t_2a6676b17c662b 1-2,7-9,13,15,17-24,26-30,32-51,54-56,58-66,68-70,77,79,81-82,93,97-98,100,102-103,106,108-111,113,115-116,120,122,124-129,131-132,135,137-142,161-162
+e2e/folder-ordering.spec.ts
+  s_d95265c1b2e24d::t_38e1c593ec8c73 207-210
+src/App.tsx
+  s_d95265c1b2e24d::t_a61b19cf0d9576 694,698,702-712
+  s_d95265c1b2e24d::t_3c0ba614d548b8 4291
+  s_d95265c1b2e24d::t_08756f05828d56 4288,4293
+  s_d95265c1b2e24d::t_5d227adf404eb5 688,693,695-697,699-701,713-714,717,719-721
+  s_d95265c1b2e24d::t_c514394a9bb950 2518-2529
+  s_d95265c1b2e24d::t_34c69877e70773 1264
+  s_d95265c1b2e24d::t_e998fa16ad5c00 4355
+  s_d95265c1b2e24d::t_4d14c809dd170e 4349
+  s_d95265c1b2e24d::t_23046841c5c2e1 1355
+  s_d95265c1b2e24d::t_e7563461849acb 4357
+  s_d95265c1b2e24d::t_febec9b0d59199 2509-2510,2512-2513
+src/components/workspace/library-panel.test.tsx
+  s_d95265c1b2e24d::t_530ffb28ab82c9 39,128,135
+  s_d95265c1b2e24d::t_145ae0ec770aed 123-127,129-134,136-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "08fca9a24b39696f7e1b0eee10f898169abf030c",
+  "prompts": {},
+  "sessions": {
+    "s_d95265c1b2e24d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b866f5e5-d563-4163-a6ca-347bdce33307",
+        "model": "deepseek-v4-flash-vision-tencent"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
