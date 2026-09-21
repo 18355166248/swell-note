@@ -3,8 +3,8 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { syntaxTree } from "@codemirror/language"
 import { languages } from "@codemirror/language-data"
 import { undoDepth, redoDepth } from "@codemirror/commands"
-import type { EditorState, Extension, SelectionRange } from "@codemirror/state"
-import { EditorView, type DecorationSet, type ViewUpdate } from "@codemirror/view"
+import { EditorSelection, type EditorState, type Extension, type SelectionRange } from "@codemirror/state"
+import { Direction, EditorView, type DecorationSet, type ViewUpdate } from "@codemirror/view"
 
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
 import { collectClipboardFiles, readClipboardContent, readClipboardEvent, validateClipboardFiles } from "@/services/clipboard/clipboard-content"
@@ -267,6 +267,32 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         if (!activeTableEdit(update.view)) handlers.current.onFormatStateChange?.(detectFormatState(update.state))
         // 打字打到可视区边缘、或光标跳到远处时同样要跟过去，否则又落到键盘后面。
         if (control.getSettings().platform === "mobile" && update.view.hasFocus) scrollCursorIntoView(update.view)
+      }),
+      // 行右侧空白落到本行行尾（详见 blankLineEndAt）。用 mouseSelectionStyle 而不是
+      // mousedown 处理器：它只替换落点计算，Shift 扩选与多选仍由 CodeMirror 原生驱动。
+      EditorView.mouseSelectionStyle.of((view, event) => {
+        // 双击选词、三击选段另有语义，不在这里改。
+        if (event.detail > 1) return null
+        const end = blankLineEndAt(view, event)
+        if (end === null) return null
+        let anchor = end
+        return {
+          get(curEvent) {
+            // 没有真正拖动（含「已有选区时按下再抬起」这类 CodeMirror 会到 mouseup 才取落点的情况）：
+            // 落点就是按下处那一行的行尾，不再重新做坐标映射，否则又会落回相邻行。
+            const moved = Math.abs(curEvent.clientX - event.clientX) > 2
+              || Math.abs(curEvent.clientY - event.clientY) > 2
+            if (!moved) return EditorSelection.single(anchor)
+            // 从空白处拖选：以按下处的行尾为锚点，另一端仍用 CodeMirror 的坐标映射，
+            // 这样空白区起手也能正常拉出选区，不会把拖动整段钉死在行尾。
+            const cur = view.posAndSideAtCoords({ x: curEvent.clientX, y: curEvent.clientY }, false)
+            if (!cur || cur.pos === anchor) return EditorSelection.single(anchor)
+            return EditorSelection.single(anchor, cur.pos)
+          },
+          update(update) {
+            if (update.docChanged) anchor = update.changes.mapPos(anchor, -1)
+          },
+        }
       }),
       EditorView.domEventHandlers({
         copy(event, view) {
@@ -1128,6 +1154,31 @@ function hasEditorClipboardContext(view: EditorView) {
 
 function isEditableFormControl(target: EventTarget | null) {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+}
+
+// 点击「本行文字右侧的空白」时，把光标明确落到本行行尾。
+// CodeMirror 的 posAtCoords 是按字形矩形就近匹配的，而正文行高（1.85 × 14px ≈ 25.9px/行）
+// 明显高于字形本身（约 18px），文字右侧的空白没有任何字形矩形可匹配，纵向落点就会就近落到
+// 相邻行的字形上；高度缓存与真实排版一旦不一致（改字号、缩放、字体加载完成后重排），行框
+// 下半段就会被判给下一行，表现为「点同一块空白，纵向位置不同结果不同」。
+// 只在规则单行、且鼠标确实位于文字右侧时接手，其余情况（软换行、Bidi、只读、带修饰键）
+// 一律返回 null，交回 CodeMirror 自己定位。
+function blankLineEndAt(view: EditorView, event: MouseEvent): number | null {
+  if (event.button !== 0 || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return null
+  if (view.state.readOnly) return null
+  // 命中文字时事件目标是行内的 span，只有落在行的空白区域才会直接命中 .cm-line 本身。
+  const target = event.target
+  if (!(target instanceof HTMLElement) || !target.classList.contains("cm-line")) return null
+  const line = view.state.doc.lineAt(view.posAtDOM(target, 0))
+  const end = view.coordsAtPos(line.to, -1)
+  const start = view.coordsAtPos(line.from, 1)
+  if (!end || !start) return null
+  // 软换行的逻辑行占多个视觉行，行尾不在鼠标所在的那一段，不能直接送到整个逻辑行末。
+  if (Math.abs(start.top - end.top) > 1) return null
+  // RTL 与混排内容里「行尾」的视觉位置与 LTR 不同，不做修正。
+  if (view.textDirectionAt(line.from) !== Direction.LTR || view.bidiSpans(line).length > 1) return null
+  if (event.clientX <= end.right) return null
+  return line.to
 }
 
 function isStructuralMarkdownLine(state: EditorState, lineFrom: number, contentStart: number) {
