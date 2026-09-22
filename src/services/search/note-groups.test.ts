@@ -15,6 +15,24 @@ function summarize(groups: ReturnType<typeof groupNotesByDate>) {
 }
 
 describe("groupNotesByDate", () => {
+  it("旧笔记置顶后独立成组，普通笔记继续按日期分组且不重复", () => {
+    const notes = [{ ...note("pinned", NOW - 200 * DAY), pinned: true }, note("today", NOW), note("old", NOW - 200 * DAY)]
+    expect(summarize(groupNotesByDate(notes, "updated-desc", NOW))).toEqual([
+      ["置顶", ["pinned"]], ["今天", ["today"]], ["更早", ["old"]],
+    ])
+  })
+
+  it.each(["title-asc", "updated-desc"] as const)("%s 缺少时间也保留置顶分组", (sort) => {
+    expect(summarize(groupNotesByDate([{ ...note("pinned"), pinned: true }, note("other")], sort, NOW))).toEqual([
+      ["置顶", ["pinned"]], [null, ["other"]],
+    ])
+  })
+
+  it("全部置顶时不产生空的普通分组", () => {
+    expect(summarize(groupNotesByDate([{ ...note("pinned", NOW), pinned: true }], "updated-desc", NOW))).toEqual([
+      ["置顶", ["pinned"]],
+    ])
+  })
   it("按真实修改时间分组，而不是按列表下标", () => {
     const notes = [
       note("a", NOW - 3600000),

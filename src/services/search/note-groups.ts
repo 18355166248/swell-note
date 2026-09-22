@@ -25,6 +25,16 @@ export function getLocalDayIndex(timestamp: number) {
 }
 
 export function groupNotesByDate(notes: readonly Note[], sort: NoteSort, now = Date.now()): NoteDateGroup[] {
+  // 置顶独立成组，避免旧笔记置顶后出现「更早 → 今天 → 更早」的日期标题。
+  const pinned = notes.filter((note) => note.pinned)
+  const regular = notes.filter((note) => !note.pinned)
+  return [
+    ...(pinned.length ? [{ key: "pinned", label: "置顶", notes: pinned }] : []),
+    ...groupRegularNotesByDate(regular, sort, now),
+  ]
+}
+
+function groupRegularNotesByDate(notes: readonly Note[], sort: NoteSort, now: number): NoteDateGroup[] {
   if (notes.length === 0) return []
   // 按标题排序时日期标题会与实际顺序矛盾；旧缓存整体缺 modifiedAt 时同样无法分组。
   if (sort === "title-asc" || notes.every((note) => note.modifiedAt === undefined)) {

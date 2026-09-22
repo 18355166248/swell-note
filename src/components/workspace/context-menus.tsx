@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react"
-import { Check, FileText, Folder, FolderInput, FolderOpen, FolderPlus, PencilLine, Plus, Search, Star, StarOff, Trash2 } from "lucide-react"
+import { Check, FileText, Folder, FolderInput, FolderOpen, FolderPlus, PencilLine, Pin, PinOff, Plus, Search, Star, StarOff, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -31,6 +31,7 @@ export type NoteContextActions = {
   onOpen: (note: Note) => void
   onRequest: (request: ContextMenuRequest) => void
   onToggleStar: (noteId: string) => void
+  onTogglePin: (noteId: string) => void
 }
 
 export function NoteListContextMenu({ children, canCreate, onCreate, onSearch }: {
@@ -54,7 +55,7 @@ export function NoteRowContextMenu({ actions, children, note }: {
   children: ReactNode
   note: Note
 }) {
-  const { disabled, folders, onMove, onOpen, onRequest, onToggleStar } = actions
+  const { disabled, folders, onMove, onOpen, onRequest, onTogglePin, onToggleStar } = actions
   // 只读笔记与画布没有可写路径，重命名、移动、删除对它们都无从执行。
   const canManage = Boolean(note.remotePath && !note.readOnly && !disabled)
   const currentFolder = note.folder === "根目录" ? null : note.folder ?? null
@@ -66,6 +67,9 @@ export function NoteRowContextMenu({ actions, children, note }: {
       <ContextMenuContent>
         <ContextMenuLabel>{note.title || "未命名笔记"}</ContextMenuLabel>
         <ContextMenuItem onSelect={() => onOpen(note)}><FileText />打开笔记</ContextMenuItem>
+        <ContextMenuItem onSelect={() => onTogglePin(note.id)}>
+          {note.pinned ? <><PinOff />取消置顶</> : <><Pin />置顶笔记</>}
+        </ContextMenuItem>
         <ContextMenuItem onSelect={() => onToggleStar(note.id)}>
           {note.starred ? <><StarOff />取消收藏</> : <><Star />收藏</>}
         </ContextMenuItem>

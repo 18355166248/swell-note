@@ -16,7 +16,11 @@ import type { EditorSettings } from "./core/editor-types"
 import { editorSessionStore, sessionFields } from "./editor-session"
 import { bottomOverlayHeight, scrollCursorIntoView } from "./cursor-visibility"
 import { applyLinkTarget, detectFormatState, focusExistingLinkUrl, linkInsertion, linkTargetAt, linkTargetInText, removeLinkTarget, type EditorFormatState, type EditorLinkTarget, type InlineMarkKind, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
-import { createClipboardImageCoverage, htmlToMarkdown, isInlineMarkdownFragment, shouldInsertClipboardImageFiles } from "./html-to-markdown"
+import { createClipboardImageCoverage, htmlToMarkdown, isInlineMarkdownFragment, shouldInsertClipboardImageFiles, type HtmlImagePlaceholder } from "./html-to-markdown"
+import type {
+  AttachmentQueueInsertion,
+  AttachmentQueueSlot,
+} from "@/services/vault/attachment-queue"
 import { buildLivePreviewDecorationsForRanges, markdownLivePreviewBase, markdownTableEditing, type EditorLinkTap, type LivePreviewOptions } from "./live-preview"
 import type { EmbeddedWikiNoteResult } from "./markdown-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
@@ -45,7 +49,17 @@ export type MarkdownEditorHandle = {
   // ownerSessionKey 是发起附件的那篇笔记：与本编辑器当前笔记不一致时返回 null。
   // 队列的执行是异步的（前面还排着别的批次），到执行时才读当前编辑器会捕获到用户此刻
   // 正在看的另一篇笔记，书签自身的身份校验也会因此通过，引用就写进了错误的笔记。
-  captureInsertion: (position?: number, ownerSessionKey?: string) => { insert: (text: string) => boolean; dispose: () => void } | null
+  captureInsertion: (position?: number, ownerSessionKey?: string) => BookmarkInsertion | null
+  // 附件批次（粘贴、拖入、文件选择器）用的落点。第一参数是粘贴留下的占位位置，
+  // 下标与 files 对齐；重试时改传上次留下的令牌（retrySlots），由它们取回仍在映射中的占位。
+  captureAttachmentInsertion: (input: {
+    ownerSessionKey?: string
+    /** 首次入队：正文里占位的位置，下标与 files 对齐，没有占位的项为 null。 */
+    placeholders?: readonly AttachmentQueueSlotInput[]
+    position?: number
+    /** 重试：原批次写失败时交回的占位令牌，下标与本次要传的 files 对齐。 */
+    retrySlots?: readonly (AttachmentQueueSlot | null)[]
+  }) => AttachmentQueueInsertion | null
   collapseSelection: () => void
   copySelection: () => Promise<boolean>
   cutSelection: () => Promise<boolean>
@@ -117,7 +131,10 @@ type MarkdownEditorProps = {
   onCursorChange?: (line: number, column: number) => void
   // 光标 / 选区的格式状态（工具栏高亮）；表格单元格编辑时由单元格汇报行内格式。
   onFormatStateChange?: (state: EditorFormatState | null) => void
-  onInsertFiles?: (files: File[], position?: number) => void
+  // 第三个参数只在混合粘贴时有：这一批图片在正文里的占位位置（下标与 files 对齐）。
+  // 返回值表示宿主是否受理——返回 false 时调用方会把「图片写入中…」就地还原成「无法导入」，
+  // 否则正文里会留下一句不会兑现的承诺。
+  onInsertFiles?: (files: File[], position?: number, options?: { slots?: readonly AttachmentQueueSlotInput[] }) => boolean | void
   onPasteError?: (message: string) => void
   // 移动端点按已有链接时不直接跳转，交给宿主弹出「打开 / 编辑 / 移除」菜单。
   onLinkMenu?: (tap: EditorLinkTap) => void
@@ -163,7 +180,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     // 异步附件回写前核对：上传期间被同步合并过就不能按旧偏移落笔。
     const revisionRef = useRef(revision)
     revisionRef.current = revision
-    const insertionMarks = useRef(new Set<{ anchor?: number; from: number; head?: number; to: number }>())
+    const insertionMarks = useRef(new Set<InsertionMark>())
+    // 交回队列等重试的令牌。放 ref 而不是 state：占位随每次文档变化映射位置，
+    // 存进 state 会让正文每敲一个字都重渲染整个编辑器。
+    const pendingSlots = useRef<SlotRegistry>(new WeakMap())
     // ⌘/Ctrl+⇧+V 按下后置位，交给紧随其后的 paste 事件消费；keyup 时仍未消费则主动读剪贴板。
     const plainPastePendingRef = useRef(false)
     const [theme, setTheme] = useState<"dark" | "light">(() => document.documentElement.classList.contains("dark") ? "dark" : "light")
@@ -437,7 +457,15 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
             // 导入不了的图时，只有那一张被补上，另一张得留住占位。
             const imagesCoveredByFiles = shouldInsertClipboardImageFiles(html, files)
             const imageFiles = imagesCoveredByFiles ? files.filter((file) => file.type.startsWith("image/")) : []
-            const markdown = html ? htmlToMarkdown(html, { imageCoveredByFile: createClipboardImageCoverage(html, files) }) : null
+            // 图片在正文里的位置由转换器一并报出（偏移 + 占位文字）。绝不在插入之后
+            // 到正文里搜这段文字：用户可能同时改了正文，搜出来的可能是别人写的那一份。
+            const placeholders: HtmlImagePlaceholder[] = []
+            const markdown = html
+              ? htmlToMarkdown(html, {
+                imageCoveredByFile: createClipboardImageCoverage(html, files),
+                onImagePlaceholder: (placeholder) => placeholders.push(placeholder),
+              })
+              : null
             if (markdown || (imagesCoveredByFiles && imageFiles.length > 0)) {
               // 阻止默认粘贴必须与「文件是否入队」一起决定：HTML 只剩图片节点时转换结果可能为
               // null，此时若提前 return false，文件不会入队、默认粘贴也照常发生，图片和占位一起消失。
@@ -448,16 +476,13 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
                 return true
               }
               const range = view.state.selection.main
+              const insertFrom = range.from
+              let insert = ""
               // 行内片段（单个加粗词、链接等）原位插入，不拆当前段落。
               // 块级结构（标题/列表/表格等）必须落在独立行上：插入点两侧不在行边界时补空行，
               // 否则表格尾行会和后面的文字粘成一行，被表格语法吞掉（内容看似丢失）。
               if (isInlineMarkdownFragment(markdown)) {
-                view.dispatch({
-                  changes: { from: range.from, to: range.to, insert: markdown },
-                  selection: { anchor: range.from + markdown.length },
-                  scrollIntoView: true,
-                  userEvent: "input.paste",
-                })
+                insert = markdown
               } else {
                 const doc = view.state.doc
                 const prevChar = range.from > 0 ? doc.sliceString(range.from - 1, range.from) : "\n"
@@ -466,18 +491,30 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
                 const nextNextChar = range.to + 1 < doc.length ? doc.sliceString(range.to + 1, range.to + 2) : "\n"
                 const prefix = prevChar === "\n" ? (prevPrevChar === "\n" ? "" : "\n") : "\n\n"
                 const suffix = nextChar === "\n" ? (nextNextChar === "\n" ? "" : "\n") : "\n\n"
-                const insert = prefix + markdown + suffix
-                view.dispatch({
-                  changes: { from: range.from, to: range.to, insert },
-                  // 光标落在插入内容之后（含补的空行），后续输入不会粘进表格/标题行。
-                  selection: { anchor: range.from + insert.length },
-                  scrollIntoView: true,
-                  userEvent: "input.paste",
-                })
+                insert = prefix + markdown + suffix
               }
-              // 占位已在正文里，图片本体随后由附件队列写入并追加在占位之后。
-              // 队列是异步的，这里只负责把这一批交给宿主，不等待结果、不改动已插入的正文。
-              if (imagesCoveredByFiles && handlers.current.onInsertFiles) handlers.current.onInsertFiles(imageFiles)
+              view.dispatch({
+                changes: { from: range.from, to: range.to, insert },
+                // 光标落在插入内容之后（含补的空行），后续输入不会粘进表格/标题行。
+                selection: { anchor: range.from + insert.length },
+                scrollIntoView: true,
+                userEvent: "input.paste",
+              })
+              // 占位已在正文里，图片本体随后由附件队列写入并**原位替换**它。
+              // 队列是异步的，这里只负责把这一批连同各自的位置交给宿主，不等待结果。
+              if (imagesCoveredByFiles && handlers.current.onInsertFiles) {
+                // 偏移是相对转换结果算的；正文里前面还可能有补出来的空行，必须一并加上。
+                const base = insertFrom + insert.indexOf(markdown)
+                const slots: AttachmentQueueSlotInput[] = new Array(imageFiles.length).fill(null)
+                for (const placeholder of placeholders) {
+                  const slot = { from: base + placeholder.offset, text: placeholder.text }
+                  if (!placeholdersConflict(slots, placeholder.fileIndex, slot)) slots[placeholder.fileIndex] = slot
+                }
+                const accepted = handlers.current.onInsertFiles(imageFiles, undefined, { slots })
+                // 宿主不受理（只读、库不支持写附件）：立刻把占位还原成「无法导入」说明，
+                // 否则正文里会留下一句没有后续的「图片写入中…」。
+                if (accepted === false) restoreImagePlaceholders(view, slots)
+              }
               return true
             }
           }
@@ -709,6 +746,311 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       control.updateSettings(sourceMode ? SOURCE_MODE_SETTINGS : LIVE_PREVIEW_SETTINGS)
     }, [sourceMode])
 
+    /**
+     * 建立一个异步落点：书签位置 + 发起时的笔记身份，落笔时逐项校验。
+     *
+     * 书签/占位一律由这里创建，身份校验也只写在这一处。零宽书签（拖入、文件选择器）与
+     * 占位区间（粘贴）的差别只在 mark 有没有 text：两者对「是不是还是同一篇笔记」要求完全一样，
+     * 复制一遍判定迟早会漏掉其中一条，而漏掉的代价是把引用写进别人的笔记。
+     */
+    function createInsertion(
+      input: {
+        /** 新粘贴留下的占位：调用方按偏移算好，这里只登记，绝不自己去正文里搜文字。 */
+        placeholders?: readonly AttachmentQueueSlotInput[]
+        position?: number
+        /** 重试：队列交回上次那批失败项的占位令牌，下标与本次要传的文件对齐。 */
+        retrySlots?: readonly (AttachmentQueueSlot | null)[]
+      },
+      ownerSessionKey?: string,
+    ): (AttachmentQueueInsertion & BookmarkInsertion) | null {
+      // 发起时的那篇笔记若不是本编辑器此刻承载的笔记，就不能取书签：书签是位置 + 偏移映射，
+      // 属于当前文档；拿它去代表另一篇笔记的插入点，落笔就会插错地方。
+      // 返回 null 让队列走显式降级（追加到原笔记末尾），而不是把引用写进当前笔记。
+      if (ownerSessionKey !== undefined && ownerSessionKey !== sessionKeyRef.current) return null
+      const view = controlRef.current?.getView()
+      const target = view ? activeTableEdit(view) : undefined
+      const tableEnd = target?.input.closest<HTMLElement>(".cm-md-table-wrap")?.dataset.tableTo
+      const oldLength = view?.state.doc.length ?? 0
+      target?.commit()
+      const range = view?.state.selection.main
+      const end = tableEnd ? Number(tableEnd) + (view?.state.doc.length ?? 0) - oldLength : undefined
+      // 书签永远是零宽插入点：有选区时取选区起点，选中文字原样保留；
+      // position 是文件拖入的落点坐标换算结果，与当前光标无关。
+      const at = end ?? input.position ?? range?.from ?? 0
+      const mark: InsertionMark = {
+        anchor: end === undefined && input.position === undefined ? range?.anchor : undefined,
+        from: at,
+        head: end === undefined && input.position === undefined ? range?.head : undefined,
+        to: at,
+      }
+      // 重试走令牌、新粘贴走偏移，两条路都在这里换成同一份占位标记。
+      //
+      // 重试**必须**用令牌里那份标记，不能照旧偏移重建：偏移描述的是当初那一刻的正文，
+      // 用户在上传期间敲的字、以及上一轮就地写下的失败说明，都已经让它对不上了。
+      // 令牌里的标记从第一次落笔起就留在 insertionMarks 里跟着每次变更映射位置。
+      const slotMarks: (SlotMark | null)[] = input.retrySlots
+        ? input.retrySlots.map((slot) => (slot ? pendingSlots.current.get(slot) ?? null : null))
+        : input.placeholders?.map((placeholder) =>
+          placeholder ? { from: placeholder.from, text: placeholder.text, to: placeholder.from + placeholder.text.length } : null) ?? []
+      for (const slotMark of slotMarks) if (slotMark) insertionMarks.current.add(slotMark)
+      // 重试时一个令牌都换不出标记（记录已被移除、或本实例根本不是创建它的那个）：
+      // 按「没有占位」处理，交给队列降级追加，而不是照着一个不属于自己的位置落笔。
+      if (input.retrySlots && slotMarks.every((slotMark) => slotMark === null)) return null
+      // 零宽书签只在没有占位时才用：拖入与粘贴之外的路径都走它。
+      const usesBookmark = slotMarks.length === 0
+      if (usesBookmark) insertionMarks.current.add(mark)
+      // 书签同时记住发起时的笔记身份与编辑器实例：异步附件完成时据此判断
+      // 「这篇笔记是否还是当前笔记」「视图是否还是同一个」。
+      const markSessionKey = sessionKeyRef.current
+      const ownerNoteId = storageKeyRef.current
+      // 发起时的远端修订号。上传期间若被同步合并过，文档偏移与书签的映射关系
+      // 已经不可信，落笔会插到语义错误的位置。
+      const ownerRevision = revisionRef.current
+
+      /**
+       * 从映射表里摘掉这些占位标记：书签本身，外加所有没被点名放过的占位。
+       *
+       * `except` 是「交回队列等重试」的令牌对应的标记——它们必须继续留在表里跟着正文映射，
+       * 否则重试时拿到的偏移还是上一次落笔那一刻的旧值，会把引用写到错误的位置。
+       */
+      const release = (except?: ReadonlySet<AttachmentQueueSlot>) => {
+        insertionMarks.current.delete(mark)
+        slots.forEach((token, index) => {
+          const slotMark = slotMarks[index]
+          if (!slotMark || (token && except?.has(token))) return
+          insertionMarks.current.delete(slotMark)
+        })
+      }
+
+      /**
+       * 身份与文档状态校验。返回视图表示可以落笔；返回字符串则是不能落笔的原因，
+       * 由调用方决定是走降级（unplaced）还是当作占位已消失（dropped）。
+       */
+      const guard = (): { view: EditorView } | { reason: "unavailable" | "unplaced" } => {
+        const current = controlRef.current
+        const currentView = current?.getView()
+        if (!currentView?.dom.isConnected || currentView.state.readOnly) return { reason: "unavailable" }
+        // 已经切到别的笔记：书签里的文档偏移属于上一篇，写进去会插到错误位置。
+        // 让调用方走「追加到原笔记末尾」的安全降级，而不是污染当前笔记。
+        if (markSessionKey !== sessionKeyRef.current || ownerNoteId !== storageKeyRef.current) return { reason: "unplaced" }
+        // 上传期间这篇笔记被同步合并过（revision 变了）：偏移映射已不可信，
+        // 同样走安全降级，绝不按旧偏移落笔。
+        if (ownerRevision !== undefined && revisionRef.current !== ownerRevision) return { reason: "unplaced" }
+        return { view: currentView }
+      }
+
+      // 登记一处占位、并返回代表它的令牌。令牌只带一个 dispose：它的内容（占位标记）
+      // 存在本实例的 pendingSlots 里，队列拿到的始终是个不透明值。
+      const newSlot = (slotMark: SlotMark): AttachmentQueueSlot => {
+        const token: AttachmentQueueSlot = {
+          // 令牌作废与占位标记的摘除必须是同一件事：只摘一处，另一处会留在映射表里
+          // 随每次文档变化白算位置（队列移除记录时走的就是这个 dispose）。
+          dispose: () => { insertionMarks.current.delete(slotMark); pendingSlots.current.delete(token) },
+        }
+        pendingSlots.current.set(token, slotMark)
+        return token
+      }
+      // 与本批下标对齐的落点令牌，写失败的那些交给队列留着等重试。
+      //
+      // 重试沿用发下来的**同一个令牌对象**，不照着标记另造一个：令牌是队列的持有物，
+      // 换一个新对象就等于把旧的那个丢在半路，它登记的占位标记再也无人释放，
+      // 会永远挂在本实例的映射表里跟着每次正文变化重算位置。
+      const slots: (AttachmentQueueSlot | null)[] = input.retrySlots
+        ? [...input.retrySlots]
+        : slotMarks.map((slotMark) => (slotMark ? newSlot(slotMark) : null))
+      /** 一处占位已经有结论（成功、被删改、或撤销）：标记与令牌一起作废。 */
+      const forget = (slotMark: SlotMark | null, token: AttachmentQueueSlot | null) => {
+        if (slotMark) insertionMarks.current.delete(slotMark)
+        token?.dispose()
+      }
+
+      let settled = false
+      const outcome = () => ({
+        results: [] as ("inserted" | "unplaced" | "dropped" | null)[],
+        dropped: 0,
+        leftover: [] as string[],
+        placed: 0,
+        slots,
+        unplaced: "",
+      })
+      const result = outcome()
+      const unplacedSnippets: string[] = []
+      // 交回队列继续等重试的令牌。它们对应的占位标记仍然生效（正文里那句失败说明），
+      // dispose 必须放过它们，否则重试就再也找不到这处落点，引用只能追加到笔记末尾。
+      const handedOver = new Set<AttachmentQueueSlot>()
+
+      /** 占位失效、但这段文字在正文别处还能找到 ⇒ 用户只是挪动了它，仍可降级追加。 */
+      const placeholderSurvives = (view: EditorView, text: string) =>
+        view.state.doc.toString().includes(text)
+
+      /**
+       * 零宽书签路径落笔（拖入、文件选择器、以及单条 insert）：整段落在书签位置。
+       * 返回是否插进去了；没插进去时调用方据 `result.unplaced` 走降级追加。
+       */
+      const placeAtBookmark = (view: EditorView, markdown: string) => {
+        // 一个书签只落一次：迟到的重复回调不能把同一批引用插两遍。
+        if (settled) return false
+        settled = true
+        insertionMarks.current.delete(mark)
+        const { from, to } = mark
+        // 锚点有效性：书签按变更映射而来，偏移必须仍落在当前文档范围内。
+        // （用户在上传期间继续打字是合法场景，正文变化本身不算失效。）
+        if (from < 0 || to > view.state.doc.length) return false
+        const gap = paragraphSeparatorAt(view.state, from)
+        const insert = "\n".repeat(Math.max(0, gap.length - (markdown.match(/^\n*/)?.[0].length ?? 0))) + markdown
+        // 用户没动过选区（粘贴后等待）才把光标带到图片之后并滚动聚焦；
+        // 等待期间已移到别处写作时只做正文变更，选区随事务映射，不打断输入。
+        const selectionUntouched = mark.anchor !== undefined
+          && view.state.selection.main.anchor === mark.anchor
+          && view.state.selection.main.head === mark.head
+        // 路由栈会保活上一页编辑器；异步附件可以继续写回它绑定的文档，
+        // 但隐藏页绝不能在完成时抢焦点或滚动，否则当前笔记会突然跳动。
+        const editorIsActive = !view.dom.closest("[inert]")
+        if (selectionUntouched && editorIsActive) {
+          view.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: "input.attachment", scrollIntoView: true })
+        } else {
+          view.dispatch({ changes: { from, to, insert }, userEvent: "input.attachment" })
+        }
+        return true
+      }
+
+      const insertion: AttachmentQueueInsertion & BookmarkInsertion = {
+        dispose() {
+          // 交回队列等重试的占位标记要留着；其余占位标记与书签一并释放。
+          // 交出令牌的那些也不在这里释放：它们归队列管，记录被移除时由队列调它们的 dispose。
+          release(handedOver)
+        },
+        /**
+         * 单个引用就地落笔（拖入、文件选择器）。返回 false 表示落点已不可用。
+         *
+         * 不走 place：place 是「一批文件各有成败」的接口，会把传入的 Markdown 当片段重新
+         * 聚合（补尾换行、多条之间插空行）。这里的调用方给的已经是要原样写进去的完整文本，
+         * 再聚合一次就会多出一个换行，把「附件 + 光标后面的字」拆成两段。
+         * 但落笔位置、身份校验与降级语义必须完全一致，所以共用 placeAtBookmark。
+         */
+        insert(markdown: string) {
+          release(handedOver)
+          const checked = guard()
+          if ("reason" in checked) return false
+          return placeAtBookmark(checked.view, markdown)
+        },
+        place(placements) {
+          if (settled) return result
+          release(handedOver)
+          result.results = placements.map((placement) => placement?.markdown ? "unplaced" : null)
+          const checked = guard()
+          if ("reason" in checked) {
+            // 视图不可用（切走、只读、卸载）：等于没有落点，写成功的全部交给降级追加。
+            unplacedSnippets.push(...placements.map((placement) => placement?.markdown ?? "").filter(Boolean))
+            result.unplaced = aggregateSnippets(unplacedSnippets)
+            // 不能操作当前编辑器时，只把原文占位交给按库/笔记校验的降级清理。
+            placements.forEach((placement, index) => {
+              if (slotMarks[index] && (placement?.markdown || placement?.cancelled)) result.leftover.push(slotMarks[index]!.text)
+            })
+            settled = true
+            return result
+          }
+          const { view: currentView } = checked
+          if (slotMarks.some(Boolean)) {
+            // 占位路径：成功的原位换成引用，失败的原地换成失败说明——
+            // 绝不让「图片写入中…」留在正文里，那会让用户以为还在写，其实早就结束了。
+            const changes: { from: number; insert: string; to: number }[] = []
+            const retained: { mark: SlotMark; text: string }[] = []
+            placements.forEach((placement, index) => {
+              const slotMark = slotMarks[index]
+              const token = slots[index]
+              // 这一项这次没有结果（重试批次里不含已经成功的项）：占位原样留着。
+              if (!placement) return
+              if (!slotMark) {
+                if (placement.markdown) unplacedSnippets.push(placement.markdown)
+                if (token) forget(null, token)
+                slots[index] = null
+                return
+              }
+              const { from, to } = slotMark
+              if (to > currentView.state.doc.length) {
+                if (placement.markdown) unplacedSnippets.push(placement.markdown)
+                forget(slotMark, token)
+                slots[index] = null
+                return
+              }
+              const current = currentView.state.doc.sliceString(from, to)
+              if (!placement.markdown) {
+                // 占位还在就换成失败原因，并把令牌交回队列——重试成功后引用替换掉这句说明，
+                // 而不是被追加到笔记末尾、把过期说明永远留在正文里。
+                if (current === slotMark.text) {
+                  const text = placement.cancelled
+                    ? slotMark.text.replace(PLACEHOLDER_NOTE, "（图片写入已取消）")
+                    : attachmentFailurePlaceholder(slotMark.text, placement.reason)
+                  changes.push({ from, insert: text, to })
+                  if (placement.cancelled && !input.retrySlots) {
+                    forget(slotMark, token)
+                    slots[index] = null
+                  } else if (token) {
+                    handedOver.add(token)
+                    retained.push({ mark: slotMark, text })
+                  }
+                } else {
+                  // 占位已被删掉（用户撤销了那次粘贴）：什么都不做，令牌也随之作废。
+                  forget(slotMark, token)
+                  slots[index] = null
+                }
+                return
+              }
+              if (current !== slotMark.text) {
+                // 这段占位已被改动：绝不覆盖用户写的字。
+                if (placeholderSurvives(currentView, slotMark.text)) {
+                  // 占位只是被挪了位置：正文里还有那句话，降级追加并顺手把它清掉。
+                  unplacedSnippets.push(placement.markdown)
+                  result.leftover.push(slotMark.text)
+                } else {
+                  // 占位在正文里已经不存在了（典型是撤销了这次粘贴）：记成 dropped。
+                  // **不能同时算作 unplaced**——否则降级会把用户刚撤销掉的内容追加到笔记末尾，
+                  // 正好是「撤销」这个动作要取消的东西。
+                  result.dropped += 1
+                  result.results[index] = "dropped"
+                }
+                forget(slotMark, token)
+                slots[index] = null
+                return
+              }
+              changes.push({ from, insert: placement.markdown, to })
+              result.placed += 1
+              result.results[index] = "inserted"
+              // 已成功替换：占位映射与令牌都不再需要，重试也不该再碰这一处。
+              forget(slotMark, token)
+              slots[index] = null
+            })
+            if (changes.length > 0) {
+              // 文件顺序可能与 HTML 顺序不同，CodeMirror 的变更区间必须按正文位置排序。
+              changes.sort((left, right) => left.from - right.from)
+              const changeSet = currentView.state.changes(changes)
+              currentView.dispatch({ changes: changeSet, userEvent: "input.attachment" })
+              // 自己替换了占位，旧 text/to 已失效；先映射前面其它图片造成的偏移，再登记新范围。
+              for (const entry of retained) {
+                entry.mark.from = changeSet.mapPos(entry.mark.from, -1)
+                entry.mark.text = entry.text
+                entry.mark.to = entry.mark.from + entry.text.length
+                insertionMarks.current.add(entry.mark)
+              }
+            }
+            settled = true
+            result.unplaced = aggregateSnippets(unplacedSnippets)
+            return result
+          }
+          // 零宽书签路径（拖入、文件选择器）：整段落在书签位置，本来就只有一个落点。
+          const markdown = aggregateSnippets(placements.map((placement) => placement?.markdown ?? "").filter(Boolean))
+          if (!markdown) return result
+          const placed = placeAtBookmark(currentView, markdown)
+          result.results = placements.map((placement) => placement?.markdown ? (placed ? "inserted" : "unplaced") : null)
+          result.placed = result.results.filter((status) => status === "inserted").length
+          if (!result.placed) result.unplaced = markdown
+          return result
+        },
+      }
+      return insertion
+    }
+
     useImperativeHandle(ref, () => ({
       applyLink(target, label, url, cell) {
         const control = controlRef.current
@@ -718,68 +1060,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         return applyLinkTarget(view, target, label, url)
       },
       captureInsertion(position, ownerSessionKey) {
-        // 发起时的那篇笔记若不是本编辑器此刻承载的笔记，就不能取书签：书签是零宽位置 +
-        // 偏移映射，属于当前文档；拿它去代表另一篇笔记的插入点，落笔就会插错地方。
-        // 返回 null 让队列走显式降级（追加到原笔记末尾），而不是把引用写进当前笔记。
-        if (ownerSessionKey !== undefined && ownerSessionKey !== sessionKeyRef.current) return null
-        const view = controlRef.current?.getView()
-        const target = view ? activeTableEdit(view) : undefined
-        const tableEnd = target?.input.closest<HTMLElement>(".cm-md-table-wrap")?.dataset.tableTo
-        const oldLength = view?.state.doc.length ?? 0
-        target?.commit()
-        const range = view?.state.selection.main
-        const end = tableEnd ? Number(tableEnd) + (view?.state.doc.length ?? 0) - oldLength : undefined
-        // 书签永远是零宽插入点：有选区时取选区起点，选中文字原样保留；
-        // position 是文件拖入的落点坐标换算结果，与当前光标无关。
-        const at = end ?? position ?? range?.from ?? 0
-        const mark = { anchor: end === undefined && position === undefined ? range?.anchor : undefined, from: at, head: end === undefined && position === undefined ? range?.head : undefined, to: at }
-        // 上传期间按每次文档变化映射书签，单纯移动光标不会改变上传发起的位置。
-        insertionMarks.current.add(mark)
-        // 书签同时记住发起时的笔记身份与编辑器实例：异步附件完成时据此判断
-        // 「这篇笔记是否还是当前笔记」「视图是否还是同一个」。
-        const markSessionKey = sessionKeyRef.current
-        const ownerNoteId = storageKeyRef.current
-        // 发起时的远端修订号。上传期间若被同步合并过，文档偏移与书签的映射关系
-        // 已经不可信，落笔会插到语义错误的位置。
-        const ownerRevision = revisionRef.current
-
-        const dispose = () => { insertionMarks.current.delete(mark) }
-        let settled = false
-        return { dispose, insert(text: string) {
-          dispose()
-          // 书签只许落笔一次：迟到的重复回调（重试、双回调）不能重复插入。
-          if (settled) return false
-          settled = true
-          const current = controlRef.current
-          const currentView = current?.getView()
-          if (!currentView?.dom.isConnected || currentView.state.readOnly) return false
-          // 已经切到别的笔记：书签里的文档偏移属于上一篇，写进去会插到错误位置。
-          // 返回 false 让调用方走「追加到原笔记末尾」的安全降级，而不是污染当前笔记。
-          if (markSessionKey !== sessionKeyRef.current || ownerNoteId !== storageKeyRef.current) return false
-          // 上传期间这篇笔记被同步合并过（revision 变了）：偏移映射已不可信，
-          // 同样走安全降级，绝不按旧偏移落笔。
-          if (ownerRevision !== undefined && revisionRef.current !== ownerRevision) return false
-          const { from, to } = mark
-          // 锚点有效性：书签按变更映射而来，偏移必须仍落在当前文档范围内。
-          // （用户在上传期间继续打字是合法场景，正文变化本身不算失效。）
-          if (from < 0 || to > currentView.state.doc.length) return false
-          const gap = paragraphSeparatorAt(currentView.state, from)
-          const insert = "\n".repeat(Math.max(0, gap.length - (text.match(/^\n*/)?.[0].length ?? 0))) + text
-          // 用户没动过选区（粘贴后等待）才把光标带到图片之后并滚动聚焦；
-          // 等待期间已移到别处写作时只做正文变更，选区随事务映射，不打断输入。
-          const selectionUntouched = mark.anchor !== undefined
-            && currentView.state.selection.main.anchor === mark.anchor
-            && currentView.state.selection.main.head === mark.head
-          // 路由栈会保活上一页编辑器；异步附件可以继续写回它绑定的文档，
-          // 但隐藏页绝不能在完成时抢焦点或滚动，否则当前笔记会突然跳动。
-          const editorIsActive = !currentView.dom.closest("[inert]")
-          if (selectionUntouched && editorIsActive) {
-            currentView.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: "input.attachment", scrollIntoView: true })
-          } else {
-            currentView.dispatch({ changes: { from, to, insert }, userEvent: "input.attachment" })
-          }
-          return true
-        } }
+        return createInsertion(position === undefined ? {} : { position }, ownerSessionKey)
+      },
+      captureAttachmentInsertion({ ownerSessionKey, placeholders, position, retrySlots }) {
+        return createInsertion({ placeholders, position, retrySlots }, ownerSessionKey)
       },
       collapseSelection() {
         controlRef.current?.dispatchCommand({ type: "selection.collapse" })
@@ -1370,6 +1654,115 @@ export function shouldPasteAsPlainText(state: EditorState) {
       if (node.name === "InlineCode" || node.name === "FencedCode" || node.name === "CodeBlock") return true
     }
     return false
+  })
+}
+
+/**
+ * 正文里一个异步落点：上传期间按每次文档变化映射位置，落笔时再校验身份是否还对得上。
+ *
+ * 两种情况共用同一份结构：零宽书签（拖入、文件选择器 —— 还没有位置，只有一个插入点），
+ * 以及粘贴留下的**占位区间**（`text` 就是那一刻写进正文的占位文字）。占位是区间而不是点，
+ * 这样用户改过这段文字时能查出来，绝不会覆盖他自己写的内容。
+ */
+type InsertionMark = {
+  anchor?: number
+  from: number
+  head?: number
+  /** 占位文字。为零宽书签时不存在。 */
+  text?: string
+  to: number
+}
+
+/** 占位落点：有区间、也有那一刻写进正文的文字，据此判断用户有没有动过这段内容。 */
+type SlotMark = InsertionMark & { text: string }
+
+/** 调用方为一批粘贴图片算好的占位位置（下标与剪贴板 files 对齐，没有占位的项为 null）。 */
+export type AttachmentQueueSlotInput = { from: number; text: string } | null
+
+/**
+ * 单个引用就地插入的落点（拖入、文件选择器：还没有位置，只有一个插入点）。
+ *
+ * 与 AttachmentQueueInsertion 的差别只在粒度：那边一批一次落笔、还要处理每一项各自的成败，
+ * 这里永远只有一个落点，因此 `insert` 直接返回成没成，调用方不必去翻 outcome。
+ */
+export type BookmarkInsertion = {
+  dispose: () => void
+  insert: (markdown: string) => boolean
+}
+
+/**
+ * 令牌 → 占位标记的对照表。
+ *
+ * 标记不放进令牌：令牌是要交给队列当不透明值传下去的，里面不该有编辑器内部的可变结构。
+ * 放在 WeakMap 里也让「队列丢掉了某个令牌」不会让标记泄漏——键一旦不可达，条目随之消失。
+ */
+type SlotRegistry = WeakMap<AttachmentQueueSlot, SlotMark>
+
+/** 占位结尾那段说明，重写时先剥掉它：否则重试再次失败就会叠成「失败：…（图片写入失败：…）」。 */
+const PLACEHOLDER_NOTE = /（图片写入(?:中|失败|已取消)[^）]*）\s*$/
+
+/**
+ * 写失败时就地替换占位的说明。
+ *
+ * 刻意**不**沿用原来那段占位文字：它写着「写入中」，留着它就是一句与事实相反的假消息。
+ * 用「写入失败」开头，用户一眼能看出这张图没进来，也方便全库搜索排查。
+ *
+ * alt 要留着：占位本来是「示意图（图片写入中…）」，失败后应当是「示意图（图片写入失败：…）」。
+ * 把 alt 一起丢掉，用户就再也认不出这里原本是哪张图。
+ */
+function attachmentFailurePlaceholder(placeholderText: string, reason: string | undefined) {
+  const detail = (reason ?? "").trim()
+  const note = `图片写入失败${detail ? `：${detail}` : ""}`
+  const alt = placeholderText.replace(PLACEHOLDER_NOTE, "").trimEnd()
+  return alt ? `${alt}（${note}）` : `（${note}）`
+}
+
+/** 把若干条写成功的引用拼成一段降级追加用的 Markdown。 */
+function aggregateSnippets(snippets: readonly string[]) {
+  const blocks = snippets.map((snippet) => snippet.trimEnd()).filter(Boolean)
+  return blocks.length > 0 ? `${blocks.join("\n\n")}\n` : ""
+}
+
+/**
+ * 这个占位能不能登记成落点。
+ *
+ * 正常不会冲突（转换器给每张图分配的文件下标互不相同）。真冲突了就必须丢掉**后一个**，
+ * 而不是覆盖前一个：覆盖会让两张占位抢同一个文件、另一个文件没人认领，而正文里那张图的
+ * 占位将永远停在「写入中」。丢掉后一个至少还会走降级（追加到笔记末尾），内容不丢。
+ *
+ * 除了下标，还要挡住区间重叠：占位文字相邻（中间没有其他字符）时，两次替换会互相吃掉
+ * 对方刚写进去的引用，最后只剩一张图。
+ */
+function placeholdersConflict(
+  slots: readonly AttachmentQueueSlotInput[],
+  fileIndex: number,
+  slot: { from: number; text: string },
+) {
+  if (slots[fileIndex]) return true
+  const end = slot.from + slot.text.length
+  return slots.some((other) => other !== null && slot.from < other.from + other.text.length && other.from < end)
+}
+
+/**
+ * 宿主不受理这批文件（只读、库不支持写附件）时，把已经写进正文的「写入中…」还原成
+ * 「无法导入」说明。留着「写入中」是一句不会兑现的承诺，用户会以为再等等就有图。
+ *
+ * 从后往前改：每处替换都会改变其后所有偏移，倒序处理才不会让还没执行的落点错位。
+ */
+function restoreImagePlaceholders(view: EditorView, slots: readonly AttachmentQueueSlotInput[]) {
+  const { doc } = view.state
+  const changes: Array<{ from: number; insert: string; to: number }> = []
+  for (const slot of slots) {
+    if (!slot) continue
+    const to = slot.from + slot.text.length
+    // 位置已被用户改动（对不上原文）就跳过：宁可留下一句占位，也不能覆盖他自己写的字。
+    if (to > doc.length || doc.sliceString(slot.from, to) !== slot.text) continue
+    changes.push({ from: slot.from, insert: "（图片无法导入：未能写入附件）", to })
+  }
+  if (changes.length === 0) return
+  view.dispatch({
+    changes: changes.sort((a, b) => b.from - a.from),
+    userEvent: "input.paste",
   })
 }
 

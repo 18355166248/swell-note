@@ -7,7 +7,7 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { remarkObsidian } from "@/services/markdown/remark-obsidian"
 
-import { createClipboardImageCoverage, htmlNeedsClipboardImageFiles, htmlToMarkdown, isInlineMarkdownFragment, shouldInsertClipboardImageFiles } from "./html-to-markdown"
+import { createClipboardImageCoverage, htmlNeedsClipboardImageFiles, htmlToMarkdown, isInlineMarkdownFragment, shouldInsertClipboardImageFiles, type HtmlImagePlaceholder } from "./html-to-markdown"
 
 function renderMarkdown(markdown: string) {
   // 与正式阅读态一致，兼容旧 Vault 语法的 remark 插件也参与转换结果验收。
@@ -73,10 +73,20 @@ describe("htmlToMarkdown", () => {
     expect(renderMarkdown(markdown!).textContent).toContain("图片无法导入")
   })
 
-  it("剪贴板同时给了图片文件时，本地图片只留 alt 交由附件队列插入", () => {
+  it("剪贴板同时给了图片文件时，本地图片留下待写入占位交由附件队列原地替换", () => {
     const html = '<p>前<img src="file:///tmp/a.png" alt="示意">后</p>'
     const file = new File([new Uint8Array([1])], "a.png", { type: "image/png" })
-    expect(htmlToMarkdown(html, { imageCoveredByFile: createClipboardImageCoverage(html, [file]) })).toBe("前示意后")
+    const placeholders: HtmlImagePlaceholder[] = []
+    const markdown = htmlToMarkdown(html, {
+      imageCoveredByFile: createClipboardImageCoverage(html, [file]),
+      onImagePlaceholder: (placeholder) => placeholders.push(placeholder),
+    })
+    expect(markdown).toBe("前示意（图片写入中…）后")
+    // 偏移必须精确指向占位文字，调用方据此把引用填回原处，而不是追加到末尾。
+    expect(markdown!.slice(placeholders[0].offset, placeholders[0].offset + placeholders[0].text.length))
+      .toBe("示意（图片写入中…）")
+    expect(placeholders[0].text).toBe("示意（图片写入中…）")
+    expect(placeholders[0].fileIndex).toBe(0)
     // 选项只作用于本次调用，不能泄漏给下一次转换。
     expect(htmlToMarkdown(html)).toBe("前示意（图片无法导入：本地文件地址不导入）后")
   })
@@ -86,24 +96,96 @@ describe("htmlToMarkdown", () => {
     const file = new File([new Uint8Array([1])], "截图.png", { type: "image/png" })
     // 图片马上由剪贴板文件写入正文并附上引用，这里再说一句「图片无法导入」就是假消息，
     // 用户会以为粘贴失败，紧接着却看到图片出现。
-    expect(htmlToMarkdown(html, { imageCoveredByFile: createClipboardImageCoverage(html, [file]) })).toBe("看图：")
+    expect(htmlToMarkdown(html, { imageCoveredByFile: createClipboardImageCoverage(html, [file]) }))
+      .toBe("看图：（图片写入中…）")
     // 没有文件兜底时仍然必须给出可见占位，两条路径不能互相污染。
     expect(htmlToMarkdown(html)).toBe("看图：（图片无法导入：data: 地址不导入）")
   })
 
-  it("剪贴板只给一个文件却有两张导入不了的图片时，只有那张有文件补上的才不留占位", () => {
+  it("剪贴板只给一个文件却有两张导入不了的图片时，只有那张有文件补上的才留待写入占位", () => {
     // 回归点：覆盖判定如果退化成一个全局布尔值，两张图的占位会一起被删掉，
     // 可只有一张真会被补上引用，另一张从此在正文里没有任何痕迹。
     const html = '<p><img src="file:///tmp/a.png"><img src="file:///tmp/b.png" alt="乙图"></p>'
     const file = new File([new Uint8Array([1])], "a.png", { type: "image/png" })
     const coverage = createClipboardImageCoverage(html, [file])
-    expect(coverage({ alt: "", src: "file:///tmp/a.png" })).toBe(true)
-    expect(coverage({ alt: "乙图", src: "file:///tmp/b.png" })).toBe(false)
-    // 甲图有文件补引用、又没有 alt，正文里什么都不留；乙图没有文件补，占位必须留住。
+    expect(coverage({ alt: "", src: "file:///tmp/a.png" })).toBe(0)
+    expect(coverage({ alt: "乙图", src: "file:///tmp/b.png" })).toBeNull()
+    // 甲图有文件补引用 → 待写入占位；乙图没有文件补，必须留住「无法导入」的真实原因。
     expect(htmlToMarkdown(html, { imageCoveredByFile: coverage }))
-      .toBe("乙图（图片无法导入：本地文件地址不导入）")
+      .toBe("（图片写入中…）乙图（图片无法导入：本地文件地址不导入）")
     // 全局布尔值的写法会把乙图的占位一起删掉，整段只剩一个空段落——这正是回归点。
     expect(htmlToMarkdown(html)).toBe("（图片无法导入：本地文件地址不导入）乙图（图片无法导入：本地文件地址不导入）")
+  })
+
+  it("多张图各自留下占位，偏移按文档顺序精确递增", () => {
+    // 保序的核心：每张图的位置必须与它在原文里的位置一致，而不是全部堆到末尾。
+    const html = '<p>文字 A</p><p><img src="file:///tmp/1.png" alt="甲"></p><p>文字 B</p><p><img src="file:///tmp/2.png" alt="乙"></p>'
+    const files = [
+      new File([new Uint8Array([1])], "1.png", { type: "image/png" }),
+      new File([new Uint8Array([2])], "2.png", { type: "image/png" }),
+    ]
+    const placeholders: HtmlImagePlaceholder[] = []
+    const markdown = htmlToMarkdown(html, {
+      imageCoveredByFile: createClipboardImageCoverage(html, files),
+      onImagePlaceholder: (placeholder) => placeholders.push(placeholder),
+    })!
+    expect(markdown).toBe("文字 A\n\n甲（图片写入中…）\n\n文字 B\n\n乙（图片写入中…）")
+    // 下标与 files 对齐，偏移与文字一致，且两个占位是按顺序报出来的。
+    expect(placeholders.map((placeholder) => placeholder.fileIndex)).toEqual([0, 1])
+    expect(placeholders.map((placeholder) => markdown.slice(placeholder.offset, placeholder.offset + placeholder.text.length)))
+      .toEqual(["甲（图片写入中…）", "乙（图片写入中…）"])
+    expect(placeholders[0].offset).toBeLessThan(placeholders[1].offset)
+  })
+
+  it("占位文字按行首状态转义，文件名里的 Markdown 标记不会变成语法", () => {
+    // 占位多半写在段首，文件名里的 * 与 [ 若不转义，整段会被解析成强调或链接。
+    const html = '<p><img src="file:///tmp/a.png"></p>'
+    const file = new File([new Uint8Array([1])], "a.png", { type: "image/png" })
+    const placeholders: HtmlImagePlaceholder[] = []
+    const markdown = htmlToMarkdown(html, {
+      imageCoveredByFile: createClipboardImageCoverage(html, [file]),
+      imagePlaceholder: () => "*重点* [一]",
+      onImagePlaceholder: (placeholder) => placeholders.push(placeholder),
+    })!
+    // 星号与方括号在段首转义后才是字面量；text 报的是**已转义**的文字，
+    // 落笔前用它校验这一段没被改过。
+    expect(markdown).toBe("\\*重点\\* \\[一\\]")
+    expect(placeholders[0].text).toBe(markdown)
+  })
+
+  it("自定义占位文字回调收到的 fileIndex 与剪贴板文件下标一致", () => {
+    const html = '<p><img src="file:///tmp/a.png"><img src="file:///tmp/b.png"></p>'
+    const files = [
+      new File([new Uint8Array([1])], "a.png", { type: "image/png" }),
+      new File([new Uint8Array([2])], "b.png", { type: "image/png" }),
+    ]
+    const seen: number[] = []
+    htmlToMarkdown(html, {
+      imageCoveredByFile: createClipboardImageCoverage(html, files),
+      imagePlaceholder: (_image, fileIndex) => {
+        seen.push(fileIndex)
+        return `图 ${fileIndex}`
+      },
+    })
+    expect(seen).toEqual([0, 1])
+  })
+
+  it("输出里不得残留占位哨兵", () => {
+    // 哨兵只是内部机制；漏到正文里就是用户可见的乱码，且会随自动保存落盘。
+    const html = '<p>前<img src="file:///tmp/a.png" alt="示意图">后<img src="file:///tmp/b.png"></p>'
+    const files = [
+      new File([new Uint8Array([1])], "a.png", { type: "image/png" }),
+      new File([new Uint8Array([2])], "b.png", { type: "image/png" }),
+    ]
+    const markdown = htmlToMarkdown(html, { imageCoveredByFile: createClipboardImageCoverage(html, files) })!
+    expect([...markdown].some((character) => character >= "\uE001" && character <= "\uE002")).toBe(false)
+  })
+
+  it("没有文件补的图片与有文件补的图片混排时，只有前者留下「无法导入」说明", () => {
+    const html = '<p>甲<img src="file:///tmp/a.png" alt="有文件">乙<img src="file:///tmp/b.png" alt="没文件">丙</p>'
+    const file = new File([new Uint8Array([1])], "a.png", { type: "image/png" })
+    expect(htmlToMarkdown(html, { imageCoveredByFile: createClipboardImageCoverage(html, [file]) }))
+      .toBe("甲有文件（图片写入中…）乙没文件（图片无法导入：本地文件地址不导入）丙")
   })
 
   it("不同路径的同名图片不能由一个文件同时覆盖，重复检查不改变判定", () => {
@@ -122,9 +204,30 @@ describe("htmlToMarkdown", () => {
       new File([new Uint8Array([1])], "图片1.png", { type: "image/png" }),
       new File([new Uint8Array([2])], "图片2.png", { type: "image/png" }),
     ]
-    // 两张图都被认定有文件补引用、又都没有 alt，于是正文只剩空内容——转换返回 null，
-    // 调用方据此知道「这次粘贴没有文字可插，只有要交给附件队列的图片文件」（见 markdown-editor）。
-    expect(htmlToMarkdown(html, { imageCoveredByFile: createClipboardImageCoverage(html, files) })).toBeNull()
+    // 两张图都按顺序配上文件，各自留下待写入占位；正文不再是「空内容 → 返回 null」，
+    // 而是有两个位置明确的占位，引用写完后原位替换（这是保序的前提）。
+    const placeholders: HtmlImagePlaceholder[] = []
+    const markdown = htmlToMarkdown(html, {
+      imageCoveredByFile: createClipboardImageCoverage(html, files),
+      onImagePlaceholder: (placeholder) => placeholders.push(placeholder),
+    })
+    expect(markdown).toBe("（图片写入中…）（图片写入中…）")
+    expect(placeholders.map((placeholder) => placeholder.fileIndex)).toEqual([0, 1])
+    // 顺序配对不能把同一个文件发给两张图：两张图的 fileIndex 必须不同。
+    expect(new Set(placeholders.map((placeholder) => placeholder.fileIndex)).size).toBe(2)
+  })
+
+  it("按顺序配对时每个文件只被领走一次，反复求值不会把同一个下标发给两张图", () => {
+    const html = '<p><img src="file:///tmp/1.png"><img src="file:///tmp/2.png"></p>'
+    const files = [
+      new File([new Uint8Array([1])], "甲.png", { type: "image/png" }),
+      new File([new Uint8Array([2])], "乙.png", { type: "image/png" }),
+    ]
+    const coverage = createClipboardImageCoverage(html, files)
+    expect(coverage({ alt: "", src: "file:///tmp/1.png" })).toBe(0)
+    expect(coverage({ alt: "", src: "file:///tmp/2.png" })).toBe(1)
+    // 游标用尽后不再发号，避免第三张图复用第一张的引用。
+    expect(coverage({ alt: "", src: "file:///tmp/3.png" })).toBeNull()
   })
 
   it("HTML 里是否存在导入不了的图片", () => {

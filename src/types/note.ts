@@ -8,6 +8,8 @@ export type Note = {
   updatedAt: string
   modifiedAt?: number
   starred: boolean
+  // 与收藏独立的本机列表偏好，旧缓存未记录时按未置顶处理。
+  pinned?: boolean
   folder?: string
   frontmatter?: Record<string, string | string[]>
   format?: "canvas" | "markdown"

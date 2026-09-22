@@ -68,7 +68,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
 
   const searching = Boolean(open && cacheId && normalizedQuery && completedQuery !== normalizedQuery)
   const matches = useMemo(() => {
-    if (!normalizedQuery) return sortNotes(notes, "updated-desc").slice(0, RECENT_LIMIT)
+    if (!normalizedQuery) return sortNotes(notes, "updated-desc", { pinnedFirst: false }).slice(0, RECENT_LIMIT)
     const matched = notes.filter((note) => {
       if (`${note.title} ${note.preview}`.toLocaleLowerCase().includes(normalizedQuery)) return true
       return nativePaths

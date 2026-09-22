@@ -231,7 +231,7 @@ describe("MarkdownEditor", () => {
     act(() => { editorView().contentDOM.dispatchEvent(pasteEvent({ files: [image], html: '<p><img src="file:///tmp/a.png" alt="示意图"></p>' })) })
     // 图片本体只通过附件队列进来一次，不会既走 HTML 又走文件。
     expect(onInsertFiles).toHaveBeenCalledTimes(1)
-    expect(onInsertFiles).toHaveBeenCalledWith([image])
+    expect(onInsertFiles).toHaveBeenCalledWith([image], undefined, { slots: [expect.objectContaining({ text: expect.stringContaining("示意图") })] })
     expect(onChange).toHaveBeenLastCalledWith(expect.stringContaining("示意图"), expect.anything())
     expect(onChange).toHaveBeenLastCalledWith(expect.not.stringContaining("file:///tmp/a.png"), expect.anything())
   })
@@ -245,10 +245,13 @@ describe("MarkdownEditor", () => {
     expect(onInsertFiles).not.toHaveBeenCalled()
   })
 
-  it("HTML 只剩图片、转换不出文字时仍然入队图片文件，不静默丢掉整次粘贴", () => {
+  it("无 alt 的本地图片留下可搜索的占位，并把位置交给附件队列", () => {
     // 回归点：入队调用原先写在 if (markdown) 里。只有一张无 alt 的本地图片时，
-    // 转换结果因为 imagesCoveredByFiles 删掉图片节点而变成 null，于是文件不入队、
-    // 默认粘贴也照常发生——图片和占位一起消失，用户看不到任何东西。
+    // 转换结果因为图片节点被换成引用而变成 null，于是文件不入队、默认粘贴也照常发生——
+    // 图片和占位一起消失，用户看不到任何东西。
+    //
+    // 现在图片节点换成**可见占位**而不是消失：正文里看得出这里原本有一张图，
+    // 写入完成后引用就替换掉它，位置由 slots 精确给出（不靠事后搜文字）。
     const image = new File(["png"], "本地图片.png", { type: "image/png" })
     const onInsertFiles = vi.fn()
     const onChange = vi.fn()
@@ -256,13 +259,142 @@ describe("MarkdownEditor", () => {
     const event = pasteEvent({ files: [image], html: '<p><img src="file:///tmp/a.png"></p>' })
     act(() => { editorView().contentDOM.dispatchEvent(event) })
     expect(event.defaultPrevented).toBe(true)
-    expect(onInsertFiles).toHaveBeenCalledWith([image])
-    // 正文没有任何可插入的文字，文档保持原样。
-    expect(onChange).not.toHaveBeenCalled()
+    const doc = editorView().state.doc.toString()
+    expect(doc).toContain("（图片写入中…）")
+    const from = doc.indexOf("（图片写入中…）")
+    expect(onInsertFiles).toHaveBeenCalledWith([image], undefined, { slots: [{ from, text: "（图片写入中…）" }] })
+  })
+
+  describe("混合粘贴的图片占位落点", () => {
+    /** 粘一段带本地图片的富文本，返回占位在正文里的坐标与交给队列的落点。 */
+    function pasteMixedImage(html: string, files: File[], name = "本地图片.png") {
+      const handle = createRef<MarkdownEditorHandle>()
+      const image = new File(["png"], name, { type: "image/png" })
+      const onInsertFiles = vi.fn()
+      mount(<MarkdownEditor onChange={() => {}} onInsertFiles={onInsertFiles} ref={handle} sessionKey="vault:A" storageKey="vault:A" value="正文" />)
+      act(() => { editorView().contentDOM.dispatchEvent(pasteEvent({ files: [image, ...files], html })) })
+      const [, , options] = onInsertFiles.mock.calls[0]
+      return { handle, options, view: editorView() }
+    }
+
+    it("写入完成后引用原位替换占位，位置仍是原顺序（文字 A → 图 → 文字 B）", () => {
+      const { handle, options } = pasteMixedImage(
+        '<p>文字 A</p><p><img src="file:///tmp/a.png" alt="示意图"></p><p>文字 B</p>',
+        [],
+      )
+      const slots = options?.slots ?? []
+      expect(slots).toHaveLength(1)
+      // 粘贴前占位就已经落在两段文字之间：这正是「写入中」期间用户看到的东西。
+      const before = editorView().state.doc.toString()
+      expect(before).toContain("示意图（图片写入中…）")
+      expect(before.indexOf("文字 A")).toBeLessThan(before.indexOf("示意图（图片写入中…）"))
+      expect(before.indexOf("示意图（图片写入中…）")).toBeLessThan(before.indexOf("文字 B"))
+
+      const insertion = handle.current!.captureAttachmentInsertion({ ownerSessionKey: "vault:A", placeholders: slots })!
+      const outcome = insertion.place([{ markdown: "![示意图](attachments/示意图.png)" }])
+
+      expect(outcome.placed).toBe(1)
+      // 关键断言：引用落在两段文字**之间**，没有被追加到末尾——这正是这一项 P1 的全部意义。
+      const after = editorView().state.doc.toString()
+      expect(after).not.toContain("图片写入中")
+      expect(after.indexOf("文字 A")).toBeLessThan(after.indexOf("![示意图](attachments/示意图.png)"))
+      expect(after.indexOf("![示意图](attachments/示意图.png)")).toBeLessThan(after.indexOf("文字 B"))
+    })
+
+    it("写失败时就地把占位换成失败说明并保留 alt，不留一句「写入中」", () => {
+      const { handle, options } = pasteMixedImage(
+        '<p>文字 A</p><p><img src="file:///tmp/a.png" alt="示意图"></p>',
+        [],
+      )
+      const insertion = handle.current!.captureAttachmentInsertion({ ownerSessionKey: "vault:A", placeholders: options?.slots })!
+      insertion.place([{ markdown: null, reason: "远端拒绝" }])
+
+      const doc = editorView().state.doc.toString()
+      expect(doc).toContain("示意图（图片写入失败：远端拒绝）")
+      expect(doc).not.toContain("图片写入中")
+    })
+
+    it("占位处的文字被用户改过就绝不覆盖，引用交回队列走降级", () => {
+      const { handle, options } = pasteMixedImage('<p><img src="file:///tmp/a.png" alt="示意图"></p>', [])
+      const from = options!.slots![0]!.from
+      const view = editorView()
+      // 用户把占位改成了自己的字：那是他的正文，不能被一张图顶掉。
+      act(() => {
+        const slot = options!.slots![0]!
+        view.dispatch({ changes: { from, insert: "我自己写的", to: from + slot.text.length } })
+      })
+      const insertion = handle.current!.captureAttachmentInsertion({ ownerSessionKey: "vault:A", placeholders: options?.slots })!
+      const outcome = insertion.place([{ markdown: "![示意图](attachments/示意图.png)" }])
+
+      expect(outcome.placed).toBe(0)
+      expect(outcome.unplaced).toContain("![示意图](attachments/示意图.png)")
+      expect(view.state.doc.toString()).toContain("我自己写的")
+    })
+
+    it("撤销掉这次粘贴后不往笔记末尾硬塞，如实报成 dropped", () => {
+      const { handle, options } = pasteMixedImage('<p><img src="file:///tmp/a.png" alt="示意图"></p>', [])
+      const insertion = handle.current!.captureAttachmentInsertion({ ownerSessionKey: "vault:A", placeholders: options?.slots })!
+      // 撤销把占位整段删掉了（模拟用户撤销这次粘贴）。
+      const view = editorView()
+      act(() => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "正文" } }))
+      const outcome = insertion.place([{ markdown: "![示意图](attachments/示意图.png)" }])
+
+      expect(outcome).toEqual({ results: ["dropped"], dropped: 1, leftover: [], placed: 0, slots: [null], unplaced: "" })
+    })
+
+    it("这一批还没轮到这一项时占位原样留着，不写成凭空的失败说明", () => {
+      const { handle, options } = pasteMixedImage('<p><img src="file:///tmp/a.png" alt="示意图"></p>', [])
+      const before = editorView().state.doc.toString()
+      const insertion = handle.current!.captureAttachmentInsertion({ ownerSessionKey: "vault:A", placeholders: options?.slots })!
+      // null = 这次没有它的结果（重试批次里不含已成功的项）：正文一个字都不能动。
+      const outcome = insertion.place([null])
+
+      expect(outcome.placed).toBe(0)
+      expect(editorView().state.doc.toString()).toBe(before)
+      expect(before).toContain("示意图（图片写入中…）")
+    })
+
+    it("宿主不受理时把占位还原成「无法导入」，不留孤儿占位", () => {
+      const image = new File(["png"], "本地图片.png", { type: "image/png" })
+      // onInsertFiles 返回 false = 只读/库不支持写附件：占位必须自己收拾干净，
+      // 否则正文里留下一句永远不会兑现的「图片写入中…」。
+      mount(<MarkdownEditor onChange={() => {}} onInsertFiles={() => false} value="正文" />)
+      act(() => { editorView().contentDOM.dispatchEvent(pasteEvent({ files: [image], html: '<p>文字 A</p><p><img src="file:///tmp/a.png" alt="示意图"></p>' })) })
+
+      const doc = editorView().state.doc.toString()
+      expect(doc).not.toContain("图片写入中")
+      expect(doc).toContain("图片无法导入")
+      expect(doc).toContain("文字 A")
+    })
+
+    it("多张图片的落点各自独立，替换其中一张不会挪动另一张", () => {
+      const first = new File(["png"], "甲.png", { type: "image/png" })
+      const second = new File(["png"], "乙.png", { type: "image/png" })
+      const handle = createRef<MarkdownEditorHandle>()
+      const onInsertFiles = vi.fn()
+      mount(<MarkdownEditor onChange={() => {}} onInsertFiles={onInsertFiles} ref={handle} sessionKey="vault:A" storageKey="vault:A" value="" />)
+      act(() => {
+        editorView().contentDOM.dispatchEvent(pasteEvent({
+          files: [first, second],
+          html: '<p><img src="file:///tmp/a.png" alt="甲"></p><p><img src="file:///tmp/b.png" alt="乙"></p>',
+        }))
+      })
+      const slots = onInsertFiles.mock.calls[0][2]!.slots!
+      expect(slots).toHaveLength(2)
+      const insertion = handle.current!.captureAttachmentInsertion({ ownerSessionKey: "vault:A", placeholders: slots })!
+      // 第一张写失败、第二张成功：失败那处只换掉自己的占位，第二张仍落在原位。
+      const outcome = insertion.place([
+        { markdown: null, reason: "拒绝" },
+        { markdown: "![乙](attachments/乙.png)" },
+      ])
+
+      expect(outcome.placed).toBe(1)
+      const doc = editorView().state.doc.toString()
+      expect(doc.indexOf("甲（图片写入失败：拒绝）")).toBeLessThan(doc.indexOf("![乙](attachments/乙.png)"))
+    })
   })
 
   it("附件书签的归属笔记与当前笔记不一致时拒绝取书签", () => {
-    // 队列执行到某一批时用户可能已经切到了别的笔记：此时同步取书签会捕获「当前」那篇的
     // 身份，书签自己的守卫也会通过，引用就写进了错误的笔记。发起式必须一路带下来。
     const handle = createRef<MarkdownEditorHandle>()
     mount(<MarkdownEditor onChange={() => {}} ref={handle} sessionKey="cache-1:session-a" value="正文" />)
@@ -740,8 +872,28 @@ describe("MarkdownEditor", () => {
       queue.enqueue({ target, files: [new File(["a"], "first.png")], insertions: { capture: () => null } })
       act(() => view.dispatch({ selection: { anchor: original.indexOf("目标") } }))
       const position = mode === "drop" ? original.indexOf("目标") : undefined
+      // 没有占位（拖入/文件选择器）走书签路径。聚合与「所有结果一次性落笔」这一步
+      // 属于编辑器，这里按它的契约调用 insert，段落分隔由编辑器自己补。
       const id = queue.enqueue({ target, files: [new File(["b"], "second.png")], insertions: {
-        capture: () => handle.current?.captureInsertion(position, "vault:A") ?? null,
+        capture: () => {
+          const bookmark = handle.current?.captureInsertion(position, "vault:A") ?? null
+          if (!bookmark) return null
+          return {
+            dispose: bookmark.dispose,
+            place: (placements) => {
+              const snippets = placements.map((placement) => placement?.markdown?.trimEnd() ?? "").filter(Boolean)
+              const markdown = snippets.length > 0 ? `${snippets.join("\n\n")}\n` : ""
+              return {
+                results: placements.map((p) => p?.markdown ? "inserted" : null),
+                dropped: 0,
+                leftover: [],
+                placed: markdown && bookmark.insert(markdown) ? 1 : 0,
+                slots: placements.map(() => null),
+                unplaced: "",
+              }
+            },
+          }
+        },
       } })!
       act(() => view.dispatch({ changes: { from: 0, insert: "新增前缀" }, selection: { anchor: original.length + 4 } }))
       await act(async () => {

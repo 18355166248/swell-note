@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Check, ChevronRight, FileText, Folder, FolderOpen, PencilLine, Trash2 } from "lucide-react"
+import { Check, ChevronRight, FileText, Folder, FolderOpen, PencilLine, Pin, PinOff, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -63,7 +63,7 @@ export function MobileFolderActionSheet({ disabled, folder, mode, onClose, onDel
   )
 }
 
-export function MobileNoteActionSheet({ disabled, folders, note, onClose, onDelete, onMove, onOpen, onRename }: {
+export function MobileNoteActionSheet({ disabled, folders, note, onClose, onDelete, onMove, onOpen, onRename, onTogglePin }: {
   disabled: boolean
   folders: VaultFolder[]
   note: Note | null
@@ -72,6 +72,7 @@ export function MobileNoteActionSheet({ disabled, folders, note, onClose, onDele
   onMove: (noteId: string, folderPath: string | null) => void
   onOpen: (note: Note) => void
   onRename: (noteId: string, title: string) => void
+  onTogglePin: (noteId: string) => void
 }) {
   const [view, setView] = useState<"delete" | "menu" | "move" | "rename">("menu")
   const [title, setTitle] = useState("")
@@ -102,6 +103,7 @@ export function MobileNoteActionSheet({ disabled, folders, note, onClose, onDele
         {view === "menu" ? (
           <div className="mobile-action-list">
             <button onClick={() => onOpen(note)} type="button"><FileText /><span>打开笔记</span><ChevronRight /></button>
+            <button onClick={() => { onClose(); onTogglePin(note.id) }} type="button">{note.pinned ? <PinOff /> : <Pin />}<span>{note.pinned ? "取消置顶" : "置顶笔记"}</span><ChevronRight /></button>
             <button disabled={!canManage} onClick={() => setView("rename")} type="button"><PencilLine /><span>重命名</span><ChevronRight /></button>
             <button disabled={!canManage} onClick={() => setView("move")} type="button"><FolderOpen /><span>移动到文件夹</span><ChevronRight /></button>
             <button className="mobile-action-destructive" disabled={!canManage} onClick={() => setView("delete")} type="button"><Trash2 /><span>删除笔记</span><ChevronRight /></button>

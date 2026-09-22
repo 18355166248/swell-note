@@ -276,7 +276,7 @@ test.describe("Markdown 源码模式", () => {
       )
     }, [PNG_BUFFER.toString("base64")] as const)
 
-    // HTML 那条路只留 alt 文字（引用交给附件队列），file: 地址不得进正文。
+    // HTML 那条路只留占位（引用交给附件队列），file: 地址不得进正文。
     await waitStoredDoc(page, (content) => content.includes("剪贴板图"))
     expect(await readStored(page)).not.toContain("file:///C:/Users/e2e")
     // 真实文件经队列写入：写完正文里恰好一条附件引用，没有第二份原始地址。
@@ -284,11 +284,127 @@ test.describe("Markdown 源码模式", () => {
     const stored = await readStored(page)
     // 只数引用个数：附件 URL 本身含文件名，按纯文本数会把 alt 与 URL 算成两次。
     expect(stored.match(/!\[[^\]]*\]\([^)]*attachments\/[^)]*\)/g) ?? []).toHaveLength(1)
-    // 附件 URL 本身含文件名（带时间戳），逐字符比对没有意义；断言结构而不是字面值：
-    // HTML 里那句 alt 后面紧跟恰好一条指向本机附件目录的引用。
-    expect(stored).toMatch(/剪贴板图!\[剪贴板图\.png\]\(\.\.\/attachments\/剪贴板图-\d+\.png\)/)
-    // 附件 URL 含文件名，按纯文本数会把同一张图算成多次；数「HTML 的 alt」这个前缀就够：
-    // 它只出现一次，说明图片没有被 HTML 与文件两条路各插一份。
-    expect(stored.match(/剪贴板图!\[/g) ?? []).toHaveLength(1)
+    // 附件 URL 本身含文件名（带时间戳），逐字符比对没有意义；断言结构而不是字面值。
+    // 引用直接**替换**了占位（占位原本带着 alt），因此正文里不再另有一份松散的 alt 文字：
+    // 图片说明只出现在引用的 alt 槽里，不会出现「说明文字 + 引用里的说明」两份。
+    expect(stored).toMatch(/!\[剪贴板图\.png\]\(\.\.\/attachments\/剪贴板图-\d+\.png\)/)
+    expect(stored.match(/剪贴板图/g) ?? []).toHaveLength(2)
   })
+
+  test("文字 A → 图片 → 文字 B 的混合粘贴保持原顺序，引用不堆到末尾", async ({ page }, testInfo) => {
+    const mobile = testInfo.project.name === "mobile-chrome"
+    await seedNote(page, "", mobile)
+    await page.locator(".cm-content:visible").first().click()
+
+    await page.evaluate(([base64]) => {
+      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))
+      const transfer = new DataTransfer()
+      transfer.setData("text/html", [
+        "<p>文字 A</p>",
+        '<p><img src="file:///C:/Users/e2e/夹在中间.png" alt="夹在中间"></p>',
+        "<p>文字 B</p>",
+      ].join(""))
+      transfer.setData("text/plain", "文字 A夹在中间文字 B")
+      transfer.items.add(new File([bytes], "夹在中间.png", { type: "image/png" }))
+      document.querySelector(".cm-content")!.dispatchEvent(
+        new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }),
+      )
+    }, [PNG_BUFFER.toString("base64")] as const)
+
+    await waitStoredDoc(page, (content) => /!\[夹在中间\.png\]\([^)]*attachments\//.test(content))
+
+    // 本项 P1 的全部意义就在这三行：引用落在两段文字**之间**，没有被追加到末尾。
+    const stored = await readStored(page)
+    const image = stored.search(/!\[夹在中间\.png\]\(/)
+    expect(image).toBeGreaterThan(stored.indexOf("文字 A"))
+    expect(image).toBeLessThan(stored.indexOf("文字 B"))
+    // 写入完成后不该再留着「写入中」那句话，它的兑现物已经就位了。
+    // （「写入中」这个中间态在本机库里几乎观察不到——写文件是本地同步操作，
+    //  占位刚插进去就被替换掉了。它在单元测试里由 captureAttachmentInsertion 的用例精确锁住。）
+    expect(stored).not.toContain("图片写入中")
+    expect(stored).not.toContain("file:///C:/Users/e2e")
+  })
+})
+
+test("附件写入失败后编辑正文再重试，原位恢复且刷新后不残留失败占位", async ({ page, isMobile }) => {
+  await seedNote(page, "", isMobile)
+  await page.locator(".cm-content:visible").first().click()
+  await page.evaluate((base64) => {
+    const original = File.prototype.arrayBuffer
+    File.prototype.arrayBuffer = function () {
+      // 只让这次上传失败；重试必须仍使用原文件而不是重新粘贴。
+      File.prototype.arrayBuffer = original
+      return Promise.reject(new Error("回归测试：首次写入失败"))
+    }
+    const transfer = new DataTransfer()
+    transfer.setData("text/html", '<p>前文</p><p><img src="file:///retry.png" alt="重试图"></p><p>后文</p>')
+    transfer.items.add(new File([Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))], "retry.png", { type: "image/png" }))
+    document.querySelector<HTMLElement>(".cm-content")!.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }))
+  }, PNG_BUFFER.toString("base64"))
+  await waitStoredDoc(page, (content) => content.includes("图片写入失败"))
+  await page.locator(".cm-content:visible").first().click()
+  await page.keyboard.press("Control+Home")
+  await page.keyboard.insertText("新增正文\n")
+  await page.getByRole("button", { name: "只重试失败的 1 个", exact: true }).click()
+  await waitStoredDoc(page, (content) => content.includes("![retry.png]") && !content.includes("图片写入失败"))
+  const stored = await readStored(page)
+  expect(stored).toContain("新增正文")
+  expect(stored.indexOf("![retry.png]")).toBeGreaterThan(stored.indexOf("前文"))
+  expect(stored.indexOf("![retry.png]")).toBeLessThan(stored.indexOf("后文"))
+  expect(stored.match(/!\[retry\.png\]/g)).toHaveLength(1)
+  await expect(page.getByRole("button", { name: "重新插入引用", exact: true })).toHaveCount(0)
+  await page.reload()
+  await openNote(page, isMobile)
+  expect(await readStored(page)).toBe(stored)
+})
+
+test("两张图片的文件顺序与 HTML 相反时仍保持图文对应", async ({ page, isMobile }) => {
+  await seedNote(page, "", isMobile)
+  await page.locator(".cm-content:visible").first().click()
+  await page.evaluate((base64) => {
+    const transfer = new DataTransfer()
+    transfer.setData("text/html", '<p>前文</p><p><img src="file:///first.png"></p><p>中间</p><p><img src="file:///second.png"></p><p>后文</p>')
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+    transfer.items.add(new File([bytes], "second.png", { type: "image/png" }))
+    transfer.items.add(new File([bytes], "first.png", { type: "image/png" }))
+    document.querySelector<HTMLElement>(".cm-content")!.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }))
+  }, PNG_BUFFER.toString("base64"))
+  await waitStoredDoc(page, (content) => content.includes("![first.png]") && content.includes("![second.png]"))
+  const stored = await readStored(page)
+  expect(stored.indexOf("![first.png]")).toBeLessThan(stored.indexOf("中间"))
+  expect(stored.indexOf("![second.png]")).toBeGreaterThan(stored.indexOf("中间"))
+  expect(stored.indexOf("![second.png]")).toBeLessThan(stored.indexOf("后文"))
+  expect(stored).not.toContain("图片写入中")
+})
+
+test("同批部分原位替换、部分降级追加时保留两张引用且原子清理占位", async ({ page, isMobile }) => {
+  await seedNote(page, "", isMobile)
+  await (await sourceToggleButton(page)).click()
+  await page.locator(".cm-content:visible").first().click()
+  await page.evaluate((base64) => {
+    const original = File.prototype.arrayBuffer
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    Object.assign(window, { releaseAttachmentReview: () => { File.prototype.arrayBuffer = original; release() } })
+    File.prototype.arrayBuffer = async function () { await gate; return original.call(this) }
+    const transfer = new DataTransfer()
+    transfer.setData("text/html", '<p><img src="file:///first.png" alt="甲"></p><p><img src="file:///second.png" alt="乙"></p>')
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+    transfer.items.add(new File([bytes], "first.png", { type: "image/png" }))
+    transfer.items.add(new File([bytes], "second.png", { type: "image/png" }))
+    document.querySelector<HTMLElement>(".cm-content")!.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: transfer }))
+  }, PNG_BUFFER.toString("base64"))
+  await expect(page.locator(".cm-content:visible").first()).toContainText("乙（图片写入中…）")
+  // 把第二个占位向后挪动，第一处书签不动。上传结束时会同时走原位与降级两条路径。
+  await page.keyboard.press("Control+End")
+  await page.keyboard.press("Shift+Home")
+  await page.keyboard.insertText("\n\n乙（图片写入中…）")
+  await page.evaluate(() => (window as unknown as { releaseAttachmentReview: () => void }).releaseAttachmentReview())
+  await waitStoredDoc(page, (content) => content.includes("![first.png]") && content.includes("![second.png]") && !content.includes("图片写入中"))
+  const stored = await readStored(page)
+  expect(stored.match(/!\[first\.png\]/g)).toHaveLength(1)
+  expect(stored.match(/!\[second\.png\]/g)).toHaveLength(1)
+  await page.reload()
+  await openNote(page, isMobile)
+  expect(await readStored(page)).toBe(stored)
 })

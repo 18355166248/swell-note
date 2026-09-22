@@ -18,6 +18,9 @@ const target: AttachmentQueueTarget = {
 
 const noteA = { editorSessionKey: "session-a", id: "webdav:/甲.md", title: "甲笔记" }
 
+/** 落点判定与正文清理无关时的默认值：正文取不到、没有残留占位。 */
+const noContent = { content: () => "", leftover: [] as string[] }
+
 describe("附件落点身份", () => {
   it("库与笔记合起来才构成编辑器会话身份", () => {
     // 同一个 editorSessionKey 在不同库里是两篇不同的笔记，拼在一起才不会撞。
@@ -29,11 +32,12 @@ describe("附件落点身份", () => {
     const write = vi.fn()
     // 新库里恰好有一篇 editorSessionKey 相同的笔记：只按它查找就会写进别人的正文。
     const result = resolveAttachmentFallback({
+      ...noContent,
       activeCacheId: "cache-b",
       markdown: "![图](attachments/图.png)\n",
       notes: [noteA],
       target,
-      writeMarkdown: write,
+      replaceContent: write,
     })
 
     expect(write).not.toHaveBeenCalled()
@@ -43,11 +47,12 @@ describe("附件落点身份", () => {
   it("原笔记被删除时不复活它，并如实说明引用没进正文", () => {
     const write = vi.fn()
     const result = resolveAttachmentFallback({
+      ...noContent,
       activeCacheId: "cache-a",
       markdown: "![图](attachments/图.png)\n",
       notes: [{ ...noteA, pendingOperation: "delete" }],
       target,
-      writeMarkdown: write,
+      replaceContent: write,
     })
 
     expect(write).not.toHaveBeenCalled()
@@ -57,26 +62,79 @@ describe("附件落点身份", () => {
   it("同一库内重命名后按 editorSessionKey 跟上，追加到新标题的笔记末尾", () => {
     const write = vi.fn()
     const result = resolveAttachmentFallback({
+      ...noContent,
       activeCacheId: "cache-a",
       markdown: "![图](attachments/图.png)\n",
       // 重命名换掉了 id 与标题，editorSessionKey 不变：这是同一篇笔记。
       notes: [{ editorSessionKey: "session-a", id: "webdav:/乙.md", title: "乙笔记" }],
       target,
-      writeMarkdown: write,
+      replaceContent: write,
     })
 
     expect(write).toHaveBeenCalledWith("webdav:/乙.md", "![图](attachments/图.png)\n")
     expect(result).toEqual({ placed: true, notice: "「乙笔记」编辑器已切换，附件追加到了笔记末尾" })
   })
 
+  it("追加前清掉正文里残留的占位，别让「图片写入中…」永远留在笔记里", () => {
+    const write = vi.fn()
+    const result = resolveAttachmentFallback({
+      activeCacheId: "cache-a",
+      content: () => "开头\n\n（图片写入中…）\n\n结尾",
+      leftover: ["（图片写入中…）"],
+      markdown: "![图](attachments/图.png)\n",
+      notes: [noteA],
+      target,
+      replaceContent: write,
+    })
+
+    expect(result.placed).toBe(true)
+    // 先清占位、再追加引用：只提交一次完整正文，不能将整篇正文误交给追加接口。
+    expect(write.mock.calls).toEqual([
+      ["webdav:/甲.md", "开头\n\n\n\n结尾\n\n![图](attachments/图.png)\n"],
+    ])
+  })
+
+  it("只删每处占位的第一份，用户复制出来的那些不动", () => {
+    const write = vi.fn()
+    resolveAttachmentFallback({
+      activeCacheId: "cache-a",
+      // 用户把占位文字复制了一份到别处：那是他自己写的字，不能替他删掉。
+      content: () => "（图片写入中…）\n\n他自己复制的：（图片写入中…）",
+      leftover: ["（图片写入中…）"],
+      markdown: "![图](attachments/图.png)\n",
+      notes: [noteA],
+      target,
+      replaceContent: write,
+    })
+
+    expect(write.mock.calls[0][1]).toBe("\n\n他自己复制的：（图片写入中…）\n\n![图](attachments/图.png)\n")
+  })
+
+  it("正文里已经没有占位时不额外写一次", () => {
+    const write = vi.fn()
+    resolveAttachmentFallback({
+      activeCacheId: "cache-a",
+      content: () => "开头结尾",
+      leftover: ["（图片写入中…）"],
+      markdown: "![图](attachments/图.png)\n",
+      notes: [noteA],
+      target,
+      replaceContent: write,
+    })
+
+    // 只为清理而写入会平白多出一次保存、多一条历史版本。
+    expect(write.mock.calls).toEqual([["webdav:/甲.md", "开头结尾\n\n![图](attachments/图.png)\n"]])
+  })
+
   it("没有库（本地会话）时与 cacheId 为 null 的发起相匹配", () => {
     const write = vi.fn()
     const result = resolveAttachmentFallback({
+      ...noContent,
       activeCacheId: null,
       markdown: "![图](attachments/图.png)\n",
       notes: [noteA],
       target: { ...target, cacheId: null },
-      writeMarkdown: write,
+      replaceContent: write,
     })
 
     expect(result.placed).toBe(true)

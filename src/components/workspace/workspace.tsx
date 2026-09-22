@@ -39,6 +39,7 @@ import {
   MoreHorizontal,
   Menu,
   PencilLine,
+  Pin,
   Plus,
   RefreshCw,
   Search,
@@ -55,7 +56,7 @@ import { Button } from "@/components/ui/button"
 import { RouteActivityProvider } from "@/components/ui/route-activity"
 import { lazyWithRetry } from "@/lib/lazy-with-retry"
 import { useOptionalStableCallback, useStableCallback } from "@/lib/use-stable-callback"
-import type { AttachmentQueue } from "@/services/vault/attachment-queue"
+import type { AttachmentQueue, AttachmentQueueSlotInput } from "@/services/vault/attachment-queue"
 import { attachmentEditorKey } from "@/services/vault/attachment-target"
 import { AttachmentQueuePanel, useAttachmentQueue } from "@/components/workspace/attachment-queue-panel"
 import {
@@ -249,6 +250,7 @@ type WorkspaceProps = {
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
   onRestoreNoteVersion: (content: string) => void
   onToggleNoteStar: (noteId: string) => void
+  onToggleNotePin: (noteId: string) => void
   onToggleNoteTask?: (noteId: string, line: number, checked: boolean) => void
   onSelectFolder: (folder: string | null) => void
   onSelectLibraryView: (view: LibraryView) => void
@@ -468,6 +470,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
   const selectFolder = useStableCallback(props.onSelectFolder)
   const moveNoteById = useStableCallback(props.onMoveNoteById)
   const toggleNoteStar = useStableCallback(props.onToggleNoteStar)
+  const toggleNotePin = useStableCallback(props.onToggleNotePin)
   const createNoteInFolder = useStableCallback(props.onCreateNoteInFolder)
   // 编辑器面板与搜索、目录树毫无关系，却因为回调每次重建而跟着整屏重渲染。
   // 这一组把它的入参全部固定下来，memo 才拦得住。
@@ -513,7 +516,8 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
     onOpen: selectNote,
     onRequest: setContextRequest,
     onToggleStar: toggleNoteStar,
-  }), [contextActionsDisabled, moveNoteById, props.folders, selectNote, toggleNoteStar])
+    onTogglePin: toggleNotePin,
+  }), [contextActionsDisabled, moveNoteById, props.folders, selectNote, toggleNotePin, toggleNoteStar])
   const folderContextActions = useMemo<FolderContextActions>(() => ({
     canCreateNote: props.canCreateNote && !props.isCreatingNote,
     disabled: contextActionsDisabled,
@@ -1792,6 +1796,7 @@ const NoteListRow = memo(function NoteListRow({ active, contextActions, note, on
     >
       <div className="note-row-heading">
         <strong><HighlightedText query={query} text={note.title || "未命名笔记"} /></strong>
+        {note.pinned ? <Pin aria-label="已置顶" className="pinned-icon" /> : null}
         {note.starred ? <Star className="starred-icon" /> : null}
       </div>
       <p><HighlightedText query={query} text={previewText} /></p>
@@ -2193,8 +2198,8 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
    *    的当前位置，身份不符则显式降级，绝不改写到别的笔记。
    * 3. 这一批文件本身，失败重试只重传失败项。
    */
-  const handleInsertFiles = useCallback((files: File[], position?: number) => {
-    if (files.length === 0 || editorReadOnly || !canInsertAttachment) return
+  const handleInsertFiles = useCallback((files: File[], position?: number, options?: { slots?: readonly AttachmentQueueSlotInput[] }) => {
+    if (files.length === 0 || editorReadOnly || !canInsertAttachment) return false
     const targetNoteId = note.id
     const editorSessionKey = note.editorSessionKey ?? note.id
     // 发起时那篇笔记对应的编辑器 sessionKey，与传给 MarkdownEditor 的完全相同
@@ -2209,10 +2214,17 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
         // capture 由队列在入队时调用，不能延迟到执行时，否则光标移动后会插到新位置。
         // 书签绑定发起时的那篇笔记：captureInsertion 在重试时笔记对不上则返回 null，
         // 队列据此走「追加到原文末尾」的降级，而不是把引用写进当前打开的笔记。
-        // 重试不能复用当初拖入的数字偏移，它没有继续映射；改取原笔记当前光标，身份仍需匹配。
-        capture: ({ retry }) => editorRef.current?.captureInsertion(retry ? undefined : position, ownerSessionKey) ?? null,
+        capture: ({ retry, reinsert, slots }) => editorRef.current?.captureAttachmentInsertion({
+          ownerSessionKey,
+          // 重试时不再复用当初的数字偏移（它没有继续映射），改用原批次留下的占位令牌。
+          // 补插是用户的新操作，只取当前光标；不能复用第一次粘贴/拖入的数字坐标。
+          ...(reinsert ? {} : retry
+            ? { retrySlots: slots }
+            : { placeholders: options?.slots, position }),
+        }) ?? null,
       },
     })
+    return true
   }, [activeCacheId, attachmentQueue, canInsertAttachment, editorReadOnly, note.editorSessionKey, note.id, note.title])
 
   const getWikiLinkSuggestions = useCallback(() => wikiLinkNotes
@@ -2650,7 +2662,9 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
         batches={batches}
         onCancel={(batchId) => attachmentQueue.cancel(batchId)}
         onDismiss={(batchId) => attachmentQueue.dismiss(batchId)}
+        onReinsert={(batchId) => attachmentQueue.reinsert(batchId)}
         onRetry={(batchId) => attachmentQueue.retry(batchId)}
+        references={(batchId) => attachmentQueue.references(batchId)}
       />
       {viewSwitchError ? (
         <p className="attachment-error" role="alert">{viewSwitchError}</p>
@@ -3219,7 +3233,7 @@ function MobileRouteEntryPage({ active, backLabel, canGoBack, entry, navigationO
       : liveProps.allNotes
     const tagged = selectedTag ? folderNotes.filter((note) => note.tags?.includes(selectedTag)) : folderNotes
     const viewed = libraryView === "recent"
-      ? sortNotes(tagged, "updated-desc").slice(0, 32)
+      ? sortNotes(tagged, "updated-desc", { pinnedFirst: false }).slice(0, 32)
       : libraryView === "starred" ? tagged.filter((note) => note.starred) : tagged
     const searched = normalizedQuery
       ? viewed.filter((note) => noteMatchesLibraryQuery(note, normalizedQuery, entryNativeSearchPaths))
@@ -3945,6 +3959,7 @@ function MobileNoteList(props: MobileNoteListProps) {
         onMove={props.onMoveNoteById}
         onOpen={(note) => { setActionNote(null); selectNote(note) }}
         onRename={props.onRenameNoteById}
+        onTogglePin={props.onToggleNotePin}
       />
       {props.canCreateNote ? <Button aria-label={props.selectedFolder ? `在${props.selectedFolder}中新建笔记` : "在根目录新建笔记"} className="mobile-fab" disabled={props.isCreatingNote} onClick={props.onCreateNote} size="icon-lg" title={props.selectedFolder ? `新建到：${props.selectedFolder}` : "新建到：根目录"}>{props.isCreatingNote ? <LoaderCircle className="animate-spin" /> : <Plus />}</Button> : null}
     </section>

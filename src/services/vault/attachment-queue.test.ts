@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest"
 
-import { createAttachmentQueue, type AttachmentQueueTarget } from "./attachment-queue"
+import {
+  createAttachmentQueue,
+  type AttachmentQueueInsertions,
+  type AttachmentQueuePlacementResult,
+  type AttachmentQueueSlot,
+  type AttachmentQueueTarget,
+} from "./attachment-queue"
 
 /**
  * 队列的行为几乎全在「异步归属」上：谁写、写到哪、失败了重试谁、取消之后还剩什么。
@@ -50,15 +56,95 @@ function recordingWriter(results: (files: File[]) => { errors?: string[]; markdo
   }
 }
 
+/**
+ * 没有占位（拖入、文件选择器）时的落点桩：把整批成功项**聚合一次**落笔，
+ * 与编辑器里 `insert` 那条路径同形，方便沿用「插入了什么」的断言。
+ *
+ * 有占位的逐条替换不在这一层验证——那是编辑器的职责，队列只负责按顺序把结果递过去。
+ */
+function aggregatePlacements(placements: readonly AttachmentQueuePlacementResult[]) {
+  const snippets = placements.map((placement) => placement?.markdown?.trimEnd() ?? "").filter(Boolean)
+  return snippets.length > 0 ? `${snippets.join("\n\n")}\n` : ""
+}
+
 function fakeInsertion() {
   const inserted: string[] = []
   let disposed = false
+  const insertions: AttachmentQueueInsertions = {
+    capture: () => ({
+      dispose: () => { disposed = true },
+      place: (placements) => {
+        const markdown = aggregatePlacements(placements)
+        if (markdown) inserted.push(markdown)
+        return { results: placements.map((p) => p?.markdown ? "inserted" : null), dropped: 0, leftover: [], placed: markdown ? 1 : 0, slots: placements.map(() => null), unplaced: "" }
+      },
+    }),
+  }
+  return { inserted, isDisposed: () => disposed, insertions }
+}
+
+/** 一条落点失效的路径：拿不到占位，引用只能交给降级追加。 */
+function fallbackInsertions(): AttachmentQueueInsertions {
   return {
-    inserted,
-    isDisposed: () => disposed,
-    insertions: {
-      capture: () => ({ dispose: () => { disposed = true }, insert: (markdown: string) => { inserted.push(markdown); return true } }),
-    },
+    capture: () => ({
+      dispose: () => {},
+      place: (placements) => ({
+        results: placements.map((p) => p?.markdown ? "unplaced" : null),
+        dropped: 0,
+        leftover: [],
+        placed: 0,
+        slots: placements.map(() => null),
+        unplaced: aggregatePlacements(placements),
+      }),
+    }),
+  }
+}
+
+/**
+ * 模拟编辑器的**逐条占位**语义，用来验证队列这一侧：
+ * - 写成功的项原位换成引用（占位文字进 `replaced`）；
+ * - 写失败的项就地改成失败说明，并把该处占位做成令牌交回队列（进 `failed`）；
+ * - 重试时 `capture` 收到的令牌若被复用，`place` 又把它换成引用——正是
+ *   「重试成功后正文里那句失败说明会被替换掉」这条约定。
+ *
+ * 占位文字按下标生成，与 batch.items 一一对应；测试断言的是「哪一处被换成什么」，
+ * 具体坐标由编辑器负责，队列只保证结果按 items 顺序递过去。
+ */
+function slotRecorder() {
+  const replaced: string[] = []
+  const failed: string[] = []
+  const placeholders = new Map<number, string>()
+  const textAt = (index: number) => placeholders.get(index) ?? `（图片写入中：第 ${index} 个）`
+  const insertions: AttachmentQueueInsertions = {
+    capture: ({ slots }) => ({
+      dispose: () => {},
+      place: (placements) => {
+        let placed = 0
+        const kept: (AttachmentQueueSlot | null)[] = placements.map(() => null)
+        placements.forEach((placement, index) => {
+          if (!placement) return
+          // 复用了上一批交回的令牌 = 这次换掉的就是那句失败说明，而不是另开一处落点。
+          const reused = slots?.[index] ?? null
+          if (placement.markdown) {
+            replaced.push(`${reused ? "复用" : "新落点"}:${textAt(index)}`)
+            placed += 1
+          } else {
+            failed.push(placement.reason ?? "")
+            kept[index] = reused ?? { dispose: () => {} }
+          }
+        })
+        return { results: placements.map((p) => p?.markdown ? "inserted" : null), dropped: 0, leftover: [], placed, slots: kept, unplaced: "" }
+      },
+    }),
+  }
+  return {
+    failed,
+    /** 记录某处占位当前的文字，供「重试复用了同一处落点」的比对。 */
+    setPlaceholder: (index: number, text: string) => placeholders.set(index, text),
+    replaced,
+    /** 某一处占位当前显示的文字。 */
+    textAt,
+    insertions,
   }
 }
 
@@ -73,8 +159,9 @@ describe("附件写入队列", () => {
         return { errors: ["写入失败"], markdown: "" }
       },
     })
+    // 这一批只在乎 dispose 被调了几次（书签是否被释放），落笔结果无关紧要。
     const original = queue.enqueue({ files: [file("bad.png")], target: targetA, insertions: {
-      capture: () => ({ dispose, insert: () => true }),
+      capture: () => ({ dispose, place: () => ({ results: [], dropped: 0, leftover: [], placed: 0, slots: [], unplaced: "" }) }),
     } })!
     await until(() => queue.getSnapshot()[0].status === "failed")
     queue.enqueue({ files: [file("block.png")], target: targetA, insertions: fakeInsertion().insertions })
@@ -121,7 +208,7 @@ describe("附件写入队列", () => {
 
   it("入队立即固定书签，取消等待批次会释放且不重新捕获", async () => {
     const gate = deferred<void>()
-    const capture = vi.fn(() => ({ dispose, insert: () => true }))
+    const capture = vi.fn(() => ({ dispose, place: () => ({ results: [], dropped: 0, leftover: [], placed: 0, slots: [], unplaced: "" }) }))
     const dispose = vi.fn()
     const queue = createAttachmentQueue({
       fallback: () => ({ notice: "降级", placed: true }),
@@ -289,11 +376,7 @@ describe("附件写入队列", () => {
     const { write } = recordingWriter(() => ({}))
     const queue = createAttachmentQueue({ fallback: () => ({ notice: "原笔记已删除，附件已写入但正文引用未插入", placed: false }), write })
 
-    queue.enqueue({
-      files: [file("x.png")],
-      insertions: { capture: () => ({ dispose: () => {}, insert: () => false }) },
-      target: targetA,
-    })
+    queue.enqueue({ files: [file("x.png")], insertions: fallbackInsertions(), target: targetA })
     await until(() => queue.getSnapshot()[0].status === "done")
 
     expect(queue.getSnapshot()[0].notice).toBe("原笔记已删除，附件已写入但正文引用未插入")
@@ -327,10 +410,20 @@ describe("附件写入队列", () => {
       fallback: (target) => { fallbacks.push({ ...target }); return { notice: "已切换", placed: true } },
       write: async (target, files) => { await gate.promise; return write(target, files) },
     })
-    const bookmarkFor = (target: AttachmentQueueTarget): { capture: () => { dispose: () => void; insert: (markdown: string) => boolean } | null } => ({
+    const bookmarkFor = (target: AttachmentQueueTarget): AttachmentQueueInsertions => ({
       capture: () => {
         if (active.editorSessionKey !== target.editorSessionKey) return null
-        return { dispose: () => {}, insert: () => false }
+        return {
+          dispose: () => {},
+          place: (placements) => ({
+        results: placements.map((p) => p?.markdown ? "unplaced" : null),
+            dropped: 0,
+            leftover: [],
+            placed: 0,
+            slots: placements.map(() => null),
+            unplaced: aggregatePlacements(placements),
+          }),
+        }
       },
     })
 
@@ -453,6 +546,239 @@ describe("附件写入队列", () => {
     expect(queue.getSnapshot()[0].insertion).toBe("appended")
   })
 
+  it("写失败就地标成失败说明，并把那处占位交回队列等重试", async () => {
+    const recorder = slotRecorder()
+    const { write } = recordingWriter(() => ({ errors: ["远端拒绝"] }))
+    const queue = createAttachmentQueue({ fallback: () => ({ notice: "不应走降级", placed: true }), write })
+
+    queue.enqueue({ files: [file("bad.png")], insertions: recorder.insertions, target: targetA })
+    await until(() => queue.getSnapshot()[0].status === "failed")
+
+    // 全批失败也要走 place：否则正文里那句「图片写入中…」永远挂着，而面板已经写着失败。
+    expect(recorder.failed).toEqual(["远端拒绝"])
+    const batch = queue.getSnapshot()[0]
+    expect(batch.insertion).toBe("none")
+    expect(batch.notice).toContain("写入失败，正文中的图片占位已标为失败")
+  })
+
+  it("重试成功后引用替换掉正文里那句失败说明，而不是另开一处落点", async () => {
+    const recorder = slotRecorder()
+    let attempt = 0
+    const { write } = recordingWriter(() => (++attempt === 1 ? { errors: ["远端拒绝"] } : {}))
+    const queue = createAttachmentQueue({ fallback: () => ({ notice: "不应走降级", placed: true }), write })
+
+    const batchId = queue.enqueue({ files: [file("bad.png")], insertions: recorder.insertions, target: targetA })!
+    await until(() => queue.getSnapshot()[0].status === "failed")
+    expect(recorder.replaced).toEqual([])
+
+    queue.retry(batchId)
+    await until(() => queue.getSnapshot().find((batch) => batch.id === batchId)!.retrying === false)
+    // 「复用」是关键：占位令牌活过了重试窗口，重试的落笔换掉的是同一处失败说明。
+    expect(recorder.replaced).toEqual(["复用:（图片写入中：第 0 个）"])
+  })
+
+  it("重试再失败时占位不丢，第三次重试仍能换掉那句失败说明", async () => {
+    const recorder = slotRecorder()
+    let attempt = 0
+    const { write } = recordingWriter(() => (++attempt < 3 ? { errors: ["远端拒绝"] } : {}))
+    const queue = createAttachmentQueue({ fallback: () => ({ notice: "不应走降级", placed: true }), write })
+
+    const batchId = queue.enqueue({ files: [file("bad.png")], insertions: recorder.insertions, target: targetA })!
+    await until(() => queue.getSnapshot()[0].status === "failed")
+    queue.retry(batchId)
+    await until(() => queue.getSnapshot().find((batch) => batch.id === batchId)!.retrying === false)
+    expect(recorder.replaced).toEqual([])
+
+    // 第三次才成功。占位令牌必须经第二次重试原样传下来——按重试批次的 item id 存会在这里丢。
+    queue.retry(batchId)
+    await until(() => queue.getSnapshot().find((batch) => batch.id === batchId)!.items[0].status === "done")
+    expect(recorder.replaced).toEqual(["复用:（图片写入中：第 0 个）"])
+  })
+
+  it("重试期间失败项留下的占位由原记录代为释放，撤掉记录后不再参与映射", async () => {
+    const recorder = slotRecorder()
+    const dispose = vi.fn()
+    const { write } = recordingWriter(() => ({ errors: ["远端拒绝"] }))
+    const queue = createAttachmentQueue({ fallback: () => ({ notice: "降级", placed: true }), write })
+    // 让交回的令牌是可观察的：dispose 被调用才说明记录真的把占位放掉了。
+    const withSpy: typeof recorder.insertions = {
+      capture: (options) => {
+        const insertion = recorder.insertions.capture(options)
+        return insertion && {
+          dispose: insertion.dispose,
+          place: (placements) => {
+            const outcome = insertion.place(placements)
+            return { ...outcome, slots: outcome.slots.map((slot) => (slot ? { dispose } : null)) }
+          },
+        }
+      },
+    }
+
+    const batchId = queue.enqueue({ files: [file("bad.png")], insertions: withSpy, target: targetA })!
+    await until(() => queue.getSnapshot()[0].status === "failed")
+    expect(queue.dismiss(batchId)).toBe(true)
+    expect(dispose).toHaveBeenCalled()
+  })
+
+  it("部分成功时成功项原位插入、失败项就地标失败，两条路各自如实汇报", async () => {
+    const recorder = slotRecorder()
+    const { write } = recordingWriter((files) => (files[0]?.name === "bad.png" ? { errors: ["远端拒绝"] } : {}))
+    const queue = createAttachmentQueue({ fallback: () => ({ notice: "不应走降级", placed: true }), write })
+
+    queue.enqueue({ files: [file("ok.png"), file("bad.png")], insertions: recorder.insertions, target: targetA })
+    await until(() => queue.getSnapshot()[0].status === "failed")
+
+    expect(recorder.replaced).toEqual(["新落点:（图片写入中：第 0 个）"])
+    expect(recorder.failed).toEqual(["远端拒绝"])
+    const batch = queue.getSnapshot()[0]
+    expect(batch.insertion).toBe("inserted")
+    // 成功那一条已经原位落好了，不能因为同批有失败就改口说「引用未插入」；
+    // 失败那一条的原因由它自己的 item.error 呈现，不需要再借 notice 重复一遍。
+    expect(batch.notice ?? "").not.toContain("引用未插入")
+  })
+
+  it("落点失效时不覆盖用户文字，改为降级追加并如实说明", async () => {
+    const fallbackCalls: { leftover: readonly string[]; markdown: string }[] = []
+    const { write } = recordingWriter(() => ({}))
+    const queue = createAttachmentQueue({
+      fallback: (_target, markdown, leftover) => {
+        fallbackCalls.push({ leftover, markdown })
+        return { notice: "占位已被改动，引用追加到了笔记末尾", placed: true }
+      },
+      write,
+    })
+
+    queue.enqueue({ files: [file("x.png")], target: targetA, insertions: {
+      capture: () => ({
+        dispose: () => {},
+        place: () => ({ results: ["unplaced"], dropped: 0, leftover: ["（图片写入中：x.png）"], placed: 0, slots: [null], unplaced: "![x.png](attachments/x.png)\n" }),
+      }),
+    } })
+    await until(() => queue.getSnapshot()[0].status === "done")
+
+    const batch = queue.getSnapshot()[0]
+    expect(batch.insertion).toBe("appended")
+    // 残留占位文字必须一并交给降级：否则笔记里会永远留着「图片写入中…」这句假消息。
+    expect(fallbackCalls).toEqual([{ leftover: ["（图片写入中：x.png）"], markdown: "![x.png](attachments/x.png)\n" }])
+    expect(batch.notice).toBe("占位已被改动，引用追加到了笔记末尾")
+  })
+
+  it("占位已被撤销时不往笔记末尾硬塞，提示可重新插入引用", async () => {
+    const fallback = vi.fn(() => ({ notice: "不应走降级", placed: true }))
+    const { write } = recordingWriter(() => ({}))
+    const queue = createAttachmentQueue({ fallback, write })
+
+    queue.enqueue({ files: [file("undone.png")], target: targetA, insertions: {
+      capture: () => ({
+        dispose: () => {},
+        place: () => ({ results: ["dropped"], dropped: 1, leftover: [], placed: 0, slots: [null], unplaced: "" }),
+      }),
+    } })
+    await until(() => queue.getSnapshot()[0].status === "done")
+
+    const batch = queue.getSnapshot()[0]
+    expect(fallback).not.toHaveBeenCalled()
+    expect(batch.insertion).toBe("failed")
+    expect(batch.notice).toContain("可点「重新插入引用」")
+  })
+
+  it("references 只给已写入附件的引用，没写成一个都不给", async () => {
+    const { write } = recordingWriter((files) => (files[0]?.name === "bad.png" ? { errors: ["拒绝"] } : {}))
+    const queue = createAttachmentQueue({ fallback: () => ({ notice: "降级", placed: true }), write })
+
+    queue.enqueue({ files: [file("ok.png"), file("bad.png")], insertions: fakeInsertion().insertions, target: targetA })
+    await until(() => queue.getSnapshot()[0].status === "failed")
+    const batchId = queue.getSnapshot()[0].id
+    // 只列写成功的那个：文件已经在磁盘上了，重传一遍没有任何意义。
+    expect(queue.references(batchId)).toBe("![ok.png](attachments/ok.png)\n")
+    expect(queue.getSnapshot()[0].referenceCount).toBe(1)
+    expect(queue.references("不存在的批次")).toBe("")
+  })
+
+  it("未结束的批次不受理补插，重试进行中也不受理", async () => {
+    const gate = deferred<void>()
+    const { write } = recordingWriter(() => ({}))
+    const queue = createAttachmentQueue({
+      fallback: () => ({ notice: "降级", placed: true }),
+      write: async (target, files) => { await gate.promise; return write(target, files) },
+    })
+
+    queue.enqueue({ files: [file("running.png")], insertions: fakeInsertion().insertions, target: targetA })
+    // 还在写：引用马上就会被自己插进去，此刻补插只会在正文里留下两份。
+    expect(queue.reinsert(queue.getSnapshot()[0].id)).toBe(false)
+    gate.resolve()
+    await until(() => queue.getSnapshot()[0].status === "done")
+    expect(queue.getSnapshot()[0].reinserting).toBe(false)
+  })
+
+  it("补插把之前没进正文的引用插进当前打开的原文，并就地更新状态与说明", async () => {
+    const inserted: string[] = []
+    let placed = 0
+    // 首次落笔时笔记已经切走（capture 拿不到落点）；用户切回来之后 capture 才有东西。
+    let open = false
+    const insertions: AttachmentQueueInsertions = {
+      capture: () => (open ? {
+        dispose: () => {},
+        place: (placements) => {
+          const markdown = aggregatePlacements(placements)
+          if (markdown) { inserted.push(markdown); placed = 1 }
+          return { results: placements.map((p) => p?.markdown ? "inserted" : null), dropped: 0, leftover: [], placed, slots: placements.map(() => null), unplaced: "" }
+        },
+      } : null),
+    }
+    const fallback = vi.fn(() => ({ notice: "首次插入失败", placed: false }))
+    const { write } = recordingWriter(() => ({}))
+    const queue = createAttachmentQueue({ fallback, write })
+
+    const batchId = queue.enqueue({ files: [file("lost.png")], insertions, target: targetA })!
+    await until(() => queue.getSnapshot()[0].status === "done")
+    expect(queue.getSnapshot()[0].insertion).toBe("failed")
+
+    // 用户切回原笔记：这次补插当场重新取落点，引用插进正文而不是又追加一遍。
+    open = true
+    fallback.mockClear()
+    expect(queue.reinsert(batchId)).toBe(true)
+    expect(inserted).toEqual(["![lost.png](attachments/lost.png)\n"])
+    expect(fallback).not.toHaveBeenCalled()
+
+    const batch = queue.getSnapshot()[0]
+    // 仍是同一条记录：不新开一条来路不明的批次，用户看到的是这一批状态变了。
+    expect(queue.getSnapshot()).toHaveLength(1)
+    expect(batch.id).toBe(batchId)
+    expect(batch.insertion).toBe("inserted")
+    expect(batch.reinserting).toBe(false)
+  })
+
+  it("补插拿不到落点时如实走降级，不假装插进了正文", async () => {
+    const fallback = vi.fn(() => ({ notice: "「甲笔记」已被删除，附件已写入但正文引用未插入", placed: false }))
+    const { write } = recordingWriter(() => ({}))
+    const queue = createAttachmentQueue({ fallback, write })
+
+    const batchId = queue.enqueue({ files: [file("lost.png")], insertions: { capture: () => null }, target: targetA })!
+    await until(() => queue.getSnapshot()[0].status === "done")
+    expect(queue.reinsert(batchId)).toBe(true)
+
+    const batch = queue.getSnapshot()[0]
+    expect(batch.insertion).toBe("failed")
+    expect(batch.notice).toContain("已被删除")
+  })
+
+  it("已插入的引用拒绝补插，复制引用仍可使用", async () => {
+    const { write } = recordingWriter(() => ({}))
+    const queue = createAttachmentQueue({
+      fallback: () => ({ notice: "已追加到笔记末尾", placed: true }),
+      write,
+    })
+
+    const batchId = queue.enqueue({ files: [file("x.png")], insertions: { capture: () => null }, target: targetA })!
+    await until(() => queue.getSnapshot()[0].status === "done")
+    const before = queue.references(batchId)
+    expect(queue.reinsert(batchId)).toBe(false)
+    // references 是「已写入过什么」的账，与插了几次无关：反复补插不会让它越滚越长。
+    expect(queue.references(batchId)).toBe(before)
+    expect(queue.references(batchId)).toBe("![x.png](attachments/x.png)\n")
+  })
+
   it("已结束的批次可以撤掉，进行中的不允许，快照始终是新对象", async () => {
     const { write } = recordingWriter(() => ({}))
     const queue = createAttachmentQueue({ fallback: () => ({ notice: "降级", placed: true }), write })
@@ -471,5 +797,31 @@ describe("附件写入队列", () => {
     // 快照按引用比较，必须换对象，否则 useSyncExternalStore 收不到更新。
     expect(queue.getSnapshot()).not.toBe(before)
     expect(listener).toHaveBeenCalled()
+  })
+})
+
+describe("补插在重试链中只执行一次", () => {
+  it("从任意历史行补插后所有入口都拒绝重复落笔", async () => {
+    let attempt = 0
+    let canCapture = false
+    const insertion = fakeInsertion()
+    const queue = createAttachmentQueue({
+      fallback: () => ({ placed: false, notice: "原笔记暂不可写" }),
+      write: async (_target, files) => ++attempt === 2
+        ? { errors: ["第二个文件失败"], markdown: "" }
+        : { errors: [], markdown: `![图](${files[0].name})` },
+    })
+    const id = queue.enqueue({ target: targetA, files: [file("a.png"), file("b.png")], insertions: {
+      capture: (options) => canCapture ? insertion.insertions.capture(options) : null,
+    } })!
+    await until(() => queue.getSnapshot()[0].status === "failed")
+    const retry = queue.retry(id)!
+    await until(() => queue.getSnapshot().find((batch) => batch.id === retry)?.status === "done")
+    canCapture = true
+    expect(queue.reinsert(retry)).toBe(true)
+    expect(queue.reinsert(id)).toBe(false)
+    expect(queue.reinsert(retry)).toBe(false)
+    expect(insertion.inserted).toEqual(["![图](a.png)\n\n![图](b.png)\n"])
+    expect(queue.getSnapshot().every((batch) => batch.pendingReferenceCount === 0 && batch.insertion === "inserted")).toBe(true)
   })
 })

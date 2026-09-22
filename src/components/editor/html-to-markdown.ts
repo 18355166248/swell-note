@@ -11,22 +11,59 @@ const SAFE_LINK_PATTERN = /^(?:https?:|mailto:|\/|#|\.\/|\.\.\/)/i
 const SAFE_IMAGE_PATTERN = /^https?:/i
 const HARD_BREAK = "\uE000"
 
+// \u56FE\u7247\u5199\u5165\u5360\u4F4D\u7684\u54E8\u5175\u3002\u6E32\u67D3\u671F\u53D1\u5C04\u54E8\u5175\uFF0C\u6536\u5C3E\u5904\u624D\u6362\u6210\u53EF\u89C1\u6587\u5B57\u5E76\u8BB0\u5F55\u5B83\u5728\u6700\u7EC8\u4E32\u91CC\u7684\u504F\u79FB\u3002
+//
+// \u4E3A\u4EC0\u4E48\u4E0D\u5728\u4E8B\u540E\u5230\u6B63\u6587\u91CC\u641C\u5360\u4F4D\u6587\u5B57\uFF1A\u7528\u6237\u53EF\u80FD\u5728\u5199\u5165\u671F\u95F4\u7F16\u8F91\uFF0C\u6B63\u6587\u91CC\u4E5F\u53EF\u80FD\u672C\u6765\u5C31\u6709
+// \u4E00\u6A21\u4E00\u6837\u7684\u5B57\u7B26\u4E32\uFF0C\u641C\u51FA\u6765\u7684\u4F4D\u7F6E\u53EF\u80FD\u662F\u522B\u4EBA\u7684\u3002\u504F\u79FB\u5FC5\u987B\u4E0E\u6587\u5B57\u5728\u540C\u4E00\u6B21\u904D\u5386\u91CC\u4EA7\u751F\u3002
+//
+// 选 U+E001 / U+E002 是因为它们与 HARD_BREAK（U+E000）不冲突，且整条链路——行内转义、
+// \u7A7A\u767D\u6298\u53E0\u3001\u884C\u9996\u5224\u65AD\u3001\u5757\u95F4\u8DDD\u538B\u7F29\u2014\u2014\u90FD\u4E0D\u89E6\u78B0\u79C1\u6709\u533A\u5B57\u7B26\uFF0C\u54E8\u5175\u80FD\u539F\u6837\u6D3B\u5230\u6536\u5C3E\u3002
+const PLACEHOLDER_OPEN = "\uE001"
+const PLACEHOLDER_CLOSE = "\uE002"
+
 // 块级容器：遇到时产生段落边界，而不是把文字直接拼接在一起。
 const BLOCK_TAGS = new Set(["ADDRESS", "ARTICLE", "ASIDE", "DD", "DIV", "DL", "DT", "FIELDSET", "FIGCAPTION", "FIGURE", "FOOTER", "FORM", "H1", "H2", "H3", "H4", "H5", "H6", "HEADER", "HR", "MAIN", "NAV", "P", "PRE", "SECTION", "TABLE"])
 
 /** HTML 里的一张图片，按渲染顺序取出。 */
 export type ClipboardImage = { alt: string; src: string }
 
+/** 正文里一个待写入图片的占位，以及它在最终 Markdown 串里的位置。 */
+export type HtmlImagePlaceholder = {
+  /** 补上这张图引用的剪贴板文件在传入 files 里的下标。 */
+  fileIndex: number
+  /**
+   * 占位文字在**最终 Markdown**（已 trim）里的起始偏移。
+   *
+   * 调用方据此把它换算成正文坐标。绝不能让调用方事后到正文里搜这段文字：用户可能在
+   * 写入期间编辑，正文里也可能本来就有个一模一样的字符串，搜出来的位置是别人的。
+   */
+  offset: number
+  /** 实际写进正文的占位文字（已按行首状态转义），落笔前用它校验这一段没被改过。 */
+  text: string
+}
+
 export type HtmlToMarkdownOptions = {
   /**
-   * 这张**导入不了**的图片是否有剪贴板文件来补上引用（Word/飞书等本地图片富文本）。
-   * 判定为真时这里只保留 alt 说明文字，真正的正文引用由附件队列写入，同一张图不会被插两次。
+   * 这张**导入不了**的图片由哪个剪贴板文件补上引用（Word/飞书等本地图片富文本）。
+   * 返回该文件在传入 files 里的下标；返回 null 表示没有文件补，图片只能留下「无法导入」占位。
    *
    * 必须是逐图判定，不能退化成一个全局布尔值：HTML 里有两张导入不了的图片、剪贴板只给了
    * 一个图片文件时，全局开关会把两张图的占位一起删掉，可只有一张真的会被补上，
    * 另一张连占位都不剩——图片从正文里静默消失，正是这条降级反馈要防的情况。
+   *
+   * 返回下标而不只是布尔值，是因为写完后必须把**哪一个文件**的引用填回**哪一张图**的位置：
+   * 只知道「有文件补上」无法把引用放回原处，多图粘贴的顺序就还原不出来。
    */
-  imageCoveredByFile?: (image: ClipboardImage) => boolean
+  imageCoveredByFile?: (image: ClipboardImage) => number | null
+  /** 占位文字。返回值按当前行首状态转义后写进正文；默认见 imageWritePlaceholder。 */
+  imagePlaceholder?: (image: ClipboardImage, fileIndex: number) => string
+  /** 每个占位在最终 Markdown 里的位置，按图片在 HTML 中出现的顺序回调。 */
+  onImagePlaceholder?: (placeholder: HtmlImagePlaceholder) => void
+}
+
+/** 图片写入期间的默认占位。与「图片无法导入」同一形状，同样可搜索。 */
+export function imageWritePlaceholder(image: ClipboardImage, _fileIndex: number): string {
+  return image.alt ? `${image.alt}（图片写入中…）` : "（图片写入中…）"
 }
 
 /** HTML 里所有本函数导入不了（src 不是 http(s)）的图片。 */
@@ -84,7 +121,8 @@ function imageFileName(source: string): string {
 }
 
 /**
- * 建立「HTML 里导入不了的图片 → 是否确实有剪贴板文件补上引用」的逐图判定。
+ * 建立「HTML 里导入不了的图片 → 由哪个剪贴板文件补上引用」的逐图判定，
+ * 返回该文件在 `files` 里的下标；null 表示没有文件补。
  *
  * 能确认的只有两种情形：
  * 1. src 的文件名与剪贴板文件同名，且该名称在两侧各只出现一次；
@@ -92,16 +130,19 @@ function imageFileName(source: string): string {
  *    它们的 src 常指向临时目录甚至 data:，只认文件名会把每一张都判成未覆盖，
  *    于是每张图都多出一个「导入失败」的占位，而引用紧接着就插进来了）。
  *
- * 对不上就返回 false，宁可多留一个占位，也不能让图片连同占位一起消失。
+ * 对不上就返回 null，宁可多留一个占位，也不能让图片连同占位一起消失。
+ *
+ * 情形 2 按顺序配对，因此隐含一个假定：**剪贴板给出的文件顺序与图片在文档里的顺序一致**。
+ * 这个假定无法从剪贴板本身验证；一旦不成立，图片会按顺序错位（而不是像改动前那样
+ * 全部堆在末尾）。同名唯一的情形不受影响，因为它按名字配对而不是按顺序。
  */
-export function createClipboardImageCoverage(html: string | null, files: File[]): (image: ClipboardImage) => boolean {
+export function createClipboardImageCoverage(html: string | null, files: File[]): (image: ClipboardImage) => number | null {
   const imageFiles = files.filter((file) => file.type.startsWith("image/"))
   // 文件里混了非图片，或压根没有图片文件：没有任何东西能补上 HTML 图片的引用。
-  if (imageFiles.length === 0 || imageFiles.length !== files.length) return () => false
+  if (imageFiles.length === 0 || imageFiles.length !== files.length) return () => null
   const unsupported = unsupportedImages(html ?? "")
-  if (unsupported.length === 0) return () => false
+  if (unsupported.length === 0) return () => null
   const paired = unsupported.length === imageFiles.length
-  if (paired) return () => true
   const countNames = (names: string[]) => {
     const counts = new Map<string, number>()
     for (const name of names) if (name) counts.set(name, (counts.get(name) ?? 0) + 1)
@@ -109,12 +150,26 @@ export function createClipboardImageCoverage(html: string | null, files: File[])
   }
   const sourceNames = countNames(unsupported.map((image) => imageFileName(image.src)))
   const fileNames = countNames(imageFiles.map((file) => file.name.trim().toLowerCase()))
-  // 文件名不含目录，a/image.png 与 b/image.png 不能靠一个同名文件区分。
-  // 数量不匹配时仅接受两侧都唯一的名称，其余保留占位；判定保持纯函数，重复渲染不会消耗匹配。
-  return (image) => {
+  const uniqueMatch = (image: ClipboardImage) => {
     const name = imageFileName(image.src)
-    return sourceNames.get(name) === 1 && fileNames.get(name) === 1
+    if (sourceNames.get(name) !== 1 || fileNames.get(name) !== 1) return null
+    const index = imageFiles.findIndex((file) => file.name.trim().toLowerCase() === name)
+    return index >= 0 ? index : null
   }
+  // 先为所有唯一名称预留文件，避免前面的匿名图片抢走后面可准确匹配的文件。
+  const matches = unsupported.map(uniqueMatch)
+  const reserved = new Set(matches.filter((index) => index !== null))
+  const remaining = imageFiles.map((_, index) => index).filter((index) => !reserved.has(index))
+  if (!paired) return uniqueMatch
+  const bySource = new Map<string, number[]>()
+  unsupported.forEach((image, index) => {
+    const match = matches[index] ?? remaining.shift()!
+    const indices = bySource.get(image.src) ?? []
+    indices.push(match)
+    bySource.set(image.src, indices)
+  })
+  // 相同 src 的多处图片按出现顺序领取，文件下标只使用一次。
+  return (image) => bySource.get(image.src)?.shift() ?? null
 }
 
 /**
@@ -127,21 +182,84 @@ export function createClipboardImageCoverage(html: string | null, files: File[])
  */
 let currentHtmlOptions: HtmlToMarkdownOptions = {}
 
+/**
+ * 本次转换里发出的待写入占位，下标即哨兵里携带的序号。
+ *
+ * 与 currentHtmlOptions 同样只在单次调用内有效（入口存旧值、finally 还原），
+ * 不能做成跨调用的全局列表：粘贴的图片文件与网页 HTML 走同一条分发路径，
+ * 泄漏一次就会让下一次转换把上一次的占位也算进去。
+ */
+let currentPlaceholders: Array<{ atLineStart: boolean; fileIndex: number; text: string }> = []
+
+/** 发射一个占位哨兵。真正的文字与偏移留到收尾处统一结算，见 resolvePlaceholders。 */
+function emitPlaceholder(image: ClipboardImage, fileIndex: number, atLineStart: boolean): string {
+  const placeholder = currentHtmlOptions.imagePlaceholder ?? imageWritePlaceholder
+  currentPlaceholders.push({ atLineStart, fileIndex, text: placeholder(image, fileIndex) })
+  return `${PLACEHOLDER_OPEN}${currentPlaceholders.length - 1}${PLACEHOLDER_CLOSE}`
+}
+
 export function htmlToMarkdown(html: string, options: HtmlToMarkdownOptions = {}): string | null {
-  const previous = currentHtmlOptions
+  const previousOptions = currentHtmlOptions
+  const previousPlaceholders = currentPlaceholders
   currentHtmlOptions = options
+  currentPlaceholders = []
   try {
     const document = new DOMParser().parseFromString(html, "text/html")
     const body = document.body
     if (!body || !body.querySelector(STRUCTURE_SELECTOR)) return null
     const blocks = renderBlockChildren(body, "")
-    const markdown = compressBlockGaps(blocks.join("\n\n")).trim()
-    return markdown || null
+    const compressed = compressBlockGaps(blocks.join("\n\n"))
+    // trim 会吃掉开头的空行，占位偏移必须按 trim 之后的串算——否则整段会往前偏。
+    const lead = compressed.length - compressed.trimStart().length
+    const { markdown, placeholders } = resolvePlaceholders(compressed.trim(), lead)
+    if (!markdown) return null
+    // 偏移与文字在同一次遍历里产生，调用方据此把引用填回原处。
+    if (options.onImagePlaceholder) for (const placeholder of placeholders) options.onImagePlaceholder(placeholder)
+    return markdown
   } catch {
     return null
   } finally {
-    currentHtmlOptions = previous
+    currentHtmlOptions = previousOptions
+    currentPlaceholders = previousPlaceholders
   }
+}
+
+/**
+ * 收尾单遍替换：把哨兵换成可见占位文字，同时记下它在最终串里的偏移。
+ *
+ * 替换必须与压缩空行分开做（先压缩、后替换）。反过来会让 compressBlockGaps 在“行”这个
+ * 层面看到哨兵，而占位文字可能自带换行或前缀，压缩结果就不再是最终形态，偏移全错。
+ *
+ * 文字在这里才转义，转义用**发射时**记下的行首状态：文件名里带 `*`、`[` 时，
+ * 占位文字同样要转义才对，否则它自己会被解析成强调或链接。
+ */
+function resolvePlaceholders(
+  raw: string,
+  lead: number,
+): { markdown: string; placeholders: HtmlImagePlaceholder[] } {
+  if (!raw.includes(PLACEHOLDER_OPEN)) return { markdown: raw, placeholders: [] }
+  const placeholders: HtmlImagePlaceholder[] = []
+  let markdown = ""
+  let cursor = 0
+  for (;;) {
+    const open = raw.indexOf(PLACEHOLDER_OPEN, cursor)
+    if (open < 0) break
+    const close = raw.indexOf(PLACEHOLDER_CLOSE, open + PLACEHOLDER_OPEN.length)
+    if (close < 0) break
+    const pending = currentPlaceholders[Number(raw.slice(open + PLACEHOLDER_OPEN.length, close))]
+    markdown += raw.slice(cursor, open)
+    cursor = close + PLACEHOLDER_CLOSE.length
+    // 序号对不上（理论上不会发生）时保留原文，宁可让用户看到哨兵也不要静默丢内容。
+    if (!pending) {
+      markdown += raw.slice(open, cursor)
+      continue
+    }
+    const text = escapeText(pending.text, pending.atLineStart)
+    placeholders.push({ fileIndex: pending.fileIndex, offset: markdown.length - lead, text })
+    markdown += text
+  }
+  markdown += raw.slice(cursor)
+  return { markdown, placeholders }
 }
 
 // 图片无法按外链导入时的可见占位。有 alt 时保留原有说明文字，没有时给一段可搜索的说明。
@@ -389,12 +507,13 @@ function renderInline(node: Node, atLineStart: boolean): string {
     // 剪贴板同时给了这些图片的真实文件时，正文引用由附件队列写入，这里只留 alt 说明文字，
     // 避免同一张图片既进队列又在正文里留一份原始地址。
     if (!SAFE_IMAGE_PATTERN.test(source)) {
-      // 逐图确认「这张」是否有剪贴板文件补上引用：有就只留 alt 说明文字，没有就留可见占位。
-      // 补上的那些绝不能退回「图片无法导入」占位：图片马上由文件插进来，写一句导入失败
-      // 是假消息，还会和紧跟其后的引用打架。未被文件覆盖的图片则必须保住占位——
-      // 它们不会有任何引用补充，静默删掉就是真的丢了。
-      const covered = currentHtmlOptions.imageCoveredByFile?.({ alt, src: source }) ?? false
-      if (covered) return alt ? escapeText(alt, atLineStart) : ""
+      // 逐图确认「这张」由哪个剪贴板文件补上引用：有就留下待写入占位，没有就留「无法导入」说明。
+      //
+      // 这里刻意**不再**退回「只留 alt 文字」的老写法：那样正文里看不出这里缺一张图，
+      // 而引用稍后会被追加到整段末尾，多图粘贴的顺序就此丢失。占位是同一套降级反馈的
+      // 延伸——图片写完之后原位替换成引用，写失败则原位替换成失败说明。
+      const fileIndex = currentHtmlOptions.imageCoveredByFile?.({ alt, src: source }) ?? null
+      if (fileIndex !== null) return emitPlaceholder({ alt, src: source }, fileIndex, atLineStart)
       return escapeText(imageImportPlaceholder(alt, imageImportReason(source)), atLineStart)
     }
     return `![${escapeText(alt, false)}](${serializeLinkDestination(source)})`

@@ -580,7 +580,7 @@ function App() {
     const timer = window.setTimeout(() => {
       // 清除/切库/原子目录重命名都会替换 ref；旧闭包不得把过期快照重新写回。
       if (latestCacheSnapshotRef.current !== snapshot) return
-      // 内容读取、收藏和本地编辑后统一刷新离线快照；敏感凭据不属于 Note 模型，因此不会进入缓存。
+      // 内容读取、收藏、置顶和本地编辑后统一刷新离线快照；敏感凭据不属于 Note 模型，因此不会进入缓存。
       void saveVaultCache(snapshot)
         .then(listVaultCaches)
         .then(setVaultCaches)
@@ -737,7 +737,7 @@ function App() {
     ? folderNotes.filter((note) => note.tags?.includes(selectedTag))
     : folderNotes, [folderNotes, selectedTag])
   const libraryNotes = useMemo(() => libraryView === "recent"
-    ? sortNotes(taggedNotes, "updated-desc").slice(0, 32)
+    ? sortNotes(taggedNotes, "updated-desc", { pinnedFirst: false }).slice(0, 32)
     : libraryView === "starred"
       ? taggedNotes.filter((note) => note.starred)
       : taggedNotes, [libraryView, taggedNotes])
@@ -1111,6 +1111,8 @@ function App() {
         }
         })()
       : patch
+    // 同一附件批次可能先原位插入、再降级追加；React 批处理结束前后者也必须读到最新正文。
+    notesRef.current = notesRef.current.map((note) => note.id === noteId ? { ...note, ...indexedPatch } : note)
     setNotes((current) =>
       current.map((note) =>
         note.id === noteId
@@ -1281,6 +1283,18 @@ function App() {
   const toggleNoteStar = (noteId: string) => {
     setNotes((current) => current.map((note) => note.id === noteId
       ? { ...note, starred: !note.starred }
+      : note))
+  }
+
+  const toggleNotePin = (noteId: string) => {
+    // 刷新和结构变更会用快照替换 notes，等它们提交后再修改偏好，避免新置顶被旧快照覆盖。
+    if (isRefreshingVault || isManagingNote || vaultMutationBarrierRef.current > 0) {
+      setVaultError("正在更新笔记库，请等待完成后再修改置顶状态")
+      return
+    }
+    // 置顶只影响本机列表，不改正文、修改时间或 WebDAV 待同步状态。
+    setNotes((current) => current.map((note) => note.id === noteId
+      ? { ...note, pinned: !note.pinned }
       : note))
   }
 
@@ -1489,12 +1503,14 @@ function App() {
     })
   }
 
-  const formatNoteById = (noteId: string, syntax: string) => {
+  const formatNoteById = (noteId: string, syntax: string, mode: "append" | "replace" = "append") => {
     const note = notesRef.current.find((candidate) => candidate.id === noteId)
-    if (!note || !syntax || note.readOnly) return
+    if (!note || (mode === "append" && !syntax) || note.readOnly) return
     // 追加的是块级内容（图片/附件 Markdown）：与既有正文之间补空行，
     // 避免粘进末行段落或被末尾表格吞并。
-    const content = appendBlockMarkdown(note.content, syntax)
+    const content = mode === "replace" ? syntax : appendBlockMarkdown(note.content, syntax)
+    // 与编辑器写回共用即时正文快照，连续降级处理不能覆盖同一事件内已接受的修改。
+    notesRef.current = notesRef.current.map((candidate) => candidate.id === noteId ? { ...candidate, content } : candidate)
     if (activeCacheMeta) {
       void saveNoteVersion({ cacheId: activeCacheMeta.id, content: note.content, noteId, reason: "编辑前", title: note.title })
         .catch(() => undefined)
@@ -1535,17 +1551,19 @@ function App() {
    * 两个回调都经 ref 转手：队列实例只在首帧创建一次，直接闭包捕获会把首帧的
    * activeCacheMeta / notes 永久带进来（首帧它们多半还是空的）。
    */
-  const attachmentFallbackRef = useRef<(target: AttachmentQueueTarget, markdown: string) => AttachmentQueueFallbackResult>(() => ({ placed: false, notice: "" }))
-  attachmentFallbackRef.current = (target, markdown) => {
+  const attachmentFallbackRef = useRef<(target: AttachmentQueueTarget, markdown: string, leftover: readonly string[]) => AttachmentQueueFallbackResult>(() => ({ placed: false, notice: "" }))
+  attachmentFallbackRef.current = (target, markdown, leftover) => {
     // 落点失效时的显式降级：把引用追加到**原笔记**末尾，判断与说明见 resolveAttachmentFallback。
     const { activeCacheMeta } = assetResolverContextRef.current
     try {
       return resolveAttachmentFallback({
         activeCacheId: activeCacheMeta?.id ?? null,
+        content: (noteId) => notesRef.current.find((candidate) => candidate.id === noteId)?.content ?? "",
+        leftover,
         markdown,
         notes: notesRef.current,
         target,
-        writeMarkdown: formatNoteById,
+        replaceContent: (noteId, content) => formatNoteById(noteId, content, "replace"),
       })
     } catch (error) {
       // 写入失败本身也要如实汇报：这时附件同样已经落在磁盘/远端了。
@@ -1557,7 +1575,7 @@ function App() {
   const attachmentQueueRef = useRef<ReturnType<typeof createAttachmentQueue> | null>(null)
   if (!attachmentQueueRef.current) {
     attachmentQueueRef.current = createAttachmentQueue({
-      fallback: (target, markdown) => attachmentFallbackRef.current(target, markdown),
+      fallback: (target, markdown, leftover) => attachmentFallbackRef.current(target, markdown, leftover),
       write: (target, files) => attachmentWriteRef.current(target, files),
     })
   }
@@ -1855,6 +1873,7 @@ function App() {
         updatedAt: formatRemoteDate(file.updatedAt),
         modifiedAt: parseRemoteTimestamp(file.updatedAt),
         starred: previousNote?.starred ?? false,
+        pinned: previousNote?.pinned ?? false,
         folder: preserveWorkingCopy
           ? workingCopy!.folder
           : deriveRemoteFolder(adapter.getDisplayPath?.(file.path) ?? file.path),
@@ -1900,7 +1919,7 @@ function App() {
         ...note,
         syncStatus: note.pendingOperation === "create" ? "modified" : "conflict",
       }))
-    const mergedNotes = [...remoteNotes, ...orphanedWorkingCopies]
+    let mergedNotes = [...remoteNotes, ...orphanedWorkingCopies]
     const availableNoteIds = mergedNotes
       .filter((note) => note.pendingOperation !== "delete")
       .map((note) => note.id)
@@ -1915,6 +1934,17 @@ function App() {
     if (options.scope && !options.scope.isCurrent()) return contextNotes
     const persistedCache = activeCacheMeta?.id === cacheId ? null : await loadVaultCache(cacheId, { hydrate: "active" })
     if (options.scope && !options.scope.isCurrent()) return contextNotes
+    if (!preserveContext) {
+      // 重新选择本地目录会全量扫描文件，但置顶属于库内偏好；只从同一 cacheId 恢复，避免同名路径跨库串用。
+      const cachedNotes = activeCacheMeta?.id === cacheId ? notesRef.current : persistedCache?.notes ?? []
+      const pinnedByPath = new Map(cachedNotes.filter((note) => note.remotePath).map((note) => [
+        normalizeVaultPathIdentity(note.remotePath!), Boolean(note.pinned),
+      ]))
+      mergedNotes = mergedNotes.map((note) => ({
+        ...note,
+        pinned: note.remotePath ? pinnedByPath.get(normalizeVaultPathIdentity(note.remotePath)) ?? false : false,
+      }))
+    }
     const nextTrashEntries = options.structureSnapshot?.trash ?? (activeCacheMeta?.id === cacheId
       ? trashEntries
       : persistedCache?.trash ?? []
@@ -4407,6 +4437,7 @@ function App() {
             onResolveWikiNote={resolveWikiNote}
             onRestoreNoteVersion={restoreActiveNoteVersion}
             onToggleNoteStar={toggleNoteStar}
+            onToggleNotePin={toggleNotePin}
             onToggleNoteTask={(noteId, line, checked) => toggleTask({
               checked,
               id: `${noteId}:${line}`,
