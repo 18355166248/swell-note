@@ -94,6 +94,7 @@ import {
   normalizeNoteTarget,
 } from "@/services/search/note-index"
 import { sortNotes, type NoteSort } from "@/services/search/note-sort"
+import { hasPendingNotePin, notePinQueueKey, syncNotePins } from "@/services/sync/note-pin-sync"
 import { noteMatchesLibraryQuery } from "@/services/search/note-list-filter"
 import {
   buildVaultFolders,
@@ -834,14 +835,15 @@ function App() {
   const syncSummary = useMemo(() => summarizeWebDavSync(notes), [notes])
   // 一份排序配置算一个待处理项目（不按目录条目计数）；冲突单独展示，不计入待处理数。
   const folderOrderPendingCount = folderOrderSync && (folderOrderSync.status === "pending" || folderOrderSync.status === "error") ? 1 : 0
-  const pendingSyncCount = syncSummary.pending + syncSummary.failed + pendingWebDavDirectories.length + pendingWebDavDirectoryMoves.length + pendingAttachmentCount + folderOrderPendingCount
+  const pinPendingCount = notes.some(hasPendingNotePin) ? 1 : 0
+  const pendingSyncCount = syncSummary.pending + syncSummary.failed + pendingWebDavDirectories.length + pendingWebDavDirectoryMoves.length + pendingAttachmentCount + folderOrderPendingCount + pinPendingCount
   const autoSyncQueueKey = useMemo(() => `${buildAutoSyncQueueKey(
     activeCacheMeta?.id,
     notes,
     pendingWebDavDirectories,
     pendingAttachmentCount,
     pendingWebDavDirectoryMoves,
-  )}|folder-order:${folderOrderSync?.queueSignature ?? ""}`,
+  )}|folder-order:${folderOrderSync?.queueSignature ?? ""}|note-pins:${notePinQueueKey(notes)}`,
   [activeCacheMeta?.id, folderOrderSync?.queueSignature, notes, pendingAttachmentCount, pendingWebDavDirectories, pendingWebDavDirectoryMoves])
   autoSyncQueueKeyRef.current = autoSyncQueueKey
   const conflictCount = syncSummary.conflicts
@@ -1292,9 +1294,9 @@ function App() {
       setVaultError("正在更新笔记库，请等待完成后再修改置顶状态")
       return
     }
-    // 置顶只影响本机列表，不改正文、修改时间或 WebDAV 待同步状态。
+    // 独立标记置顶意图；不改正文、修改时间或正文同步状态，离线取消置顶同样需要上传。
     setNotes((current) => current.map((note) => note.id === noteId
-      ? { ...note, pinned: !note.pinned }
+      ? { ...note, pinned: !note.pinned, pinPending: note.source === "webdav" ? true : undefined }
       : note))
   }
 
@@ -1702,6 +1704,16 @@ function App() {
   }
 
   const connectWebDav = async (config: WebDavConfig, password: string) => {
+    // 设置页与快捷连接也可能在旧列表仍可操作时同步；同样挡住置顶编辑，避免晚到快照覆盖新意图。
+    vaultMutationBarrierRef.current += 1
+    try {
+      return await connectWebDavSession(config, password)
+    } finally {
+      vaultMutationBarrierRef.current = Math.max(0, vaultMutationBarrierRef.current - 1)
+    }
+  }
+
+  const connectWebDavSession = async (config: WebDavConfig, password: string) => {
     setSyncFailure(null)
     setFolderOrderConflictDismissed((current) => nextFolderOrderConflictDismissed(current, "explicit"))
     const adapter = createWebDavVaultAdapter(config, password)
@@ -1786,7 +1798,7 @@ function App() {
     adapter: VaultAdapter,
     preserveContext = false,
     contextNotes: Note[] = notes,
-    options: { scope?: VaultSyncScope; structureSnapshot?: VaultCacheSnapshot } = {},
+    options: { scope?: VaultSyncScope; structureSnapshot?: VaultCacheSnapshot; run?: SyncRun } = {},
   ) => {
     const [files, directories] = await Promise.all([
       adapter.listMarkdownFiles(),
@@ -1874,6 +1886,8 @@ function App() {
         modifiedAt: parseRemoteTimestamp(file.updatedAt),
         starred: previousNote?.starred ?? false,
         pinned: previousNote?.pinned ?? false,
+        pinPending: previousNote?.pinPending,
+        pinSynced: previousNote?.pinSynced,
         folder: preserveWorkingCopy
           ? workingCopy!.folder
           : deriveRemoteFolder(adapter.getDisplayPath?.(file.path) ?? file.path),
@@ -1969,6 +1983,23 @@ function App() {
         ?? (preserveContext ? pendingWebDavDirectoryMoves : persistedCache?.pendingDirectoryMoves ?? [])
       : []
     const mergedDirectories = [...new Set([...displayDirectories, ...preservedPendingDirectories])]
+    let pinSyncError: unknown = null
+    try {
+      // 置顶跟随现有整库同步屏障运行；结构尚未提交时只拉取，避免先发布不存在的目标路径。
+      mergedNotes = await syncNotePins({
+        adapter,
+        notes: mergedNotes,
+        allowUpload: preservedPendingDirectories.length === 0 && preservedPendingDirectoryMoves.length === 0
+          && !hasPendingStructureOperations(mergedNotes),
+        isCancelled: () => Boolean(options.run?.cancelled || (options.scope && !options.scope.isCurrent())),
+      })
+    } catch (error) {
+      // 配置失败不丢本轮读取的笔记和待上传意图；先保存快照，再交给统一同步错误入口提示。
+      pinSyncError = error
+    }
+    if (pinSyncError || mergedNotes.some(hasPendingNotePin)) {
+      cacheMeta.lastSyncedAt = activeCacheMeta?.id === cacheId ? activeCacheMeta.lastSyncedAt : undefined
+    }
     const snapshot: VaultCacheSnapshot = {
       ...cacheMeta,
       activeNoteId: nextActiveNoteId,
@@ -2028,6 +2059,7 @@ function App() {
       note.remotePath === file.path && typeof note.searchText === "string",
     ))
     startVaultIndex(adapter, filesToIndex)
+    if (pinSyncError) throw pinSyncError
     return mergedNotes
   }
 
@@ -2305,7 +2337,7 @@ function App() {
       setSyncProgress((current) => current ? { ...current, currentLabel: "刷新远端列表", phase: "refreshing" } : current)
       const previousLastSyncedAt = activeCacheMeta?.lastSyncedAt
       const postSyncSnapshot = { ...directoryResult.snapshot, notes: syncResult.notes }
-      const refreshedNotes = await loadVault(vaultSession, true, syncResult.notes, { scope, structureSnapshot: postSyncSnapshot })
+      const refreshedNotes = await loadVault(vaultSession, true, syncResult.notes, { scope, structureSnapshot: postSyncSnapshot, run })
       if (!scope.isCurrent()) return
       // 排序阶段：即使仅排序改变也完成三方判定与条件上传；结构操作未成功时暂停上传但允许拉取。
       setSyncProgress((current) => current ? { ...current, currentLabel: "同步文件夹排序", phase: "refreshing" } : current)
@@ -2374,7 +2406,7 @@ function App() {
       }
     }
     if (failedNoteIds.size > 0) await refreshVault(failedNoteIds)
-    else if (folderOrderSync && (folderOrderSync.status === "error" || folderOrderSync.status === "pending")) {
+    else if (pinPendingCount > 0 || (folderOrderSync && (folderOrderSync.status === "error" || folderOrderSync.status === "pending"))) {
       // 只有排序失败/待上传时也能重试：完整同步的排序阶段会重新处理该库配置。
       await refreshVault()
     }

@@ -1,4 +1,5 @@
 import type { Note } from "@/types/note"
+import { hasPendingNotePin } from "./note-pin-sync"
 
 export type SyncSummary = {
   conflicts: number
@@ -32,9 +33,11 @@ export function summarizeSyncQueue(
   const summary = summarizeWebDavSync(notes)
   // 附件队列总数已包含失败项；展示时拆开口径，但同步按钮的工作量只能累计一次。
   const pendingAttachments = Math.max(0, queuedAttachmentCount - failedAttachmentCount)
+  // 置顶配置是一个独立同步项目，不与正文待上传状态互相覆盖。
+  const pendingPins = notes.some(hasPendingNotePin) ? 1 : 0
   return {
     failed: summary.failed + failedAttachmentCount,
-    pending: summary.pending + pendingAttachments,
-    work: summary.pending + summary.failed + queuedAttachmentCount,
+    pending: summary.pending + pendingAttachments + pendingPins,
+    work: summary.pending + summary.failed + queuedAttachmentCount + pendingPins,
   }
 }

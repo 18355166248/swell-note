@@ -84,6 +84,11 @@ class MockWebDavServer {
     return file ? (JSON.parse(file.content) as FolderOrderDocument) : null
   }
 
+  readNotePins(): string[] | null {
+    const file = this.files.get("/Swell/.swell/note-pins.json")
+    return file ? JSON.parse(file.content).pins : null
+  }
+
   putCount(path: string) {
     return this.log.filter((entry) => entry === `PUT ${path}`).length
   }
@@ -314,6 +319,66 @@ async function manualSync(page: Page) {
 function webDavCacheId(username: string) {
   return createHash("sha256").update(`webdav:${SERVER_URL}:${username}:${REMOTE_ROOT}`).digest("hex")
 }
+
+test("笔记置顶跨端同步：桌面上传、手机离线取消并重启恢复、桌面拉回", async ({ browser }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chrome")
+  test.setTimeout(60_000)
+  const server = new MockWebDavServer()
+  seedRemoteLibrary(server)
+  const desktop = await newDevice(browser, server, testInfo)
+  const mobile = await newMobileDevice(browser, server, testInfo)
+  const showAll = async (page: Page) => {
+    await page.evaluate(() => { window.location.hash = "/notes/view/all" })
+    await expect(page.locator(".note-list-row:visible")).toHaveCount(4)
+  }
+  try {
+    await connectViaSettings(desktop.page)
+    await showAll(desktop.page)
+    await desktop.page.locator(".note-list-row:visible").filter({ hasText: "g" }).click({ button: "right" })
+    await desktop.page.getByRole("menuitem", { name: "置顶笔记", exact: true }).click()
+    await expect(desktop.page.locator(".note-list-row:visible").first().getByLabel("已置顶")).toBeVisible()
+    // 手动模式下只入队；置顶不触发正文 PUT，也不在后台擅自上传配置。
+    expect(server.readNotePins()).toBeNull()
+    await manualSync(desktop.page)
+    await expect.poll(() => server.readNotePins()).toEqual(["Gamma/g.md"])
+
+    await connectViaSettings(mobile.page)
+    await showAll(mobile.page)
+    const row = mobile.page.locator(".note-list-row:visible").first()
+    await expect(row.getByLabel("已置顶")).toBeVisible()
+    await expect(row.locator("strong")).toHaveText("g")
+    await mobile.context.setOffline(true)
+    const box = await row.boundingBox()
+    if (!box) throw new Error("置顶行不可见")
+    const session = await mobile.context.newCDPSession(mobile.page)
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ id: 1, x: box.x + box.width / 2, y: box.y + box.height / 2 }] })
+    await expect(mobile.page.getByRole("dialog")).toBeVisible()
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+    await session.detach()
+    await mobile.page.getByRole("button", { name: "取消置顶", exact: true }).click()
+    await expect(mobile.page.locator(".note-list-row:visible").getByLabel("已置顶")).toHaveCount(0)
+    // 等待离线快照落盘后恢复网络并重启，重新连接应上传取消意图，不能被云端旧置顶覆盖。
+    await expect.poll(async () => mobile.page.evaluate(async () => {
+      const request = indexedDB.open("swell-note-vault-cache", 3)
+      const db = await new Promise<IDBDatabase>((resolve) => { request.onsuccess = () => resolve(request.result) })
+      const pending = await new Promise<boolean>((resolve) => {
+        const get = db.transaction("vaults", "readonly").objectStore("vaults").getAll()
+        get.onsuccess = () => resolve(get.result.some((cache) => cache.notes.some((note: { pinPending?: boolean; pinned?: boolean }) => note.pinPending && !note.pinned)))
+      })
+      db.close()
+      return pending
+    })).toBe(true)
+    await mobile.context.setOffline(false)
+    await connectViaSettings(mobile.page)
+    await expect.poll(() => server.readNotePins()).toEqual([])
+    await manualSync(desktop.page)
+    await expect(desktop.page.locator(".note-list-row:visible").getByLabel("已置顶")).toHaveCount(0)
+    expect(server.putCount("/Swell/Gamma/g.md")).toBe(0)
+  } finally {
+    await desktop.context.close()
+    await mobile.context.close()
+  }
+})
 
 test.describe("文件夹排序 WebDAV 双设备同步", () => {
   test("A 排序手动同步上传，B 连接即见；B 反向排序，A 拉回", async ({ browser }, testInfo) => {

@@ -47,6 +47,7 @@ import { inspectCachedAttachments, type AttachmentMaintenanceReport } from "@/se
 import { inspectStorageQuota, requestPersistentStorage, type StorageQuotaReport } from "@/services/storage/storage-quota"
 import { getNativeSearchIndexStatus, supportsNativeSearchIndex, type NativeSearchIndexStatus } from "@/services/search/sqlite-note-index"
 import { summarizeSyncQueue, summarizeWebDavSync } from "@/services/sync/sync-summary"
+import { hasPendingNotePin } from "@/services/sync/note-pin-sync"
 import { getSyncProgressDescription, getSyncProgressPercent, type SyncProgress } from "@/services/sync/sync-progress"
 import type { AutoSyncMode } from "@/services/sync/sync-preferences"
 import type { SyncLogEntry } from "@/services/sync/sync-log"
@@ -737,7 +738,7 @@ export function SyncSettingsPage({
   const summary = summarizeWebDavSync(notes)
   const problemNotes = notes.filter((note) => note.source === "webdav"
     && note.pendingOperation !== "delete"
-    && (note.syncStatus === "modified" || note.syncStatus === "conflict"))
+    && (note.syncStatus === "modified" || note.syncStatus === "conflict" || hasPendingNotePin(note)))
   const hasCachedNotes = notes.some((note) => note.source === "webdav")
   const deletedNotes = notes.filter((note) => note.source === "webdav" && note.pendingOperation === "delete")
   const indexing = indexProgress && indexProgress.indexed < indexProgress.total
@@ -901,6 +902,9 @@ export function SyncSettingsPage({
 }
 
 function getPendingOperationLabel(note: Note) {
+  if (hasPendingNotePin(note) && !note.pendingOperation && note.syncStatus !== "modified") {
+    return note.pinned ? "置顶状态待同步" : "取消置顶待同步"
+  }
   if (note.pendingOperation === "create") return "本机新建 · 待上传"
   if (note.pendingOperation === "move") return "重命名或移动 · 待同步"
   if (note.pendingOperation === "delete") return "本机已删除 · 待同步"

@@ -1,5 +1,6 @@
 import type { WebDavConfig } from "@/lib/webdav-config"
 import { FOLDER_ORDER_MAX_BYTES } from "@/services/preferences/folder-order-document"
+import { NOTE_PINS_MAX_BYTES } from "@/services/preferences/note-pins-document"
 import {
   checkWebDavDirectoryExists,
   completeWebDavDirectoryMove,
@@ -28,6 +29,7 @@ export function createWebDavVaultAdapter(
   // 排序元数据固定在 <root>/.swell/folder-order.json；凭据留在闭包里，组件层不可见。
   const metadataDirectoryPath = `${config.remotePath.replace(/\/+$/g, "")}/.swell`
   const folderOrderDocumentPath = `${metadataDirectoryPath}/folder-order.json`
+  const notePinDocumentPath = `${metadataDirectoryPath}/note-pins.json`
   return {
     cacheIdentity: `webdav:${config.serverUrl}:${config.username}:${config.remotePath}`,
     cacheLabel: `坚果云 · ${config.remotePath}`,
@@ -46,6 +48,24 @@ export function createWebDavVaultAdapter(
     },
     kind: "webdav",
     readOnly: true,
+    // 与文件夹排序共用条件写协议，置顶配置独立存储，不改写 Markdown 正文。
+    notePinStore: {
+      async ensureMetadataDirectory() {
+        await ensureWebDavDirectory(config, password, metadataDirectoryPath)
+      },
+      readDocument() {
+        return readJsonDocument(config, password, notePinDocumentPath, NOTE_PINS_MAX_BYTES)
+      },
+      createDocument(body) {
+        return createJsonDocument(config, password, notePinDocumentPath, body)
+      },
+      updateDocument(body, expectedEtag) {
+        return updateJsonDocument(config, password, notePinDocumentPath, body, expectedEtag)
+      },
+      verifyRoot() {
+        return checkWebDavDirectoryExists(config, password, config.remotePath)
+      },
+    },
     folderOrderStore: {
       async ensureMetadataDirectory() {
         await ensureWebDavDirectory(config, password, metadataDirectoryPath)

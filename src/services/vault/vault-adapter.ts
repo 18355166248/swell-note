@@ -70,6 +70,7 @@ export interface VaultAdapter {
   readonly kind: VaultSourceKind
   readonly readOnly: boolean
   readonly folderOrderStore?: VaultFolderOrderStore
+  readonly notePinStore?: VaultFolderOrderStore
   getDisplayPath?(path: string): string
   getStoragePath?(displayPath: string): string
   ensureDirectory?(path: string): Promise<void>

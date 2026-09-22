@@ -13,6 +13,13 @@ const baseNote: Note = {
 }
 
 describe("summarizeWebDavSync", () => {
+  it("仅置顶或取消置顶也计入待同步，多个条目合为一个配置项目", () => {
+    const notes: Note[] = [
+      { ...baseNote, source: "webdav", remotePath: "/a.md", pinned: true, pinPending: true, syncStatus: "synced" },
+      { ...baseNote, id: "b", source: "webdav", remotePath: "/b.md", pinned: false, pinPending: true, syncStatus: "synced" },
+    ]
+    expect(summarizeSyncQueue(notes, 0, 0)).toEqual({ pending: 1, failed: 0, work: 1 })
+  })
   it("区分待同步、失败、冲突和已同步笔记", () => {
     const notes: Note[] = [
       { ...baseNote, id: "pending", source: "webdav", syncStatus: "modified" },

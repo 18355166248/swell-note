@@ -8,8 +8,11 @@ export type Note = {
   updatedAt: string
   modifiedAt?: number
   starred: boolean
-  // 与收藏独立的本机列表偏好，旧缓存未记录时按未置顶处理。
+  // 与收藏独立；WebDAV 库通过 .swell/note-pins.json 同步，旧缓存默认未置顶。
   pinned?: boolean
+  pinPending?: boolean
+  // 最近确认的置顶值和源路径，用于区分远端更新与本机操作，并在重命名后迁移配置。
+  pinSynced?: { remotePath: string; pinned: boolean }
   folder?: string
   frontmatter?: Record<string, string | string[]>
   format?: "canvas" | "markdown"
