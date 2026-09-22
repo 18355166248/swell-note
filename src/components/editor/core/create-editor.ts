@@ -92,6 +92,10 @@ export function buildEditorState(options: EditorStateOptions): EditorState {
     settings: options.settings,
   }
   const extensions: Extension = [
+    // Tauri 正式包会给启动页 style 注入 nonce；此时 CSP 中的 unsafe-inline 不再生效。
+    // CodeMirror 动态主题必须沿用该 nonce，否则光标定位/闪烁与原生选区隐藏样式都会被拦截。
+    // nonce 属性可能被浏览器隐藏为空串，必须读取 DOM 的 .nonce；普通网页/开发模式允许为空。
+    EditorView.cspNonce.of(document.querySelector<HTMLStyleElement>("style[nonce]")?.nonce ?? ""),
     options.languageExtensions,
     // 实时预览与表格编辑按原 markdownLivePreview 的位置注册，装饰层级不变。
     options.compartments.livePreview.of(options.livePreviewExtensions(context)),

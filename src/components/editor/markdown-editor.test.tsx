@@ -98,6 +98,23 @@ describe("MarkdownEditor", () => {
     expect(getDrawSelectionConfig(view.state).drawRangeCursor).toBe(false)
   })
 
+  it("正式包沿用启动样式 nonce，切换笔记与源码模式后仍保留", () => {
+    const bootstrapStyle = document.createElement("style")
+    bootstrapStyle.nonce = "native-style-nonce"
+    document.head.prepend(bootstrapStyle)
+    try {
+      const { rerender } = mountWithRerender(<MarkdownEditor sessionKey="nonce-a" onChange={() => {}} value="第一篇" />)
+      const view = editorView()
+      expect(view.state.facet(EditorView.cspNonce)).toBe("native-style-nonce")
+
+      rerender(<MarkdownEditor sessionKey="nonce-b" sourceMode onChange={() => {}} value="第二篇" />)
+      expect(editorView()).toBe(view)
+      expect(view.state.facet(EditorView.cspNonce)).toBe("native-style-nonce")
+    } finally {
+      bootstrapStyle.remove()
+    }
+  })
+
   it("iOS 实际组件保留原生选区，不挂 CodeMirror 自绘层", () => {
     setNavigatorPlatform({
       maxTouchPoints: 5,
