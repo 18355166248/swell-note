@@ -10,6 +10,7 @@ describe("UI preferences", () => {
     expect(loadUiPreferences()).toEqual({
       colorMode: "system",
       libraryPaneWidth: 230,
+      markdownSourceMode: "live",
       noteListPaneWidth: 320,
       noteViewMode: "unified",
     })
@@ -17,6 +18,27 @@ describe("UI preferences", () => {
     saveUiPreferences({ noteViewMode: "preview" })
 
     expect(loadUiPreferences().noteViewMode).toBe("preview")
+  })
+
+  it("keeps the Markdown source mode as a local preference independent of the view mode", () => {
+    saveUiPreferences({ markdownSourceMode: "source" })
+    expect(loadUiPreferences().markdownSourceMode).toBe("source")
+
+    // 两个维度正交：改阅读态不该把源码模式带回即时预览，反之亦然。
+    saveUiPreferences({ noteViewMode: "locked" })
+    expect(loadUiPreferences().markdownSourceMode).toBe("source")
+
+    saveUiPreferences({ markdownSourceMode: "live" })
+    expect(loadUiPreferences()).toMatchObject({ markdownSourceMode: "live", noteViewMode: "locked" })
+  })
+
+  it("treats an unknown or missing Markdown source mode as live preview", () => {
+    // 旧版本写下的偏好对象没有这个字段，升级后必须仍停留在即时预览。
+    window.localStorage.setItem("swell-note:ui-preferences:v1", JSON.stringify({ colorMode: "dark" }))
+    expect(loadUiPreferences().markdownSourceMode).toBe("live")
+
+    window.localStorage.setItem("swell-note:ui-preferences:v1", JSON.stringify({ markdownSourceMode: "wysiwyg" }))
+    expect(loadUiPreferences().markdownSourceMode).toBe("live")
   })
 
   it("falls back safely when cached data is invalid", () => {

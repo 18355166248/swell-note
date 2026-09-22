@@ -248,6 +248,41 @@ function editLabel(kind: "math" | "mermaid") {
   return kind === "math" ? "编辑公式源码" : "编辑图表源码"
 }
 
+/**
+ * 打开的块编辑器登记表，按 EditorView 隔离。
+ *
+ * 公式 / mermaid 的编辑器是 Widget 自绘的 DOM，草稿只活在 Widget 实例里；宿主（编辑器适配层）
+ * 在切换正文模式这类会回收 Widget 的时刻必须先把它提交回正文，否则没保存的内容会被静默丢掉。
+ * 直接遍历 DOM 找按钮再模拟点击太脆（样式类一改就失效），这里给 Widget 自己登记一个提交入口。
+ */
+const openRichEditors = new WeakMap<EditorView, Set<{ commit: () => void; host: HTMLElement }>>()
+
+function registerRichEditor(view: EditorView, host: HTMLElement, commit: () => void) {
+  let open = openRichEditors.get(view)
+  if (!open) {
+    open = new Set()
+    openRichEditors.set(view, open)
+  }
+  const entry = { commit, host }
+  open.add(entry)
+  return () => {
+    open.delete(entry)
+    if (open.size === 0) openRichEditors.delete(view)
+  }
+}
+
+/**
+ * 提交当前所有打开着的块编辑器草稿。切正文模式前调用：草稿进入正文，
+ * 而不是随 Widget 一起被回收。
+ */
+export function commitOpenRichEditors(view: EditorView | undefined) {
+  if (!view) return
+  for (const entry of Array.from(openRichEditors.get(view) ?? [])) {
+    // 已从 DOM 摘下的条目不再提交：它的宿主已消失，提交也无处可落。
+    if (entry.host.isConnected) entry.commit()
+  }
+}
+
 abstract class UnifiedRichWidget extends WidgetType {
   readonly readOnly: boolean
 
@@ -341,7 +376,10 @@ abstract class UnifiedRichWidget extends WidgetType {
     }
     editor.append(input, error, actions)
     host.append(editor)
+    // 先占位、再在 commit 定义之后登记：dismiss 里要注销，而 commit 又会经 dismiss 收尾。
+    let unregisterEditor = () => {}
     const dismiss = (clear: boolean) => {
+      unregisterEditor()
       if (clear) clearBlockEditDraft(this.view, key)
       editor.remove()
       host.classList.remove("cm-md-rich-editing")
@@ -368,6 +406,9 @@ abstract class UnifiedRichWidget extends WidgetType {
         userEvent: "input.rich-block",
       })
     }
+    // 登记提交入口：切换正文模式会回收整个 Widget，宿主必须先经这里把草稿写回正文，
+    // 否则没点「保存」的内容会静默消失。
+    unregisterEditor = registerRichEditor(this.view, host, commit)
     save.addEventListener("mousedown", (event) => event.preventDefault())
     cancel.addEventListener("mousedown", (event) => event.preventDefault())
     save.addEventListener("click", commit)

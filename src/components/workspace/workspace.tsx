@@ -49,12 +49,15 @@ import {
   X,
 } from "lucide-react"
 
+
 import swellNoteLogo from "@/assets/brand/swell-note-logo-ribbon-s.svg"
 import { Button } from "@/components/ui/button"
 import { RouteActivityProvider } from "@/components/ui/route-activity"
 import { lazyWithRetry } from "@/lib/lazy-with-retry"
 import { useOptionalStableCallback, useStableCallback } from "@/lib/use-stable-callback"
-import type { AttachmentWriteResult } from "@/services/vault/attachment-writer"
+import type { AttachmentQueue } from "@/services/vault/attachment-queue"
+import { attachmentEditorKey } from "@/services/vault/attachment-target"
+import { AttachmentQueuePanel, useAttachmentQueue } from "@/components/workspace/attachment-queue-panel"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -103,7 +106,7 @@ import { buildMarkdownNoteLink, buildRelativeMarkdownHref } from "@/services/mar
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
 import { sortNotes, type NoteSort } from "@/services/search/note-sort"
 import { noteMatchesLibraryQuery } from "@/services/search/note-list-filter"
-import { getNoteViewModeAction, loadUiPreferences, saveUiPreferences, type NoteViewMode } from "@/services/preferences/ui-preferences"
+import { getNoteViewModeAction, loadUiPreferences, saveUiPreferences, type MarkdownSourceMode, type NoteViewMode } from "@/services/preferences/ui-preferences"
 import { SYSTEM_ROOT_FOLDER_PATH } from "@/services/preferences/folder-order-preferences"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { EditorFormatState } from "@/components/editor/markdown-input"
@@ -195,6 +198,7 @@ type WorkspaceProps = {
   nativeSearchQuery: string
   noteViewMode: NoteViewMode
   noteSort: NoteSort
+  markdownSourceMode: MarkdownSourceMode
   noteLoadErrors: Readonly<Record<string, string>>
   notes: Note[]
   onCreateNote: () => void
@@ -202,12 +206,18 @@ type WorkspaceProps = {
   onCreateFolder: (name: string, parentFolder: string | null) => void
   onFormat: (syntax: string) => void
   onFormatNote: (noteId: string, syntax: string) => void
-  onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
+  /**
+   * 附件写入队列。队列实例常驻在 App，编辑区只往里排队。
+   * 放在编辑区外面是因为编辑区会随切笔记、切阅读态、窄屏路由卸载——
+   * 队列状态跟着组件走，写了一半的批次就会在卸载时凭空消失。
+   */
+  attachmentQueue: AttachmentQueue
   onIncludeNestedFolderNotesChange: (include: boolean) => void
   onImportNotes: (files: File[]) => void
   onBrowseAllNotes: () => void
   onMobileBack: (fallback: string, canGoBack: boolean) => boolean | Promise<boolean>
   onMobileScreenChange: (screen: MobileScreen) => void
+  onMarkdownSourceModeChange: (mode: MarkdownSourceMode) => void
   onNoteViewModeChange: (mode: NoteViewMode) => void
   onDeleteNote: () => void
   onDeleteNoteById: (noteId: string) => void
@@ -465,7 +475,6 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
   const exportNote = useStableCallback(props.onExportNote)
   const formatNote = useStableCallback(props.onFormat)
   const formatNoteById = useStableCallback(props.onFormatNote)
-  const insertAttachments = useStableCallback(props.onInsertAttachments)
   const loadWikiNote = useStableCallback(props.onLoadWikiNote)
   const openWikiLink = useStableCallback(props.onOpenWikiLink)
   const openSourceFile = useStableCallback(props.onOpenSourceFile)
@@ -628,6 +637,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
             && !props.activeNote.readOnly,
           )}
           isManagingNote={props.isManagingNote}
+          markdownSourceMode={props.markdownSourceMode}
           moveTargets={props.folders}
           note={props.activeNote}
           // 补全候选取整库而不是当前筛选结果：搜索时列表被裁短，链接候选不该跟着一起消失。
@@ -637,11 +647,12 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           onExportNote={exportNote}
           onFormat={formatNote}
           onFormatNote={formatNoteById}
-          onInsertAttachments={insertAttachments}
+          attachmentQueue={props.attachmentQueue}
           onLoadWikiNote={loadWikiNote}
           onOpenWikiLink={openWikiLink}
           onOpenSourceFile={openSourceFile}
           onMoveNote={moveNote}
+          onMarkdownSourceModeChange={props.onMarkdownSourceModeChange}
           onNoteViewModeChange={changeNoteViewMode}
           onRenameNote={renameNote}
           onSelectNote={selectNote}
@@ -1809,17 +1820,25 @@ type NoteEditorProps = {
   isManagingNote: boolean
   moveTargets: VaultFolder[]
   note: Note
+  // 正文的呈现方式（即时预览 / Markdown 源码）。与 noteViewMode（阅读态）正交：
+  // 前者只影响怎么写，后者决定可不可写，因此界面上分成两个入口，不并成一组按钮。
+  markdownSourceMode: MarkdownSourceMode
   noteViewMode: NoteViewMode
   onBack?: () => void
   onDeleteNote: () => void
   onExportNote: () => void
   onFormat: (syntax: string) => void
   onFormatNote: (noteId: string, syntax: string) => void
-  onInsertAttachments: (files: File[]) => Promise<AttachmentWriteResult>
+  /**
+   * 附件写入队列。编辑区只负责「把这一批连同发起现场交给队列」，
+   * 写入、重试、取消、进度都由队列与队列面板承担。
+   */
+  attachmentQueue: AttachmentQueue
   onLoadWikiNote: (target: string) => void
   onOpenWikiLink: (target: string) => void
   onOpenSourceFile: () => void
   onMoveNote: (folderPath: string | null) => void
+  onMarkdownSourceModeChange: (mode: MarkdownSourceMode) => void
   onNoteViewModeChange: (mode: NoteViewMode) => void
   onRenameNote: (title: string) => void
   onReloadNote: () => void
@@ -1875,7 +1894,7 @@ function alignPreviewToSourceLine(viewport: HTMLElement, article: HTMLElement | 
 
 // 搜索、切目录、展开侧栏统统与正文无关，但它们每一次都把编辑器整棵子树重画一遍
 // （实测搜索敲 6 个字，编辑器白渲染 11 次）。上面已经把入参固定住，这里收口。
-const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onFormatNote, onInsertAttachments, onLoadWikiNote, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
+const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, attachmentQueue, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, markdownSourceMode, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onLoadWikiNote, onMarkdownSourceModeChange, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
   const noteRenderIdentity = note.editorSessionKey ?? stableNoteRenderIdentity(note.id, note.remotePath)
   const assetScope = `${activeCacheId ?? "session"}:${noteRenderIdentity}`
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
@@ -1894,6 +1913,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
   // 特殊画布始终使用专属预览；preview 仅承接旧偏好和低频兼容阅读入口。
   const previewing = isSpecialPreview || noteViewMode === "preview"
   const viewAction = getNoteViewModeAction(noteViewMode)
+  const sourceMode = markdownSourceMode === "source"
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false)
@@ -1916,9 +1936,14 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
   const [findResult, setFindResult] = useState({ current: 0, total: 0 })
   const findInputRef = useRef<HTMLInputElement>(null)
   const previewSearchRef = useRef(new PreviewSearch())
+  // 粘贴/插入时的即时错误（剪贴板读不到、代码块里不能插图等）。写入过程与结果不在这里，
+  // 它们属于队列，由 AttachmentQueuePanel 常驻展示——编辑区卸载也不该让它们消失。
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
-  const [insertingAttachment, setInsertingAttachment] = useState(false)
-  const attachmentBusyRef = useRef(false)
+  const batches = useAttachmentQueue(attachmentQueue)
+  // 忙碌态看「这篇笔记是否还有批次在排队或写入」，而不是看本组件的某次 await：
+  // 队列可能正忙在别的笔记上，那时这个工具栏不该被锁住。
+  const attachmentBusy = batches.some((batch) => (batch.status === "queued" || batch.status === "writing")
+    && batch.target.editorSessionKey === (note.editorSessionKey ?? note.id))
   const currentNoteIdRef = useRef(note.id)
   currentNoteIdRef.current = note.id
   const [viewSwitchError, setViewSwitchError] = useState<string | null>(null)
@@ -1932,6 +1957,11 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
   // 预览是懒加载 chunk：切换瞬间如果还没取到，原正文会整块换成加载占位。
   // 先等同一个模块缓存就绪再翻状态（启动预取已覆盖时只是一个微任务），
   // 没取到时编辑器多停一拍，也比正文整块消失更容易接受。路径必须与上方 lazyWithRetry 一致。
+  // 正文模式切换：只翻本机编辑偏好，不动笔记内容、不写远端元数据。
+  // 草稿的落定在编辑器内部完成（切换前会先提交表格单元格与公式块草稿），这里不重复处理。
+  const toggleMarkdownSourceMode = useCallback(() => {
+    onMarkdownSourceModeChange(markdownSourceMode === "source" ? "live" : "source")
+  }, [markdownSourceMode, onMarkdownSourceModeChange])
   const handleNoteViewModeChange = useCallback((mode: NoteViewMode) => {
     // 每次切换意图都递增序号：加载期间用户改回编辑态或换了笔记，旧请求完成后不得再翻状态。
     const requestId = ++previewRequestRef.current
@@ -2151,35 +2181,39 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
     else if (sheet.href) void openExternalUrl(sheet.href)
   }, [onOpenWikiLink])
 
-  const handleInsertFiles = useCallback(async (files: File[], position?: number) => {
+  /**
+   * 把一批附件交给队列。
+   *
+   * 这里不再自己 await 写入：写入可能很久（远端、大文件、前面还排着别的批次），
+   * 等在这里会让人误以为「点了没反应」。队列按发起顺序串行写入，进度与重试都由它负责。
+   *
+   * 三件事在**发起这一刻**固定下来，之后无论用户切笔记、重命名、切库都不再改：
+   * 1. 目标笔记的身份（库 + editorSessionKey）。完成后一律按它落笔，不读当前打开的笔记。
+   * 2. 插入锚点。队列入队时立即取书签，等待期间跟踪正文变化；主动重试时重新取原笔记
+   *    的当前位置，身份不符则显式降级，绝不改写到别的笔记。
+   * 3. 这一批文件本身，失败重试只重传失败项。
+   */
+  const handleInsertFiles = useCallback((files: File[], position?: number) => {
     if (files.length === 0 || editorReadOnly || !canInsertAttachment) return
-    // 远端写入要求串行；并发的第二批不排队也不静默吞掉，明确提示后由用户重试。
-    if (attachmentBusyRef.current) {
-      setAttachmentError("上一批附件仍在写入，请完成后再试")
-      return
-    }
-    const uploadNoteId = note.id
-    const insertion = editorRef.current?.captureInsertion(position)
-    attachmentBusyRef.current = true
+    const targetNoteId = note.id
+    const editorSessionKey = note.editorSessionKey ?? note.id
+    // 发起时那篇笔记对应的编辑器 sessionKey，与传给 MarkdownEditor 的完全相同
+    // （两处都走 attachmentEditorKey，写法必须一致）。
+    // 首次入队同步捕获；之后重试时可能已切笔记，必须继续携带原身份才能拒绝错误落点。
+    const ownerSessionKey = attachmentEditorKey(activeCacheId, editorSessionKey)
     setAttachmentError(null)
-    setInsertingAttachment(true)
-    try {
-      const { errors, markdown } = await onInsertAttachments(files)
-      // 部分文件失败时仍插入已写入成功的附件，避免用户重复拖拽整批文件。
-      if (markdown) {
-        // 书签绑定原编辑器，重命名仍可插入；切换笔记/模式导致实例卸载时回退原笔记追加，
-        // 此时本组件可能已卸载，「追加到末尾」的提示由执行追加的 formatNoteById 负责。
-        if (!insertion?.insert(markdown)) onFormatNote(uploadNoteId, markdown)
-      }
-      setAttachmentError(errors.length > 0 ? errors.join("；") : null)
-    } catch (error) {
-      setAttachmentError(error instanceof Error ? error.message : "插入附件失败")
-    } finally {
-      insertion?.dispose()
-      attachmentBusyRef.current = false
-      setInsertingAttachment(false)
-    }
-  }, [canInsertAttachment, editorReadOnly, note.id, onFormatNote, onInsertAttachments])
+    attachmentQueue.enqueue({
+      files,
+      target: { cacheId: activeCacheId, editorSessionKey, noteId: targetNoteId, noteTitle: note.title },
+      insertions: {
+        // capture 由队列在入队时调用，不能延迟到执行时，否则光标移动后会插到新位置。
+        // 书签绑定发起时的那篇笔记：captureInsertion 在重试时笔记对不上则返回 null，
+        // 队列据此走「追加到原文末尾」的降级，而不是把引用写进当前打开的笔记。
+        // 重试不能复用当初拖入的数字偏移，它没有继续映射；改取原笔记当前光标，身份仍需匹配。
+        capture: ({ retry }) => editorRef.current?.captureInsertion(retry ? undefined : position, ownerSessionKey) ?? null,
+      },
+    })
+  }, [activeCacheId, attachmentQueue, canInsertAttachment, editorReadOnly, note.editorSessionKey, note.id, note.title])
 
   const getWikiLinkSuggestions = useCallback(() => wikiLinkNotes
     .filter((candidate) => candidate.pendingOperation !== "delete" && Boolean(candidate.remotePath))
@@ -2531,7 +2565,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
         </div>
       ) : (
         <FormattingToolbar
-          attachmentBusy={insertingAttachment}
+          attachmentBusy={attachmentBusy}
           canInsertAttachment={canInsertAttachment}
           editorRef={editorRef}
           canUndo={historyState.undo}
@@ -2540,6 +2574,8 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
           formatState={formatState}
           onFormat={handleFormat}
           onInsertFiles={handleInsertFiles}
+          onToggleSourceMode={toggleMarkdownSourceMode}
+          sourceMode={sourceMode}
         />
       ) : null}
 
@@ -2608,6 +2644,14 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
       {attachmentError ? (
         <p className="attachment-error" role="alert">{attachmentError}</p>
       ) : null}
+      {/* 队列面板挂在编辑区内部但仍然只读队列状态：批次写完后切走笔记、切阅读态，
+          这些记录会随编辑区一起卸载（用户回来时队列本身还在 App 里，不会丢）。 */}
+      <AttachmentQueuePanel
+        batches={batches}
+        onCancel={(batchId) => attachmentQueue.cancel(batchId)}
+        onDismiss={(batchId) => attachmentQueue.dismiss(batchId)}
+        onRetry={(batchId) => attachmentQueue.retry(batchId)}
+      />
       {viewSwitchError ? (
         <p className="attachment-error" role="alert">{viewSwitchError}</p>
       ) : null}
@@ -2724,7 +2768,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
                 */}
                 <MarkdownEditor
                   compact={compact}
-                  sessionKey={`${activeCacheId ?? "session"}:${note.editorSessionKey ?? note.id}`}
+                  sessionKey={attachmentEditorKey(activeCacheId, note.editorSessionKey ?? note.id)}
                   revision={note.revision}
                   onHistoryChange={(undo, redo) => setHistoryState((current) => current.undo === undo && current.redo === redo ? current : { undo, redo })}
                   onEditingTargetChange={setEditingTable}
@@ -2753,6 +2797,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
                   onSelectionChange={setHasSelection}
                   readOnly={editorReadOnly}
                   ref={editorRef}
+                  sourceMode={markdownSourceMode === "source"}
                   storageKey={note.id}
                   value={note.content}
                 />
@@ -2789,7 +2834,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
       ) : null}
       {compact && !previewing && !editorReadOnly ? (
         <FormattingToolbar
-          attachmentBusy={insertingAttachment}
+          attachmentBusy={attachmentBusy}
           canInsertAttachment={canInsertAttachment}
           editorRef={editorRef}
           canUndo={historyState.undo}
@@ -2800,6 +2845,8 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, back
           mobile
           onFormat={handleFormat}
           onInsertFiles={handleInsertFiles}
+          onToggleSourceMode={toggleMarkdownSourceMode}
+          sourceMode={sourceMode}
         />
       ) : !compact && !isExcalidraw ? (
         <footer className="editor-statusbar">
@@ -3257,6 +3304,7 @@ function MobileRouteEntryPage({ active, backLabel, canGoBack, entry, navigationO
       cloudConnected={routeProps.cloudConnected}
       compact
       isManagingNote={routeProps.isManagingNote}
+      markdownSourceMode={routeProps.markdownSourceMode}
       moveTargets={routeProps.folders}
       note={routeNote}
       noteViewMode={routeProps.noteViewMode}
@@ -3265,9 +3313,10 @@ function MobileRouteEntryPage({ active, backLabel, canGoBack, entry, navigationO
       onExportNote={routeProps.onExportNote}
       onFormat={routeProps.onFormat}
       onFormatNote={routeProps.onFormatNote}
-      onInsertAttachments={routeProps.onInsertAttachments}
+      attachmentQueue={routeProps.attachmentQueue}
       onLoadWikiNote={routeProps.onLoadWikiNote}
       onMoveNote={routeProps.onMoveNote}
+      onMarkdownSourceModeChange={routeProps.onMarkdownSourceModeChange}
       onNoteViewModeChange={routeProps.onNoteViewModeChange}
       onOpenSourceFile={routeProps.onOpenSourceFile}
       onOpenWikiLink={routeProps.onOpenWikiLink}

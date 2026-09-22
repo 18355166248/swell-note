@@ -1,9 +1,17 @@
 export type NoteViewMode = "locked" | "preview" | "unified"
 export type ColorMode = "dark" | "light" | "system"
+/**
+ * 正文的编辑呈现方式：即时预览（富文本外观）或 Markdown 源码。
+ *
+ * 这是**本机编辑偏好**，只影响怎么看着写，不改变笔记内容、也不随笔记同步到远端，
+ * 因此和 noteViewMode（阅读态：锁定/阅读/一体化）是两个正交维度，界面上不应并成一组按钮。
+ */
+export type MarkdownSourceMode = "live" | "source"
 
 export type UiPreferences = {
   colorMode: ColorMode
   libraryPaneWidth: number
+  markdownSourceMode: MarkdownSourceMode
   noteListPaneWidth: number
   noteViewMode: NoteViewMode
 }
@@ -12,6 +20,7 @@ const UI_PREFERENCES_KEY = "swell-note:ui-preferences:v1"
 const DEFAULT_UI_PREFERENCES: UiPreferences = {
   colorMode: "system",
   libraryPaneWidth: 230,
+  markdownSourceMode: "live",
   noteListPaneWidth: 320,
   noteViewMode: "unified",
 }
@@ -56,6 +65,8 @@ export function loadUiPreferences(): UiPreferences {
     colorMode: stored.colorMode === "dark" || stored.colorMode === "light" ? stored.colorMode : "system",
     libraryPaneWidth: paneWidth(stored.libraryPaneWidth, "libraryPaneWidth"),
     noteListPaneWidth: paneWidth(stored.noteListPaneWidth, "noteListPaneWidth"),
+    // 默认即时预览；只有明确存过 source 才进源码模式，旧偏好对象缺少该字段时行为不变。
+    markdownSourceMode: stored.markdownSourceMode === "source" ? "source" : DEFAULT_UI_PREFERENCES.markdownSourceMode,
     // 旧版 edit 与新的统一画布语义一致；历史 preview 只可能由用户主动切换写入，必须继续保留。
     noteViewMode: stored.noteViewMode === "preview" || stored.noteViewMode === "locked" || stored.noteViewMode === "unified"
       ? stored.noteViewMode

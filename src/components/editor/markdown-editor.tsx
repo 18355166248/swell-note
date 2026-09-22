@@ -16,11 +16,12 @@ import type { EditorSettings } from "./core/editor-types"
 import { editorSessionStore, sessionFields } from "./editor-session"
 import { bottomOverlayHeight, scrollCursorIntoView } from "./cursor-visibility"
 import { applyLinkTarget, detectFormatState, focusExistingLinkUrl, linkInsertion, linkTargetAt, linkTargetInText, removeLinkTarget, type EditorFormatState, type EditorLinkTarget, type InlineMarkKind, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
-import { htmlToMarkdown, isInlineMarkdownFragment } from "./html-to-markdown"
+import { createClipboardImageCoverage, htmlToMarkdown, isInlineMarkdownFragment, shouldInsertClipboardImageFiles } from "./html-to-markdown"
 import { buildLivePreviewDecorationsForRanges, markdownLivePreviewBase, markdownTableEditing, type EditorLinkTap, type LivePreviewOptions } from "./live-preview"
 import type { EmbeddedWikiNoteResult } from "./markdown-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import { ImageZoomOverlay } from "./image-zoom"
+import { commitOpenRichEditors } from "./unified-rich-block"
 import { activeTableEdit, type TableEditTarget } from "./table-edit-target"
 import { selectionRenderingExtensions } from "./selection-rendering"
 import "./markdown-table.css"
@@ -41,7 +42,10 @@ export type MarkdownEditorHandle = {
   // cell 存在时写入单元格 textarea（面板期间单元格靠 contextMenuActive 标记保持挂载）。
   applyLink: (target: EditorLinkTarget | null, label: string, url: string, cell?: LinkCellSnapshot | null) => boolean
   // position 是文件拖入的落点（文档偏移）；省略时插入点为表格末尾或当前选区起点。
-  captureInsertion: (position?: number) => { insert: (text: string) => boolean; dispose: () => void }
+  // ownerSessionKey 是发起附件的那篇笔记：与本编辑器当前笔记不一致时返回 null。
+  // 队列的执行是异步的（前面还排着别的批次），到执行时才读当前编辑器会捕获到用户此刻
+  // 正在看的另一篇笔记，书签自身的身份校验也会因此通过，引用就写进了错误的笔记。
+  captureInsertion: (position?: number, ownerSessionKey?: string) => { insert: (text: string) => boolean; dispose: () => void } | null
   collapseSelection: () => void
   copySelection: () => Promise<boolean>
   cutSelection: () => Promise<boolean>
@@ -123,6 +127,13 @@ type MarkdownEditorProps = {
   onResolveWikiNote?: (target: string) => EmbeddedWikiNoteResult
   onSelectionChange?: (hasSelection: boolean) => void
   getWikiLinkSuggestions?: () => WikiLinkSuggestion[]
+  /**
+   * 正文源码模式。false（默认）= 即时预览，true = 纯 Markdown 源码。
+   *
+   * 只切换呈现层：走 startSourceMode 而不是直接改设置，因为切换前要把表格单元格 /
+   * 公式块这类「局部草稿」显式落定，不能让它们在装饰被拆掉时静默消失。
+   */
+  sourceMode?: boolean
   readOnly?: boolean
   storageKey?: string
   /** 打开笔记时已知的远端修订号。异步附件回写前核对，避免写到已被同步改写的版本上。 */
@@ -131,7 +142,7 @@ type MarkdownEditorProps = {
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ sessionKey, revision, onHistoryChange, onEditingTargetChange, onFormatStateChange, onLinkMenu, onPasteError, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onLoadWikiNote, onOpenWikiLink, onResolveAsset, onResolveWikiNote, onSelectionChange, readOnly = false, storageKey, value }, ref) {
+  function MarkdownEditor({ sessionKey, revision, onHistoryChange, onEditingTargetChange, onFormatStateChange, onLinkMenu, onPasteError, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onLoadWikiNote, onOpenWikiLink, onResolveAsset, onResolveWikiNote, onSelectionChange, readOnly = false, sourceMode = false, storageKey, value }, ref) {
     const hostRef = useRef<HTMLDivElement | null>(null)
     const controlRef = useRef<EditorControl | null>(null)
     const sessionKeyRef = useRef(sessionKey)
@@ -235,6 +246,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     // 实时预览与表格编辑拆成两个 Compartment 的工厂：两者开关互不影响。
     // 选项里的回调全部经 handlers 中转，平台与只读一律从 settings 读——
     // 工厂因此不依赖任何易变的 props，平台切换只走 reconfigure，不重建 EditorView。
+    //
+    // 源码模式就是这两个开关同时关掉：正文装饰与表格网格一起消失，语法高亮与文本编辑
+    // （两者都来自 languageExtensions 与 behaviorExtensions，不在这些 Compartment 里）
+    // 原样保留。因此切换只是一次 reconfigure，不重建 EditorView、不动文档、不清撤销栈。
     const buildLivePreviewExtensions = useCallback(({ settings }: EditorExtensionContext): Extension => settings.livePreview
       ? markdownLivePreviewBase(livePreviewOptionsFor(settings, handlers, settings.platform))
       : [], [])
@@ -415,9 +430,23 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           // 转换失败或没有可用结构时返回 null，走原生纯文本粘贴，内容不丢。
           if (!control.getSettings().readOnly) {
             const html = clipboard.html
-            const markdown = html ? htmlToMarkdown(html) : null
-            if (markdown) {
+            // HTML 里带 <img>、同时又给了真实图片文件（Word / 飞书 / 浏览器复制富文本常见）：
+            // 两条路都走会得到两张图，只走文件又会丢掉周围的文字与表格结构。
+            // 因此 HTML 里的图片渲染成占位，真正的正文引用交给附件队列，一次粘贴只产生一份图片。
+            // 覆盖判定必须逐图做（见 createClipboardImageCoverage）：剪贴板只给了一个文件却有两张
+            // 导入不了的图时，只有那一张被补上，另一张得留住占位。
+            const imagesCoveredByFiles = shouldInsertClipboardImageFiles(html, files)
+            const imageFiles = imagesCoveredByFiles ? files.filter((file) => file.type.startsWith("image/")) : []
+            const markdown = html ? htmlToMarkdown(html, { imageCoveredByFile: createClipboardImageCoverage(html, files) }) : null
+            if (markdown || (imagesCoveredByFiles && imageFiles.length > 0)) {
+              // 阻止默认粘贴必须与「文件是否入队」一起决定：HTML 只剩图片节点时转换结果可能为
+              // null，此时若提前 return false，文件不会入队、默认粘贴也照常发生，图片和占位一起消失。
               event.preventDefault()
+              if (!markdown) {
+                // 转换没有产出文字，只剩要交给附件队列的图片文件。
+                if (handlers.current.onInsertFiles) handlers.current.onInsertFiles(imageFiles)
+                return true
+              }
               const range = view.state.selection.main
               // 行内片段（单个加粗词、链接等）原位插入，不拆当前段落。
               // 块级结构（标题/列表/表格等）必须落在独立行上：插入点两侧不在行边界时补空行，
@@ -429,23 +458,26 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
                   scrollIntoView: true,
                   userEvent: "input.paste",
                 })
-                return true
+              } else {
+                const doc = view.state.doc
+                const prevChar = range.from > 0 ? doc.sliceString(range.from - 1, range.from) : "\n"
+                const prevPrevChar = range.from > 1 ? doc.sliceString(range.from - 2, range.from - 1) : "\n"
+                const nextChar = range.to < doc.length ? doc.sliceString(range.to, range.to + 1) : "\n"
+                const nextNextChar = range.to + 1 < doc.length ? doc.sliceString(range.to + 1, range.to + 2) : "\n"
+                const prefix = prevChar === "\n" ? (prevPrevChar === "\n" ? "" : "\n") : "\n\n"
+                const suffix = nextChar === "\n" ? (nextNextChar === "\n" ? "" : "\n") : "\n\n"
+                const insert = prefix + markdown + suffix
+                view.dispatch({
+                  changes: { from: range.from, to: range.to, insert },
+                  // 光标落在插入内容之后（含补的空行），后续输入不会粘进表格/标题行。
+                  selection: { anchor: range.from + insert.length },
+                  scrollIntoView: true,
+                  userEvent: "input.paste",
+                })
               }
-              const doc = view.state.doc
-              const prevChar = range.from > 0 ? doc.sliceString(range.from - 1, range.from) : "\n"
-              const prevPrevChar = range.from > 1 ? doc.sliceString(range.from - 2, range.from - 1) : "\n"
-              const nextChar = range.to < doc.length ? doc.sliceString(range.to, range.to + 1) : "\n"
-              const nextNextChar = range.to + 1 < doc.length ? doc.sliceString(range.to + 1, range.to + 2) : "\n"
-              const prefix = prevChar === "\n" ? (prevPrevChar === "\n" ? "" : "\n") : "\n\n"
-              const suffix = nextChar === "\n" ? (nextNextChar === "\n" ? "" : "\n") : "\n\n"
-              const insert = prefix + markdown + suffix
-              view.dispatch({
-                changes: { from: range.from, to: range.to, insert },
-                // 光标落在插入内容之后（含补的空行），后续输入不会粘进表格/标题行。
-                selection: { anchor: range.from + insert.length },
-                scrollIntoView: true,
-                userEvent: "input.paste",
-              })
+              // 占位已在正文里，图片本体随后由附件队列写入并追加在占位之后。
+              // 队列是异步的，这里只负责把这一批交给宿主，不等待结果、不改动已插入的正文。
+              if (imagesCoveredByFiles && handlers.current.onInsertFiles) handlers.current.onInsertFiles(imageFiles)
               return true
             }
           }
@@ -543,11 +575,11 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     const initialRef = useRef({ sessionKey, revision, value, readOnly, compact, storageKey, settings: null as EditorSettings | null })
     initialRef.current.settings = {
       assetScope: storageKey,
-      livePreview: true,
+      livePreview: !sourceMode,
       placeholder: "开始记录你的想法…",
       platform: compact ? "mobile" : "desktop",
       readOnly,
-      tableEditing: true,
+      tableEditing: !sourceMode,
       theme,
     }
     useEffect(() => {
@@ -656,6 +688,27 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       controlRef.current?.updateSettings({ theme })
     }, [theme])
 
+    // 正文模式（即时预览 ↔ Markdown 源码）经 Compartment 重配置。
+    //
+    // 三条硬约束都在这里守住：
+    // 1. 不动文档。切换只翻两个开关，正文一个字符都不改，撤销历史因此天然保留。
+    // 2. 不重建视图。updateSettings 只派发 reconfigure，焦点、IME 状态与滚动容器都不受影响。
+    // 3. 不打断输入。组合期间 updateSettings 会把设置挂起到 compositionend
+    //    （见 EditorControl.updateSettings），正在拼的候选词不会被拆掉。
+    //
+    // 切换**前**先把局部草稿落定：表格单元格与公式/mermaid 块的编辑态由装饰 Widget 持有，
+    // 关掉实时预览会让这些 Widget 连同它们未提交的草稿一起被回收——那就等于静默丢字。
+    // 因此先 commit（写回正文，仍是同一份撤销历史），草稿不是"丢掉"而是"成为正文的一部分"。
+    const sourceModeRef = useRef(sourceMode)
+    useEffect(() => {
+      const control = controlRef.current
+      if (!control) return
+      if (sourceModeRef.current === sourceMode) return
+      sourceModeRef.current = sourceMode
+      if (sourceMode) commitLocalDrafts(control.getView())
+      control.updateSettings(sourceMode ? SOURCE_MODE_SETTINGS : LIVE_PREVIEW_SETTINGS)
+    }, [sourceMode])
+
     useImperativeHandle(ref, () => ({
       applyLink(target, label, url, cell) {
         const control = controlRef.current
@@ -664,7 +717,11 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         if (cell) return applyCellLink(view, cell, target, label, url)
         return applyLinkTarget(view, target, label, url)
       },
-      captureInsertion(position) {
+      captureInsertion(position, ownerSessionKey) {
+        // 发起时的那篇笔记若不是本编辑器此刻承载的笔记，就不能取书签：书签是零宽位置 +
+        // 偏移映射，属于当前文档；拿它去代表另一篇笔记的插入点，落笔就会插错地方。
+        // 返回 null 让队列走显式降级（追加到原笔记末尾），而不是把引用写进当前笔记。
+        if (ownerSessionKey !== undefined && ownerSessionKey !== sessionKeyRef.current) return null
         const view = controlRef.current?.getView()
         const target = view ? activeTableEdit(view) : undefined
         const tableEnd = target?.input.closest<HTMLElement>(".cm-md-table-wrap")?.dataset.tableTo
@@ -680,7 +737,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         insertionMarks.current.add(mark)
         // 书签同时记住发起时的笔记身份与编辑器实例：异步附件完成时据此判断
         // 「这篇笔记是否还是当前笔记」「视图是否还是同一个」。
-        const ownerSessionKey = sessionKeyRef.current
+        const markSessionKey = sessionKeyRef.current
         const ownerNoteId = storageKeyRef.current
         // 发起时的远端修订号。上传期间若被同步合并过，文档偏移与书签的映射关系
         // 已经不可信，落笔会插到语义错误的位置。
@@ -698,7 +755,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           if (!currentView?.dom.isConnected || currentView.state.readOnly) return false
           // 已经切到别的笔记：书签里的文档偏移属于上一篇，写进去会插到错误位置。
           // 返回 false 让调用方走「追加到原笔记末尾」的安全降级，而不是污染当前笔记。
-          if (ownerSessionKey !== sessionKeyRef.current || ownerNoteId !== storageKeyRef.current) return false
+          if (markSessionKey !== sessionKeyRef.current || ownerNoteId !== storageKeyRef.current) return false
           // 上传期间这篇笔记被同步合并过（revision 变了）：偏移映射已不可信，
           // 同样走安全降级，绝不按旧偏移落笔。
           if (ownerRevision !== undefined && revisionRef.current !== ownerRevision) return false
@@ -1005,6 +1062,25 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     )
   },
 )
+
+// 正文模式的设置补丁。两处共用同一份常量，避免「进入源码」和「退出源码」写歪成不对称的一组开关。
+const SOURCE_MODE_SETTINGS = { livePreview: false, tableEditing: false } as const
+const LIVE_PREVIEW_SETTINGS = { livePreview: true, tableEditing: true } as const
+
+/**
+ * 切到源码模式前把「只活在装饰 Widget 里的编辑态」落定。
+ *
+ * 表格单元格（textarea 草稿）与公式 / mermaid 块（block-edit-session 草稿）都靠 Widget 存活：
+ * 一旦实时预览装饰被拆掉，Widget 被回收，没提交的内容就再也回不来了。这里逐个提交，
+ * 内容因此进入正文与同一份撤销历史，而不是被静默丢弃。
+ *
+ * 只提交、不取消：用户正在写的东西不该因为切了一下视图就消失。
+ */
+function commitLocalDrafts(view: EditorView | undefined) {
+  if (!view) return
+  activeTableEdit(view)?.commit()
+  commitOpenRichEditors(view)
+}
 
 // 实时预览的选项。回调一律经 handlers 中转，因此这份选项只在作用域或平台变化时才需要重算，
 // 不会因为父组件的每次渲染换引用而触发装饰整体重建。

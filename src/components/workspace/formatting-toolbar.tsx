@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react"
-import { Bold, CheckCircle2, Code, Code2, Heading3, Image, Italic, Link, List, ListOrdered, LoaderCircle, Minus, MoreHorizontal, Quote, Redo2, Strikethrough, Table, Undo2 } from "lucide-react"
+import { Bold, Braces, CheckCircle2, Code, Code2, Heading3, Image, Italic, Link, List, ListOrdered, LoaderCircle, Minus, MoreHorizontal, Quote, Redo2, Strikethrough, Table, Undo2 } from "lucide-react"
 
 import { TABLE_INSERT_TEMPLATE, type MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { EditorFormatState } from "@/components/editor/markdown-input"
@@ -26,7 +26,7 @@ const SECONDARY_FORMATS: Array<{
   { icon: ListOrdered, label: "有序列表", stateKey: "orderedList", syntax: "\n1. " },
 ]
 
-export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable = false, attachmentBusy, canInsertAttachment, editorRef, formatState = null, hasSelection = false, mobile = false, onFormat, onInsertFiles }: {
+export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable = false, attachmentBusy, canInsertAttachment, editorRef, formatState = null, hasSelection = false, mobile = false, onFormat, onInsertFiles, onToggleSourceMode, sourceMode = false }: {
   canUndo?: boolean
   canRedo?: boolean
   editingTable?: boolean
@@ -40,7 +40,11 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
   hasSelection?: boolean
   mobile?: boolean
   onFormat: (syntax: string) => void
-  onInsertFiles: (files: File[]) => Promise<void>
+  // 只负责「把这一批交给宿主」，不等写入完成：真正的串行写入与进度在附件队列里。
+  onInsertFiles: (files: File[]) => void
+  onToggleSourceMode?: () => void
+  // 正文当前是不是纯 Markdown 源码。按钮据此切换图标语义与高亮。
+  sourceMode?: boolean
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [, quote, code, link, strike, inlineCode, rule, table] = SECONDARY_FORMATS
@@ -56,7 +60,7 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
         <SelectionButtons run={run} />
         <FormatButton active={Boolean(formatState?.strong)} icon={Bold} label="加粗（⌘/Ctrl+B）" onClick={() => onFormat("**加粗文字**")} />
         <FormatButton active={Boolean(formatState?.emphasis)} icon={Italic} label="斜体（⌘/Ctrl+I）" onClick={() => onFormat("*斜体文字*")} />
-        <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} formatState={formatState} onFormat={onFormat} />
+        <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} formatState={formatState} onFormat={onFormat} onToggleSourceMode={onToggleSourceMode} sourceMode={sourceMode} />
       </div>
     )
   }
@@ -98,6 +102,19 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
           <span className="toolbar-divider" />
           <FormatButton disabled={editingTable} icon={table.icon} label={table.label} onClick={() => onFormat(table.syntax)} />
           <FormatButton disabled={editingTable} icon={rule.icon} label={rule.label} onClick={() => onFormat(rule.syntax)} />
+          <span className="toolbar-divider" />
+          {/* 正文呈现方式与上方的格式按钮不是一类：它只改怎么看着写，不改可写性，
+              因此单独用一条分隔线隔开，并且不放进「更多操作」里和只读阅读并排。
+              图标用花括号而不是 Code2——Code2 已经是「插入代码块」的图标，同一个工具栏里
+              两个语义不同的按钮用同一个图标会认错。 */}
+          {onToggleSourceMode ? (
+            <FormatButton
+              active={sourceMode}
+              icon={Braces}
+              label={sourceMode ? "退出 Markdown 源码模式" : "切换为 Markdown 源码模式"}
+              onClick={onToggleSourceMode}
+            />
+          ) : null}
         </>
       )}
       {canInsertAttachment ? (
@@ -111,19 +128,21 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
           }} ref={fileInputRef} tabIndex={-1} type="file" />
         </>
       ) : null}
-      {mobile ? <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} formatState={formatState} onFormat={onFormat} /> : null}
+      {mobile ? <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} formatState={formatState} onFormat={onFormat} onToggleSourceMode={onToggleSourceMode} sourceMode={sourceMode} /> : null}
     </div>
   )
 }
 
 // 用工具栏内部的浮层而不是通用下拉菜单：菜单一旦接管焦点，手机键盘会收起再弹出，
 // 工具栏也会跟着键盘上下跳一次；自绘浮层可以让焦点始终留在 CodeMirror 里。
-function SecondaryFormatsMenu({ canRedo = true, editorRef, formatState, onFormat, editingTable }: {
+function SecondaryFormatsMenu({ canRedo = true, editorRef, formatState, onFormat, editingTable, onToggleSourceMode, sourceMode = false }: {
   canRedo?: boolean
   editorRef: RefObject<MarkdownEditorHandle | null>
   editingTable: boolean
   formatState: EditorFormatState | null
   onFormat: (syntax: string) => void
+  onToggleSourceMode?: () => void
+  sourceMode?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
@@ -180,6 +199,27 @@ function SecondaryFormatsMenu({ canRedo = true, editorRef, formatState, onFormat
               <span>{label}</span>
             </button>
           ))}
+          {/* 正文呈现方式：与上面的格式项分开一段，语义上不属于「更多格式」，
+              而是和它们并列的一种全局开关。 */}
+          {onToggleSourceMode ? (
+            <>
+              <span className="toolbar-more-divider" role="separator" />
+              <button
+                aria-pressed={sourceMode}
+                data-active={sourceMode ? "true" : undefined}
+                onClick={() => {
+                  setOpen(false)
+                  onToggleSourceMode()
+                }}
+                onPointerDown={(event) => event.preventDefault()}
+                role="menuitem"
+                type="button"
+              >
+                <Braces />
+                <span>{sourceMode ? "退出 Markdown 源码" : "Markdown 源码模式"}</span>
+              </button>
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>

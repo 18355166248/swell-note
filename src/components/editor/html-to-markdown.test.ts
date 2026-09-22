@@ -7,7 +7,7 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { remarkObsidian } from "@/services/markdown/remark-obsidian"
 
-import { htmlToMarkdown, isInlineMarkdownFragment } from "./html-to-markdown"
+import { createClipboardImageCoverage, htmlNeedsClipboardImageFiles, htmlToMarkdown, isInlineMarkdownFragment, shouldInsertClipboardImageFiles } from "./html-to-markdown"
 
 function renderMarkdown(markdown: string) {
   // 与正式阅读态一致，兼容旧 Vault 语法的 remark 插件也参与转换结果验收。
@@ -59,9 +59,105 @@ describe("htmlToMarkdown", () => {
     expect(htmlToMarkdown(html)).toBe("| 横跨 |  | 右 |\n| --- | --- | --- |\n| 甲 | 乙 | 丙 |")
   })
 
-  it("图片只保留 http(s) 地址，其余协议只留 alt 文字", () => {
+  it("图片只保留 http(s) 地址，其余协议保留可见占位而不是静默丢弃", () => {
     expect(htmlToMarkdown('<p><img src="https://a.com/x.png" alt="示意"></p>')).toBe("![示意](https://a.com/x.png)")
-    expect(htmlToMarkdown('<p><img src="data:image/png;base64,xx" alt="内嵌"></p>')).toBe("内嵌")
+    // 非 http(s)：alt 作为说明保留，并附上无法导入的原因，用户能看到这里原本有一张图。
+    expect(htmlToMarkdown('<p><img src="data:image/png;base64,xx" alt="内嵌"></p>')).toBe("内嵌（图片无法导入：data: 地址不导入）")
+    expect(htmlToMarkdown('<p><img src="file:///tmp/a.png" alt="本地"></p>')).toBe("本地（图片无法导入：本地文件地址不导入）")
+  })
+
+  it("非 http(s) 图片没有 alt 时也留下可见占位", () => {
+    const markdown = htmlToMarkdown('<p><img src="data:image/png;base64,xx"></p>')
+    expect(markdown).toBe("（图片无法导入：data: 地址不导入）")
+    // 渲染成正文后必须仍有可见文字，而不是空白段落。
+    expect(renderMarkdown(markdown!).textContent).toContain("图片无法导入")
+  })
+
+  it("剪贴板同时给了图片文件时，本地图片只留 alt 交由附件队列插入", () => {
+    const html = '<p>前<img src="file:///tmp/a.png" alt="示意">后</p>'
+    const file = new File([new Uint8Array([1])], "a.png", { type: "image/png" })
+    expect(htmlToMarkdown(html, { imageCoveredByFile: createClipboardImageCoverage(html, [file]) })).toBe("前示意后")
+    // 选项只作用于本次调用，不能泄漏给下一次转换。
+    expect(htmlToMarkdown(html)).toBe("前示意（图片无法导入：本地文件地址不导入）后")
+  })
+
+  it("有文件补上引用时，没有 alt 的图片不能留下「导入失败」的假消息", () => {
+    const html = '<p>看图：<img src="data:image/png;base64,xx"></p>'
+    const file = new File([new Uint8Array([1])], "截图.png", { type: "image/png" })
+    // 图片马上由剪贴板文件写入正文并附上引用，这里再说一句「图片无法导入」就是假消息，
+    // 用户会以为粘贴失败，紧接着却看到图片出现。
+    expect(htmlToMarkdown(html, { imageCoveredByFile: createClipboardImageCoverage(html, [file]) })).toBe("看图：")
+    // 没有文件兜底时仍然必须给出可见占位，两条路径不能互相污染。
+    expect(htmlToMarkdown(html)).toBe("看图：（图片无法导入：data: 地址不导入）")
+  })
+
+  it("剪贴板只给一个文件却有两张导入不了的图片时，只有那张有文件补上的才不留占位", () => {
+    // 回归点：覆盖判定如果退化成一个全局布尔值，两张图的占位会一起被删掉，
+    // 可只有一张真会被补上引用，另一张从此在正文里没有任何痕迹。
+    const html = '<p><img src="file:///tmp/a.png"><img src="file:///tmp/b.png" alt="乙图"></p>'
+    const file = new File([new Uint8Array([1])], "a.png", { type: "image/png" })
+    const coverage = createClipboardImageCoverage(html, [file])
+    expect(coverage({ alt: "", src: "file:///tmp/a.png" })).toBe(true)
+    expect(coverage({ alt: "乙图", src: "file:///tmp/b.png" })).toBe(false)
+    // 甲图有文件补引用、又没有 alt，正文里什么都不留；乙图没有文件补，占位必须留住。
+    expect(htmlToMarkdown(html, { imageCoveredByFile: coverage }))
+      .toBe("乙图（图片无法导入：本地文件地址不导入）")
+    // 全局布尔值的写法会把乙图的占位一起删掉，整段只剩一个空段落——这正是回归点。
+    expect(htmlToMarkdown(html)).toBe("（图片无法导入：本地文件地址不导入）乙图（图片无法导入：本地文件地址不导入）")
+  })
+
+  it("不同路径的同名图片不能由一个文件同时覆盖，重复检查不改变判定", () => {
+    const html = '<p><img src="file:///a/image.png" alt="甲"><img src="file:///b/image.png" alt="乙"></p>'
+    const coverage = createClipboardImageCoverage(html, [new File(["image"], "image.png", { type: "image/png" })])
+    const expected = "甲（图片无法导入：本地文件地址不导入）乙（图片无法导入：本地文件地址不导入）"
+    expect(htmlToMarkdown(html, { imageCoveredByFile: coverage })).toBe(expected)
+    expect(htmlToMarkdown(html, { imageCoveredByFile: coverage })).toBe(expected)
+  })
+
+  it("导入不了的图片数与图片文件数一一对应时，按顺序认作全覆盖（Word / 飞书的形态）", () => {
+    // 这类来源的 src 常指向临时目录甚至 data:，只按文件名比对会把每一张都判成未覆盖，
+    // 于是正文里每张图前面多出一句「导入失败」，而引用紧接着就插了进来。
+    const html = '<p><img src="file:///tmp/1.png"><img src="data:image/png;base64,yy"></p>'
+    const files = [
+      new File([new Uint8Array([1])], "图片1.png", { type: "image/png" }),
+      new File([new Uint8Array([2])], "图片2.png", { type: "image/png" }),
+    ]
+    // 两张图都被认定有文件补引用、又都没有 alt，于是正文只剩空内容——转换返回 null，
+    // 调用方据此知道「这次粘贴没有文字可插，只有要交给附件队列的图片文件」（见 markdown-editor）。
+    expect(htmlToMarkdown(html, { imageCoveredByFile: createClipboardImageCoverage(html, files) })).toBeNull()
+  })
+
+  it("HTML 里是否存在导入不了的图片", () => {
+    // 网页富文本：图片本身就是可用的外链，附带的资源文件不是用户要插入的附件。
+    expect(htmlNeedsClipboardImageFiles('<p><img src="https://a.com/x.png" alt="示意"></p>')).toBe(false)
+    expect(htmlNeedsClipboardImageFiles("<p>没有图片</p>")).toBe(false)
+    // Word / 飞书：本地图片在正文里没有可用引用，必须靠剪贴板文件补齐。
+    expect(htmlNeedsClipboardImageFiles('<p><img src="file:///tmp/a.png"></p>')).toBe(true)
+    expect(htmlNeedsClipboardImageFiles('<p><img src="data:image/png;base64,xx"></p>')).toBe(true)
+  })
+
+  it("只有 HTML、剪贴板没给文件时，图片不能只留 alt 而把占位一起丢掉", () => {
+    const html = '<p>看图：<img src="data:image/png;base64,xx" alt="红点图"></p>'
+    // 回归点：`图片数 === 文件数` 在 0 === 0 时也成立，单凭它判断会让这次粘贴走进
+    // 「文件会补上引用」的分支——但根本没有文件，结果图片既没有引用也没有占位，静默消失。
+    expect(shouldInsertClipboardImageFiles(html, [])).toBe(false)
+    expect(shouldInsertClipboardImageFiles(null, [])).toBe(false)
+    // 因此这条路径必须保留可见占位。
+    expect(htmlToMarkdown(html, { imageCoveredByFile: createClipboardImageCoverage(html, []) }))
+      .toBe("看图：红点图（图片无法导入：data: 地址不导入）")
+  })
+
+  it("只有 HTML 里确实有导入不了的图片、且剪贴板给了图片文件时，才走附件队列", () => {
+    const localHtml = '<p>看图：<img src="file:///tmp/a.png" alt="本地图"></p>'
+    const file = new File([new Uint8Array([1])], "a.png", { type: "image/png" })
+    expect(shouldInsertClipboardImageFiles(localHtml, [file])).toBe(true)
+    // 混进非图片文件时宁可不接管：文件与图片对不上就不能假定它们一一对应。
+    expect(shouldInsertClipboardImageFiles(localHtml, [file, new File([new Uint8Array([2])], "a.txt", { type: "text/plain" })])).toBe(false)
+    // 图片本来就是 http(s) 外链：附带的文件不是用户要插入的附件。
+    expect(shouldInsertClipboardImageFiles('<p><img src="https://a.com/x.png"></p>', [file])).toBe(false)
+    // 对不上时转换仍留在 HTML 自己渲染引用的老路上。
+    expect(htmlToMarkdown(localHtml, { imageCoveredByFile: createClipboardImageCoverage(localHtml, []) }))
+      .toBe("看图：本地图（图片无法导入：本地文件地址不导入）")
   })
 
   it("解析异常时返回 null 而不是抛出", () => {

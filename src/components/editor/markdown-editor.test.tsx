@@ -12,6 +12,7 @@ import { EditorView, getDrawSelectionConfig } from "@codemirror/view"
 import type { MarkdownEditorHandle } from "./markdown-editor"
 import MarkdownEditor, { findPlainTextMatches, findTableWrapperAtLine, formatToolbarText, paragraphSeparatorAtEnd, selectedMarkdownRange, shouldPasteAsPlainText } from "./markdown-editor"
 import { markdownLivePreview } from "./live-preview"
+import { createAttachmentQueue } from "@/services/vault/attachment-queue"
 
 // React 19 在测试里要求显式打开 act 环境标记。
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -204,6 +205,20 @@ describe("MarkdownEditor", () => {
     expect(onChange).toHaveBeenLastCalledWith("**网页文字**正文", expect.anything())
   })
 
+  it("本地图片的富文本同时带文件时，正文留 alt、图片交给附件队列且只插入一次", () => {
+    // Word / 飞书复制出来的混合剪贴板：HTML 里的 src 是本地地址，正文用不了，但同时给了真实图片文件。
+    const image = new File(["png"], "本地图片.png", { type: "image/png" })
+    const onInsertFiles = vi.fn()
+    const onChange = vi.fn()
+    mount(<MarkdownEditor onChange={onChange} onInsertFiles={onInsertFiles} value="正文" />)
+    act(() => { editorView().contentDOM.dispatchEvent(pasteEvent({ files: [image], html: '<p><img src="file:///tmp/a.png" alt="示意图"></p>' })) })
+    // 图片本体只通过附件队列进来一次，不会既走 HTML 又走文件。
+    expect(onInsertFiles).toHaveBeenCalledTimes(1)
+    expect(onInsertFiles).toHaveBeenCalledWith([image])
+    expect(onChange).toHaveBeenLastCalledWith(expect.stringContaining("示意图"), expect.anything())
+    expect(onChange).toHaveBeenLastCalledWith(expect.not.stringContaining("file:///tmp/a.png"), expect.anything())
+  })
+
   it("只读状态不接管图片粘贴", () => {
     const image = new File(["png"], "截图.png", { type: "image/png" })
     const onInsertFiles = vi.fn()
@@ -211,6 +226,31 @@ describe("MarkdownEditor", () => {
     const event = pasteEvent({ itemFiles: [image] })
     act(() => { editorView().contentDOM.dispatchEvent(event) })
     expect(onInsertFiles).not.toHaveBeenCalled()
+  })
+
+  it("HTML 只剩图片、转换不出文字时仍然入队图片文件，不静默丢掉整次粘贴", () => {
+    // 回归点：入队调用原先写在 if (markdown) 里。只有一张无 alt 的本地图片时，
+    // 转换结果因为 imagesCoveredByFiles 删掉图片节点而变成 null，于是文件不入队、
+    // 默认粘贴也照常发生——图片和占位一起消失，用户看不到任何东西。
+    const image = new File(["png"], "本地图片.png", { type: "image/png" })
+    const onInsertFiles = vi.fn()
+    const onChange = vi.fn()
+    mount(<MarkdownEditor onChange={onChange} onInsertFiles={onInsertFiles} value="正文" />)
+    const event = pasteEvent({ files: [image], html: '<p><img src="file:///tmp/a.png"></p>' })
+    act(() => { editorView().contentDOM.dispatchEvent(event) })
+    expect(event.defaultPrevented).toBe(true)
+    expect(onInsertFiles).toHaveBeenCalledWith([image])
+    // 正文没有任何可插入的文字，文档保持原样。
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it("附件书签的归属笔记与当前笔记不一致时拒绝取书签", () => {
+    // 队列执行到某一批时用户可能已经切到了别的笔记：此时同步取书签会捕获「当前」那篇的
+    // 身份，书签自己的守卫也会通过，引用就写进了错误的笔记。发起式必须一路带下来。
+    const handle = createRef<MarkdownEditorHandle>()
+    mount(<MarkdownEditor onChange={() => {}} ref={handle} sessionKey="cache-1:session-a" value="正文" />)
+    expect(handle.current!.captureInsertion(undefined, "cache-1:session-a")).not.toBeNull()
+    expect(handle.current!.captureInsertion(undefined, "cache-1:session-b")).toBeNull()
   })
 
   it("菜单粘贴可读取浏览器图片，并绑定触发时的插入位置", async () => {
@@ -473,8 +513,7 @@ describe("MarkdownEditor", () => {
     } })
     const markdown = "![截图](../attachments/截图.png)\n"
     const onInsertFiles = vi.fn(() => {
-      const insertion = handle.current!.captureInsertion()
-      insertion.insert(markdown)
+      handle.current!.captureInsertion()!.insert(markdown)
     })
     mount(<MarkdownEditor onChange={() => {}} onInsertFiles={onInsertFiles} ref={handle} value="正文" />)
     act(() => { handle.current!.findText("正文") })
@@ -646,7 +685,7 @@ describe("MarkdownEditor", () => {
     const onChange = vi.fn()
     mount(<MarkdownEditor onChange={onChange} ref={handle} value="开头 目标 结尾" />)
     act(() => { handle.current!.findText("目标") })
-    const insertion = handle.current!.captureInsertion()
+    const insertion = handle.current!.captureInsertion()!
     act(() => {
       handle.current!.findText("开头", "next", true)
       handle.current!.insertText("更长的开头")
@@ -658,19 +697,53 @@ describe("MarkdownEditor", () => {
   it("rejects a late attachment after its editor was unmounted", () => {
     const handle = createRef<MarkdownEditorHandle>()
     mount(<MarkdownEditor onChange={() => {}} ref={handle} value="正文" />)
-    const insertion = handle.current!.captureInsertion()
+    const insertion = handle.current!.captureInsertion()!
     act(() => { root!.render(<div />) })
     expect(insertion.insert("附件")).toBe(false)
   })
 
   // 附件书签（captureInsertion → 异步完成后 insert）的行为约定，逐条对应审计场景。
   describe("附件插入书签", () => {
+    it.each(["cursor", "drop"] as const)("排队中的附件保留发起位置（%s），随正文变化映射且不抢新光标", async (mode) => {
+      const handle = createRef<MarkdownEditorHandle>()
+      const original = "开头\n\n目标段落\n\n结尾"
+      mount(<MarkdownEditor onChange={() => {}} ref={handle} sessionKey="vault:A" storageKey="vault:A" value={original} />)
+      const view = editorView()
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      let calls = 0
+      const queue = createAttachmentQueue({
+        fallback: () => ({ placed: false, notice: "不应走降级" }),
+        write: async () => {
+          if (++calls === 1) { await gate; return { errors: ["首批失败"], markdown: "" } }
+          return { errors: [], markdown: "![图](x.png)" }
+        },
+      })
+      const target = { cacheId: "vault", editorSessionKey: "A", noteId: "A", noteTitle: "甲" }
+      queue.enqueue({ target, files: [new File(["a"], "first.png")], insertions: { capture: () => null } })
+      act(() => view.dispatch({ selection: { anchor: original.indexOf("目标") } }))
+      const position = mode === "drop" ? original.indexOf("目标") : undefined
+      const id = queue.enqueue({ target, files: [new File(["b"], "second.png")], insertions: {
+        capture: () => handle.current?.captureInsertion(position, "vault:A") ?? null,
+      } })!
+      act(() => view.dispatch({ changes: { from: 0, insert: "新增前缀" }, selection: { anchor: original.length + 4 } }))
+      await act(async () => {
+        release()
+        for (let count = 0; count < 100 && queue.getSnapshot().find((batch) => batch.id === id)?.status !== "done"; count++) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+      })
+      expect(queue.getSnapshot().find((batch) => batch.id === id)?.insertion).toBe("inserted")
+      expect(view.state.doc.toString()).toBe("新增前缀开头\n\n![图](x.png)\n目标段落\n\n结尾")
+      expect(view.state.selection.main.head).toBe(view.state.doc.length)
+    })
+
     it("有文字选区时插入图片不删除选中文字，插入点在选区起点", () => {
       const handle = createRef<MarkdownEditorHandle>()
       const onChange = vi.fn()
       mount(<MarkdownEditor onChange={onChange} ref={handle} value="甲乙丙丁" />)
       act(() => { handle.current!.findText("乙丙") })
-      const insertion = handle.current!.captureInsertion()
+      const insertion = handle.current!.captureInsertion()!
       act(() => { expect(insertion.insert("![图](x.png)\n")).toBe(true) })
       expect(onChange).toHaveBeenLastCalledWith("甲![图](x.png)\n乙丙丁", expect.anything())
     })
@@ -679,7 +752,7 @@ describe("MarkdownEditor", () => {
       const handle = createRef<MarkdownEditorHandle>()
       mount(<MarkdownEditor onChange={() => {}} ref={handle} value={"开头 目标 结尾\n\n第二段"} />)
       act(() => { handle.current!.findText("目标") })
-      const insertion = handle.current!.captureInsertion()
+      const insertion = handle.current!.captureInsertion()!
       act(() => { handle.current!.findText("第二段", "next", true) })
       const before = editorView().state.selection.main.head
       act(() => { expect(insertion.insert("![图](x.png)\n")).toBe(true) })
@@ -693,7 +766,7 @@ describe("MarkdownEditor", () => {
       const handle = createRef<MarkdownEditorHandle>()
       mount(<MarkdownEditor onChange={() => {}} ref={handle} value="开头 目标 结尾" />)
       act(() => { handle.current!.findText("目标") })
-      const insertion = handle.current!.captureInsertion()
+      const insertion = handle.current!.captureInsertion()!
       const text = "![图](x.png)\n"
       act(() => { expect(insertion.insert(text)).toBe(true) })
       expect(editorView().state.selection.main.head).toBe(3 + text.length)
@@ -704,7 +777,7 @@ describe("MarkdownEditor", () => {
       const onChange = vi.fn()
       mount(<MarkdownEditor onChange={onChange} ref={handle} value="开头 目标 结尾" />)
       act(() => { handle.current!.findText("目标") })
-      const insertion = handle.current!.captureInsertion()
+      const insertion = handle.current!.captureInsertion()!
       act(() => { editorView().dispatch({ changes: { from: 3, to: 6 } }) })
       act(() => { expect(insertion.insert("![图](x.png)\n")).toBe(true) })
       expect(onChange).toHaveBeenLastCalledWith("开头 ![图](x.png)\n结尾", expect.anything())
@@ -714,7 +787,7 @@ describe("MarkdownEditor", () => {
       const handle = createRef<MarkdownEditorHandle>()
       mount(<MarkdownEditor onChange={() => {}} ref={handle} value="正文" />)
       act(() => { handle.current!.findText("正文") })
-      const insertion = handle.current!.captureInsertion()
+      const insertion = handle.current!.captureInsertion()!
       const images = "![甲](a.png)\n\n![乙](b.png)\n"
       act(() => { expect(insertion.insert(images)).toBe(true) })
       act(() => { handle.current!.undo() })
@@ -728,7 +801,7 @@ describe("MarkdownEditor", () => {
       mount(<MarkdownEditor onChange={() => {}} ref={handle} value="正文" />)
       // 模拟用户在插图前刚敲过一个字（与随后的附件插入落在同一撤销时间窗内）。
       act(() => { editorView().dispatch({ changes: { from: 2, insert: "新" }, selection: { anchor: 3 }, userEvent: "input.type" }) })
-      const insertion = handle.current!.captureInsertion()
+      const insertion = handle.current!.captureInsertion()!
       act(() => { expect(insertion.insert("![图](x.png)\n")).toBe(true) })
       act(() => { handle.current!.undo() })
       expect(editorView().state.doc.toString()).toBe("正文新")
@@ -738,7 +811,7 @@ describe("MarkdownEditor", () => {
       const handle = createRef<MarkdownEditorHandle>()
       const onChange = vi.fn()
       mount(<MarkdownEditor onChange={onChange} ref={handle} value="正文" />)
-      const insertion = handle.current!.captureInsertion()
+      const insertion = handle.current!.captureInsertion()!
       act(() => { expect(insertion.insert("![图](x.png)\n")).toBe(true) })
       expect(insertion.insert("![图](x.png)\n")).toBe(false)
       expect(onChange).toHaveBeenLastCalledWith("![图](x.png)\n正文", expect.anything())
@@ -749,7 +822,7 @@ describe("MarkdownEditor", () => {
       const onChange = vi.fn()
       mount(<MarkdownEditor onChange={onChange} ref={handle} value={"第一段\n\n第二段"} />)
       act(() => { handle.current!.findText("第一段") })
-      const insertion = handle.current!.captureInsertion(5)
+      const insertion = handle.current!.captureInsertion(5)!
       act(() => { expect(insertion.insert("![图](x.png)\n")).toBe(true) })
       expect(onChange).toHaveBeenLastCalledWith("第一段\n\n![图](x.png)\n第二段", expect.anything())
     })
@@ -1079,7 +1152,7 @@ describe("MarkdownEditor", () => {
       const { rerender } = mountWithRerender(
         <MarkdownEditor onChange={() => {}} ref={handle} sessionKey="cache:a" storageKey="note-a" value="第一篇" />,
       )
-      const insertion = handle.current!.captureInsertion()
+      const insertion = handle.current!.captureInsertion()!
 
       rerender(<MarkdownEditor onChange={() => {}} ref={handle} sessionKey="cache:b" storageKey="note-b" value="第二篇" />)
 
@@ -1093,7 +1166,7 @@ describe("MarkdownEditor", () => {
       const { rerender } = mountWithRerender(
         <MarkdownEditor onChange={() => {}} ref={handle} revision={'"r1"'} sessionKey="cache:a" storageKey="note-a" value="第一篇" />,
       )
-      const insertion = handle.current!.captureInsertion()
+      const insertion = handle.current!.captureInsertion()!
 
       // 同一篇笔记，但远端 revision 已经变了：偏移映射不再可信。
       rerender(<MarkdownEditor onChange={() => {}} ref={handle} revision={'"r2"'} sessionKey="cache:a" storageKey="note-a" value="第一篇" />)
@@ -1105,16 +1178,155 @@ describe("MarkdownEditor", () => {
     it("revision 未变化时正常插入", () => {
       const handle = createRef<MarkdownEditorHandle>()
       mount(<MarkdownEditor onChange={() => {}} ref={handle} revision={'"r1"'} sessionKey="cache:a" storageKey="note-a" value="第一篇" />)
-      const insertion = handle.current!.captureInsertion()
+      const insertion = handle.current!.captureInsertion()!
       expect(insertion.insert("![图](x.png)\n")).toBe(true)
     })
 
     it("书签仍属于当前笔记时正常插入", () => {
       const handle = createRef<MarkdownEditorHandle>()
       mount(<MarkdownEditor onChange={() => {}} ref={handle} sessionKey="cache:a" storageKey="note-a" value="第一篇" />)
-      const insertion = handle.current!.captureInsertion()
+      const insertion = handle.current!.captureInsertion()!
       expect(insertion.insert("![图](x.png)\n")).toBe(true)
       expect(editorView().state.doc.toString()).toContain("![图](x.png)")
+    })
+  })
+
+  describe("Markdown 源码模式", () => {
+    // 正文里同时放了标题、行内格式、图片与表格：源码模式要一次性证明「预览装饰全没了」，
+    // 只测一个装饰类型会漏掉「只关掉一半」这种回归（两个 Compartment 是分开配的）。
+    const richDoc = "# 标题\n\n**加粗** 与 `代码`\n\n![图](http://a.com/x.png)\n\n| 列 A | 列 B |\n| --- | --- |\n| 1 | 2 |\n"
+
+    function decorationCount(view: EditorView) {
+      return view.dom.querySelectorAll(".cm-md-heading, .cm-md-strong, .cm-md-inline-code, .cm-md-image, .cm-md-table-wrap").length
+    }
+
+    async function settleDecorations(view: EditorView) {
+      // 装饰经延迟事务提交，等一拍再看，避免把「还没渲染」误判成「已关闭」。
+      for (let attempt = 0; attempt < 30 && decorationCount(view) === 0; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+    }
+
+    it("切换源码模式不改正文、不重建 EditorView、撤销栈保持可用", async () => {
+      const onChange = vi.fn()
+      const handle = createRef<MarkdownEditorHandle>()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} ref={handle} sessionKey="cache:a" value={richDoc} />,
+      )
+      const view = editorView()
+      await act(async () => { await settleDecorations(view) })
+      expect(decorationCount(view)).toBeGreaterThan(0)
+
+      // 先造一段可撤销的历史，切换后必须还在。
+      act(() => { view.dispatch({ changes: { from: 0, insert: "前缀 " }, userEvent: "input.type" }) })
+      const withHistory = view.state.doc.toString()
+      const depthBefore = undoDepth(view.state)
+      expect(depthBefore).toBeGreaterThan(0)
+
+      rerender(<MarkdownEditor onChange={onChange} ref={handle} sessionKey="cache:a" sourceMode value={withHistory} />)
+      // 同一个 EditorView 实例与同一个 DOM 节点：切换只 reconfigure，不重建。
+      expect(editorView()).toBe(view)
+      // 正文逐字节相同（含前面插入的前缀），一个字符都没动。
+      expect(view.state.doc.toString()).toBe(withHistory)
+      expect(undoDepth(view.state)).toBe(depthBefore)
+      for (const selector of [".cm-md-heading", ".cm-md-strong", ".cm-md-inline-code", ".cm-md-image", ".cm-md-table-wrap"]) {
+        expect(view.dom.querySelector(selector)).toBeNull()
+      }
+      // 源码模式仍可编辑：语法高亮（语言扩展）与文本输入能力保留。
+      expect(view.state.readOnly).toBe(false)
+      act(() => { view.dispatch({ changes: { from: view.state.doc.length, insert: "尾注" }, userEvent: "input.type" }) })
+      expect(view.state.doc.toString()).toBe(`${withHistory}尾注`)
+      // 撤销只回退这一笔用户输入，绝不把模式切换变成一次可撤销的文档改动。
+      act(() => { handle.current!.undo() })
+      expect(view.state.doc.toString()).toBe(withHistory)
+
+      rerender(<MarkdownEditor onChange={onChange} ref={handle} sessionKey="cache:a" sourceMode={false} value={withHistory} />)
+      expect(editorView()).toBe(view)
+      expect(view.state.doc.toString()).toBe(withHistory)
+      await act(async () => { await settleDecorations(view) })
+      expect(decorationCount(view)).toBeGreaterThan(0)
+    })
+
+    it("源码模式下只读仍然生效，且不重建视图", () => {
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={() => {}} sessionKey="cache:a" sourceMode value="正文" />,
+      )
+      const view = editorView()
+      expect(view.state.readOnly).toBe(false)
+      rerender(<MarkdownEditor onChange={() => {}} sessionKey="cache:a" sourceMode readOnly value="正文" />)
+      expect(editorView()).toBe(view)
+      expect(view.state.readOnly).toBe(true)
+      expect(view.contentDOM.getAttribute("contenteditable")).toBe("false")
+      // 退出源码模式时序不变：先解锁再离开，避免源码/预览任一侧留下半套设置。
+      rerender(<MarkdownEditor onChange={() => {}} sessionKey="cache:a" readOnly={false} value="正文" />)
+      expect(editorView()).toBe(view)
+      expect(view.state.readOnly).toBe(false)
+    })
+
+    it("挂载时即为源码模式：不渲染预览装饰，也不改正文", () => {
+      mount(<MarkdownEditor onChange={() => {}} sessionKey="cache:a" sourceMode value={richDoc} />)
+      const view = editorView()
+      expect(decorationCount(view)).toBe(0)
+      expect(view.state.doc.toString()).toBe(richDoc)
+    })
+
+    it("IME 组合期间切换源码模式被挂起，组合结束后落地且不丢字符", async () => {
+      const onChange = vi.fn()
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={onChange} sessionKey="cache:a" value={richDoc} />,
+      )
+      const view = editorView()
+      await act(async () => { await settleDecorations(view) })
+
+      act(() => { view.contentDOM.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })) })
+      // 用户正在拼字，此时点了「Markdown 源码模式」。
+      rerender(<MarkdownEditor onChange={onChange} sessionKey="cache:a" sourceMode value={richDoc} />)
+      // 组合期间不重配置：装饰仍在，候选词不会被拆掉。
+      expect(view.dom.querySelector(".cm-md-heading")).not.toBeNull()
+
+      // IME 提交最终字符。
+      act(() => { view.dispatch({ changes: { from: 0, insert: "中文" }, userEvent: "input.type.compose" }) })
+      const composed = view.state.doc.toString()
+      expect(composed.startsWith("中文")).toBe(true)
+
+      act(() => { view.contentDOM.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true })) })
+      await act(async () => { await settleDecorations(view) })
+      // 挂起的切换在 compositionend 落地：装饰关掉，且刚提交的中文一个字符都没丢、没重复。
+      expect(view.state.doc.toString()).toBe(composed)
+      expect(view.dom.querySelector(".cm-md-heading")).toBeNull()
+      expect(editorView()).toBe(view)
+    })
+
+    it("切到源码模式前先提交表格单元格草稿，草稿进入正文而不是被静默丢弃", async () => {
+      const tableDoc = "前段。\n\n| 名称 | 状态 |\n| --- | --- |\n| 苹果 | 新鲜 |\n"
+      const { rerender } = mountWithRerender(
+        <MarkdownEditor onChange={() => {}} sessionKey="cache:a" storageKey="note-a" value={tableDoc} />,
+      )
+      const view = editorView()
+      await act(async () => { await settleDecorations(view) })
+      const wrap = view.dom.querySelector<HTMLElement>(".cm-md-table-wrap")
+      expect(wrap).not.toBeNull()
+
+      // 进入单元格编辑并改草稿（尚未提交）。
+      const cell = wrap!.querySelectorAll<HTMLTableCellElement>(".cm-md-table tr")[1].children[0]
+      act(() => {
+        cell.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }))
+        cell.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }))
+      })
+      for (let attempt = 0; attempt < 30 && !wrap!.querySelector(".cm-md-table-cell-input"); attempt += 1) {
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)) })
+      }
+      const input = wrap!.querySelector<HTMLTextAreaElement>(".cm-md-table-cell-input")
+      expect(input).not.toBeNull()
+      act(() => {
+        input!.setRangeText("草稿值", 0, input!.value.length, "end")
+        input!.dispatchEvent(new Event("input", { bubbles: true }))
+      })
+
+      rerender(<MarkdownEditor onChange={() => {}} sessionKey="cache:a" sourceMode storageKey="note-a" value={view.state.doc.toString()} />)
+      // 草稿必须已经在正文里（当作已提交的内容），而不是随 Widget 一起消失。
+      expect(view.state.doc.toString()).toContain("草稿值")
+      expect(view.dom.querySelector(".cm-md-table-wrap")).toBeNull()
     })
   })
 

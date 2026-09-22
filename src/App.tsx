@@ -43,7 +43,14 @@ import {
   appendBlockMarkdown,
   canWriteVaultAttachments,
   writeVaultAttachments,
+  type AttachmentWriteResult,
 } from "@/services/vault/attachment-writer"
+import {
+  createAttachmentQueue,
+  type AttachmentQueueFallbackResult,
+  type AttachmentQueueTarget,
+} from "@/services/vault/attachment-queue"
+import { resolveAttachmentFallback } from "@/services/vault/attachment-target"
 import { createWebDavVaultAdapter } from "@/services/vault/webdav-vault-adapter"
 import { WebDavAuthenticationError } from "@/services/webdav-client"
 import {
@@ -163,6 +170,7 @@ import {
   loadUiPreferences,
   saveUiPreferences,
   type ColorMode,
+  type MarkdownSourceMode,
   type NoteViewMode,
 } from "@/services/preferences/ui-preferences"
 import { applyFolderOrderToTree } from "@/services/preferences/folder-order-preferences"
@@ -349,10 +357,16 @@ function App() {
   const [noteSort, setNoteSort] = useState<NoteSort>("updated-desc")
   const [selectedTag, setSelectedTag] = useState<string | null>(null)
   const [noteViewMode, setNoteViewMode] = useState<NoteViewMode>(() => loadUiPreferences().noteViewMode)
+  const [markdownSourceMode, setMarkdownSourceMode] = useState<MarkdownSourceMode>(() => loadUiPreferences().markdownSourceMode)
   const [colorMode, setColorMode] = useState<ColorMode>(() => loadUiPreferences().colorMode)
   const changeNoteViewMode = useCallback((mode: NoteViewMode) => {
     setNoteViewMode(mode)
     saveUiPreferences({ noteViewMode: mode })
+  }, [])
+  // 正文呈现方式是本机编辑偏好：写成偏好而不写进笔记，也不随笔记同步到远端。
+  const changeMarkdownSourceMode = useCallback((mode: MarkdownSourceMode) => {
+    setMarkdownSourceMode(mode)
+    saveUiPreferences({ markdownSourceMode: mode })
   }, [])
   // 新建笔记必须落在统一画布：空白笔记在兼容阅读视图下无从输入。
   // 这里只切当前视图，不写入偏好，用户显式选择的只读偏好在下次启动时依然生效。
@@ -1003,25 +1017,49 @@ function App() {
     [activeNoteId, resolveNoteAsset],
   )
 
-  const attachmentNoteId = activeNote?.id
-  const attachmentNotePath = activeNote?.remotePath
-  const attachmentNoteSource = activeNote?.source
-  const attachmentCacheId = activeCacheMeta?.sourceKind === "webdav" ? activeCacheMeta.id : undefined
-  const insertActiveNoteAttachments = useCallback(async (files: File[]) => {
-    if (!attachmentNotePath || !attachmentNoteId) {
-      return { errors: ["当前笔记库不支持写入附件"], markdown: "" }
+  /**
+   * 按「发起时固定的目标笔记」找当前可写的落点。
+   *
+   * 队列的写入可能隔很久（用户排队了好几批），期间用户可能重命名、切库、甚至删掉原笔记。
+   * 因此这里每次都重新解析：
+   * - 库换了 → 直接拒绝。旧路径配新适配器会写到另一个库里，比失败更糟。
+   * - 笔记重命名（id 与路径都变了，但 editorSessionKey 不变）→ 跟上新路径继续写，
+   *   这是同一篇笔记，不该被当成「原笔记不见了」。
+   * - 笔记被删 → 返回 null，由调用方如实报告，绝不复活它，也不改写到别的笔记。
+   */
+  const resolveAttachmentTarget = useCallback((target: AttachmentQueueTarget) => {
+    const { activeCacheMeta, vaultSession } = assetResolverContextRef.current
+    const currentCacheId = activeCacheMeta?.id ?? null
+    if (currentCacheId !== target.cacheId) return null
+    const note = notesRef.current.find((candidate) =>
+      (candidate.editorSessionKey ?? candidate.id) === target.editorSessionKey)
+    if (!note || note.pendingOperation === "delete" || !note.remotePath) return null
+    return {
+      cacheId: target.cacheId,
+      noteId: note.id,
+      notePath: note.remotePath,
+      noteSource: note.source,
+      vaultSession,
     }
-    if (attachmentNoteSource === "webdav" && attachmentCacheId) {
+  }, [])
+
+  const writeAttachmentsForTarget = useCallback(async (target: AttachmentQueueTarget, files: File[]): Promise<AttachmentWriteResult> => {
+    const resolved = resolveAttachmentTarget(target)
+    if (!resolved) {
+      return { errors: [`「${target.noteTitle}」已不在当前笔记库或已被删除，附件未写入`], markdown: "" }
+    }
+    if (resolved.noteSource === "webdav" && target.cacheId) {
       const config = loadWebDavConfig()
       const rootPath = config.remotePath.replace(/^\/+|\/+$/g, "")
+      const cacheId = target.cacheId
       const writer = {
         createBinaryFile: async (path: string, data: Uint8Array, mimeType?: string) => {
           // WebDAV 附件先持久化到 IndexedDB；这里不持有 File，刷新页面后队列仍可继续同步。
           await queueVaultAttachment({
-            cacheId: attachmentCacheId,
+            cacheId,
             data: data.slice().buffer,
             mimeType,
-            noteId: attachmentNoteId,
+            noteId: resolved.noteId,
             path,
           })
           return { path }
@@ -1031,16 +1069,17 @@ function App() {
           : path.replace(/^\/+/, ""),
         getStoragePath: (displayPath: string) => `${config.remotePath.replace(/\/+$/g, "")}/${displayPath.replace(/^\/+/, "")}`.replace(/\/{2,}/g, "/"),
       }
-      const result = await writeVaultAttachments(writer, attachmentNotePath, files)
-      setPendingAttachmentCount((await listPendingVaultAttachments(attachmentCacheId)).length)
+      const result = await writeVaultAttachments(writer, resolved.notePath, files)
+      setPendingAttachmentCount((await listPendingVaultAttachments(cacheId)).length)
       return result
     }
-    if (!vaultSession || !canWriteVaultAttachments(vaultSession)) {
+    const adapter = resolved.vaultSession
+    if (!adapter || !canWriteVaultAttachments(adapter)) {
       return { errors: ["当前笔记库不支持写入附件"], markdown: "" }
     }
     // 附件不进入 Markdown 文件列表，写盘后由预览按相对路径直接读取，无需重新扫描笔记库。
-    return writeVaultAttachments(vaultSession, attachmentNotePath, files)
-  }, [attachmentCacheId, attachmentNoteId, attachmentNotePath, attachmentNoteSource, vaultSession])
+    return writeVaultAttachments(adapter, resolved.notePath, files)
+  }, [resolveAttachmentTarget])
 
   const updateNoteById = (noteId: string, patch: Partial<Note>) => {
     const targetNote = notesRef.current.find((note) => note.id === noteId)
@@ -1486,6 +1525,43 @@ function App() {
     // 发起上传的编辑器组件可能已卸载，提示放在跨笔记切换存活的库级横幅上，不伪装成原位成功。
     setVaultError(`「${note.title}」编辑器已切换，附件追加到了笔记末尾`)
   }
+
+  /**
+   * 附件插入队列。挂在 App 而不是编辑区里：编辑区会随切笔记、切阅读态、窄屏路由卸掉，
+   * 队列状态一旦跟着走就会「写了一半的批次突然消失」，用户既看不到进度也没法重试。
+   *
+   * 队列本身不碰正文，只负责「按发起顺序串行写入 + 把引用交给发起时那篇笔记的落点」。
+   *
+   * 两个回调都经 ref 转手：队列实例只在首帧创建一次，直接闭包捕获会把首帧的
+   * activeCacheMeta / notes 永久带进来（首帧它们多半还是空的）。
+   */
+  const attachmentFallbackRef = useRef<(target: AttachmentQueueTarget, markdown: string) => AttachmentQueueFallbackResult>(() => ({ placed: false, notice: "" }))
+  attachmentFallbackRef.current = (target, markdown) => {
+    // 落点失效时的显式降级：把引用追加到**原笔记**末尾，判断与说明见 resolveAttachmentFallback。
+    const { activeCacheMeta } = assetResolverContextRef.current
+    try {
+      return resolveAttachmentFallback({
+        activeCacheId: activeCacheMeta?.id ?? null,
+        markdown,
+        notes: notesRef.current,
+        target,
+        writeMarkdown: formatNoteById,
+      })
+    } catch (error) {
+      // 写入失败本身也要如实汇报：这时附件同样已经落在磁盘/远端了。
+      return { placed: false, notice: error instanceof Error ? error.message : "附件已写入，但正文引用插入失败" }
+    }
+  }
+  const attachmentWriteRef = useRef(writeAttachmentsForTarget)
+  attachmentWriteRef.current = writeAttachmentsForTarget
+  const attachmentQueueRef = useRef<ReturnType<typeof createAttachmentQueue> | null>(null)
+  if (!attachmentQueueRef.current) {
+    attachmentQueueRef.current = createAttachmentQueue({
+      fallback: (target, markdown) => attachmentFallbackRef.current(target, markdown),
+      write: (target, files) => attachmentWriteRef.current(target, files),
+    })
+  }
+  const attachmentQueue = attachmentQueueRef.current
 
   const startVaultIndex = (adapter: VaultAdapter, files: VaultFileEntry[]) => {
     const generation = ++indexGenerationRef.current
@@ -4265,6 +4341,7 @@ function App() {
             nativeSearchPaths={nativeSearchPaths}
             nativeSearchQuery={nativeSearchResult?.query ?? ""}
             noteViewMode={noteViewMode}
+            markdownSourceMode={markdownSourceMode}
             noteSort={noteSort}
             noteLoadErrors={noteLoadErrors}
             notes={visibleNotes}
@@ -4282,7 +4359,7 @@ function App() {
             onFolderOrderChange={updateFolderOrder}
             onFormat={formatActiveNote}
             onFormatNote={formatNoteById}
-            onInsertAttachments={insertActiveNoteAttachments}
+            attachmentQueue={attachmentQueue}
             onIncludeNestedFolderNotesChange={(include) => {
               // 聚合偏好绑定到当前路径，切换目录时无需等待 effect 即可恢复“仅当前层”，避免旧内容闪现。
               setNestedFolderNotesPath(include ? effectiveFolder : null)
@@ -4297,6 +4374,7 @@ function App() {
             onMoveNote={(folderPath) => void moveActiveNote(folderPath)}
             onMoveNoteById={(noteId, folderPath) => void moveNote(noteId, folderPath, undefined, false)}
             onNoteViewModeChange={changeNoteViewMode}
+            onMarkdownSourceModeChange={changeMarkdownSourceMode}
             onRenameFolder={renameFolder}
             onRenameNote={(title) => void moveActiveNote(activeNote?.folder === "根目录" ? null : activeNote?.folder ?? null, title)}
             onRenameNoteById={(noteId, title) => {

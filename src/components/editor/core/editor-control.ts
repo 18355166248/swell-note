@@ -346,6 +346,18 @@ export class EditorControl {
    */
   updateSettings(patch: Partial<EditorSettings>): void {
     if (this.destroyed) return
+    // 组合期间只挂起、不重配置：立刻翻转 contenteditable、或拆掉实时预览装饰，会把正在拼的
+    // 候选词打断（与 updateDocument 的挂起语义一致）。
+    //
+    // 注意必须在这里就地返回、且**不改 this.settings**：设置一旦提前写进去，
+    // compositionend 时 updateSettings 会看到 previous 与 next 相同而不派发任何 Compartment
+    // effect，开关就永远落不到视图上。挂起态由 onCompositionEnd 的 flush 收尾，
+    // 即使这次没有挂起的正文（用户只是点了切换、正文未变），也会走同一条路补上。
+    if (this.composing) {
+      this.pendingSettings = { ...this.pendingSettings, ...patch }
+      if (!this.pending) this.pending = { doc: this.getDocument(), identity: this.identity, origin: "echo" }
+      return
+    }
     const previous = this.settings
     const next: EditorSettings = { ...previous, ...patch }
     this.settings = next

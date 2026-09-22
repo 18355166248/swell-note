@@ -434,6 +434,9 @@ test.describe("编辑器三批修复收尾验收", () => {
     await clickLine(page, "开头段落。")
     await page.keyboard.press("End")
     await insertImages(page, ["流程六.png"])
+    // 写入期间编辑区仍可输入，队列面板因此挂在正文上方（这条旧流程不关心它，
+    // 但不能让它悄悄挡住或顶掉正文）。
+    await expect(page.locator(".attachment-queue")).toBeVisible()
 
     // 写入进行中：删掉插入点所在的段落文字（书签随事务映射到删除点）。
     await clickLine(page, "开头段落。")
@@ -452,7 +455,7 @@ test.describe("编辑器三批修复收尾验收", () => {
     expect(final.search(imageRefPattern("流程六.png"))).toBeLessThan(final.indexOf("| 名称 | 状态 |"))
   })
 
-  test("流程7：busy 守卫拒绝第二批并提示，第一批结束后可重试且不重复插入", async ({ page }) => {
+  test("流程7：连续两批附件排队串行写入，进度可见且各自只插一次", async ({ page }) => {
     test.setTimeout(60_000)
     await seedReleaseVault(page)
 
@@ -460,24 +463,70 @@ test.describe("编辑器三批修复收尾验收", () => {
     await clickLine(page, "结尾段落。")
     await page.keyboard.press("End")
     await insertImages(page, ["流程七甲.png"])
-    // 写入进行中发起第二批：被守卫拒绝并给出提示。
-    await insertImages(page, ["流程七乙.png"])
-    await expect(page.locator("p.attachment-error")).toContainText("上一批附件仍在写入")
+    // 写入进行中发起第二批：不再被守卫拒绝，而是排进队列等待。
+    // 第二批放两个文件，进度计数才有意义（单文件时「1 / 1」不携带信息，面板有意不显示）。
+    await insertImages(page, ["流程七乙.png", "流程七丙.png"])
 
-    // 第一批完成：只有第一批的引用，第二批没有被静默插入。
+    const queue = page.locator(".attachment-queue")
+    await expect(queue).toBeVisible()
+    // 等待/写入两个状态同时可见，且是两批各自的记录，没有互相顶掉。
+    await expect(queue).toContainText("正在写入")
+    await expect(queue).toContainText("等待写入")
+    // 进度必须真实：只报「第几个 / 共几个」，不出现任何百分比。
+    await expect(queue).toContainText(/正在写入（[0-9]+ \/ 2）/)
+    await expect(queue).not.toContainText("%")
+
+    // 第一批落盘时第二批还没写完：排队确实是串行，不是并行抢写。
     await waitStored(page, NOTE_A_ID, (content) => imageRefPattern("流程七甲.png").test(content))
     let current = await readStored(page, NOTE_A_ID)
     expect(current).not.toContain("流程七乙")
+    expect(current).not.toContain("流程七丙")
     expect(countImageRefs(current)).toBe(1)
 
-    // 结束后重试第二批：正常插入，两个引用各出现一次。
-    await setAttachmentDelay(page, 0)
-    await insertImages(page, ["流程七乙.png"])
-    await waitStored(page, NOTE_A_ID, (content) => imageRefPattern("流程七乙.png").test(content))
+    // 第二批随后完成，两批都收尾为已插入，且各只插一次。
+    await waitStored(page, NOTE_A_ID, (content) => imageRefPattern("流程七丙.png").test(content))
+    await expect(queue).toContainText("已插入 1 个附件")
+    await expect(queue).toContainText("已插入 2 个附件")
     current = await readStored(page, NOTE_A_ID)
-    expect(countImageRefs(current)).toBe(2)
+    expect(countImageRefs(current)).toBe(3)
     expect(countImageRefsOf(current, "流程七甲.png")).toBe(1)
     expect(countImageRefsOf(current, "流程七乙.png")).toBe(1)
+    expect(countImageRefsOf(current, "流程七丙.png")).toBe(1)
+
+    // 切到另一篇笔记：队列是 App 级状态，记录留着（否则切走就等于把进度和重试入口一起丢掉），
+    // 但每条仍然署名发起时的那篇笔记——这正是「不按当前打开的笔记归属」在界面上的体现。
+    await openNoteFromList(page, "验收乙")
+    await expect(queue).toBeVisible()
+    await expect(queue).toContainText("验收甲")
+    expect(await readStored(page, NOTE_B_ID)).toBe(NOTE_B_CONTENT)
+  })
+
+  test("流程9：排队期间切走笔记，第二批的引用仍落回发起时那篇，不写进当前打开的笔记", async ({ page }) => {
+    test.setTimeout(60_000)
+    await seedReleaseVault(page)
+
+    // 两批都发起在甲笔记，第一批还没写完就切到乙笔记。
+    // 回归点：书签若在执行批次时才取，捕获到的是乙的身份，连书签自己的守卫也会通过，
+    // 甲的第二批引用就会被插进乙的正文。
+    await setAttachmentDelay(page, 1200)
+    await clickLine(page, "结尾段落。")
+    await page.keyboard.press("End")
+    await insertImages(page, ["流程九甲.png"])
+    await insertImages(page, ["流程九乙.png"])
+
+    const queue = page.locator(".attachment-queue")
+    await expect(queue).toBeVisible()
+    await openNoteFromList(page, "验收乙")
+    await expect(page.locator(".cm-content")).toContainText("验收乙另一篇正文。")
+
+    await waitStored(page, NOTE_A_ID, (content) => imageRefPattern("流程九乙.png").test(content))
+    const contentA = await readStored(page, NOTE_A_ID)
+    expect(countImageRefsOf(contentA, "流程九甲.png")).toBe(1)
+    expect(countImageRefsOf(contentA, "流程九乙.png")).toBe(1)
+
+    // 乙的正文零改动：既没有甲的图片引用，也没有甲的降级追加痕迹。
+    await setAttachmentDelay(page, 0)
+    expect(await readStored(page, NOTE_B_ID)).toBe(NOTE_B_CONTENT)
   })
 
   test("流程8：正文、表格、图片修改保存后，刷新完整恢复内容与引用", async ({ page }) => {

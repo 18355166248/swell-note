@@ -14,7 +14,122 @@ const HARD_BREAK = "\uE000"
 // 块级容器：遇到时产生段落边界，而不是把文字直接拼接在一起。
 const BLOCK_TAGS = new Set(["ADDRESS", "ARTICLE", "ASIDE", "DD", "DIV", "DL", "DT", "FIELDSET", "FIGCAPTION", "FIGURE", "FOOTER", "FORM", "H1", "H2", "H3", "H4", "H5", "H6", "HEADER", "HR", "MAIN", "NAV", "P", "PRE", "SECTION", "TABLE"])
 
-export function htmlToMarkdown(html: string): string | null {
+/** HTML 里的一张图片，按渲染顺序取出。 */
+export type ClipboardImage = { alt: string; src: string }
+
+export type HtmlToMarkdownOptions = {
+  /**
+   * 这张**导入不了**的图片是否有剪贴板文件来补上引用（Word/飞书等本地图片富文本）。
+   * 判定为真时这里只保留 alt 说明文字，真正的正文引用由附件队列写入，同一张图不会被插两次。
+   *
+   * 必须是逐图判定，不能退化成一个全局布尔值：HTML 里有两张导入不了的图片、剪贴板只给了
+   * 一个图片文件时，全局开关会把两张图的占位一起删掉，可只有一张真的会被补上，
+   * 另一张连占位都不剩——图片从正文里静默消失，正是这条降级反馈要防的情况。
+   */
+  imageCoveredByFile?: (image: ClipboardImage) => boolean
+}
+
+/** HTML 里所有本函数导入不了（src 不是 http(s)）的图片。 */
+function unsupportedImages(html: string): ClipboardImage[] {
+  try {
+    const document = new DOMParser().parseFromString(html, "text/html")
+    return Array.from(document.querySelectorAll("img"))
+      .map((img) => ({ alt: (img.getAttribute("alt") ?? "").trim(), src: (img.getAttribute("src") ?? "").trim() }))
+      .filter((image) => !SAFE_IMAGE_PATTERN.test(image.src))
+  } catch {
+    // 解析失败按「没有图片」处理：这条路径只影响占位文案，异常不能把整次粘贴带下水。
+    return []
+  }
+}
+
+/**
+ * 剪贴板 HTML 里是否存在“本函数导入不了、但剪贴板可能给了真实文件”的图片。
+ *
+ * 只在剪贴板同时带文件时才会被调用，用来决定这批文件是否该交给附件队列：
+ * 网页复制的富文本（图片本来就是 http(s) 外链）不该把附带的资源当附件插入，
+ * 而 Word/飞书那种 src 为 file:/data: 的本地图片，正文里没有可用引用，必须靠文件补齐。
+ */
+export function htmlNeedsClipboardImageFiles(html: string): boolean {
+  return unsupportedImages(html).length > 0
+}
+
+/**
+ * 剪贴板里的图片文件该不该当作附件插入。
+ *
+ * 两个条件必须同时成立，缺一个都会出错：
+ * - HTML 里确实有本函数导入不了的图片，否则网页富文本附带的资源文件会被当成附件插进来；
+ * - 剪贴板真的给了至少一个图片文件，否则没有任何东西能补上这些图片的引用。
+ *
+ * 第二个条件最容易写漏：`图片数 === 文件数` 在两者都为 0 时也成立，
+ * 单凭它判断会让「只有 HTML、没有附带文件」的粘贴走进「只留 alt」的分支，
+ * 图片连同占位一起从正文里消失——正是这条降级反馈要防的静默丢失。
+ */
+export function shouldInsertClipboardImageFiles(html: string | null, files: File[]): boolean {
+  const images = files.filter((file) => file.type.startsWith("image/"))
+  return images.length > 0
+    && images.length === files.length
+    && htmlNeedsClipboardImageFiles(html ?? "")
+}
+
+/** src 末尾的文件名，用于和剪贴板文件名比对。取不到时返回空串（视作对不上）。 */
+function imageFileName(source: string): string {
+  const path = source.split(/[?#]/)[0]
+  const name = path.split(/[/\\]/).pop() ?? ""
+  try {
+    return decodeURIComponent(name).trim().toLowerCase()
+  } catch {
+    // 非法百分号转义：按原样比对，不要因为一个解码异常让整次粘贴退回纯文本。
+    return name.trim().toLowerCase()
+  }
+}
+
+/**
+ * 建立「HTML 里导入不了的图片 → 是否确实有剪贴板文件补上引用」的逐图判定。
+ *
+ * 能确认的只有两种情形：
+ * 1. src 的文件名与剪贴板文件同名，且该名称在两侧各只出现一次；
+ * 2. 导入不了的图片数与图片文件数一一对应，映射没有歧义（Word / 飞书的典型形态，
+ *    它们的 src 常指向临时目录甚至 data:，只认文件名会把每一张都判成未覆盖，
+ *    于是每张图都多出一个「导入失败」的占位，而引用紧接着就插进来了）。
+ *
+ * 对不上就返回 false，宁可多留一个占位，也不能让图片连同占位一起消失。
+ */
+export function createClipboardImageCoverage(html: string | null, files: File[]): (image: ClipboardImage) => boolean {
+  const imageFiles = files.filter((file) => file.type.startsWith("image/"))
+  // 文件里混了非图片，或压根没有图片文件：没有任何东西能补上 HTML 图片的引用。
+  if (imageFiles.length === 0 || imageFiles.length !== files.length) return () => false
+  const unsupported = unsupportedImages(html ?? "")
+  if (unsupported.length === 0) return () => false
+  const paired = unsupported.length === imageFiles.length
+  if (paired) return () => true
+  const countNames = (names: string[]) => {
+    const counts = new Map<string, number>()
+    for (const name of names) if (name) counts.set(name, (counts.get(name) ?? 0) + 1)
+    return counts
+  }
+  const sourceNames = countNames(unsupported.map((image) => imageFileName(image.src)))
+  const fileNames = countNames(imageFiles.map((file) => file.name.trim().toLowerCase()))
+  // 文件名不含目录，a/image.png 与 b/image.png 不能靠一个同名文件区分。
+  // 数量不匹配时仅接受两侧都唯一的名称，其余保留占位；判定保持纯函数，重复渲染不会消耗匹配。
+  return (image) => {
+    const name = imageFileName(image.src)
+    return sourceNames.get(name) === 1 && fileNames.get(name) === 1
+  }
+}
+
+/**
+ * 本次转换的选项。渲染是同步的、且只会从 htmlToMarkdown 这一条链路进入，
+ * 因此用模块级变量传参，避免让 renderInline 这条被递归调用的链路多背一个只为 IMG 分支服务的参数。
+ *
+ * 只在单次调用内有效：入口先存旧值、finally 里还原，嵌套调用（万一将来出现）也只会覆盖再复位回外层值。
+ * 不能把它做成跨调用的全局开关——粘贴的图片文件和网页 HTML 会走同一条分发路径，
+ * 泄漏一次就会让所有后续粘贴都丢掉远程图片。
+ */
+let currentHtmlOptions: HtmlToMarkdownOptions = {}
+
+export function htmlToMarkdown(html: string, options: HtmlToMarkdownOptions = {}): string | null {
+  const previous = currentHtmlOptions
+  currentHtmlOptions = options
   try {
     const document = new DOMParser().parseFromString(html, "text/html")
     const body = document.body
@@ -24,7 +139,25 @@ export function htmlToMarkdown(html: string): string | null {
     return markdown || null
   } catch {
     return null
+  } finally {
+    currentHtmlOptions = previous
   }
+}
+
+// 图片无法按外链导入时的可见占位。有 alt 时保留原有说明文字，没有时给一段可搜索的说明。
+// 静默丢弃会让「粘贴后图片消失」无从排查，用户至少要看得出这里原本有一张图以及为什么没进来。
+//
+// 刻意用全角括号而不是方括号：`[` 会被 escapeText 转义成 `\[`，源码模式里会出现一堆
+// 与可见文字不一致的反斜杠，读起来像转义错误。
+function imageImportPlaceholder(alt: string, reason: string): string {
+  return alt ? `${alt}（${reason}）` : `（${reason}）`
+}
+
+function imageImportReason(source: string): string {
+  if (!source) return "图片无法导入：图片地址为空"
+  if (/^data:/i.test(source)) return "图片无法导入：data: 地址不导入"
+  if (/^(?:file|blob):/i.test(source)) return "图片无法导入：本地文件地址不导入"
+  return "图片无法导入：仅支持 http(s) 地址"
 }
 
 // 块与块之间的连续空行压成一段；代码围栏内部的空行是内容本身（<pre> 允许空行），
@@ -252,8 +385,18 @@ function renderInline(node: Node, atLineStart: boolean): string {
     const source = (node.getAttribute("src") ?? "").trim()
     const alt = (node.getAttribute("alt") ?? "").trim()
     // alt 落在 "![" 之后（或被降级成裸文字时可能位于行首），按行首参数决定是否转义行首标记。
-    // 非 http(s) 图片（data:、file: 等）不引入笔记，只保留 alt 文字以免静默丢内容。
-    if (!SAFE_IMAGE_PATTERN.test(source)) return escapeText(alt, atLineStart)
+    // 非 http(s) 图片（data:、file: 等）不引入笔记，但保留可见占位，不静默丢内容。
+    // 剪贴板同时给了这些图片的真实文件时，正文引用由附件队列写入，这里只留 alt 说明文字，
+    // 避免同一张图片既进队列又在正文里留一份原始地址。
+    if (!SAFE_IMAGE_PATTERN.test(source)) {
+      // 逐图确认「这张」是否有剪贴板文件补上引用：有就只留 alt 说明文字，没有就留可见占位。
+      // 补上的那些绝不能退回「图片无法导入」占位：图片马上由文件插进来，写一句导入失败
+      // 是假消息，还会和紧跟其后的引用打架。未被文件覆盖的图片则必须保住占位——
+      // 它们不会有任何引用补充，静默删掉就是真的丢了。
+      const covered = currentHtmlOptions.imageCoveredByFile?.({ alt, src: source }) ?? false
+      if (covered) return alt ? escapeText(alt, atLineStart) : ""
+      return escapeText(imageImportPlaceholder(alt, imageImportReason(source)), atLineStart)
+    }
     return `![${escapeText(alt, false)}](${serializeLinkDestination(source)})`
   }
   // 其余行内标签（span、font、mark 等）不对应 Markdown 结构，剥掉标签保留文字，
