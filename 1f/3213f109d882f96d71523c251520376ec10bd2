@@ -1,0 +1,46 @@
+src/services/preferences/note-pins-document.ts
+  s_dd2d87390e0774::t_a998fe1d870ea9 1-40
+e2e/folder-order-sync.spec.ts
+  s_dd2d87390e0774::t_496f803623ce0d 323-382
+  s_dd2d87390e0774::t_e4cb66c3981315 87-91
+src/App.tsx
+  s_dd2d87390e0774::t_e4cb66c3981315 1707-1716
+  s_dd2d87390e0774::t_425b3dc25ee70f 97,838-839,846,1297,1299,1801,1889-1890,1986-2002,2062,2340,2409
+src/services/vault/vault-adapter.ts
+  s_dd2d87390e0774::t_a998fe1d870ea9 73
+src/services/sync/note-pin-sync.ts
+  s_dd2d87390e0774::t_7b13d597cbe83b 44-45,58,60-65
+  s_dd2d87390e0774::t_a998fe1d870ea9 1-43,46-56,59,66-100
+  s_dd2d87390e0774::t_425b3dc25ee70f 57
+src/services/sync/sync-summary.ts
+  s_dd2d87390e0774::t_a09a9edc35c998 2,36-37,40-41
+src/services/vault/webdav-vault-adapter.ts
+  s_dd2d87390e0774::t_a998fe1d870ea9 3,32,51-68
+src/services/sync/sync-summary.test.ts
+  s_dd2d87390e0774::t_a09a9edc35c998 16-22
+docs/note-pinning-sync.md
+  s_dd2d87390e0774::t_496f803623ce0d 1-13
+src/services/sync/note-pin-sync.test.ts
+  s_dd2d87390e0774::t_4d89072418d322 1-126,147-181
+  s_dd2d87390e0774::t_7b13d597cbe83b 127-146
+src/types/note.ts
+  s_dd2d87390e0774::t_a998fe1d870ea9 11,13-15
+src/components/routes/app-pages.tsx
+  s_dd2d87390e0774::t_a09a9edc35c998 50,741,905-907
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "1f3213f109d882f96d71523c251520376ec10bd2",
+  "prompts": {},
+  "sessions": {
+    "s_dd2d87390e0774": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c7f9-21c7-7921-880b-ed6003a60c18",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
