@@ -208,3 +208,83 @@ test('全部替换为相同文字或空文本后，匹配状态与撤销一致',
   await editor.press('ControlOrMeta+z')
   await expect(bar.locator('[aria-live]')).toContainText('/2')
 })
+
+test('查找计数刷新与全部替换不抢输入焦点', async ({page}) => {
+  await seedCachedVault(page, '猫 猫')
+  const editor = page.locator('.desktop-workspace:visible .cm-content')
+  await expect(editor).toBeVisible()
+  await editor.click()
+  await page.keyboard.press('ControlOrMeta+f')
+  const query = page.getByLabel('查找当前笔记')
+  await query.fill('猫')
+  await expect(query).toBeFocused()
+  await expect(page.locator('.editor-find-bar [aria-live]')).toHaveText('1/2')
+  await expect(query).toBeFocused()
+  const replacement = page.getByLabel('替换为')
+  await replacement.fill('猫咪')
+  await expect(replacement).toBeFocused()
+  await page.locator('.editor-find-bar').getByRole('button', {name:'全部', exact:true}).click()
+  await expect(editor).toHaveText('猫咪 猫咪')
+  await expect(editor).not.toBeFocused()
+  await expect(page.locator('.editor-find-bar [aria-live]')).toContainText('/2')
+})
+
+test('保护版本写入期间切换笔记会取消旧恢复', async ({page}) => {
+  await seedCachedVault(page, 'A 当前正文', false, 'B 当前正文')
+  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('A 当前正文')
+  await page.evaluate(async () => {
+    const req = indexedDB.open('swell-note-history', 1)
+    req.onupgradeneeded = () => {
+      const store = req.result.createObjectStore('versions', {keyPath:'key'})
+      store.createIndex('noteKey', 'noteKey')
+    }
+    const db = await new Promise<IDBDatabase>((resolve,reject) => {req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)})
+    const tx = db.transaction('versions', 'readwrite')
+    tx.objectStore('versions').put({cacheId:'e2e-vault',content:'A 旧正文',createdAt:Date.now(),id:'switch-old',key:'switch-old',noteId:'webdav:/Swell/测试/第一篇.md',noteKey:'e2e-vault\u0000webdav:/Swell/测试/第一篇.md',reason:'编辑前',title:'第一篇'})
+    await new Promise<void>((resolve,reject)=>{tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error)})
+    db.close()
+  })
+  await page.getByRole('button',{name:'更多操作',exact:true}).click()
+  await page.getByRole('menuitem',{name:/本地版本历史/}).click()
+  await expect(page.locator('.note-history-preview pre')).toHaveText('A 旧正文')
+  await page.evaluate(() => {
+    const originalOpen = indexedDB.open.bind(indexedDB)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    ;(window as Window & { releaseHistory?: () => void }).releaseHistory = release
+    indexedDB.open = ((name: string, version?: number) => {
+      const request = version === undefined ? originalOpen(name) : originalOpen(name, version)
+      if (name === 'swell-note-history') {
+        Object.defineProperty(request, 'onsuccess', {
+          configurable: true,
+          set(callback: ((event: Event) => void) | null) {
+            if (callback) request.addEventListener('success', (event) => { void gate.then(() => callback.call(request, event)) }, {once:true})
+          },
+        })
+      }
+      return request
+    }) as typeof indexedDB.open
+  })
+  page.once('dialog', dialog => dialog.accept())
+  await page.getByRole('button',{name:'恢复此版本',exact:true}).click()
+  await expect(page.getByRole('button',{name:'正在保存保护版本…'})).toBeVisible()
+  await page.getByRole('button',{name:'关闭',exact:true}).click()
+  await page.locator('.desktop-workspace:visible .note-list-row').filter({hasText:'第二篇'}).click()
+  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('B 当前正文')
+  await page.evaluate(() => (window as Window & { releaseHistory: () => void }).releaseHistory())
+  await expect.poll(() => page.evaluate(async () => {
+    const request = indexedDB.open('swell-note-history', 1)
+    const database = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+    const transaction = database.transaction('versions', 'readonly')
+    const count = await new Promise<number>((resolve, reject) => {
+      const read = transaction.objectStore('versions').count()
+      read.onsuccess = () => resolve(read.result)
+      read.onerror = () => reject(read.error)
+    })
+    database.close()
+    return count
+  })).toBe(2)
+  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('B 当前正文')
+  await page.locator('.desktop-workspace:visible .note-list-row').filter({hasText:'第一篇'}).click()
+  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('A 当前正文')
+})

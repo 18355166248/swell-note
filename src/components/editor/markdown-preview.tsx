@@ -325,7 +325,7 @@ function buildMarkdownComponents(
       const markdownNoteTarget = parseMarkdownNoteHref(href)
       if (markdownNoteTarget) return <button className="wiki-link markdown-note-link" onClick={() => handlersRef.current.onWikiLink(markdownNoteTarget)} type="button">{children}</button>
       const assetSource = parseVaultAssetHref(href) ?? (isRelativeAttachmentHref(href) ? href : null)
-      if (assetSource) return <VaultAttachment onResolveAsset={handlersRef.current.onResolveAsset} source={assetSource}>{children}</VaultAttachment>
+      if (assetSource) return <VaultAttachment key={assetSource} onResolveAsset={handlersRef.current.onResolveAsset} source={assetSource}>{children}</VaultAttachment>
       if (href?.startsWith("#")) return <MarkdownAnchorLink href={href} id={id} label={label}>{children}</MarkdownAnchorLink>
       // Tauri WebView 默认拒绝 target=_blank 的新窗口请求，点击统一交给 openExternalUrl；
       // href 保留给悬停预览与右键菜单。

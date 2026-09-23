@@ -98,3 +98,38 @@ it("成功打开附件后在卸载时释放对象 URL", async () => {
     URL.revokeObjectURL = originalRevoke
   }
 })
+
+it("附件路径变化时释放旧 URL，且新附件必须重新点击读取", async () => {
+  const host = document.createElement("div")
+  const root = createRoot(host)
+  const originalCreate = URL.createObjectURL
+  const originalRevoke = URL.revokeObjectURL
+  const createUrl = vi.fn().mockReturnValueOnce("blob:first").mockReturnValueOnce("blob:second")
+  const revokeUrl = vi.fn()
+  const resolver = vi.fn(async () => ({ data: new Uint8Array(1), mimeType: "application/pdf" }))
+  URL.createObjectURL = createUrl
+  URL.revokeObjectURL = revokeUrl
+  const render = (source: string) => root.render(<MarkdownPreview
+    content={`[报告](./attachments/${source}.pdf)`}
+    onLoadWikiNote={vi.fn()}
+    onResolveAsset={resolver}
+    onResolveWikiNote={() => ({ status: "missing" })}
+    onWikiLink={vi.fn()}
+  />)
+  try {
+    await act(async () => render("first"))
+    await act(async () => host.querySelector<HTMLButtonElement>(".markdown-attachment-button")!.click())
+    expect(host.querySelector("iframe")?.getAttribute("src")).toBe("blob:first")
+    await act(async () => render("second"))
+    expect(revokeUrl).toHaveBeenCalledWith("blob:first")
+    expect(host.querySelector("iframe")).toBeNull()
+    expect(resolver).toHaveBeenCalledTimes(1)
+    await act(async () => host.querySelector<HTMLButtonElement>(".markdown-attachment-button")!.click())
+    expect(host.querySelector("iframe")?.getAttribute("src")).toBe("blob:second")
+    expect(resolver).toHaveBeenCalledTimes(2)
+  } finally {
+    await act(async () => root.unmount())
+    URL.createObjectURL = originalCreate
+    URL.revokeObjectURL = originalRevoke
+  }
+})

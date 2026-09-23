@@ -432,6 +432,7 @@ function App() {
   const latestCacheSnapshotRef = useRef<VaultCacheSnapshot | null>(null)
   const activeCacheIdRef = useRef<string | null>(null)
   const restoreScopeRef = useRef({ cacheId: null as string | null, noteId: "", generation: 0 })
+  const noteContentRevisionRef = useRef(new Map<string, number>())
   const restoringVersionRef = useRef(false)
   const pendingDirectoryMovesRef = useRef<PendingWebDavDirectoryMove[]>([])
   const notesRef = useRef(notes)
@@ -1117,6 +1118,11 @@ function App() {
         reason: "编辑前",
         title: targetNote.title,
       }).catch(() => undefined)
+    }
+    // 等待历史保护版本落盘期间，即使正文改动后又改回原文，也不能让旧恢复覆盖这次编辑。
+    if (typeof patch.content === "string" && patch.content !== targetNote.content) {
+      const revisionKey = `${activeCacheMeta?.id ?? ""}\u0000${noteId}`
+      noteContentRevisionRef.current.set(revisionKey, (noteContentRevisionRef.current.get(revisionKey) ?? 0) + 1)
     }
     const indexedPatch: Partial<Note> = typeof patch.content === "string"
       ? (() => {
@@ -3145,12 +3151,15 @@ function App() {
     if (!cacheId) throw new Error("当前笔记库不可用，无法保存恢复前版本")
     const { id, content: original, format, title } = activeNote
     const generation = restoreScopeRef.current.generation
+    const revisionKey = `${cacheId}\u0000${id}`
+    const contentRevision = noteContentRevisionRef.current.get(revisionKey) ?? 0
     restoringVersionRef.current = true
     try {
       // 保护版本必须先完成 IndexedDB 事务；等待期间笔记、库或正文变化时，放弃覆盖。
       const protectedVersion = await saveNoteVersion({ cacheId, content: original, noteId: id, reason: "恢复前", title })
       if (!protectedVersion) throw new Error("无法保存恢复前版本，正文未修改")
-      if (restoreScopeRef.current.generation !== generation || activeCacheIdRef.current !== cacheId
+      if (restoreScopeRef.current.generation !== generation || (noteContentRevisionRef.current.get(revisionKey) ?? 0) !== contentRevision
+        || activeCacheIdRef.current !== cacheId
         || notesRef.current.find((note) => note.id === id)?.content !== original) {
         throw new Error("笔记或正文已变化，恢复已取消；请重新选择历史版本")
       }
