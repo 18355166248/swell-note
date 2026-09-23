@@ -1,0 +1,24 @@
+e2e/editor-link-click.spec.ts
+  s_8128b3b975934a::t_eab41243c1c263 17,19,27,34,105,534-551
+  s_8128b3b975934a::t_4c98a92d213645 552-553
+src/components/workspace/workspace.tsx
+  s_8128b3b975934a::t_7773c8f766d173 2121,2129-2147,2745,2751-2752,2754,2757,2773
+src/App.css
+  s_8128b3b975934a::t_7773c8f766d173 721-722,725,839
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "f2e85af6f842eb12f276d14a3aa2d18d120367d9",
+  "prompts": {},
+  "sessions": {
+    "s_8128b3b975934a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0cd92-817e-76e3-b97c-9f5bdd4d786d",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
