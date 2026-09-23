@@ -1,0 +1,19 @@
+src/App.css
+  s_ed1175c7808b26::t_c6bf72dad3a947 1307-1309
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "05d2fe209cc857337c302e5b3bffc28b8631c8d9",
+  "prompts": {},
+  "sessions": {
+    "s_ed1175c7808b26": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0cd61-5c83-7d71-a77f-63ae92ddf77b",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
