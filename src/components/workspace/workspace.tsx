@@ -2507,6 +2507,9 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
                     </DropdownMenuItem>
                   ) : null}
                   <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => setFindOpen(true)}>
+                    <Search /> 查找当前笔记
+                  </DropdownMenuItem>
                 </>
               ) : null}
               {compact && !isSpecialPreview ? (
@@ -2604,6 +2607,9 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
             <Search />
             <input
               aria-label="查找当前笔记"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               onChange={(event) => {
                 const query = event.target.value
                 setFindQuery(query)
@@ -2628,6 +2634,9 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
             <>
               <input
                 aria-label="替换为"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 className="editor-replace-input"
                 onChange={(event) => setFindReplacement(event.target.value)}
                 onKeyDown={(event) => {
@@ -2638,8 +2647,9 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
                 placeholder="替换为"
                 value={findReplacement}
               />
-              <button disabled={!findResult.total} onClick={() => setFindResult(editorRef.current?.replaceCurrent(findQuery, findReplacement) ?? { current: 0, total: 0 })} type="button">替换</button>
+              <button className="editor-replace-button" disabled={!findResult.total} onClick={() => setFindResult(editorRef.current?.replaceCurrent(findQuery, findReplacement) ?? { current: 0, total: 0 })} type="button">替换</button>
               <button
+                className="editor-replace-all-button"
                 disabled={!findResult.total}
                 onClick={() => {
                   editorRef.current?.replaceAll(findQuery, findReplacement)
@@ -2649,7 +2659,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
               >全部</button>
             </>
           ) : null}
-          <button aria-label="关闭查找" onClick={() => setFindOpen(false)} type="button"><X /></button>
+          <button aria-label="关闭查找" className="editor-find-close" onClick={() => setFindOpen(false)} type="button"><X /></button>
         </div>
       ) : null}
 

@@ -54,7 +54,7 @@ import type { SyncLogEntry } from "@/services/sync/sync-log"
 import type { Note } from "@/types/note"
 import type { CachePrivacyMode } from "@/services/cache/cache-privacy"
 import type { TrashEntry, TrashRetentionDays } from "@/services/trash/trash-entry"
-import type { ColorMode } from "@/services/preferences/ui-preferences"
+import type { ColorMode, EditorDisplay, EditorLineWidth } from "@/services/preferences/ui-preferences"
 import {
   checkForAppUpdate,
   installAppUpdate,
@@ -266,9 +266,13 @@ const colorModeOptions = [
 export function AppearanceSettingsPage({
   colorMode,
   onColorModeChange,
+  editorDisplay,
+  onEditorDisplayChange,
 }: {
   colorMode: ColorMode
   onColorModeChange: (mode: ColorMode) => void
+  editorDisplay: EditorDisplay
+  onEditorDisplayChange: (display: EditorDisplay) => void
 }) {
   return (
     <div className="settings-content-card">
@@ -292,6 +296,23 @@ export function AppearanceSettingsPage({
           </button>
         ))}
       </div>
+      <section className="editor-display-settings" aria-label="正文显示设置">
+        <h3>正文显示</h3>
+        <p>编辑和阅读共用，只保存在当前设备。窄屏自动适配屏幕宽度。</p>
+        <label>正文字号
+          <select value={editorDisplay.editorFontSize} onChange={(event) => onEditorDisplayChange({ ...editorDisplay, editorFontSize: Number(event.target.value) })}>
+            {[16, 18, 20, 24].map((size) => <option key={size} value={size}>{size} px{size === 16 ? "（默认）" : ""}</option>)}
+          </select>
+        </label>
+        <label>正文行宽
+          <select value={editorDisplay.editorLineWidth} onChange={(event) => onEditorDisplayChange({ ...editorDisplay, editorLineWidth: event.target.value as EditorLineWidth })}>
+            <option value="narrow">紧凑</option><option value="standard">标准</option><option value="wide">宽阔</option>
+          </select>
+        </label>
+        <div className="editor-display-sample" style={{ fontSize: editorDisplay.editorFontSize }}>
+          让长文更舒适，也让每一次记录更轻松。<br />Reading and writing, at your own pace.
+        </div>
+      </section>
     </div>
   )
 }

@@ -1,5 +1,7 @@
 export type NoteViewMode = "locked" | "preview" | "unified"
 export type ColorMode = "dark" | "light" | "system"
+export type EditorLineWidth = "narrow" | "standard" | "wide"
+export type EditorDisplay = { editorFontSize: number; editorLineWidth: EditorLineWidth }
 /**
  * 正文的编辑呈现方式：即时预览（富文本外观）或 Markdown 源码。
  *
@@ -9,6 +11,8 @@ export type ColorMode = "dark" | "light" | "system"
 export type MarkdownSourceMode = "live" | "source"
 
 export type UiPreferences = {
+  editorFontSize: number
+  editorLineWidth: EditorLineWidth
   colorMode: ColorMode
   libraryPaneWidth: number
   markdownSourceMode: MarkdownSourceMode
@@ -18,6 +22,8 @@ export type UiPreferences = {
 
 const UI_PREFERENCES_KEY = "swell-note:ui-preferences:v1"
 const DEFAULT_UI_PREFERENCES: UiPreferences = {
+  editorFontSize: 16,
+  editorLineWidth: "standard",
   colorMode: "system",
   libraryPaneWidth: 230,
   markdownSourceMode: "live",
@@ -62,6 +68,8 @@ function readStoredPreferences(): Record<string, unknown> {
 export function loadUiPreferences(): UiPreferences {
   const stored = readStoredPreferences()
   return {
+    editorFontSize: typeof stored.editorFontSize === "number" && [16, 18, 20, 24].includes(stored.editorFontSize) ? stored.editorFontSize : 16,
+    editorLineWidth: stored.editorLineWidth === "narrow" || stored.editorLineWidth === "wide" ? stored.editorLineWidth : "standard",
     colorMode: stored.colorMode === "dark" || stored.colorMode === "light" ? stored.colorMode : "system",
     libraryPaneWidth: paneWidth(stored.libraryPaneWidth, "libraryPaneWidth"),
     noteListPaneWidth: paneWidth(stored.noteListPaneWidth, "noteListPaneWidth"),
@@ -72,6 +80,13 @@ export function loadUiPreferences(): UiPreferences {
       ? stored.noteViewMode
       : DEFAULT_UI_PREFERENCES.noteViewMode,
   }
+}
+
+export function applyEditorDisplay({ editorFontSize, editorLineWidth }: EditorDisplay) {
+  // 只调整排版，不回写正文或重建 EditorView；手机自动受屏幕宽度约束，避免设置宽行后横向溢出。
+  const widths: Record<EditorLineWidth, number> = { narrow: 720, standard: 960, wide: 1200 }
+  document.documentElement.style.setProperty("--editor-font-size", `${editorFontSize}px`)
+  document.documentElement.style.setProperty("--editor-page-width", `${widths[editorLineWidth]}px`)
 }
 
 export function applyColorMode(

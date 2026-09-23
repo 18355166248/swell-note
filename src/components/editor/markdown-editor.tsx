@@ -205,7 +205,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     useEffect(() => () => handlers.current.onSelectionChange?.(false), [])
 
     // 键盘升起会把可视区压掉一半，此前落在下半屏的光标就藏到了键盘后面。
-    // 布局要等 --keyboard-inset 写入后才是最终高度，所以推迟一帧再量。
+    // useKeyboardInset 也在 rAF 写布局，子组件监听可能先执行；同一帧滚文末会被旧的
+    // 最大 scrollTop 截断。跨过布局写入帧再量，避免必须再输入一个字光标才露出来。
     // 监听器只随 compact 变化增删一次，绝不在每次渲染时重复注册——
     // 重复注册的 resize 监听会让每次键盘升降叠加一次滚动补偿，手机上表现为页面不断下移。
     useEffect(() => {
@@ -219,12 +220,24 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       }
       const schedule = () => {
         if (frame) return
-        frame = requestAnimationFrame(follow)
+        frame = requestAnimationFrame(() => {
+          frame = requestAnimationFrame(follow)
+        })
       }
       viewport.addEventListener("resize", schedule)
+      // 此 effect 先于 EditorControl 的创建执行，所以监听已挂载的宿主，不能捕获空的 controlRef。
+      const host = hostRef.current
+      const scroller = host?.closest('[data-slot="scroll-area-viewport"]')
+      // iOS 的 focus 和原生键盘动画不保证与 visualViewport 同步；再以实际容器
+      // 尺寸变化为准补一次校正，不监听滚动本身，避免用户手动阅读时被拉回光标。
+      const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule)
+      if (scroller) observer?.observe(scroller)
+      host?.addEventListener("focusin", schedule)
       return () => {
         if (frame) cancelAnimationFrame(frame)
         viewport.removeEventListener("resize", schedule)
+        observer?.disconnect()
+        host?.removeEventListener("focusin", schedule)
       }
     }, [compact])
 

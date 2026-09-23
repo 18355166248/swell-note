@@ -1,13 +1,27 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest"
 
-import { applyColorMode, getNoteViewModeAction, loadUiPreferences, saveUiPreferences } from "./ui-preferences"
+import { applyColorMode, applyEditorDisplay, getNoteViewModeAction, loadUiPreferences, saveUiPreferences } from "./ui-preferences"
 
 describe("UI preferences", () => {
   beforeEach(() => window.localStorage.clear())
 
+  it("restores display preferences and rejects corrupt sizes without changing the note mode", () => {
+    saveUiPreferences({ editorFontSize: 24, editorLineWidth: "narrow", noteViewMode: "locked" })
+    expect(loadUiPreferences()).toMatchObject({ editorFontSize: 24, editorLineWidth: "narrow", noteViewMode: "locked" })
+    window.localStorage.setItem("swell-note:ui-preferences:v1", JSON.stringify({ editorFontSize: -1, editorLineWidth: "invalid" }))
+    expect(loadUiPreferences()).toMatchObject({ editorFontSize: 16, editorLineWidth: "standard" })
+    applyEditorDisplay({ editorFontSize: 20, editorLineWidth: "wide" })
+    expect(document.documentElement.style.getPropertyValue("--editor-font-size")).toBe("20px")
+    expect(document.documentElement.style.getPropertyValue("--editor-page-width")).toBe("1200px")
+    document.documentElement.style.removeProperty("--editor-font-size")
+    document.documentElement.style.removeProperty("--editor-page-width")
+  })
+
   it("defaults to the unified canvas and restores an explicit compatibility preview", () => {
     expect(loadUiPreferences()).toEqual({
+      editorFontSize: 16,
+      editorLineWidth: "standard",
       colorMode: "system",
       libraryPaneWidth: 230,
       markdownSourceMode: "live",

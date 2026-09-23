@@ -168,9 +168,11 @@ import {
 import { loadTrashRetention, saveTrashRetention } from "@/services/trash/trash-preferences"
 import {
   applyColorMode,
+  applyEditorDisplay,
   loadUiPreferences,
   saveUiPreferences,
   type ColorMode,
+  type EditorDisplay,
   type MarkdownSourceMode,
   type NoteViewMode,
 } from "@/services/preferences/ui-preferences"
@@ -360,6 +362,15 @@ function App() {
   const [noteViewMode, setNoteViewMode] = useState<NoteViewMode>(() => loadUiPreferences().noteViewMode)
   const [markdownSourceMode, setMarkdownSourceMode] = useState<MarkdownSourceMode>(() => loadUiPreferences().markdownSourceMode)
   const [colorMode, setColorMode] = useState<ColorMode>(() => loadUiPreferences().colorMode)
+  const [editorDisplay, setEditorDisplay] = useState<EditorDisplay>(() => {
+    const { editorFontSize, editorLineWidth } = loadUiPreferences()
+    return { editorFontSize, editorLineWidth }
+  })
+  const changeEditorDisplay = useCallback((display: EditorDisplay) => {
+    setEditorDisplay(display)
+    saveUiPreferences(display)
+  }, [])
+  useEffect(() => applyEditorDisplay(editorDisplay), [editorDisplay])
   const changeNoteViewMode = useCallback((mode: NoteViewMode) => {
     setNoteViewMode(mode)
     saveUiPreferences({ noteViewMode: mode })
@@ -4534,7 +4545,7 @@ function App() {
         <Route index element={<SettingsOverview onNavigate={navigate} />} />
         <Route
           path="appearance"
-          element={<AppearanceSettingsPage colorMode={colorMode} onColorModeChange={changeColorMode} />}
+          element={<AppearanceSettingsPage colorMode={colorMode} onColorModeChange={changeColorMode} editorDisplay={editorDisplay} onEditorDisplayChange={changeEditorDisplay} />}
         />
         <Route
           path="sync"

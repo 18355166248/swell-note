@@ -82,9 +82,16 @@ function resolveVisibleBand(container: HTMLElement, scroller: HTMLElement): Edge
 }
 
 export function scrollCursorIntoView(view: EditorView) {
-  const cursor = view.coordsAtPos(view.state.selection.main.head)
   const scroller = findScrollParent(view.dom)
-  if (!cursor || !scroller) return
+  if (!scroller) return
+  const head = view.state.selection.main.head
+  // 键盘缩小外层视口后，文末所在行可能已被 CodeMirror 虚拟化卸载，coordsAtPos
+  // 会返回 null。使用始终可查询的行块位置先把它滚回来，否则只有再次输入才恢复。
+  const block = view.lineBlockAt(head)
+  const cursor = view.coordsAtPos(head) ?? {
+    top: view.documentTop + block.top,
+    bottom: view.documentTop + block.bottom,
+  }
   const delta = computeScrollAdjustment(cursor, resolveVisibleBand(view.dom, scroller))
   if (delta !== 0) scroller.scrollTop += delta
 }

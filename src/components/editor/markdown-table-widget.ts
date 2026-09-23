@@ -1204,14 +1204,17 @@ export class TableWidget extends WidgetType {
     })
     // 键盘弹起会压掉下半屏：焦点在单元格 textarea 上时 CodeMirror 已失焦，
     // 编辑器自己的光标跟随不会触发，由这里把正在编辑的单元格送回可视带。
-    // 键盘动画期间 resize 连续触发，合并到同一帧再量，避免来回滚动。
+    // 键盘动画期间合并事件；跨过 useKeyboardInset 写布局的帧，避免文末单元格
+    // 的滚动被旧容器高度截断，必须再输入字符才露出光标。
     let followFrame = 0
     const scheduleKeyboardFollow = () => {
       if (followFrame) return
       followFrame = requestAnimationFrame(() => {
-        followFrame = 0
-        if (finished || document.activeElement !== input) return
-        scrollElementIntoVisibleBand(input)
+        followFrame = requestAnimationFrame(() => {
+          followFrame = 0
+          if (finished || document.activeElement !== input) return
+          scrollElementIntoVisibleBand(input)
+        })
       })
     }
     scheduleKeyboardFollow()
