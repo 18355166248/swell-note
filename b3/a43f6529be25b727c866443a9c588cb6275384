@@ -1,0 +1,63 @@
+src/components/routes/app-pages.tsx
+  s_78604a1c31077a::t_b59c7d2fdd82bc 57,269-270,274-275,299-315
+src/App.tsx
+  s_78604a1c31077a::t_b59c7d2fdd82bc 171,175,365-373,4548
+src/components/editor/cursor-visibility.dom.test.ts
+  s_78604a1c31077a::t_8c6ced44646de1 1-45
+src/components/editor/markdown-table-widget.ts
+  s_78604a1c31077a::t_85b96315d29367 1207-1208,1213-1217
+src/services/preferences/ui-preferences.ts
+  s_78604a1c31077a::t_b59c7d2fdd82bc 3-4,14-15,25-26,71-72,85-89
+  s_0d9a843cd31323::t_afc70ae3d8430d 90-91
+e2e/editor-display.spec.ts
+  s_78604a1c31077a::t_5e8e3e3bed59b0 1-5,8-10,13-14,17-18
+  s_78604a1c31077a::t_907bf6fc7ec889 6-7,11-12,15-16
+src/services/preferences/ui-preferences.test.ts
+  s_78604a1c31077a::t_ad470d96df3849 4,9-19
+  s_78604a1c31077a::t_c99b709e245bb3 23-24
+  s_0d9a843cd31323::t_1eb4fbf9a4bfca 20
+e2e/core-workflows.spec.ts
+  s_78604a1c31077a::t_7f1e60d0563640 530-537
+src/components/workspace/workspace.tsx
+  s_78604a1c31077a::t_85b96315d29367 2610-2612,2637-2639
+  s_78604a1c31077a::t_da1ba291b0a35a 2510-2512,2650,2652,2662
+src/components/editor/cursor-visibility.ts
+  s_78604a1c31077a::t_e7069a5379ce55 86-94
+src/App.css
+  s_78604a1c31077a::t_0ee63fb0ad050b 798-810,839,847,935,1293,1303,1584-1588
+  s_78604a1c31077a::t_4032bd69454ba8 1589-1590
+src/components/editor/markdown-editor.tsx
+  s_78604a1c31077a::t_a1c441f7d2f8bf 228-230,235,240
+  s_78604a1c31077a::t_e7069a5379ce55 231-234,239
+  s_78604a1c31077a::t_85b96315d29367 208-209,223-225
+docs/ios-editor-check-2026-09-23.md
+  s_78604a1c31077a::t_1f05c5b4de5bc9 1-15,18-28,30-34,37-44,46
+  s_78604a1c31077a::t_8c6ced44646de1 16-17,45
+  s_78604a1c31077a::t_4fce294aadee0c 29
+  s_78604a1c31077a::t_80477f9ccfd0cf 35
+  s_78604a1c31077a::t_66615915e44fd3 36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "b3a43f6529be25b727c866443a9c588cb6275384",
+  "prompts": {},
+  "sessions": {
+    "s_0d9a843cd31323": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c84f-1312-7d10-9612-3e5400d1f3d5",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    },
+    "s_78604a1c31077a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c851-681a-7ac2-829c-55d72c28807f",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
