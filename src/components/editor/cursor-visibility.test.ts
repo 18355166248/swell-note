@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
-import { bottomOverlayHeightFromRects, clampBandByBars, computeScrollAdjustment, isVerticalScroller } from "./cursor-visibility"
+// @vitest-environment jsdom
+import { bottomOverlayHeightFromRects, clampBandByBars, computeScrollAdjustment, isVerticalScroller, scrollElementIntoVisibleBand } from "./cursor-visibility"
 
 // 可视带取编辑器滚动容器与底部工具栏之间的那段，键盘弹起后 bottom 会大幅上移。
 const band = { bottom: 460, top: 60 }
@@ -100,4 +101,25 @@ describe("isVerticalScroller", () => {
   it("容忍 1px 的取整抖动", () => {
     expect(isVerticalScroller({ overflowY: "auto", scrollHeight: 501, clientHeight: 500 })).toBe(false)
   })
+})
+
+it("表格横滑层纵向也溢出时，仍滚动编辑器视口以露出输入框", () => {
+  const viewport = document.createElement("div")
+  viewport.dataset.slot = "scroll-area-viewport"
+  const tableScroll = document.createElement("div")
+  tableScroll.style.overflowX = "auto"
+  tableScroll.style.overflowY = "auto"
+  const input = document.createElement("textarea")
+  viewport.appendChild(tableScroll)
+  tableScroll.appendChild(input)
+  document.body.appendChild(viewport)
+  viewport.getBoundingClientRect = () => ({ top: 0, bottom: 400, left: 0, right: 300, width: 300, height: 400, x: 0, y: 0, toJSON: () => ({}) })
+  input.getBoundingClientRect = () => ({ top: 380, bottom: 420, left: 0, right: 100, width: 100, height: 40, x: 0, y: 380, toJSON: () => ({}) })
+  try {
+    scrollElementIntoVisibleBand(input, 12)
+    expect(viewport.scrollTop).toBe(32)
+    expect(tableScroll.scrollTop).toBe(0)
+  } finally {
+    viewport.remove()
+  }
 })

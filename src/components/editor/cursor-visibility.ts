@@ -24,6 +24,10 @@ export function isVerticalScroller({ overflowY, scrollHeight, clientHeight }: { 
 }
 
 function findScrollParent(element: HTMLElement | null): HTMLElement | null {
+  // 表格单元格位于横向滚动层内，WebKit 可能把该层的 overflow-y 计算成 auto，
+  // 并因输入框高度的取整误差把它误判成纵向滚动容器。正文实际只由外层视口滚动。
+  const editorViewport = element?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')
+  if (editorViewport) return editorViewport
   for (let node = element?.parentElement ?? null; node; node = node.parentElement) {
     const { overflowY } = getComputedStyle(node)
     if (isVerticalScroller({ overflowY, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight })) return node

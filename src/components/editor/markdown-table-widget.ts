@@ -1207,6 +1207,7 @@ export class TableWidget extends WidgetType {
     // 键盘动画期间合并事件；跨过 useKeyboardInset 写布局的帧，避免文末单元格
     // 的滚动被旧容器高度截断，必须再输入字符才露出光标。
     let followFrame = 0
+    const editorViewport = input.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')
     const scheduleKeyboardFollow = () => {
       if (followFrame) return
       followFrame = requestAnimationFrame(() => {
@@ -1219,10 +1220,16 @@ export class TableWidget extends WidgetType {
     }
     scheduleKeyboardFollow()
     window.visualViewport?.addEventListener("resize", scheduleKeyboardFollow)
+    // 系统键盘动画与应用缩小编辑区不一定同一帧结束；以实际滚动视口尺寸再校正一次。
+    const viewportObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleKeyboardFollow)
+    if (editorViewport) viewportObserver?.observe(editorViewport)
+    input.addEventListener("input", scheduleKeyboardFollow)
     detachKeyboardFollow = () => {
       if (followFrame) cancelAnimationFrame(followFrame)
       followFrame = 0
       window.visualViewport?.removeEventListener("resize", scheduleKeyboardFollow)
+      viewportObserver?.disconnect()
+      input.removeEventListener("input", scheduleKeyboardFollow)
     }
     input.addEventListener("paste", (event) => {
       const transfer = event.clipboardData
