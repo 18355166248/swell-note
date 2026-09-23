@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 // @vitest-environment jsdom
-import { bottomOverlayHeightFromRects, clampBandByBars, computeScrollAdjustment, isVerticalScroller, scrollElementIntoVisibleBand } from "./cursor-visibility"
+import { bottomOverlayHeightFromRects, clampBandByBars, computeScrollAdjustment, isVerticalScroller, keepTextareaCaretInVisibleBand, scrollElementIntoVisibleBand } from "./cursor-visibility"
 
 // 可视带取编辑器滚动容器与底部工具栏之间的那段，键盘弹起后 bottom 会大幅上移。
 const band = { bottom: 460, top: 60 }
@@ -121,5 +121,31 @@ it("表格横滑层纵向也溢出时，仍滚动编辑器视口以露出输入�
     expect(tableScroll.scrollTop).toBe(0)
   } finally {
     viewport.remove()
+  }
+})
+
+it("原生光标进入工具栏区域时隐藏，返回编辑区后恢复", () => {
+  const editor = document.createElement("div")
+  editor.className = "note-editor"
+  const viewport = document.createElement("div")
+  viewport.dataset.slot = "scroll-area-viewport"
+  const input = document.createElement("textarea")
+  const toolbar = document.createElement("div")
+  toolbar.className = "formatting-toolbar"
+  editor.append(viewport, toolbar)
+  viewport.append(input)
+  document.body.append(editor)
+  viewport.getBoundingClientRect = () => ({ top: 0, bottom: 400, left: 0, right: 300, width: 300, height: 400, x: 0, y: 0, toJSON: () => ({}) })
+  toolbar.getBoundingClientRect = () => ({ top: 360, bottom: 420, left: 0, right: 300, width: 300, height: 60, x: 0, y: 360, toJSON: () => ({}) })
+  let inputTop = 380
+  input.getBoundingClientRect = () => ({ top: inputTop, bottom: inputTop + 40, left: 0, right: 100, width: 100, height: 40, x: 0, y: inputTop, toJSON: () => ({}) })
+  try {
+    keepTextareaCaretInVisibleBand(input, false)
+    expect(input.style.caretColor).toBe("transparent")
+    inputTop = 100
+    keepTextareaCaretInVisibleBand(input, false)
+    expect(input.style.caretColor).toBe("")
+  } finally {
+    editor.remove()
   }
 })

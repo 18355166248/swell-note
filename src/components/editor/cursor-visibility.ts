@@ -108,3 +108,64 @@ export function scrollElementIntoVisibleBand(element: HTMLElement, margin = 12) 
   const delta = computeScrollAdjustment(element.getBoundingClientRect(), resolveVisibleBand(element, scroller), margin)
   if (delta !== 0) scroller.scrollTop += delta
 }
+
+function textareaCaretRect(input: HTMLTextAreaElement): CursorRect {
+  const style = getComputedStyle(input)
+  const inputRect = input.getBoundingClientRect()
+  // textarea 的原生光标没有可读取的 DOM Range。用同宽、同字体的镜像只测光标所在行，
+  // 不改选区和输入法组合态；表格单元格较高时不能拿整个输入框的底边代替光标位置。
+  const mirror = document.createElement("div")
+  Object.assign(mirror.style, {
+    position: "fixed",
+    left: "-10000px",
+    top: "0",
+    visibility: "hidden",
+    boxSizing: style.boxSizing,
+    width: `${inputRect.width}px`,
+    padding: style.padding,
+    border: style.border,
+    fontFamily: style.fontFamily,
+    fontSize: style.fontSize,
+    fontWeight: style.fontWeight,
+    fontStyle: style.fontStyle,
+    lineHeight: style.lineHeight,
+    letterSpacing: style.letterSpacing,
+    textAlign: style.textAlign,
+    textIndent: style.textIndent,
+    whiteSpace: "pre-wrap",
+    overflowWrap: style.overflowWrap,
+    wordBreak: style.wordBreak,
+    tabSize: style.tabSize,
+  })
+  mirror.append(document.createTextNode(input.value.slice(0, input.selectionEnd ?? 0)))
+  const marker = document.createElement("span")
+  marker.textContent = "\u200b"
+  mirror.append(marker)
+  document.body.append(mirror)
+  const markerRect = marker.getBoundingClientRect()
+  const mirrorRect = mirror.getBoundingClientRect()
+  mirror.remove()
+  const lineHeight = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.2 || 24
+  const top = inputRect.top + markerRect.top - mirrorRect.top - input.scrollTop
+  return { top, bottom: top + lineHeight }
+}
+
+// WKWebView 的原生插入光标可能独立于 DOM 层级绘制，z-index 盖不住它。
+// 先把光标所在行滚回编辑区；若滚动已到极限或动画尚未结束，暂时关掉原生 caret，
+// 滚动/布局变化后再测量并恢复，避免蓝色竖线画到快捷操作栏上。
+export function keepTextareaCaretInVisibleBand(input: HTMLTextAreaElement, scroll = true): boolean {
+  const scroller = findScrollParent(input)
+  if (!scroller) return false
+  const band = resolveVisibleBand(input, scroller)
+  const caret = textareaCaretRect(input)
+  const before = scroller.scrollTop
+  if (scroll) {
+    const delta = computeScrollAdjustment(caret, band, 12)
+    if (delta !== 0) scroller.scrollTop += delta
+  }
+  const moved = Math.abs(scroller.scrollTop - before) > 0.5
+  const visible = caret.top >= band.top && caret.bottom <= band.bottom
+  if (visible) input.style.removeProperty("caret-color")
+  else input.style.caretColor = "transparent"
+  return moved
+}
