@@ -133,7 +133,7 @@ export function DocumentContextMenu(props: Props) {
           {viewAction.nextMode === "unified" ? <PencilLine /> : <LockKeyhole />}{viewAction.label}
         </ContextMenuItem>
         <ContextMenuItem onSelect={props.onToggleStar}><Star />{props.starred ? "取消收藏" : "收藏笔记"}</ContextMenuItem>
-        <ContextMenuItem onSelect={props.onExport}><Download />导出 Markdown 文件</ContextMenuItem>
+        <ContextMenuItem onSelect={props.onExport}><Download />导出笔记与附件包</ContextMenuItem>
         <ContextMenuItem disabled={!props.canHistory} onSelect={props.onHistory}><History />本地版本历史</ContextMenuItem>
         </>}
       </ContextMenuContent>

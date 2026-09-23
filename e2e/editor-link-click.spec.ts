@@ -1,4 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test"
+import { readFile } from "node:fs/promises"
+import { strFromU8, unzipSync } from "fflate"
 
 import { useCompatibilityPreview } from "./note-view-mode"
 
@@ -464,7 +466,7 @@ test.describe("编辑细节", () => {
     await expect(page.getByRole("menuitem", { name: "新建笔记", exact: true })).toBeVisible()
     await page.keyboard.press("Escape")
     await page.locator(".markdown-preview").click({ button: "right" })
-    await expect(page.getByRole("menuitem", { name: "导出 Markdown 文件", exact: true })).toBeVisible()
+    await expect(page.getByRole("menuitem", { name: "导出笔记与附件包", exact: true })).toBeVisible()
     await page.getByRole("menuitem", { name: "全选正文", exact: true }).click()
     expect(await page.evaluate(() => window.getSelection()?.toString())).toContain("用于阅读的正文")
     await expect(page.getByRole("menu")).toHaveCount(0)
@@ -474,6 +476,33 @@ test.describe("编辑细节", () => {
       return event.defaultPrevented
     })
     expect(prevented).toBe(true)
+  })
+
+  test("单篇导出包包含离线附件，并列明外链和缺失项", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedCachedVault(page, "[报告](../attachments/report.pdf)\n![缺图](../attachments/lost.png)\n[官网](https://example.com)")
+    await page.evaluate(async () => {
+      const request = indexedDB.open("swell-note-vault-cache", 3)
+      const database = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+      const path = "/Swell/attachments/report.pdf"
+      const transaction = database.transaction("attachments", "readwrite")
+      transaction.objectStore("attachments").put({
+        cacheId: "e2e-vault", createdAt: Date.now(), data: new Uint8Array([1, 2, 3]).buffer,
+        key: `e2e-vault\u0000${path}`, noteId: "webdav:/Swell/测试/第一篇.md", path, status: "synced",
+      })
+      await new Promise<void>((resolve, reject) => { transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error) })
+      database.close()
+    })
+    await page.getByRole("button", { name: "更多操作", exact: true }).click()
+    const downloadPromise = page.waitForEvent("download")
+    await page.getByRole("menuitem", { name: "导出笔记与附件包", exact: true }).click()
+    const download = await downloadPromise
+    const archive = unzipSync(new Uint8Array(await readFile(await download.path())))
+    expect(download.suggestedFilename()).toBe("第一篇.zip")
+    expect(strFromU8(archive["Swell/测试/第一篇.md"])).toContain("https://example.com")
+    expect([...archive["Swell/attachments/report.pdf"]]).toEqual([1, 2, 3])
+    expect(strFromU8(archive["导出清单.txt"])).toContain("https://example.com")
+    expect(strFromU8(archive["导出清单.txt"])).toContain("lost.png（未找到附件）")
   })
 
   test("单元格默认续写，长表格工具条常驻并吸顶", async ({ page }, testInfo) => {

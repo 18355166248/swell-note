@@ -2559,7 +2559,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
               {note.remotePath && isExcalidrawMarkdown(note.content) ? (
                 <DropdownMenuItem onClick={onOpenSourceFile}>打开 / 下载 Excalidraw 原始文件</DropdownMenuItem>
               ) : null}
-              <DropdownMenuItem onClick={onExportNote}>导出 Markdown 文件</DropdownMenuItem>
+              <DropdownMenuItem onClick={onExportNote}>导出笔记与附件包</DropdownMenuItem>
               <DropdownMenuItem disabled={!activeCacheId} onClick={() => setHistoryDialogOpen(true)}>
                 <History /> 本地版本历史
               </DropdownMenuItem>

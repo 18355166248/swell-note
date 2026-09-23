@@ -38,3 +38,32 @@ export async function exportMarkdownDocument(content: string, suggestedName: str
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
   return true
 }
+
+export async function exportNoteBundle(data: Uint8Array, suggestedName: string) {
+  const filename = markdownExportFilename(suggestedName).replace(/\.md$/i, ".zip")
+  if (isTauri()) {
+    const [{ save }, { writeFile }] = await Promise.all([
+      import("@tauri-apps/plugin-dialog"),
+      import("@tauri-apps/plugin-fs"),
+    ])
+    const path = await save({
+      defaultPath: filename,
+      filters: [{ extensions: ["zip"], name: "ZIP" }],
+      title: "导出笔记与附件包",
+    })
+    if (!path) return false
+    await writeFile(path, data)
+    return true
+  }
+
+  const url = URL.createObjectURL(new Blob([data.slice().buffer], { type: "application/zip" }))
+  const anchor = document.createElement("a")
+  anchor.download = filename
+  anchor.href = url
+  anchor.hidden = true
+  document.body.append(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
+  return true
+}

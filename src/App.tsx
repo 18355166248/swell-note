@@ -38,6 +38,7 @@ import {
   type VaultFileEntry,
 } from "@/services/vault/vault-adapter"
 import { resolveVaultAssetPath } from "@/services/vault/vault-path"
+import { buildAttachmentHref } from "@/services/vault/attachment-path"
 import { LocalSaveCoordinator } from "@/services/vault/local-save-coordinator"
 import {
   appendBlockMarkdown,
@@ -133,7 +134,8 @@ import { buildNotePreview } from "@/services/markdown/note-preview"
 import { remapNoteVersions, saveNoteVersion } from "@/services/history/note-history"
 import { backupFilename, createVaultBackup, parseVaultBackup } from "@/services/backup/vault-backup"
 import { extractAttachmentSources } from "@/services/vault/attachment-maintenance"
-import { exportMarkdownDocument } from "@/services/export/markdown-export"
+import { exportNoteBundle } from "@/services/export/markdown-export"
+import { createNoteExportBundle } from "@/services/export/note-export-bundle"
 import { MAX_MARKDOWN_IMPORT_BYTES, sanitizeImportedMarkdownName, uniqueMarkdownPath } from "@/services/import/markdown-import"
 import {
   deleteWebDavPassword,
@@ -4083,11 +4085,31 @@ function App() {
       setVaultError("正文尚未加载，暂时不能导出")
       return
     }
+    if (!activeNote.remotePath || !activeCacheMeta) {
+      setVaultError("当前笔记没有可导出的 Vault 路径")
+      return
+    }
+    const note = activeNote
+    const remotePath = activeNote.remotePath
+    const cacheId = activeCacheMeta.id
+    const notePath = toBackupDisplayPath(remotePath)
+    setIsManagingNote(true)
     try {
       setVaultError(null)
-      await exportMarkdownDocument(activeNote.content, activeNote.remotePath?.split("/").pop() ?? activeNote.title)
+      const result = await createNoteExportBundle({
+        content: note.content,
+        notePath,
+        readAsset: (displayPath) => resolveNoteAsset(note.id, buildAttachmentHref(notePath, displayPath)),
+      })
+      if (activeCacheIdRef.current !== cacheId) throw new Error("笔记库已切换，导出已取消，请重新操作")
+      const exported = await exportNoteBundle(result.archive, remotePath.split("/").pop() ?? note.title)
+      if (exported && result.missingAttachments.length) {
+        setVaultError(`导出包已生成，但有 ${result.missingAttachments.length} 个附件未包含；详情见包内“${result.reportPath}”`)
+      }
     } catch (error) {
-      setVaultError(error instanceof Error ? error.message : "导出 Markdown 失败")
+      setVaultError(error instanceof Error ? error.message : "导出笔记与附件包失败")
+    } finally {
+      setIsManagingNote(false)
     }
   }
 
