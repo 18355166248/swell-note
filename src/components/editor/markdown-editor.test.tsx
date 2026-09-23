@@ -115,7 +115,7 @@ describe("MarkdownEditor", () => {
     }
   })
 
-  it("iOS 实际组件保留原生选区，不挂 CodeMirror 自绘层", () => {
+  it("iOS 实际组件使用自绘光标和选区", () => {
     setNavigatorPlatform({
       maxTouchPoints: 5,
       platform: "iPhone",
@@ -124,9 +124,9 @@ describe("MarkdownEditor", () => {
     mount(<MarkdownEditor onChange={() => {}} value={"第一行\n第二行"} />)
     const view = editorView()
 
-    expect(view.dom.dataset.selectionRendering).toBe("native")
-    expect(view.dom.querySelector(".cm-selectionLayer")).toBeNull()
-    expect(view.dom.querySelector(".cm-cursorLayer")).toBeNull()
+    expect(view.dom.dataset.selectionRendering).toBe("drawn")
+    expect(view.dom.querySelector(".cm-selectionLayer")).not.toBeNull()
+    expect(view.dom.querySelector(".cm-cursorLayer")).not.toBeNull()
   })
 
   function pasteEvent(data: { files?: File[]; html?: string; itemFiles?: File[]; text?: string }) {

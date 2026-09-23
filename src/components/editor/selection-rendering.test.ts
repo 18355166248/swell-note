@@ -3,20 +3,8 @@ import { EditorView, getDrawSelectionConfig } from "@codemirror/view"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { selectionRenderingExtensions, shouldDrawCodeMirrorSelection } from "./selection-rendering"
+import { selectionRenderingExtensions } from "./selection-rendering"
 import { markdownLivePreview } from "./live-preview"
-
-const macOS = {
-  maxTouchPoints: 0,
-  platform: "MacIntel",
-  userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)",
-}
-
-const iPhone = {
-  maxTouchPoints: 5,
-  platform: "iPhone",
-  userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)",
-}
 
 let host: HTMLElement | null = null
 
@@ -25,12 +13,12 @@ afterEach(() => {
   host = null
 })
 
-function createView(platform: typeof macOS) {
+function createView() {
   host = document.createElement("div")
   document.body.appendChild(host)
   return new EditorView({
     doc: "第一行\n第二行",
-    extensions: [selectionRenderingExtensions(platform)],
+    extensions: [selectionRenderingExtensions()],
     parent: host,
     selection: { anchor: 0, head: 3 },
   })
@@ -38,7 +26,7 @@ function createView(platform: typeof macOS) {
 
 describe("CodeMirror selection rendering", () => {
   it("桌面端启用自绘选区，并隐藏非空范围尾部的额外光标", () => {
-    const view = createView(macOS)
+    const view = createView()
 
     expect(view.dom.dataset.selectionRendering).toBe("drawn")
     expect(view.dom.querySelector(".cm-selectionLayer")).not.toBeNull()
@@ -47,23 +35,22 @@ describe("CodeMirror selection rendering", () => {
     view.destroy()
   })
 
-  it("iOS 使用原生选区，不挂 CodeMirror 自绘层", () => {
-    const view = createView(iPhone)
+  it("iOS 使用自绘光标，并保留 CodeMirror 的 iOS 选区手柄", () => {
+    const view = createView()
 
-    expect(shouldDrawCodeMirrorSelection(iPhone)).toBe(false)
-    expect(view.dom.dataset.selectionRendering).toBe("native")
-    expect(view.dom.querySelector(".cm-selectionLayer")).toBeNull()
-    expect(view.dom.querySelector(".cm-cursorLayer")).toBeNull()
+    expect(view.dom.dataset.selectionRendering).toBe("drawn")
+    expect(view.dom.querySelector(".cm-selectionLayer")).not.toBeNull()
+    expect(view.dom.querySelector(".cm-cursorLayer")).not.toBeNull()
+    expect(getDrawSelectionConfig(view.state).iosSelectionHandles).toBe(true)
 
     view.destroy()
   })
 
   it.each([
-    ["iOS", iPhone, "开头\n\n", "\n\n结尾"],
-    ["桌面首表", macOS, "", "\n\n结尾"],
-    ["桌面尾表", macOS, "开头\n\n", ""],
-    ["桌面仅表格", macOS, "", ""],
-  ] as const)("%s 全选覆盖异步挂载的整表，局部选择与收起时清除补充高亮", async (_name, platform, before, after) => {
+    ["首表", "", "\n\n结尾"],
+    ["尾表", "开头\n\n", ""],
+    ["仅表格", "", ""],
+  ] as const)("%s 全选覆盖异步挂载的整表，局部选择与收起时清除补充高亮", async (_name, before, after) => {
     const doc = `${before}| 名称 | 状态 |\n| --- | --- |\n| 苹果 | 新鲜 |${after}`
     host = document.createElement("div")
     document.body.appendChild(host)
@@ -71,7 +58,7 @@ describe("CodeMirror selection rendering", () => {
       parent: host,
       doc,
       selection: { anchor: doc.length, head: 0 },
-      extensions: [markdown({ base: markdownLanguage }), markdownLivePreview(), selectionRenderingExtensions(platform)],
+      extensions: [markdown({ base: markdownLanguage }), markdownLivePreview(), selectionRenderingExtensions()],
     })
     try {
       await vi.waitFor(() => expect(view.contentDOM.querySelector(".cm-md-table-wrap[data-document-selected]")).not.toBeNull())

@@ -28,9 +28,8 @@ import { ImageZoomOverlay } from "./image-zoom"
 import { commitOpenRichEditors } from "./unified-rich-block"
 import { activeTableEdit, type TableEditTarget } from "./table-edit-target"
 import { selectionRenderingExtensions } from "./selection-rendering"
+import { installTextareaDrawnCaret } from "./textarea-drawn-caret"
 import "./markdown-table.css"
-
-export { shouldDrawCodeMirrorSelection } from "./selection-rendering"
 
 // 链接面板在表格单元格编辑中打开时的现场快照：保存前校验单元格内容未变，
 // 取消时据此把焦点与选区还给单元格 textarea。
@@ -203,6 +202,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     // 编辑器所在区域被卸载 / 隐藏时要撤回选区状态，
     // 否则切回来时选区操作条会带着上一次的选区状态出现。
     useEffect(() => () => handlers.current.onSelectionChange?.(false), [])
+
+    useEffect(() => {
+      const iosDevice = /iPad|iPhone|iPod/i.test(navigator.userAgent)
+        || (/MacIntel/i.test(navigator.platform) && navigator.maxTouchPoints > 1)
+      if (!compact || !iosDevice) return
+      const host = hostRef.current
+      return host ? installTextareaDrawnCaret(host) : undefined
+    }, [compact])
 
     // 键盘升起会把可视区压掉一半，此前落在下半屏的光标就藏到了键盘后面。
     // useKeyboardInset 也在 rAF 写布局，子组件监听可能先执行；同一帧滚文末会被旧的

@@ -862,8 +862,6 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
    平台条件不增加优先级，让下方 textarea 规则仍能恢复局部编辑的系统选区。 */
 .markdown-editor-shell :where(.cm-editor[data-selection-rendering="drawn"]) .cm-content::selection,
 .markdown-editor-shell :where(.cm-editor[data-selection-rendering="drawn"]) .cm-content ::selection { background: transparent !important; }
-.markdown-editor-shell .cm-editor[data-selection-rendering="native"] .cm-content::selection,
-.markdown-editor-shell .cm-editor[data-selection-rendering="native"] .cm-content ::selection { background: color-mix(in oklab,var(--primary) 18%,transparent); }
 /* 行内表格/富块编辑框必须保留系统 textarea 选区，覆盖 CodeMirror 隐藏原生选区主题可能命中的 widget 后代。 */
 .markdown-editor-shell .cm-md-table-cell-input::selection,
 .markdown-editor-shell .cm-md-compat-editor textarea::selection,
@@ -1304,9 +1302,14 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .note-editor[data-compact="true"] .markdown-table-shell[data-overflow="true"][data-at-start="true"] .markdown-table-scroll-hint { opacity: 1; transform: translateX(0); }
   .note-editor[data-compact="true"] .markdown-editor-shell .cm-editor { font-size: var(--editor-font-size,16px); }
   .note-editor[data-compact="true"] .markdown-editor-shell .cm-scroller { line-height: 1.8; }
-  /* 正文与格式栏同在 WKWebView：iOS 原生插入光标不一定遵守兄弟元素的 z-index。
-     在正文容器的边界裁切整个绘制层，让光标保持原生显示，但不能画进下方快捷栏。 */
+  /* 正文与格式栏同在 WKWebView：自绘光标留在正文绘制层，并在边界裁切，
+     滚动到快捷栏下方时不会覆盖工具栏。 */
   .note-editor[data-compact="true"] .editor-body { position: relative; z-index: 0; isolation: isolate; overflow: hidden; clip-path: inset(0); }
+  /* Widget 的 textarea 仍负责键盘和输入法；只有收起的系统光标由定位在正文层的 DOM 光标替代。 */
+  .note-editor[data-compact="true"] .markdown-editor-shell textarea[data-drawn-caret="true"] { caret-color: transparent !important; }
+  .editor-textarea-drawn-caret { position: absolute; z-index: 2; width: 2px; pointer-events: none; background: var(--primary); animation: editor-textarea-caret-blink 1.2s steps(1) infinite; }
+  .editor-textarea-drawn-caret[hidden] { display: none; }
+  @keyframes editor-textarea-caret-blink { 50% { opacity: 0; } }
   .excalidraw-plugin .App-toolbar-container { max-width: calc(100vw - 20px); overflow-x: auto; scrollbar-width: none; }
   .excalidraw-plugin .App-toolbar-container::-webkit-scrollbar { display: none; }
   .excalidraw-plugin .App-toolbar-container .ToolIcon__icon { height: 40px !important; }
