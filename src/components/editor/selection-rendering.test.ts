@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { EditorView, getDrawSelectionConfig } from "@codemirror/view"
-import { afterEach, describe, expect, it } from "vitest"
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { selectionRenderingExtensions, shouldDrawCodeMirrorSelection } from "./selection-rendering"
+import { markdownLivePreview } from "./live-preview"
 
 const macOS = {
   maxTouchPoints: 0,
@@ -54,6 +56,37 @@ describe("CodeMirror selection rendering", () => {
     expect(view.dom.querySelector(".cm-cursorLayer")).toBeNull()
 
     view.destroy()
+  })
+
+  it.each([
+    ["iOS", iPhone, "开头\n\n", "\n\n结尾"],
+    ["桌面首表", macOS, "", "\n\n结尾"],
+    ["桌面尾表", macOS, "开头\n\n", ""],
+    ["桌面仅表格", macOS, "", ""],
+  ] as const)("%s 全选覆盖异步挂载的整表，局部选择与收起时清除补充高亮", async (_name, platform, before, after) => {
+    const doc = `${before}| 名称 | 状态 |\n| --- | --- |\n| 苹果 | 新鲜 |${after}`
+    host = document.createElement("div")
+    document.body.appendChild(host)
+    const view = new EditorView({
+      parent: host,
+      doc,
+      selection: { anchor: doc.length, head: 0 },
+      extensions: [markdown({ base: markdownLanguage }), markdownLivePreview(), selectionRenderingExtensions(platform)],
+    })
+    try {
+      await vi.waitFor(() => expect(view.contentDOM.querySelector(".cm-md-table-wrap[data-document-selected]")).not.toBeNull())
+      const table = view.contentDOM.querySelector<HTMLElement>(".cm-md-table-wrap")!
+      const from = Number(table.dataset.tableFrom)
+      const to = Number(table.dataset.tableTo)
+      view.dispatch({ selection: { anchor: from + 1, head: to } })
+      expect(table.hasAttribute("data-document-selected")).toBe(false)
+      view.dispatch({ selection: { anchor: from, head: to } })
+      expect(table.hasAttribute("data-document-selected")).toBe(true)
+      view.dispatch({ selection: { anchor: to } })
+      expect(table.hasAttribute("data-document-selected")).toBe(false)
+    } finally {
+      view.destroy()
+    }
   })
 
 })

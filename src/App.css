@@ -855,9 +855,14 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 /* 正文下方的空白必须属于文本层：正文只有一张表格时，它是唯一能落下光标的地方。 */
 .markdown-editor-shell .cm-content { min-height: var(--editor-min-height); padding: 0; caret-color: var(--primary); }
 .markdown-editor-shell .cm-line { padding: 0; }
+/* CodeMirror 默认把选区放在正文背后，代码行和表格的不透明底色会把它遮住。
+   将半透明选区提到正文上方，并让指针穿透，保留点按落光标和表格编辑。 */
+.markdown-editor-shell .cm-editor[data-selection-rendering="drawn"] .cm-selectionLayer { z-index: 1 !important; pointer-events: none; }
 .markdown-editor-shell .cm-editor[data-selection-rendering="drawn"] .cm-selectionBackground { background: color-mix(in oklab,var(--primary) 18%,transparent) !important; }
-/* 自绘选区只给 CodeMirror 的 selection layer 上色；正文根的原生选区保持透明，避免文末 min-height 空白被拖成大蓝块。 */
-.markdown-editor-shell .cm-editor[data-selection-rendering="drawn"] .cm-content::selection { background: transparent !important; }
+/* 表格 Widget 也会产生原生选区，统一隐藏以免与上层自绘高亮叠色。
+   平台条件不增加优先级，让下方 textarea 规则仍能恢复局部编辑的系统选区。 */
+.markdown-editor-shell :where(.cm-editor[data-selection-rendering="drawn"]) .cm-content::selection,
+.markdown-editor-shell :where(.cm-editor[data-selection-rendering="drawn"]) .cm-content ::selection { background: transparent !important; }
 .markdown-editor-shell .cm-editor[data-selection-rendering="native"] .cm-content::selection,
 .markdown-editor-shell .cm-editor[data-selection-rendering="native"] .cm-content ::selection { background: color-mix(in oklab,var(--primary) 18%,transparent); }
 /* 行内表格/富块编辑框必须保留系统 textarea 选区，覆盖 CodeMirror 隐藏原生选区主题可能命中的 widget 后代。 */

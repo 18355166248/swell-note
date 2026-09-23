@@ -16,5 +16,19 @@ export function selectionRenderingExtensions(platform?: SelectionPlatform): Exte
   return [
     EditorView.editorAttributes.of({ "data-selection-rendering": rendering }),
     rendering === "drawn" ? drawSelection({ drawRangeCursor: false }) : [],
+    EditorView.updateListener.of(({ view }) => syncTableSelection(view)),
   ]
+}
+
+function syncTableSelection(view: EditorView) {
+  // iOS 原生 Range 不会可靠染色整表 Widget；桌面自绘也会跳过选区首尾的块级 Widget。
+  // 在 DOM 更新后按源码范围补齐整表选中态，滚动挂载的新表格也能同步；
+  // 仅覆盖完整表格时染色，避免把局部文字选区误显示成整表全选。
+  for (const table of view.contentDOM.querySelectorAll<HTMLElement>(".cm-md-table-wrap")) {
+    const from = Number(table.dataset.tableFrom)
+    const to = Number(table.dataset.tableTo)
+    const selected = Number.isFinite(from) && Number.isFinite(to) && to > from
+      && view.state.selection.ranges.some((range) => range.from <= from && range.to >= to)
+    table.toggleAttribute("data-document-selected", selected)
+  }
 }
