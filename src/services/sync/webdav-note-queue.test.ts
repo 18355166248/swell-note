@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import { syncWebDavNoteQueue } from "./webdav-note-queue"
 import { VaultConflictError, type VaultAdapter } from "@/services/vault/vault-adapter"
-import { loadVaultCache, saveVaultCache, saveVaultNoteQueueCheckpoint } from "@/services/cache/vault-cache"
+import { loadLastVaultCache, loadVaultCache, saveVaultCache, saveVaultNoteQueueCheckpoint, saveVaultWorkingCopyEdit } from "@/services/cache/vault-cache"
 import type { Note } from "@/types/note"
 
 function note(id: string, patch: Partial<Note> = {}): Note {
@@ -39,6 +39,61 @@ function adapter(patch: Partial<VaultAdapter> = {}): VaultAdapter {
 }
 
 describe("syncWebDavNoteQueue", () => {
+  it("慢 PUT 期间继续输入后，远端只收到起始快照，新正文携新 ETag 留在队列", async () => {
+    const original = note("slow", { content: "上传快照", localEditSequence: 1 })
+    const cacheId = "live-put-success"
+    await saveVaultCache({ activeNoteId: original.id, id: cacheId, label: "慢上传", notes: [original], savedAt: 1, sourceKind: "webdav" })
+    let finishUpload!: (value: { revision: string }) => void
+    const writeTextFile = vi.fn(() => new Promise<{ revision: string }>((resolve) => { finishUpload = resolve }))
+    const syncing = syncWebDavNoteQueue({
+      adapter: adapter({ writeTextFile }),
+      notes: [original],
+      onCheckpoint: async (checkpoint) => (await saveVaultNoteQueueCheckpoint(cacheId, checkpoint)).notes,
+    })
+    expect(writeTextFile).toHaveBeenCalledWith(original.remotePath, "上传快照", '"v1"')
+    await saveVaultWorkingCopyEdit(cacheId, { ...original, content: "继续输入", localEditSequence: 2, preview: "继续输入" })
+    finishUpload({ revision: '"v2"' })
+    await syncing
+    await expect(loadVaultCache(cacheId, { hydrate: "all" })).resolves.toMatchObject({
+      notes: [expect.objectContaining({ baseContent: "上传快照", content: "继续输入", revision: '"v2"', syncStatus: "modified" })],
+    })
+  })
+
+  it("上传时改回相同正文仍保留新的编辑意图，切库不改变来源库指针", async () => {
+    const original = note("revert", { content: "原文", localEditSequence: 4 })
+    const cacheId = "live-put-switch"
+    await saveVaultCache({ activeNoteId: original.id, id: cacheId, label: "来源库", notes: [original], savedAt: 1, sourceKind: "webdav" })
+    await saveVaultWorkingCopyEdit(cacheId, { ...original, content: "中间输入", localEditSequence: 5 })
+    await saveVaultWorkingCopyEdit(cacheId, { ...original, content: "原文", localEditSequence: 6 })
+    await saveVaultCache({ activeNoteId: "", id: "other", label: "当前库", notes: [], savedAt: 2, sourceKind: "webdav" })
+    await saveVaultNoteQueueCheckpoint(cacheId, { note: { ...original, revision: '"v2"' }, type: "synced" })
+    await expect(loadVaultCache(cacheId, { hydrate: "all" })).resolves.toMatchObject({
+      notes: [expect.objectContaining({ content: "原文", localEditSequence: 6, revision: '"v2"', syncStatus: "modified" })],
+    })
+    await expect(loadLastVaultCache()).resolves.toMatchObject({ id: "other" })
+  })
+
+  it("检查点之后到刷新前的输入保留刚上传的基线和版本", async () => {
+    const original = note("late", { content: "上传快照", localEditSequence: 1 })
+    const cacheId = "live-put-late"
+    await saveVaultCache({ activeNoteId: original.id, id: cacheId, label: "末尾输入", notes: [original], savedAt: 1, sourceKind: "webdav" })
+    await saveVaultNoteQueueCheckpoint(cacheId, { note: { ...original, revision: '"v2"' }, type: "synced" })
+    await saveVaultWorkingCopyEdit(cacheId, { ...original, content: "最后输入", localEditSequence: 2 })
+    await expect(loadVaultCache(cacheId, { hydrate: "all" })).resolves.toMatchObject({
+      notes: [expect.objectContaining({ baseContent: "上传快照", content: "最后输入", revision: '"v2"', syncStatus: "modified" })],
+    })
+  })
+
+  it("冲突检查点保留上传期间写入的本地正文", async () => {
+    const original = note("conflict", { content: "旧正文", localEditSequence: 1 })
+    const cacheId = "live-put-conflict"
+    await saveVaultCache({ activeNoteId: original.id, id: cacheId, label: "冲突库", notes: [original], savedAt: 1, sourceKind: "webdav" })
+    await saveVaultWorkingCopyEdit(cacheId, { ...original, content: "新输入", localEditSequence: 2 })
+    await saveVaultNoteQueueCheckpoint(cacheId, { note: { ...original, syncStatus: "conflict" }, type: "failed" })
+    await expect(loadVaultCache(cacheId, { hydrate: "all" })).resolves.toMatchObject({
+      notes: [expect.objectContaining({ content: "新输入", syncStatus: "conflict" })],
+    })
+  })
   it("单篇网络失败不会阻断后续笔记，失败项仍留在重试队列", async () => {
     const writeTextFile = vi.fn()
       .mockRejectedValueOnce(new Error("网络中断"))

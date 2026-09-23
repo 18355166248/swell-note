@@ -187,6 +187,7 @@ type WorkspaceProps = {
   missingNoteRoute: boolean
   missingNoteSuggestions: Note[]
   isRefreshingVault: boolean
+  syncEditableCacheId: string | null
   libraryView: LibraryView
   loadingNoteIds: ReadonlySet<string>
   localVaultSupported: boolean
@@ -292,13 +293,13 @@ export function handleNoteViewModeShortcut(event: KeyboardEvent, currentMode: No
   onChange(nextMode)
 }
 
-export function resolveWriteProtected(fileReadOnly: boolean, source: Note["source"], saveStatus: NoteSaveState["status"]) {
-  // 本地 saving 是后台自动写盘，仍可继续输入；WebDAV saving 是显式同步，期间保留快照写保护。
-  return fileReadOnly || (source === "webdav" && saveStatus === "saving")
+export function resolveWriteProtected(fileReadOnly: boolean, source: Note["source"], saveStatus: NoteSaveState["status"], allowSyncEditing = false) {
+  // 上传固定快照期间正文可继续编辑；其他同步阶段及原本只读文件仍受保护。
+  return fileReadOnly || (source === "webdav" && saveStatus === "saving" && !allowSyncEditing)
 }
 
-export function resolveEditorReadOnly(fileReadOnly: boolean, source: Note["source"], viewMode: NoteViewMode, saveStatus: NoteSaveState["status"]) {
-  return resolveWriteProtected(fileReadOnly, source, saveStatus) || viewMode === "locked"
+export function resolveEditorReadOnly(fileReadOnly: boolean, source: Note["source"], viewMode: NoteViewMode, saveStatus: NoteSaveState["status"], allowSyncEditing = false) {
+  return resolveWriteProtected(fileReadOnly, source, saveStatus, allowSyncEditing) || viewMode === "locked"
 }
 
 export function Workspace(props: WorkspaceProps) {
@@ -673,6 +674,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           onToggleTask={toggleActiveNoteTask}
           saveState={props.saveState}
           syncing={props.isRefreshingVault}
+          allowSyncEditing={props.syncEditableCacheId === props.activeCacheId}
         />
       ) : <EmptyNoteEditor canCreateNote={props.canCreateNote} canRefresh={Boolean(props.activeCacheId)} hasNotes={props.totalNoteCount > 0} isLoading={props.isRefreshingVault} missing={props.missingNoteRoute} onBack={props.missingNoteRoute ? () => { void props.onMobileBack("/notes/view/all", false) } : undefined} onOpenSettings={props.onOpenSettings} onRefresh={props.onRefreshVault} onSelectNote={props.onSelectNote} suggestions={props.missingNoteSuggestions} />}
       <ContextMenuRequestDialog
@@ -1861,6 +1863,7 @@ type NoteEditorProps = {
   onUpdateNote: (patch: Partial<Note>) => void
   saveState: NoteSaveState
   syncing: boolean
+  allowSyncEditing: boolean
   wikiLinkNotes: Note[]
 }
 
@@ -1903,22 +1906,23 @@ function alignPreviewToSourceLine(viewport: HTMLElement, article: HTMLElement | 
 
 // 搜索、切目录、展开侧栏统统与正文无关，但它们每一次都把编辑器整棵子树重画一遍
 // （实测搜索敲 6 个字，编辑器白渲染 11 次）。上面已经把入参固定住，这里收口。
-const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, attachmentQueue, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, markdownSourceMode, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onLoadWikiNote, onMarkdownSourceModeChange, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onRestoreNoteVersionAsCopy, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
+const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allowSyncEditing, attachmentQueue, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, markdownSourceMode, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onLoadWikiNote, onMarkdownSourceModeChange, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onRestoreNoteVersionAsCopy, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
   const noteRenderIdentity = note.editorSessionKey ?? stableNoteRenderIdentity(note.id, note.remotePath)
   const assetScope = `${activeCacheId ?? "session"}:${noteRenderIdentity}`
-  // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
+  // 同步上传使用固定快照；期间的新输入由 App 记录到来源库工作副本。
   const isCanvas = note.format === "canvas"
   const isExcalidraw = isExcalidrawMarkdown(note.content)
   const isSpecialPreview = isCanvas || isExcalidraw
-  const fileReadOnly = isCanvas || (note.readOnly ?? note.source === "webdav")
-  const writeProtected = resolveWriteProtected(fileReadOnly, note.source, saveState.status)
+  const webDavNote = note.source === "webdav"
+  const fileReadOnly = isCanvas || (note.readOnly ?? webDavNote) || (syncing && webDavNote && !allowSyncEditing)
+  const writeProtected = resolveWriteProtected(fileReadOnly, note.source, saveState.status, allowSyncEditing)
   const editorRef = useRef<MarkdownEditorHandle>(null)
   const editorArticleRef = useRef<HTMLElement>(null)
   const dismissSelectionOriginRef = useRef<PointerOrigin | null>(null)
   const editorViewportRef = useRef<HTMLDivElement>(null)
   // locked 只切换同一个 CodeMirror 的可写能力，不更换正文组件，滚动、选区与撤销历史因此都能保留。
   const viewLocked = noteViewMode === "locked"
-  const editorReadOnly = resolveEditorReadOnly(fileReadOnly, note.source, noteViewMode, saveState.status)
+  const editorReadOnly = resolveEditorReadOnly(fileReadOnly, note.source, noteViewMode, saveState.status, allowSyncEditing)
   // 特殊画布始终使用专属预览；preview 仅承接旧偏好和低频兼容阅读入口。
   const previewing = isSpecialPreview || noteViewMode === "preview"
   const viewAction = getNoteViewModeAction(noteViewMode)
@@ -2779,7 +2783,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
                 if (event.key === "Enter" && !viewLocked) editorRef.current?.focus()
               }}
               placeholder="输入标题"
-              readOnly={viewLocked}
+              readOnly={viewLocked || (syncing && note.source === "webdav")}
               rows={1}
               value={isVaultNote ? titleDraft : note.title}
             />
@@ -3396,6 +3400,7 @@ function MobileRouteEntryPage({ active, backLabel, canGoBack, entry, navigationO
       onUpdateNote={routeProps.onUpdateNote}
       saveState={routeProps.saveState}
       syncing={routeProps.isRefreshingVault}
+      allowSyncEditing={routeProps.syncEditableCacheId === routeProps.activeCacheId}
       wikiLinkNotes={routeProps.allNotes}
     />
   )

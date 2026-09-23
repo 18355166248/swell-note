@@ -7,6 +7,8 @@ export type Note = {
   content: string
   updatedAt: string
   modifiedAt?: number
+  // 本机正文编辑序号；上传期间即使改回相同文字，也能识别快照之后的输入。
+  localEditSequence?: number
   starred: boolean
   // 与收藏独立；WebDAV 库通过 .swell/note-pins.json 同步，旧缓存默认未置顶。
   pinned?: boolean

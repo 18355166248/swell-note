@@ -51,9 +51,11 @@ describe("background save editability", () => {
     expect(value).toBe("DESKTOP-OK")
   })
 
-  it("WebDAV 显式同步期间仍保护快照，本地待保存状态不锁正文", () => {
+  it("WebDAV 仅在上传窗口开放正文，其他同步阶段仍锁定", () => {
     expect(resolveEditorReadOnly(false, "local", "unified", "saving")).toBe(false)
     expect(resolveEditorReadOnly(false, "webdav", "unified", "pending")).toBe(false)
     expect(resolveEditorReadOnly(false, "webdav", "unified", "saving")).toBe(true)
+    expect(resolveEditorReadOnly(false, "webdav", "unified", "saving", true)).toBe(false)
+    expect(resolveEditorReadOnly(true, "webdav", "unified", "saving", true)).toBe(true)
   })
 })

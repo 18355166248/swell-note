@@ -1,4 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
+import { flushSync } from "react-dom"
 import { Navigate, Route, Routes, useLocation, useMatch, useNavigate } from "react-router-dom"
 
 import { Workspace, type LibraryView } from "@/components/workspace/workspace"
@@ -74,6 +75,7 @@ import {
   remapVaultAttachmentNoteId,
   saveVaultCache,
   saveVaultNoteQueueCheckpoint,
+  saveVaultWorkingCopyEdit,
   searchCachedNoteDocuments,
   hydrateNoteFromCachedDocument,
   isIndexedDbConnectionLostError,
@@ -394,6 +396,7 @@ function App() {
   const [isManagingNote, setIsManagingNote] = useState(false)
   const [isOpeningVault, setIsOpeningVault] = useState(false)
   const [isRefreshingVault, setIsRefreshingVault] = useState(false)
+  const [syncEditableCacheId, setSyncEditableCacheId] = useState<string | null>(null)
   const [vaultError, setVaultError] = useState<string | null>(null)
   const [webDavConfigured, setWebDavConfigured] = useState(hasSavedWebDavConfig)
   const [quickConnectOpen, setQuickConnectOpen] = useState(false)
@@ -442,6 +445,9 @@ function App() {
   const notesRef = useRef(notes)
   const previousOnlineRef = useRef(isOnline)
   const activeSyncRunRef = useRef<SyncRun | null>(null)
+  const syncEditableCacheIdRef = useRef<string | null>(null)
+  const liveEditWritesRef = useRef<Promise<void>>(Promise.resolve())
+  const liveEditWriteErrorRef = useRef<unknown>(null)
   const syncScopeSequenceRef = useRef(0)
   const vaultMutationBarrierRef = useRef(0)
   const attemptedAutoSyncQueueRef = useRef<string | null>(null)
@@ -589,6 +595,8 @@ function App() {
 
   useEffect(() => {
     if (!cacheReady || !activeCacheMeta) return
+    // 显式同步的检查点拥有缓存写权；旧渲染产生的整库防抖快照不能覆盖新 ETag。
+    if (activeSyncRunRef.current && activeCacheIdRef.current === activeCacheMeta.id) return
     const snapshot: VaultCacheSnapshot = {
       ...activeCacheMeta,
       activeNoteId,
@@ -603,6 +611,7 @@ function App() {
     const timer = window.setTimeout(() => {
       // 清除/切库/原子目录重命名都会替换 ref；旧闭包不得把过期快照重新写回。
       if (latestCacheSnapshotRef.current !== snapshot) return
+      if (activeSyncRunRef.current && activeCacheIdRef.current === snapshot.id) return
       // 内容读取、收藏、置顶和本地编辑后统一刷新离线快照；敏感凭据不属于 Note 模型，因此不会进入缓存。
       void saveVaultCache(snapshot)
         .then(listVaultCaches)
@@ -636,6 +645,7 @@ function App() {
   useEffect(() => {
     const flushCacheWhenHidden = () => {
       if (document.visibilityState !== "hidden" || !latestCacheSnapshotRef.current) return
+      if (activeSyncRunRef.current && activeCacheIdRef.current === latestCacheSnapshotRef.current.id) return
       // 页面进入后台时立即启动 IndexedDB 事务，缩小 450ms 防抖窗口造成的退出丢稿风险。
       void saveVaultCache({ ...latestCacheSnapshotRef.current, savedAt: Date.now() })
         .catch(() => undefined)
@@ -1109,7 +1119,10 @@ function App() {
     const targetNote = notesRef.current.find((note) => note.id === noteId)
     if (!targetNote) return
     const touchesDocument = typeof patch.content === "string" || typeof patch.title === "string"
-    if (touchesDocument && (isRefreshingVault || vaultMutationBarrierRef.current > 0)) {
+    const liveBodyEdit = typeof patch.content === "string" && typeof patch.title !== "string"
+      && targetNote.source === "webdav" && activeCacheMeta?.id === syncEditableCacheIdRef.current
+      && activeCacheIdRef.current === syncEditableCacheIdRef.current
+    if (touchesDocument && (isRefreshingVault || vaultMutationBarrierRef.current > 0) && !liveBodyEdit) {
       setVaultError(isRefreshingVault ? "正在同步当前笔记库，请等待完成后继续编辑" : "正在提交笔记库结构，请等待完成后继续编辑")
       return
     }
@@ -1141,29 +1154,46 @@ function App() {
         })()
       : patch
     // 同一附件批次可能先原位插入、再降级追加；React 批处理结束前后者也必须读到最新正文。
-    notesRef.current = notesRef.current.map((note) => note.id === noteId ? { ...note, ...indexedPatch } : note)
+    const nextEditSequence = typeof patch.content === "string" && patch.content !== targetNote.content
+      ? (targetNote.localEditSequence ?? 0) + 1
+      : targetNote.localEditSequence
+    const nextNote: Note = {
+      ...targetNote,
+      ...indexedPatch,
+      localEditSequence: nextEditSequence,
+      ...(touchesDocument ? { modifiedAt: Date.now(), updatedAt: "刚刚" } : {}),
+      ...(touchesDocument && targetNote.source === "webdav"
+        ? {
+            syncError: undefined,
+            syncStatus: targetNote.syncStatus === "conflict" ? "conflict" as const : "modified" as const,
+            writeContentAfterMove: targetNote.pendingOperation === "move" ? true : targetNote.writeContentAfterMove,
+          }
+        : {}),
+    }
+    notesRef.current = notesRef.current.map((note) => note.id === noteId ? nextNote : note)
     setNotes((current) =>
       current.map((note) =>
         note.id === noteId
           ? {
               ...note,
-              ...indexedPatch,
+              ...nextNote,
               // 新建稿只有在出现标题之外的实际内容后才转为正式笔记；编辑器挂载时的同值回调不会误提交草稿。
               draft: note.draft
-                ? isEmptyDraftContent({ ...note, ...indexedPatch })
+                ? isEmptyDraftContent({ ...note, ...nextNote })
                 : note.draft,
-              ...(touchesDocument ? { modifiedAt: Date.now(), updatedAt: "刚刚" } : {}),
-              ...(touchesDocument && note.source === "webdav"
-                ? {
-                    syncError: undefined,
-                    syncStatus: note.syncStatus === "conflict" ? "conflict" as const : "modified" as const,
-                    writeContentAfterMove: note.pendingOperation === "move" ? true : note.writeContentAfterMove,
-                  }
-                : {}),
             }
           : note,
       ),
     )
+    if (liveBodyEdit && patch.content !== targetNote.content && activeCacheMeta) {
+      const cacheId = activeCacheMeta.id
+      // 编辑日志按输入顺序写来源库；切库后仍以捕获的 cacheId 完成落盘。
+      liveEditWritesRef.current = liveEditWritesRef.current
+        .then(() => saveVaultWorkingCopyEdit(cacheId, nextNote))
+        .catch((error) => {
+          liveEditWriteErrorRef.current = error
+        })
+    }
     if (touchesDocument && targetNote.source === "webdav") {
       setSaveStates((current) => ({
         ...current,
@@ -2105,6 +2135,8 @@ function App() {
       noteIds,
       notes: currentNotes,
       onCheckpoint: async (checkpoint) => {
+        await liveEditWritesRef.current
+        if (liveEditWriteErrorRef.current) throw liveEditWriteErrorRef.current
         // 不可逆的文件 MOVE/PUT/DELETE 直接写回来源 cacheId；切库后也不依赖旧 UI setter 才能恢复。
         const persisted = await saveVaultNoteQueueCheckpoint(cacheId, checkpoint)
         if (scope.isCurrent() && activeCacheIdRef.current === cacheId) latestCacheSnapshotRef.current = persisted
@@ -2145,7 +2177,6 @@ function App() {
     })
 
     // 认证失败前可能已有文件成功上传，先保存这部分状态，再由统一入口清理失效凭据。
-    if (scope.isCurrent() && activeCacheIdRef.current === cacheId) setNotes(result.notes)
     if (result.fatalError) throw result.fatalError
     return result
   }
@@ -2306,6 +2337,7 @@ function App() {
     setVaultError(null)
     const run: SyncRun = { cancelled: false }
     activeSyncRunRef.current = run
+    liveEditWriteErrorRef.current = null
     const syncCacheId = activeCacheMeta?.id
     const scopeToken = ++syncScopeSequenceRef.current
     const scope: VaultSyncScope | null = syncCacheId ? {
@@ -2355,7 +2387,27 @@ function App() {
             .filter((note) => (!noteIds || noteIds.has(note.id)) && !attachmentResult.failedNoteIds.has(note.id))
             .map((note) => note.id))
         : noteIds
-      const syncResult = await pushPendingWebDavNotes(vaultSession, scope.cacheId, queueNotes, scope, eligibleNoteIds, run)
+      // 目录和附件阶段保持写保护；正文队列开始后开放编辑，上传仍使用本轮固定快照。
+      syncEditableCacheIdRef.current = scope.cacheId
+      flushSync(() => setSyncEditableCacheId(scope.cacheId))
+      let syncResult: Awaited<ReturnType<typeof pushPendingWebDavNotes>>
+      let postQueueSnapshot: VaultCacheSnapshot | null = null
+      try {
+        syncResult = await pushPendingWebDavNotes(vaultSession, scope.cacheId, queueNotes, scope, eligibleNoteIds, run)
+      } finally {
+        // 先让编辑器同步转只读，再排空输入日志；刷新远端列表不得越过最后一次输入。
+        syncEditableCacheIdRef.current = null
+        flushSync(() => setSyncEditableCacheId(null))
+        await liveEditWritesRef.current
+        if (liveEditWriteErrorRef.current) throw liveEditWriteErrorRef.current
+        postQueueSnapshot = await loadVaultCache(scope.cacheId, { hydrate: "all" })
+        if (postQueueSnapshot && scope.isCurrent()) {
+          notesRef.current = postQueueSnapshot.notes
+          latestCacheSnapshotRef.current = postQueueSnapshot
+          setNotes(postQueueSnapshot.notes)
+          setSaveStates(Object.fromEntries(postQueueSnapshot.notes.map((note) => [note.id, getNoteSaveState(note)])))
+        }
+      }
       if (run.cancelled || syncResult.cancelled) {
         if (scope.isCurrent()) setSyncLogs(appendSyncLog({ message: "同步已取消，已完成项目状态已保存", status: "error" }))
         return
@@ -2363,8 +2415,9 @@ function App() {
       if (!scope.isCurrent()) return
       setSyncProgress((current) => current ? { ...current, currentLabel: "刷新远端列表", phase: "refreshing" } : current)
       const previousLastSyncedAt = activeCacheMeta?.lastSyncedAt
-      const postSyncSnapshot = { ...directoryResult.snapshot, notes: syncResult.notes }
-      const refreshedNotes = await loadVault(vaultSession, true, syncResult.notes, { scope, structureSnapshot: postSyncSnapshot, run })
+      if (!postQueueSnapshot || !scope.isCurrent()) return
+      const postSyncSnapshot = { ...directoryResult.snapshot, notes: postQueueSnapshot.notes }
+      const refreshedNotes = await loadVault(vaultSession, true, postQueueSnapshot.notes, { scope, structureSnapshot: postSyncSnapshot, run })
       if (!scope.isCurrent()) return
       // 排序阶段：即使仅排序改变也完成三方判定与条件上传；结构操作未成功时暂停上传但允许拉取。
       setSyncProgress((current) => current ? { ...current, currentLabel: "同步文件夹排序", phase: "refreshing" } : current)
@@ -2407,6 +2460,8 @@ function App() {
       showSyncFailure(message)
       setSyncLogs(appendSyncLog({ message: `同步失败：${message}`, status: "error" }))
     } finally {
+      syncEditableCacheIdRef.current = null
+      setSyncEditableCacheId(null)
       vaultMutationBarrierRef.current = Math.max(0, vaultMutationBarrierRef.current - 1)
       if (activeSyncRunRef.current === run) {
         activeSyncRunRef.current = null
@@ -2515,6 +2570,8 @@ function App() {
   }, [vaultSession])
 
   const selectVaultCache = async (cacheId: string) => {
+    // 同库重新选择会把读取时的旧快照整库写回，可能抹去正在上传的检查点。
+    if (activeSyncRunRef.current && cacheId === activeCacheIdRef.current) return
     const selectionToken = ++syncScopeSequenceRef.current
     try {
       const snapshot = await loadVaultCache(cacheId, { hydrate: "active" })
@@ -2546,6 +2603,10 @@ function App() {
   const clearActiveVaultCache = async () => {
     const target = activeCacheMeta
     if (!target) return
+    if (activeSyncRunRef.current) {
+      setVaultError("同步仍在进行，请结束后再清除当前缓存")
+      return
+    }
     syncScopeSequenceRef.current += 1
 
     // 顺序不能调换：必须先切断所有写回通道再删库。
@@ -4529,6 +4590,7 @@ function App() {
             missingNoteSuggestions={missingNoteSuggestions}
             includeNestedFolderNotes={includeNestedFolderNotes}
             isRefreshingVault={isRefreshingVault}
+            syncEditableCacheId={syncEditableCacheId}
             libraryView={libraryView}
             loadingNoteIds={loadingNoteIds}
             localVaultSupported={canSelectLocalVault()}

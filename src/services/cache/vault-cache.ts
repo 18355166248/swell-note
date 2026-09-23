@@ -384,6 +384,7 @@ export async function saveVaultNoteQueueCheckpoint(cacheId: string, checkpoint: 
       }
     } else if (currentNote) {
       const contentChangedAfterStart = currentNote.content !== checkpoint.note.content
+        || (currentNote.localEditSequence ?? 0) > (checkpoint.note.localEditSequence ?? 0)
       const mergedNote: Note = checkpoint.type === "failed"
         ? {
             ...currentNote,
@@ -418,6 +419,53 @@ export async function saveVaultNoteQueueCheckpoint(cacheId: string, checkpoint: 
     vaultStore.put({ ...merged, notes: notes.map((note) => toMetadataNote(note, Boolean(note.contentLoaded || note.contentCached))) })
     await transactionDone(transaction)
     return merged
+  } finally {
+    database.close()
+  }
+}
+
+export async function saveVaultWorkingCopyEdit(cacheId: string, editedNote: Note) {
+  const database = await openDatabase()
+  const transaction = database.transaction([VAULT_STORE, DOCUMENT_STORE], "readwrite")
+  const vaultStore = transaction.objectStore(VAULT_STORE)
+  const documentStore = transaction.objectStore(DOCUMENT_STORE)
+  try {
+    const [stored, document] = await Promise.all([
+      requestResult<VaultCacheSnapshot | undefined>(vaultStore.get(cacheId)),
+      requestResult<VaultNoteDocument | undefined>(documentStore.get(documentKey(cacheId, editedNote.id))),
+    ])
+    if (!stored) throw new Error("正在编辑的笔记库缓存不存在")
+    const currentNote = stored.notes.find((note) => note.id === editedNote.id)
+    if (!currentNote) throw new Error("正在编辑的笔记已不在缓存中")
+    if ((currentNote.localEditSequence ?? 0) >= (editedNote.localEditSequence ?? 0)) {
+      await transactionDone(transaction)
+      return
+    }
+    // 只更新正文所属字段，保留同步检查点刚写入的 ETag、基线和冲突状态。
+    const mergedNote: Note = {
+      ...currentNote,
+      baseContent: document?.baseContent,
+      content: editedNote.content,
+      preview: editedNote.preview,
+      frontmatter: editedNote.frontmatter,
+      outgoingLinks: editedNote.outgoingLinks,
+      searchText: editedNote.searchText,
+      tags: editedNote.tags,
+      modifiedAt: editedNote.modifiedAt,
+      updatedAt: editedNote.updatedAt,
+      localEditSequence: editedNote.localEditSequence,
+      syncStatus: currentNote.syncStatus === "conflict" ? "conflict" : "modified",
+      syncError: currentNote.syncStatus === "conflict" ? currentNote.syncError : undefined,
+    }
+    documentStore.put(toVaultNoteDocument(cacheId, mergedNote))
+    vaultStore.put({
+      ...stored,
+      notes: stored.notes.map((note) => note.id === mergedNote.id
+        ? toMetadataNote(mergedNote, true)
+        : note),
+      savedAt: Date.now(),
+    })
+    await transactionDone(transaction)
   } finally {
     database.close()
   }
