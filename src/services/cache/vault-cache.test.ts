@@ -260,6 +260,8 @@ describe("vault cache", () => {
     }])
 
     await expect(searchCachedNoteDocuments("search-cache", "冲突合并")).resolves.toEqual(["/Swell/同步方案.md"])
+    await expect(searchCachedNoteDocuments("search-cache", "同步方案", 5_000, "body")).resolves.toEqual([])
+    await expect(searchCachedNoteDocuments("search-cache", "冲突合并", 5_000, "body")).resolves.toEqual(["/Swell/同步方案.md"])
     await expect(searchCachedNoteDocuments("search-cache", "不存在")).resolves.toEqual([])
   })
 

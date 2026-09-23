@@ -612,13 +612,15 @@ export async function cacheVaultNoteDocuments(
   database.close()
 }
 
-export async function searchCachedNoteDocuments(cacheId: string, query: string, limit = 5_000) {
+export async function searchCachedNoteDocuments(cacheId: string, query: string, limit = 5_000, scope: "all" | "body" = "all") {
   const normalizedQuery = query.trim().toLocaleLowerCase()
   if (!normalizedQuery) return []
   const documents = await listCachedNoteDocuments(cacheId)
   const paths: string[] = []
   for (const document of documents) {
-    const haystack = `${document.title} ${document.content} ${(document.tags ?? []).join(" ")}`.toLocaleLowerCase()
+    const haystack = scope === "body"
+      ? document.content.toLocaleLowerCase()
+      : `${document.title} ${document.content} ${(document.tags ?? []).join(" ")}`.toLocaleLowerCase()
     if (haystack.includes(normalizedQuery) && document.path) paths.push(document.path)
     if (paths.length >= limit) break
   }

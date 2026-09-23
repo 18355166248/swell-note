@@ -21,6 +21,7 @@ async function seedRegressionVault(page: Page, count = 90) {
         source: "webdav",
         starred: index === 0,
         syncStatus: "synced",
+        tags: index === 1 ? ["计划"] : [],
         title,
         updatedAt: "刚刚",
       }
@@ -65,7 +66,7 @@ async function seedRegressionVault(page: Page, count = 90) {
         noteId: note.id,
         outgoingLinks: [],
         path: note.remotePath,
-        tags: [],
+        tags: note.tags,
         title: note.title,
       })
     }
@@ -118,7 +119,7 @@ test.describe("六项反馈浏览器回归", () => {
     await page.getByRole("button", { name: /全局搜索/ }).first().click()
     await page.getByRole("combobox", { name: "全局搜索笔记" }).fill("公共检索词")
     const viewport = page.locator("[data-search-scroll-viewport]")
-    await expect(page.getByRole("option")).toHaveCount(50)
+    await expect(page.locator(".global-search-results [role=option]")).toHaveCount(50)
     const before = await viewport.evaluate((element) => ({ clientHeight: element.clientHeight, scrollHeight: element.scrollHeight, scrollTop: element.scrollTop }))
     expect(before.scrollHeight).toBeGreaterThan(before.clientHeight)
     await viewport.hover()
@@ -126,9 +127,26 @@ test.describe("六项反馈浏览器回归", () => {
     await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
     await viewport.evaluate((element) => { element.scrollTop = element.scrollHeight })
     await page.getByRole("button", { name: /加载更多/ }).click()
-    await expect(page.getByRole("option")).toHaveCount(90)
+    await expect(page.locator(".global-search-results [role=option]")).toHaveCount(90)
     await viewport.evaluate((element) => { element.scrollTop = element.scrollHeight })
-    await expect(page.getByRole("option").last()).toBeInViewport()
+    await expect(page.locator(".global-search-results [role=option]").last()).toBeInViewport()
+  })
+
+  test("全局搜索的范围、标签、目录筛选组合在浏览器中生效", async ({ page }) => {
+    await seedRegressionVault(page)
+    await page.getByRole("button", { name: /全局搜索/ }).first().click()
+    const query = page.getByRole("combobox", { name: "全局搜索笔记" })
+    await query.fill("公共检索词")
+    await page.getByLabel("搜索范围").selectOption("title")
+    await expect(page.locator(".global-search-summary")).toContainText("找到 0 篇")
+    await page.getByLabel("搜索范围").selectOption("body")
+    await expect(page.locator(".global-search-summary")).toContainText("找到 89 篇")
+    await page.getByLabel("筛选标签").selectOption("计划")
+    await expect(page.locator(".global-search-summary")).toContainText("找到 1 篇")
+    await page.getByLabel("筛选目录").selectOption("其他")
+    await expect(page.locator(".global-search-summary")).toContainText("找到 0 篇")
+    await page.getByLabel("筛选目录").selectOption("目标")
+    await expect(page.locator(".global-search-summary")).toContainText("找到 1 篇")
   })
 
   test("全局搜索键盘跨页往返后活动项仍在结果视口内", async ({ page }) => {
@@ -137,7 +155,7 @@ test.describe("六项反馈浏览器回归", () => {
     const combobox = page.getByRole("combobox", { name: "全局搜索笔记" })
     await combobox.fill("公共检索词")
     for (let index = 0; index < 55; index += 1) await combobox.press("ArrowDown")
-    await expect(page.getByRole("option")).toHaveCount(90)
+    await expect(page.locator(".global-search-results [role=option]")).toHaveCount(90)
     for (let index = 0; index < 55; index += 1) await combobox.press("ArrowUp")
 
     const visible = await page.locator('[role="option"][aria-selected="true"]').evaluate((active) => {
