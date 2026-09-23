@@ -1,7 +1,9 @@
 import { strToU8, zipSync } from "fflate"
 
+import { buildAttachmentHref } from "@/services/vault/attachment-path"
 import { resolveVaultAssetPath } from "@/services/vault/vault-path"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
+import { isRelativeAttachmentHref } from "@/services/markdown/markdown-preview-utils"
 
 export type NoteExportBundleResult = {
   archive: Uint8Array
@@ -22,7 +24,7 @@ export function collectNoteExportReferences(content: string) {
     ...destinations.filter((source) => /^[a-z][a-z\d+.-]*:/i.test(source)),
     ...[...visibleContent.matchAll(bareExternalPattern)].map((match) => match[0].replace(/[.,;!?，。；！？]+$/, "")),
   ])]
-  const attachmentSources = [...new Set([...wikiEmbeds, ...destinations]
+  const attachmentSources = [...new Set([...wikiEmbeds, ...destinations.filter(isRelativeAttachmentHref)]
     .filter((source) => !source.startsWith("#") && !source.startsWith("//")
       && !/^[a-z][a-z\d+.-]*:/i.test(source) && !/\.md(?:[?#]|$)/i.test(source)))]
   return { attachmentSources, externalLinks }
@@ -70,10 +72,11 @@ export async function createNoteExportBundle({ content, notePath, readAsset }: {
 }): Promise<NoteExportBundleResult> {
   const safeNotePath = safeArchivePath(notePath)
   if (!safeNotePath || !/\.md$/i.test(safeNotePath)) throw new Error("当前笔记路径不适合打包导出")
-  const archive: Record<string, Uint8Array> = { [safeNotePath]: strToU8(content) }
+  const archive: Record<string, Uint8Array> = {}
   const { attachmentSources, externalLinks } = collectNoteExportReferences(content)
   const missingAttachments: string[] = []
   const added = new Set<string>()
+  let exportedContent = content
 
   for (const source of attachmentSources) {
     // 先用 Vault 相对路径解析器挡住越界和外链，再校验 ZIP 条目名；不允许下载库外文件。
@@ -82,6 +85,12 @@ export async function createNoteExportBundle({ content, notePath, readAsset }: {
     if (!path) {
       missingAttachments.push(`${source}（路径无效或越过笔记库）`)
       continue
+    }
+    if (source.startsWith("/")) {
+      // Vault 根目录式路径脱离 Vault 后会指向设备根目录；导出副本改为包内相对路径。
+      const relative = buildAttachmentHref(safeNotePath, path).split("/").map(encodeURIComponent).join("/")
+      const suffix = source.slice(source.split(/[?#]/, 1)[0].length)
+      exportedContent = rewriteAbsoluteVaultSource(exportedContent, source, `${relative}${suffix}`)
     }
     if (added.has(path)) continue
     added.add(path)
@@ -94,6 +103,7 @@ export async function createNoteExportBundle({ content, notePath, readAsset }: {
     }
   }
 
+  archive[safeNotePath] = strToU8(exportedContent)
   let reportPath = "导出清单.txt"
   for (let index = 2; archive[reportPath]; index += 1) reportPath = `导出清单-${index}.txt`
   archive[reportPath] = strToU8([
@@ -114,6 +124,13 @@ export async function createNoteExportBundle({ content, notePath, readAsset }: {
     missingAttachments,
     reportPath,
   }
+}
+
+function rewriteAbsoluteVaultSource(content: string, source: string, relative: string) {
+  const escaped = source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return content
+    .replace(new RegExp(`(\\]\\(<?)${escaped}(?=>?\\s|>?(?:\\)))`, "g"), (_match, prefix: string) => `${prefix}${relative}`)
+    .replace(new RegExp(`(!\\[\\[)${escaped}(?=[|#\\]])`, "g"), (_match, prefix: string) => `${prefix}${relative}`)
 }
 
 function safeArchivePath(value: string) {

@@ -10,6 +10,7 @@ describe("note export bundle", () => {
       "[资料](../attachments/report.pdf)",
       "[重复](../attachments/report.pdf)",
       "[另一篇](./other.md)",
+      "[目录](./folder)",
       "[网站](https://example.com/docs)",
     ].join("\n")
     const readAsset = vi.fn(async (path: string) => ({ data: new TextEncoder().encode(path) }))
@@ -68,5 +69,17 @@ describe("note export bundle", () => {
       attachmentSources: ["../attachments/a(1).png", "../attachments/a b.pdf"],
       externalLinks: ["https://example.com/help"],
     })
+  })
+
+  it("把 Vault 根目录式附件链接改成包内可打开的相对路径", async () => {
+    const result = await createNoteExportBundle({
+      content: "![图](/attachments/封面.png)\n![[/attachments/语音.mp3|试听]]",
+      notePath: "docs/note.md",
+      readAsset: async () => ({ data: new Uint8Array([1]) }),
+    })
+    const archive = unzipSync(result.archive)
+    expect(strFromU8(archive["docs/note.md"])).toBe("![图](../attachments/%E5%B0%81%E9%9D%A2.png)\n![[../attachments/%E8%AF%AD%E9%9F%B3.mp3|试听]]")
+    expect(archive["attachments/封面.png"]).toBeDefined()
+    expect(archive["attachments/语音.mp3"]).toBeDefined()
   })
 })

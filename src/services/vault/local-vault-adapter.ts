@@ -79,7 +79,8 @@ export function createBrowserVaultAdapter(root: BrowserFileSystemDirectoryHandle
       return { path, revision: browserRevision(await handle.getFile()) }
     },
     async createTextFile(path, content) {
-      if (handles.has(path)) throw new Error(`文件已存在：${path}`)
+      // 历史副本等新建操作不能覆盖外部程序刚创建、尚未进入句柄缓存的同名文件。
+      if (await browserFileExists(root, path)) throw new Error(`文件已存在：${path}`)
       const handle = await getBrowserFileHandle(root, path, true)
       await writeBrowserFile(handle, content)
       handles.set(path, handle)

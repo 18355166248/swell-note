@@ -151,7 +151,7 @@ test('审计：历史保护副本写入失败不能继续覆盖当前正文', as
   })
   await page.getByRole('button',{name:'更多操作',exact:true}).click()
   await page.getByRole('menuitem',{name:/本地版本历史/}).click()
-  await expect(page.locator('.note-history-preview pre')).toHaveText('旧版本正文')
+  await expect(page.locator('.note-history-diff')).toContainText('旧版本正文')
   page.once('dialog', d=>d.accept())
   await page.getByRole('button',{name:'恢复此版本',exact:true}).click()
   await expect(editor).toHaveText('当前不可丢失正文')
@@ -246,7 +246,7 @@ test('保护版本写入期间切换笔记会取消旧恢复', async ({page}) =>
   })
   await page.getByRole('button',{name:'更多操作',exact:true}).click()
   await page.getByRole('menuitem',{name:/本地版本历史/}).click()
-  await expect(page.locator('.note-history-preview pre')).toHaveText('A 旧正文')
+  await expect(page.locator('.note-history-diff')).toContainText('A 旧正文')
   await page.evaluate(() => {
     const originalOpen = indexedDB.open.bind(indexedDB)
     let release!: () => void
@@ -287,4 +287,51 @@ test('保护版本写入期间切换笔记会取消旧恢复', async ({page}) =>
   await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('B 当前正文')
   await page.locator('.desktop-workspace:visible .note-list-row').filter({hasText:'第一篇'}).click()
   await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('A 当前正文')
+})
+
+test('历史逐行差异与恢复为副本保留原笔记', async ({page}) => {
+  await seedCachedVault(page, '第一行\n当前正文')
+  await page.evaluate(() => localStorage.setItem('swell-note:webdav-config:v1', JSON.stringify({
+    provider:'jianguoyun', remotePath:'/Swell/', serverUrl:'https://dav.jianguoyun.com/dav/', username:'e2e@example.com',
+  })))
+  await page.reload()
+  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('第一行当前正文')
+  await page.evaluate(async () => {
+    const request = indexedDB.open('swell-note-history', 1)
+    request.onupgradeneeded = () => {
+      const store = request.result.createObjectStore('versions', {keyPath:'key'})
+      store.createIndex('noteKey', 'noteKey')
+    }
+    const database = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+    const transaction = database.transaction('versions', 'readwrite')
+    transaction.objectStore('versions').put({
+      cacheId:'e2e-vault', content:'第一行\n历史正文', createdAt:Date.now(), id:'copy-old', key:'copy-old',
+      noteId:'webdav:/Swell/测试/第一篇.md', noteKey:'e2e-vault\u0000webdav:/Swell/测试/第一篇.md', reason:'编辑前', title:'第一篇',
+    })
+    await new Promise<void>((resolve, reject) => { transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error) })
+    database.close()
+  })
+  await page.getByRole('button', {name:'更多操作', exact:true}).click()
+  await page.getByRole('menuitem', {name:/本地版本历史/}).click()
+  await expect(page.locator('.note-history-diff-row[data-kind="removed"]')).toContainText('当前正文')
+  await expect(page.locator('.note-history-diff-row[data-kind="added"]')).toContainText('历史正文')
+  await page.getByRole('button', {name:'恢复为副本', exact:true}).click()
+  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('第一行历史正文')
+  await expect(page.locator('.desktop-workspace:visible .note-list-row[data-active="true"]')).toContainText('历史副本')
+  await page.locator('.desktop-workspace:visible .note-list-row').getByText('第一篇', {exact:true}).click()
+  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('第一行当前正文')
+  await expect.poll(() => page.evaluate(async () => {
+    const request = indexedDB.open('swell-note-vault-cache', 3)
+    const database = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+    const transaction = database.transaction('vaults', 'readonly')
+    const snapshot = await new Promise<{notes: Array<{title: string}>}>((resolve, reject) => {
+      const read = transaction.objectStore('vaults').get('e2e-vault')
+      read.onsuccess = () => resolve(read.result)
+      read.onerror = () => reject(read.error)
+    })
+    database.close()
+    return snapshot.notes.some((note) => note.title.includes('历史副本'))
+  })).toBe(true)
+  await page.reload()
+  await expect(page.locator('.desktop-workspace:visible .note-list-row').filter({hasText:'历史副本'})).toBeVisible()
 })

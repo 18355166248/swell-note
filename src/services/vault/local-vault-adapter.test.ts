@@ -166,6 +166,17 @@ describe("browser vault adapter", () => {
     await expect(adapter.createTextFile?.("docs/新笔记.md", "覆盖内容")).rejects.toThrow("文件已存在")
   })
 
+  it("外部新建的同名文件尚未进入索引时也不会被覆盖", async () => {
+    const { adapter, docs } = createVault()
+    await adapter.listMarkdownFiles()
+    docs.entries.set("历史副本.md", new FakeFileHandle("历史副本.md", "外部内容"))
+
+    await expect(adapter.createTextFile?.("docs/历史副本.md", "历史内容")).rejects.toThrow("文件已存在")
+    const file = docs.entries.get("历史副本.md")
+    expect(file).toBeInstanceOf(FakeFileHandle)
+    if (file instanceof FakeFileHandle) expect(await (await file.getFile()).text()).toBe("外部内容")
+  })
+
   it("移动和删除 Markdown 文件时同步更新适配器路径", async () => {
     const { adapter } = createVault()
     await adapter.listMarkdownFiles()

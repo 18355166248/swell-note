@@ -249,6 +249,7 @@ type WorkspaceProps = {
   onResolveAssetForNote: (noteId: string, source: string) => Promise<VaultAsset | null>
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
   onRestoreNoteVersion: (content: string) => Promise<void>
+  onRestoreNoteVersionAsCopy: (content: string, createdAt: number, noteId: string, cacheId: string) => Promise<void>
   onToggleNoteStar: (noteId: string) => void
   onToggleNotePin: (noteId: string) => void
   onToggleNoteTask?: (noteId: string, line: number, checked: boolean) => void
@@ -490,6 +491,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
   const resolveAsset = useStableCallback(props.onResolveAsset)
   const resolveWikiNote = useStableCallback(props.onResolveWikiNote)
   const restoreNoteVersion = useStableCallback(props.onRestoreNoteVersion)
+  const restoreNoteVersionAsCopy = useStableCallback(props.onRestoreNoteVersionAsCopy)
   const refreshVault = useStableCallback(props.onRefreshVault)
   const activeNoteId = props.activeNoteId
   // 上游传的是内联箭头，不先稳定住，下面按笔记绑定的那层每次渲染都会换新函数，memo 就白加了。
@@ -666,6 +668,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           onResolveAsset={resolveAsset}
           onResolveWikiNote={resolveWikiNote}
           onRestoreNoteVersion={restoreNoteVersion}
+          onRestoreNoteVersionAsCopy={restoreNoteVersionAsCopy}
           onSync={refreshVault}
           onToggleTask={toggleActiveNoteTask}
           saveState={props.saveState}
@@ -1851,6 +1854,7 @@ type NoteEditorProps = {
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
   onRestoreNoteVersion: (content: string) => Promise<void>
+  onRestoreNoteVersionAsCopy: (content: string, createdAt: number, noteId: string, cacheId: string) => Promise<void>
   onSelectNote: (note: Note) => void
   onSync: () => void
   onToggleTask?: (line: number, checked: boolean) => void
@@ -1899,7 +1903,7 @@ function alignPreviewToSourceLine(viewport: HTMLElement, article: HTMLElement | 
 
 // 搜索、切目录、展开侧栏统统与正文无关，但它们每一次都把编辑器整棵子树重画一遍
 // （实测搜索敲 6 个字，编辑器白渲染 11 次）。上面已经把入参固定住，这里收口。
-const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, attachmentQueue, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, markdownSourceMode, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onLoadWikiNote, onMarkdownSourceModeChange, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
+const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, attachmentQueue, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, markdownSourceMode, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onLoadWikiNote, onMarkdownSourceModeChange, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onRestoreNoteVersionAsCopy, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
   const noteRenderIdentity = note.editorSessionKey ?? stableNoteRenderIdentity(note.id, note.remotePath)
   const assetScope = `${activeCacheId ?? "session"}:${noteRenderIdentity}`
   // 同步请求使用点击瞬间的正文快照；请求完成前锁定编辑，避免旧快照回写覆盖新输入。
@@ -2917,6 +2921,10 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
         noteId={note.id}
         onOpenChange={setHistoryDialogOpen}
         onRestore={onRestoreNoteVersion}
+        onRestoreCopy={(content, createdAt) => {
+          if (!activeCacheId) throw new Error("当前笔记库不可用")
+          return onRestoreNoteVersionAsCopy(content, createdAt, note.id, activeCacheId)
+        }}
         open={historyDialogOpen}
       />
       <MobileLinkSheet
@@ -3378,6 +3386,7 @@ function MobileRouteEntryPage({ active, backLabel, canGoBack, entry, navigationO
       onResolveConflict={routeProps.onResolveConflict}
       onResolveWikiNote={routeProps.onResolveWikiNote}
       onRestoreNoteVersion={routeProps.onRestoreNoteVersion}
+      onRestoreNoteVersionAsCopy={routeProps.onRestoreNoteVersionAsCopy}
       onSelectFolder={routeProps.onSelectFolder}
       onSelectNote={routeProps.onSelectNote}
       onSync={routeProps.onRefreshVault}

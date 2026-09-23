@@ -1442,6 +1442,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 
 .note-history-summary {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
@@ -1450,14 +1451,29 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .note-history-added { color: #16a34a; }
 .note-history-removed { color: #dc2626; }
 
-.note-history-preview pre {
+.note-history-diff {
   flex: 1;
-  margin: 0;
   overflow: auto;
-  padding: 16px;
   background: var(--muted);
   color: var(--foreground);
   font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.note-history-diff-row {
+  display: grid;
+  grid-template-columns: 3.5em 3.5em 1.5em minmax(0, 1fr);
+  min-width: 0;
+  padding: 1px 10px;
+}
+
+.note-history-diff-row[data-kind="added"] { background: color-mix(in srgb, #16a34a 15%, transparent); }
+.note-history-diff-row[data-kind="removed"] { background: color-mix(in srgb, #dc2626 15%, transparent); }
+.note-history-diff-row[data-kind="omitted"] { color: var(--muted-foreground); font-style: italic; }
+.note-history-diff-number { color: var(--muted-foreground); user-select: none; }
+.note-history-diff-sign { user-select: none; }
+.note-history-diff-row code {
+  min-width: 0;
+  font: inherit;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

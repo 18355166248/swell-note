@@ -136,6 +136,7 @@ import { backupFilename, createVaultBackup, parseVaultBackup } from "@/services/
 import { extractAttachmentSources } from "@/services/vault/attachment-maintenance"
 import { exportNoteBundle } from "@/services/export/markdown-export"
 import { createNoteExportBundle } from "@/services/export/note-export-bundle"
+import { uniqueHistoryCopyPath } from "@/services/history/note-history-copy"
 import { MAX_MARKDOWN_IMPORT_BYTES, sanitizeImportedMarkdownName, uniqueMarkdownPath } from "@/services/import/markdown-import"
 import {
   deleteWebDavPassword,
@@ -436,6 +437,7 @@ function App() {
   const restoreScopeRef = useRef({ cacheId: null as string | null, noteId: "", generation: 0 })
   const noteContentRevisionRef = useRef(new Map<string, number>())
   const restoringVersionRef = useRef(false)
+  const creatingHistoryCopyRef = useRef(false)
   const pendingDirectoryMovesRef = useRef<PendingWebDavDirectoryMove[]>([])
   const notesRef = useRef(notes)
   const previousOnlineRef = useRef(isOnline)
@@ -3174,6 +3176,82 @@ function App() {
     }
   }
 
+  const restoreActiveNoteVersionAsCopy = async (content: string, createdAt: number, expectedNoteId: string, expectedCacheId: string) => {
+    const source = activeNote
+    const cacheId = activeCacheMeta?.id
+    if (!source?.remotePath || !cacheId || source.id !== expectedNoteId || cacheId !== expectedCacheId) {
+      throw new Error("笔记已切换，请重新打开历史版本")
+    }
+    if (creatingHistoryCopyRef.current) throw new Error("正在创建历史副本，请等待完成")
+    if (isRefreshingVault || vaultMutationBarrierRef.current > 0) throw new Error("笔记库正在更新，请稍后再创建副本")
+    const adapter = vaultSession
+    const isWebDav = activeCacheMeta?.sourceKind === "webdav"
+    if ((!adapter && (!isWebDav || !webDavConfigured))
+      || (adapter && !isWebDav && (!adapter.createTextFile || adapter.readOnly))) {
+      throw new Error("请先打开可写的笔记库再创建历史副本")
+    }
+
+    const generation = restoreScopeRef.current.generation
+    const displaySourcePath = toBackupDisplayPath(source.remotePath)
+    const sourceTitle = source.title.trim() || source.remotePath.split("/").pop()?.replace(/\.(?:canvas|md)$/i, "") || "笔记"
+    const timestamp = Number.isFinite(createdAt) ? createdAt : Date.now()
+    const config = loadWebDavConfig()
+    const resolveStoragePath = (displayPath: string) => adapter?.getStoragePath?.(displayPath)
+      ?? (isWebDav
+        ? `${config.remotePath.replace(/\/+$/g, "")}/${displayPath.replace(/^\/+/, "")}`.replace(/\/{2,}/g, "/")
+        : displayPath)
+    const reserved = new Set(notesRef.current.map((note) => note.remotePath?.replace(/\\/g, "/").toLocaleLowerCase())
+      .filter((path): path is string => Boolean(path)))
+    const { displayPath, filename, storagePath } = uniqueHistoryCopyPath({
+      displaySourcePath,
+      reservedStoragePaths: reserved,
+      resolveStoragePath,
+      sourceTitle,
+      timestamp: formatFileTimestamp(new Date(timestamp)),
+    })
+    const now = Date.now()
+    creatingHistoryCopyRef.current = true
+    try {
+      // 本地 Vault 先由适配器确认文件创建成功；WebDAV 只创建待同步工作副本，绝不隐式上传。
+      const result = isWebDav ? null : await adapter!.createTextFile!(storagePath, content)
+      if (restoreScopeRef.current.generation !== generation || activeCacheIdRef.current !== cacheId) {
+        throw new Error(result ? `副本已写入原笔记库：${result.path}；当前已切换笔记库，请返回原库查看` : "笔记库已切换，创建副本已取消")
+      }
+      const path = result?.path ?? storagePath
+      const id = `${isWebDav ? "webdav" : adapter!.kind}:${path}`
+      const copy: Note = {
+        ...indexNoteContent(content),
+        content,
+        contentCached: true,
+        contentLoaded: true,
+        draft: false,
+        format: source.format,
+        folder: deriveRemoteFolder(displayPath),
+        id,
+        modifiedAt: now,
+        pendingOperation: isWebDav ? "create" : undefined,
+        preview: buildNotePreview(content, source.format),
+        readOnly: false,
+        remotePath: path,
+        revision: result?.revision,
+        source: isWebDav ? "webdav" : "local",
+        starred: false,
+        syncStatus: isWebDav ? "modified" : undefined,
+        title: filename.replace(/\.(?:canvas|md)$/i, ""),
+        updatedAt: isWebDav ? "刚刚创建 · 待同步" : "刚刚创建",
+      }
+      if (result) revisionByPathRef.current.set(path, result.revision)
+      setNotes((current) => [copy, ...current])
+      setSaveStates((current) => ({ ...current, [id]: { status: isWebDav ? "pending" : "saved" } }))
+      setVaultNoteCount((count) => count + 1)
+      setLibraryView("all")
+      setActiveNoteId(id)
+      navigate(`/notes/${encodeURIComponent(id)}`)
+    } finally {
+      creatingHistoryCopyRef.current = false
+    }
+  }
+
   const createLocalFolder = async (requestedName: string, parentFolder: string | null) => {
     const adapter = vaultSession
     const isWebDavWorkspace = adapter?.kind === "webdav" || activeCacheMeta?.sourceKind === "webdav"
@@ -4527,6 +4605,7 @@ function App() {
             onLoadWikiNote={loadWikiNote}
             onResolveWikiNote={resolveWikiNote}
             onRestoreNoteVersion={restoreActiveNoteVersion}
+            onRestoreNoteVersionAsCopy={restoreActiveNoteVersionAsCopy}
             onToggleNoteStar={toggleNoteStar}
             onToggleNotePin={toggleNotePin}
             onToggleNoteTask={(noteId, line, checked) => toggleTask({
