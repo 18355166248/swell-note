@@ -64,6 +64,7 @@ export type MarkdownEditorHandle = {
   cutSelection: () => Promise<boolean>
   focus: () => void
   findText: (query: string, direction?: "next" | "previous", fromStart?: boolean) => MarkdownFindResult
+  inspectFind: (query: string) => MarkdownFindResult
   insertText: (text: string) => void
   // 与阅读态互换视图时用来对齐阅读位置：一个按屏幕坐标问行号，一个把指定行顶到可视区顶端。
   lineAtViewportTop: (clientY: number) => number | null
@@ -1133,6 +1134,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       findText(query, direction = "next", fromStart = false) {
         return findTextInView(controlRef.current?.getView(), query, direction, fromStart)
       },
+      inspectFind(query) {
+        return inspectFindInView(controlRef.current?.getView(), query)
+      },
       insertText(text) {
         const control = controlRef.current
         const view = control?.getView()
@@ -1304,7 +1308,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         view.dispatch({
           changes: matches.map((match) => ({ from: match.from, insert: replacement, to: match.to })),
         })
-        view.focus()
         return matches.length
       },
       replaceCurrent(query, replacement) {
@@ -1815,6 +1818,17 @@ export function findPlainTextMatches(text: string, query: string) {
     matches.push({ from, to: from + match[0].length })
   }
   return matches
+}
+
+function inspectFindInView(view: EditorView | undefined, query: string): MarkdownFindResult {
+  if (!view || !query) return { current: 0, total: 0 }
+  const matches = findPlainTextMatches(view.state.doc.toString(), query)
+  if (!matches.length) return { current: 0, total: 0 }
+  const selection = view.state.selection.main
+  // 计数刷新只读取文档和选区，不分派事务；输入、撤销和重做不能因此移动光标或抢焦点。
+  const selectedIndex = matches.findIndex((match) => match.from === selection.from && match.to === selection.to)
+  const followingIndex = matches.findIndex((match) => match.from >= selection.head)
+  return { current: (selectedIndex >= 0 ? selectedIndex : followingIndex >= 0 ? followingIndex : 0) + 1, total: matches.length }
 }
 
 function findTextInView(

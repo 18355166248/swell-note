@@ -248,7 +248,7 @@ type WorkspaceProps = {
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onResolveAssetForNote: (noteId: string, source: string) => Promise<VaultAsset | null>
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
-  onRestoreNoteVersion: (content: string) => void
+  onRestoreNoteVersion: (content: string) => Promise<void>
   onToggleNoteStar: (noteId: string) => void
   onToggleNotePin: (noteId: string) => void
   onToggleNoteTask?: (noteId: string, line: number, checked: boolean) => void
@@ -1850,7 +1850,7 @@ type NoteEditorProps = {
   onResolveConflict: (strategy: "local" | "merge" | "remote") => void
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   onResolveWikiNote: (target: string) => EmbeddedWikiNoteResult
-  onRestoreNoteVersion: (content: string) => void
+  onRestoreNoteVersion: (content: string) => Promise<void>
   onSelectNote: (note: Note) => void
   onSync: () => void
   onToggleTask?: (line: number, checked: boolean) => void
@@ -2315,6 +2315,12 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
   }, [active, findOpen, findQuery, previewing, note.id, note.contentLoaded])
 
   useEffect(() => {
+    if (!active || !findOpen || previewing || note.contentLoaded === false) return
+    // 正文事务（含撤销/重做）回传新内容后，只刷新计数，不重新定位匹配或触碰焦点。
+    setFindResult(editorRef.current?.inspectFind(findQuery) ?? { current: 0, total: 0 })
+  }, [active, findOpen, findQuery, previewing, note.id, note.content, note.contentLoaded])
+
+  useEffect(() => {
     if (!active || !findOpen) return
     const frame = window.requestAnimationFrame(() => findInputRef.current?.focus())
     return () => window.cancelAnimationFrame(frame)
@@ -2672,7 +2678,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
                 disabled={!findResult.total}
                 onClick={() => {
                   editorRef.current?.replaceAll(findQuery, findReplacement)
-                  setFindResult({ current: 0, total: 0 })
+                  setFindResult(editorRef.current?.inspectFind(findQuery) ?? { current: 0, total: 0 })
                 }}
                 type="button"
               >全部</button>

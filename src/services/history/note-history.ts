@@ -35,22 +35,29 @@ export async function saveNoteVersion(input: SaveNoteVersionInput, now = Date.no
     noteKey,
   }
   const database = await openDatabase()
-  const transaction = database.transaction(VERSION_STORE, "readwrite")
-  const store = transaction.objectStore(VERSION_STORE)
-  store.put(version)
-  for (const stale of existing.slice(MAX_VERSIONS_PER_NOTE - 1)) store.delete(stale.key)
-  await transactionDone(transaction)
-  database.close()
+  try {
+    const transaction = database.transaction(VERSION_STORE, "readwrite")
+    const store = transaction.objectStore(VERSION_STORE)
+    store.put(version)
+    for (const stale of existing.slice(MAX_VERSIONS_PER_NOTE - 1)) store.delete(stale.key)
+    await transactionDone(transaction)
+  } finally {
+    // QuotaExceededError 也可能在 put 时同步抛出，仍须关闭连接供用户重试。
+    database.close()
+  }
   return version
 }
 
 export async function listNoteVersions(cacheId: string, noteId: string) {
   const database = await openDatabase()
-  const versions = await requestResult<NoteVersion[]>(
-    database.transaction(VERSION_STORE, "readonly").objectStore(VERSION_STORE).index("noteKey").getAll(buildNoteKey(cacheId, noteId)),
-  )
-  database.close()
-  return versions.sort((left, right) => right.createdAt - left.createdAt)
+  try {
+    const versions = await requestResult<NoteVersion[]>(
+      database.transaction(VERSION_STORE, "readonly").objectStore(VERSION_STORE).index("noteKey").getAll(buildNoteKey(cacheId, noteId)),
+    )
+    return versions.sort((left, right) => right.createdAt - left.createdAt)
+  } finally {
+    database.close()
+  }
 }
 
 export async function deleteNoteVersions(cacheId: string, noteId: string) {

@@ -837,7 +837,9 @@ type VaultAttachmentProps = {
 }
 
 function VaultAttachment({ children, onResolveAsset, source }: VaultAttachmentProps) {
-  const [requested, setRequested] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+  const resolveAssetRef = useRef(onResolveAsset)
+  resolveAssetRef.current = onResolveAsset
   const [state, setState] = useState<{
     mimeType?: string
     status: "idle" | "loading" | "ready" | "error"
@@ -845,13 +847,14 @@ function VaultAttachment({ children, onResolveAsset, source }: VaultAttachmentPr
   }>({ status: "idle" })
 
   useEffect(() => {
-    if (!requested) return
+    if (!attempt) return
     let disposed = false
     let objectUrl: string | undefined
     setState({ status: "loading" })
 
     // 附件可能很大，只在用户主动点击后读取；对象 URL 在卸载时释放，避免长时间预览造成内存泄漏。
-    void onResolveAsset(source)
+    // 父组件重新渲染可能换掉回调身份；一次点击只对应一次读取，重试由 attempt 明确触发。
+    void resolveAssetRef.current(source)
       .then((asset) => {
         if (!asset || disposed) {
           if (!disposed) setState({ status: "error" })
@@ -870,7 +873,7 @@ function VaultAttachment({ children, onResolveAsset, source }: VaultAttachmentPr
       disposed = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [onResolveAsset, requested, source])
+  }, [attempt, source])
 
   if (state.status === "ready" && state.url) {
     if (state.mimeType === "application/pdf") {
@@ -889,7 +892,7 @@ function VaultAttachment({ children, onResolveAsset, source }: VaultAttachmentPr
     <button
       className="markdown-attachment-button"
       disabled={state.status === "loading"}
-      onClick={() => setRequested(true)}
+      onClick={() => setAttempt((value) => value + 1)}
       type="button"
     >
       {state.status === "loading" ? "正在读取附件…" : state.status === "error" ? "重试读取附件" : <>打开附件：{children}</>}

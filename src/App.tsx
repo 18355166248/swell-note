@@ -431,6 +431,8 @@ function App() {
   const indexGenerationRef = useRef(0)
   const latestCacheSnapshotRef = useRef<VaultCacheSnapshot | null>(null)
   const activeCacheIdRef = useRef<string | null>(null)
+  const restoreScopeRef = useRef({ cacheId: null as string | null, noteId: "", generation: 0 })
+  const restoringVersionRef = useRef(false)
   const pendingDirectoryMovesRef = useRef<PendingWebDavDirectoryMove[]>([])
   const notesRef = useRef(notes)
   const previousOnlineRef = useRef(isOnline)
@@ -457,6 +459,10 @@ function App() {
   const refreshVaultRef = useRef<(noteIds?: ReadonlySet<string>, options?: { automatic?: boolean }) => Promise<void>>(async () => undefined)
   notesRef.current = notes
   activeCacheIdRef.current = activeCacheMeta?.id ?? null
+  if (restoreScopeRef.current.cacheId !== (activeCacheMeta?.id ?? null) || restoreScopeRef.current.noteId !== activeNoteId) {
+    // A→B→A 也算目标切换；仅比较最终 ID 会让旧异步恢复误以为仍在原现场。
+    restoreScopeRef.current = { cacheId: activeCacheMeta?.id ?? null, noteId: activeNoteId, generation: restoreScopeRef.current.generation + 1 }
+  }
   pendingDirectoryMovesRef.current = pendingWebDavDirectoryMoves
 
   useEffect(() => {
@@ -3132,18 +3138,29 @@ function App() {
   const moveActiveNote = (folderPath: string | null, requestedTitle?: string) =>
     moveNote(activeNoteId, folderPath, requestedTitle)
 
-  const restoreActiveNoteVersion = (content: string) => {
+  const restoreActiveNoteVersion = async (content: string) => {
     if (!activeNote || content === activeNote.content) return
-    if (activeCacheMeta) {
-      void saveNoteVersion({
-        cacheId: activeCacheMeta.id,
-        content: activeNote.content,
-        noteId: activeNote.id,
-        reason: "恢复前",
-        title: activeNote.title,
-      }).catch(() => undefined)
+    if (restoringVersionRef.current) throw new Error("正在恢复历史版本，请等待本次操作完成")
+    const cacheId = activeCacheMeta?.id
+    if (!cacheId) throw new Error("当前笔记库不可用，无法保存恢复前版本")
+    const { id, content: original, format, title } = activeNote
+    const generation = restoreScopeRef.current.generation
+    restoringVersionRef.current = true
+    try {
+      // 保护版本必须先完成 IndexedDB 事务；等待期间笔记、库或正文变化时，放弃覆盖。
+      const protectedVersion = await saveNoteVersion({ cacheId, content: original, noteId: id, reason: "恢复前", title })
+      if (!protectedVersion) throw new Error("无法保存恢复前版本，正文未修改")
+      if (restoreScopeRef.current.generation !== generation || activeCacheIdRef.current !== cacheId
+        || notesRef.current.find((note) => note.id === id)?.content !== original) {
+        throw new Error("笔记或正文已变化，恢复已取消；请重新选择历史版本")
+      }
+      if (isRefreshingVault || vaultMutationBarrierRef.current > 0) {
+        throw new Error("笔记库正在更新，恢复已取消；请稍后重试")
+      }
+      updateNoteById(id, { content, preview: buildNotePreview(content, format) })
+    } finally {
+      restoringVersionRef.current = false
     }
-    updateActiveNote({ content, preview: buildNotePreview(content, activeNote.format) })
   }
 
   const createLocalFolder = async (requestedName: string, parentFolder: string | null) => {
