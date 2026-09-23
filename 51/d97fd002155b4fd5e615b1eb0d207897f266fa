@@ -1,0 +1,25 @@
+src/components/editor/markdown-editor.tsx
+  s_ed1175c7808b26::t_6ee0dc45f255eb 17,216,228-235,244-245,247,250,253,255
+src/components/editor/cursor-visibility.test.ts
+  s_ed1175c7808b26::t_435e582a3b71bd 186-199
+  s_ed1175c7808b26::t_6145e4f01eab96 4-5,153-185
+  s_ed1175c7808b26::t_92134429a82b54 200-202
+src/components/editor/cursor-visibility.ts
+  s_ed1175c7808b26::t_95e507e169e51c 88-97,99-101,103,107-129,131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "51d97fd002155b4fd5e615b1eb0d207897f266fa",
+  "prompts": {},
+  "sessions": {
+    "s_ed1175c7808b26": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0cd61-5c83-7d71-a77f-63ae92ddf77b",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
