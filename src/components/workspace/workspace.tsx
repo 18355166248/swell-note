@@ -2118,13 +2118,32 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
 
   // Vault 笔记的标题对应文件名：编辑时先落草稿，失焦或回车再走统一的重命名链路，避免每次按键触发文件操作。
   const isVaultNote = note.source === "local" || note.source === "webdav"
-  const titleInputRef = useRef<HTMLInputElement>(null)
+  const titleInputRef = useRef<HTMLTextAreaElement>(null)
   const [titleDraft, setTitleDraft] = useState(note.title)
   useEffect(() => {
     // 手机打开新稿时先保持阅读姿态，用户点标题或正文后才唤起软键盘。
     if (!compact && note.draft) titleInputRef.current?.focus()
   }, [compact, note.draft, noteRenderIdentity])
   useEffect(() => { setTitleDraft(note.title) }, [note.id, note.title])
+
+  useLayoutEffect(() => {
+    const field = titleInputRef.current
+    if (!field) return
+    const resize = () => {
+      field.style.height = "auto"
+      field.style.height = `${field.scrollHeight}px`
+    }
+    resize()
+    // 标题的换行数随画布宽度变化；侧栏调宽或设备旋转后也要重新测量。
+    let width = field.clientWidth
+    const observer = new ResizeObserver(() => {
+      if (field.clientWidth === width) return
+      width = field.clientWidth
+      resize()
+    })
+    observer.observe(field)
+    return () => observer.disconnect()
+  }, [titleDraft, note.title, previewing, fileReadOnly])
 
   const cancelTitleCommitRef = useRef(false)
   const commitTitle = () => {
@@ -2723,17 +2742,19 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
           {previewing || fileReadOnly ? (
             <h1 className="document-title document-title-readonly">{note.title || "未命名笔记"}</h1>
           ) : (
-            <input
+            <textarea
               ref={titleInputRef}
               aria-label="笔记标题"
               className="document-title"
               onBlur={commitTitle}
               onChange={(event) => {
+                // 文件名必须保持单行，粘贴多行文本时改成空格；显示换行交给文本框自动折行。
+                const title = event.target.value.replace(/[\r\n]+/g, " ")
                 if (isVaultNote) {
-                  setTitleDraft(event.target.value)
+                  setTitleDraft(title)
                   return
                 }
-                onUpdateNote({ title: event.target.value })
+                onUpdateNote({ title })
               }}
               onKeyDown={(event) => {
                 // 中文输入法的确认键只提交候选词，不能顺带重命名或让输入框失焦。
@@ -2749,6 +2770,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, atta
               }}
               placeholder="输入标题"
               readOnly={viewLocked}
+              rows={1}
               value={isVaultNote ? titleDraft : note.title}
             />
           )}

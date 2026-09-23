@@ -14,9 +14,9 @@ function awaitContextMenuOpener(page: Page, target: Locator) {
   }
 }
 
-async function seedCachedVault(page: Page, noteContent?: string, readOnly = false, secondNoteContent = "# 第二篇\n\n正文 B") {
+async function seedCachedVault(page: Page, noteContent?: string, readOnly = false, secondNoteContent = "# 第二篇\n\n正文 B", firstTitle = "第一篇") {
   await page.goto("/#/notes")
-  await page.evaluate(async ({ noteContent, readOnly, secondNoteContent }) => {
+  await page.evaluate(async ({ noteContent, readOnly, secondNoteContent, firstTitle }) => {
     const cacheId = "e2e-vault"
     const noteA = {
       content: "",
@@ -24,14 +24,14 @@ async function seedCachedVault(page: Page, noteContent?: string, readOnly = fals
       contentLoaded: false,
       folder: "测试",
       id: "webdav:/Swell/测试/第一篇.md",
-      preview: "第一篇摘要",
+      preview: `${firstTitle}摘要`,
       readOnly,
       remotePath: "/Swell/测试/第一篇.md",
       revision: '"a1"',
       source: readOnly ? "local" : "webdav",
       starred: false,
       syncStatus: "synced",
-      title: "第一篇",
+      title: firstTitle,
       updatedAt: "刚刚",
     }
     const noteB = {
@@ -102,7 +102,7 @@ async function seedCachedVault(page: Page, noteContent?: string, readOnly = fals
       transaction.onerror = () => reject(transaction.error)
     })
     database.close()
-  }, { noteContent, readOnly, secondNoteContent })
+  }, { noteContent, readOnly, secondNoteContent, firstTitle })
   await page.reload()
 }
 
@@ -529,6 +529,26 @@ test.describe("编辑细节", () => {
     await title.focus()
     await title.press("Enter")
     await expect(workspace.locator(".cm-content")).toBeFocused()
+  })
+
+  test("长标题在列表和编辑器中换行显示", async ({ page }, testInfo) => {
+    const longTitle = "这是一篇标题很长的笔记用来确认移动端和桌面端都能自动换行而不需要横向滑动查看全文".repeat(2)
+    await seedCachedVault(page, undefined, false, undefined, longTitle)
+    const mobile = testInfo.project.name === "mobile-chrome"
+    const workspace = page.locator(mobile ? ".mobile-workspace:visible" : ".desktop-workspace:visible")
+    if (mobile) await workspace.getByText("测试", { exact: true }).first().click()
+
+    const row = workspace.locator(".note-list-row").filter({ hasText: longTitle })
+    await expect(row).toBeVisible()
+    await expect.poll(() => row.locator(".note-row-heading strong").evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThan(20)
+    await row.click()
+
+    const title = workspace.getByRole("textbox", { name: "笔记标题" })
+    await expect(title).toHaveValue(longTitle)
+    await expect.poll(() => title.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThan(40)
+    expect(await title.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+    await title.fill("第一行\n第二行")
+    await expect(title).toHaveValue("第一行 第二行")
   })
 
   test("工具栏整行格式保持选区并支持再次取消", async ({ page }, testInfo) => {

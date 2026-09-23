@@ -718,11 +718,11 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .dark .note-list-row[data-active="true"] { background: linear-gradient(90deg,color-mix(in oklab,var(--primary) 22%,var(--background)),color-mix(in oklab,var(--primary) 7%,var(--background))); }
 .dark .note-list-row[data-active="true"] strong { color: var(--foreground); }
 .dark .note-list-row[data-active="true"] .note-row-summary { color: color-mix(in oklab,var(--muted-foreground) 86%,var(--foreground)); }
-.note-row-heading { display: flex; align-items: center; gap: 8px; }
-.note-row-heading strong { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 650; line-height: 20px; }
+.note-row-heading { display: flex; align-items: flex-start; gap: 8px; }
+.note-row-heading strong { min-width: 0; flex: 1; font-size: 13px; font-weight: 650; line-height: 20px; overflow-wrap: anywhere; }
 .starred-icon { fill: currentColor; color: #f2a100; }
 .pinned-icon { flex-shrink: 0; color: var(--primary); }
-.note-row-heading svg { width: 13px; height: 13px; }
+.note-row-heading svg { width: 13px; height: 13px; margin-top: 3px; }
 .note-row-tag { max-width: 72px; overflow: hidden; border-radius: 4px; background: var(--blue-soft); padding: 1px 4px; color: var(--primary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 /* 日期与摘要共用一行，避免空的第三行占用列表高度；标题、日期仍各自保留可扫读的层级。 */
 .note-row-summary { display: flex; min-width: 0; align-items: baseline; gap: 8px; overflow: hidden; margin-top: 2px; color: var(--muted-foreground); font-size: 11.5px; line-height: 18px; white-space: nowrap; }
@@ -836,7 +836,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .attachment-queue-retry:disabled { cursor: not-allowed; opacity: 0.55; }
 .attachment-queue-recovery { display: flex; flex-wrap: wrap; gap: 6px; }
 .document-canvas { width: min(100%,var(--editor-page-width,960px)); min-width: 0; max-width: 100%; margin: 0 auto; padding: 48px 56px 80px; }
-.document-title { width: 100%; border: 0; background: transparent; outline: none; color: #1d2530; font-size: clamp(25px,2.3vw,34px); line-height: 1.2; font-weight: 720; letter-spacing: -.035em; }
+.document-title { display: block; box-sizing: border-box; width: 100%; min-height: 1.2em; border: 0; padding: 0; background: transparent; outline: none; color: #1d2530; font: inherit; font-size: clamp(25px,2.3vw,34px); line-height: 1.2; font-weight: 720; letter-spacing: -.035em; overflow: hidden; overflow-wrap: anywhere; resize: none; }
 .document-title[readonly] { cursor: default; }
 .document-title-readonly { margin: 0; overflow-wrap: anywhere; }
 .document-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin: 13px 0 30px; color: var(--muted-foreground); font-size: 11px; }
