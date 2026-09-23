@@ -1,0 +1,30 @@
+src/components/editor/markdown-table.css
+  s_0d9a843cd31323::t_7589126928da55 103-106
+  s_0d9a843cd31323::t_96949560f6873c 107
+src/components/editor/selection-rendering.ts
+  s_0d9a843cd31323::t_7589126928da55 19,23-24
+  s_0d9a843cd31323::t_96949560f6873c 22,25-33
+  s_0d9a843cd31323::t_ae81b80f028233 34
+src/App.css
+  s_0d9a843cd31323::t_feadade4d67d05 858-860,862-865
+src/components/editor/selection-rendering.test.ts
+  s_0d9a843cd31323::t_7589126928da55 61-67,74
+  s_0d9a843cd31323::t_22c347e72a869c 3-4,7,68-73,75-89
+  s_0d9a843cd31323::t_f525de3d518f5f 90-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "4ada076fea992be0f88d70057af8d019163f6bc2",
+  "prompts": {},
+  "sessions": {
+    "s_0d9a843cd31323": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c84f-1312-7d10-9612-3e5400d1f3d5",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
