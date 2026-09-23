@@ -85,19 +85,50 @@ function resolveVisibleBand(container: HTMLElement, scroller: HTMLElement): Edge
   return clampBandByBars(band, rects)
 }
 
-export function scrollCursorIntoView(view: EditorView) {
-  const scroller = findScrollParent(view.dom)
-  if (!scroller) return
+function nativeContentCaretRect(view: EditorView): CursorRect | null {
+  const selection = document.getSelection()
+  if (!selection?.isCollapsed || !selection.anchorNode || !view.contentDOM.contains(selection.anchorNode) || !selection.rangeCount) return null
+  const range = selection.getRangeAt(0)
+  if (typeof range.getBoundingClientRect !== "function") return null
+  const rect = range.getBoundingClientRect()
+  return rect.height > 0 ? rect : null
+}
+
+function editorCaretRect(view: EditorView): CursorRect {
   const head = view.state.selection.main.head
-  // 键盘缩小外层视口后，文末所在行可能已被 CodeMirror 虚拟化卸载，coordsAtPos
-  // 会返回 null。使用始终可查询的行块位置先把它滚回来，否则只有再次输入才恢复。
+  const native = view.dom.dataset.selectionRendering === "native" ? nativeContentCaretRect(view) : null
+  if (native) return native
+  // 虚拟化卸载文末行时 coordsAtPos 会为空；行块位置仍能用于先滚回可见区域。
   const block = view.lineBlockAt(head)
-  const cursor = view.coordsAtPos(head) ?? {
+  return view.coordsAtPos(head) ?? {
     top: view.documentTop + block.top,
     bottom: view.documentTop + block.bottom,
   }
-  const delta = computeScrollAdjustment(cursor, resolveVisibleBand(view.dom, scroller))
+}
+
+export function syncCodeMirrorCaretPaint(view: EditorView) {
+  if (view.dom.dataset.selectionRendering !== "native") return
+  const content = view.contentDOM
+  if (!view.hasFocus || !view.state.selection.main.empty) {
+    content.style.removeProperty("caret-color")
+    return
+  }
+  const scroller = findScrollParent(view.dom)
+  if (!scroller) return
+  const band = resolveVisibleBand(view.dom, scroller)
+  const caret = editorCaretRect(view)
+  // iOS 的插入线可能比 CodeMirror 测得的行框更长，临近工具栏时保留余量。
+  if (caret.top >= band.top && caret.bottom <= band.bottom - 16) content.style.removeProperty("caret-color")
+  else content.style.caretColor = "transparent"
+}
+
+export function scrollCursorIntoView(view: EditorView) {
+  const scroller = findScrollParent(view.dom)
+  if (!scroller) return
+  const cursor = editorCaretRect(view)
+  const delta = computeScrollAdjustment(cursor, resolveVisibleBand(view.dom, scroller), view.dom.dataset.selectionRendering === "native" ? 32 : 24)
   if (delta !== 0) scroller.scrollTop += delta
+  syncCodeMirrorCaretPaint(view)
 }
 
 // 表格单元格的 textarea 持有焦点时 CodeMirror 本身失焦，光标跟随不会触发；
