@@ -1786,11 +1786,13 @@ const NoteListRow = memo(function NoteListRow({ active, contextActions, note, on
   )
   const longPressProps = useLongPress(handleLongPress)
   const previewText = useSearchMatch(note, query)
+  const folder = note.folder ?? deriveFolder(note)
   const row = (
     <button
       className="note-list-row"
       data-active={active}
       onClick={() => onSelect(note)}
+      title={[note.title || "未命名笔记", folder, ...(note.tags ?? []).map((tag) => `#${tag}`)].filter(Boolean).join(" · ")}
       type="button"
       {...longPressProps}
     >
@@ -1798,13 +1800,11 @@ const NoteListRow = memo(function NoteListRow({ active, contextActions, note, on
         <strong><HighlightedText query={query} text={note.title || "未命名笔记"} /></strong>
         {note.pinned ? <Pin aria-label="已置顶" className="pinned-icon" /> : null}
         {note.starred ? <Star className="starred-icon" /> : null}
+        {note.tags?.length ? <span className="note-row-tag">#{note.tags[0]}{note.tags.length > 1 ? ` +${note.tags.length - 1}` : ""}</span> : null}
       </div>
-      <p><HighlightedText query={query} text={previewText} /></p>
-      {note.tags?.length ? <div className="note-row-tags">{note.tags.slice(0, 3).map((tag) => <span key={tag}>#{tag}</span>)}</div> : null}
-      <div className="note-row-meta">
+      <div className="note-row-summary">
         <time>{note.updatedAt}</time>
-        <span>{note.folder ?? deriveFolder(note)}</span>
-        {active ? <span className="unread-dot" /> : null}
+        <span className="note-row-preview"><HighlightedText query={query} text={previewText || folder} /></span>
       </div>
     </button>
   )
@@ -4130,9 +4130,10 @@ function VirtualNoteRows({
   ], [folders, noteSort, notes, todayIndex])
   const virtualizer = useVirtualizer({
     count: items.length,
+    // 初始估高与 CSS 行高保持一致，滚动位置恢复时才不会在真实测量后跳动。
     estimateSize: (index) => items[index]?.kind === "heading"
       ? 35
-      : items[index]?.kind === "folder" ? mobile ? 58 : 56 : mobile ? 96 : 104,
+      : items[index]?.kind === "folder" ? mobile ? 58 : 56 : 64,
     getItemKey: (index) => items[index]?.key ?? index,
     getScrollElement: () => viewportRef.current,
     // 挂载首帧就把渲染窗口摆到恢复位置；否则先按顶部渲染、滚动恢复再逐帧追上来，

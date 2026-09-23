@@ -707,7 +707,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .virtual-note-row { position: absolute; top: 0; left: 0; width: 100%; }
 .note-group-label { display: flex; height: 32px; align-items: center; gap: 6px; padding: 0 16px; color: var(--muted-foreground); font-size: 10.5px; font-weight: 620; }
 .note-group-label small { font-size: inherit; font-weight: 450; }
-.note-list-row { position: relative; display: block; width: 100%; min-height: 92px; border-bottom: 1px solid var(--border); padding: 13px 16px; text-align: left; transition: background-color 130ms ease; -webkit-tap-highlight-color: transparent; }
+.note-list-row { position: relative; display: block; width: 100%; min-height: 64px; border-bottom: 1px solid var(--border); padding: 9px 16px; text-align: left; transition: background-color 130ms ease; -webkit-tap-highlight-color: transparent; }
 .note-list-row:hover { background: var(--muted); }
 /* 触摸端没有 hover，按下时必须自己给出反馈，否则点一下像没反应。 */
 .note-list-row:active { background: color-mix(in oklab,var(--muted) 82%,var(--foreground) 6%); transition-duration: 60ms; }
@@ -717,24 +717,23 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .note-list-row[data-active="true"]::before { transform: scaleY(1); }
 .dark .note-list-row[data-active="true"] { background: linear-gradient(90deg,color-mix(in oklab,var(--primary) 22%,var(--background)),color-mix(in oklab,var(--primary) 7%,var(--background))); }
 .dark .note-list-row[data-active="true"] strong { color: var(--foreground); }
-.dark .note-list-row[data-active="true"] p,
-.dark .note-list-row[data-active="true"] .note-row-meta { color: color-mix(in oklab,var(--muted-foreground) 86%,var(--foreground)); }
+.dark .note-list-row[data-active="true"] .note-row-summary { color: color-mix(in oklab,var(--muted-foreground) 86%,var(--foreground)); }
 .note-row-heading { display: flex; align-items: center; gap: 8px; }
-.note-row-heading strong { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 650; }
+.note-row-heading strong { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 650; line-height: 20px; }
 .starred-icon { fill: currentColor; color: #f2a100; }
 .pinned-icon { flex-shrink: 0; color: var(--primary); }
 .note-row-heading svg { width: 13px; height: 13px; }
-.note-list-row p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 1; margin: 7px 0 7px; color: var(--muted-foreground); font-size: 11.5px; line-height: 1.5; }
-.note-row-heading strong mark, .note-list-row p mark { background: var(--blue-soft); color: var(--primary); border-radius: 3px; padding: 0 1px; font-weight: inherit; }
-.note-row-meta { display: flex; align-items: center; gap: 7px; color: #7e8793; font-size: 10.5px; }
+.note-row-tag { max-width: 72px; overflow: hidden; border-radius: 4px; background: var(--blue-soft); padding: 1px 4px; color: var(--primary); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+/* 日期与摘要共用一行，避免空的第三行占用列表高度；标题、日期仍各自保留可扫读的层级。 */
+.note-row-summary { display: flex; min-width: 0; align-items: baseline; gap: 8px; overflow: hidden; margin-top: 2px; color: var(--muted-foreground); font-size: 11.5px; line-height: 18px; white-space: nowrap; }
+.note-row-summary time { flex: 0 0 auto; }
+.note-row-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-row-heading strong mark, .note-row-preview mark { background: var(--blue-soft); color: var(--primary); border-radius: 3px; padding: 0 1px; font-weight: inherit; }
 .note-list-empty { display: flex; min-height: 280px; flex-direction: column; align-items: center; justify-content: center; padding: 28px 22px; color: var(--muted-foreground); text-align: center; }
 .note-list-empty > svg { width: 25px; height: 25px; margin-bottom: 12px; color: var(--primary); }
 .note-list-empty strong { color: var(--foreground); font-size: 13px; }
 .note-list-empty p { max-width: 210px; margin: 7px 0 15px; font-size: 11.5px; line-height: 1.6; }
 .note-list-empty[data-status="loading"] { min-height: 220px; }
-.note-row-meta span:not(.unread-dot) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.unread-dot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
-
 .editor-titlebar { display: flex; min-height: 54px; align-items: center; border-bottom: 1px solid var(--border); padding: 0 16px; }
 .editor-breadcrumb { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--muted-foreground); font-size: 11px; }
 .editor-breadcrumb svg { width: 13px; height: 13px; }
@@ -935,8 +934,6 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
    和边框实际撑到 145px）比真实行高 94px 高出一截：切换页面时新挂载的列表会先按占位撑开，
    下一帧完成可见性判定后再收回来，看起来就是列表闪一下。
    列表本身已经虚拟化，只渲染视口附近的行，这层跳过渲染是重复优化，去掉即可。 */
-.note-row-tags { display: flex; gap: 5px; margin-top: 7px; overflow: hidden; }
-.note-row-tags span { border-radius: 999px; background: var(--blue-soft); padding: 1px 6px; color: var(--primary); font-size: 10px; white-space: nowrap; }
 .markdown-preview { width: 100%; min-width: 0; max-width: 100%; min-height: calc(100dvh - 250px); color: #28313e; font-size: var(--editor-font-size,16px); line-height: 1.85; overflow-wrap: anywhere; }
 /* 切笔记时正文整块重建。给一个短促淡入，内容就不会硬生生地跳上来；嵌入的引用块不参与，避免页面里到处闪。 */
 .markdown-preview:not(.markdown-preview-embed) { animation: document-content-in 170ms ease-out; }
@@ -1240,7 +1237,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .mobile-note-groups .folder-list-row { min-height: 58px; grid-template-columns: 36px minmax(0,1fr) 18px; padding: 9px 16px 9px 18px; }
   .mobile-note-groups .folder-list-row strong { font-size: 14px; }
   .mobile-note-groups .folder-list-row small { font-size: 11px; }
-  .mobile-note-groups .note-list-row { min-height: 92px; padding: 13px 18px; }
+  .mobile-note-groups .note-list-row { min-height: 64px; padding: 9px 18px; }
   .mobile-library-row-main, .mobile-note-groups .folder-list-row, .mobile-note-groups .note-list-row { -webkit-touch-callout: none; touch-action: pan-y; user-select: none; }
   /* 重命名等面板自带 autoFocus 输入框，一打开就弹键盘；面板贴着视口底边，必须一起抬到键盘上方才看得见正在输入的内容。 */
   .mobile-action-sheet { position: fixed !important; inset: auto 0 var(--keyboard-inset,0px) !important; box-sizing: border-box; width: 100vw !important; min-width: 100vw; max-width: 100vw !important; max-height: min(78dvh,680px,calc(100dvh - var(--keyboard-inset,0px) - 32px)); margin: 0; translate: none !important; transform: none !important; overflow: hidden; border-radius: 20px 20px 0 0 !important; padding: 18px calc(16px + env(safe-area-inset-right,0px)) calc(16px + max(0px,env(safe-area-inset-bottom) - var(--keyboard-inset,0px))) calc(16px + env(safe-area-inset-left,0px)); }
