@@ -3,7 +3,7 @@ import { EditorView, WidgetType } from "@codemirror/view"
 
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
 
-import { keepTextareaCaretInVisibleBand } from "./cursor-visibility"
+import { scrollElementIntoVisibleBand } from "./cursor-visibility"
 
 import {
   alignTableColumn,
@@ -1207,22 +1207,14 @@ export class TableWidget extends WidgetType {
     // 键盘动画期间合并事件；跨过 useKeyboardInset 写布局的帧，避免文末单元格
     // 的滚动被旧容器高度截断，必须再输入字符才露出光标。
     let followFrame = 0
-    let paintFrame = 0
     const editorViewport = input.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')
-    const syncCaretPaint = () => {
-      if (paintFrame) return
-      paintFrame = requestAnimationFrame(() => {
-        paintFrame = 0
-        if (!finished && document.activeElement === input) keepTextareaCaretInVisibleBand(input, false)
-      })
-    }
     const scheduleKeyboardFollow = () => {
       if (followFrame) return
       followFrame = requestAnimationFrame(() => {
         followFrame = requestAnimationFrame(() => {
           followFrame = 0
           if (finished || document.activeElement !== input) return
-          if (keepTextareaCaretInVisibleBand(input)) scheduleKeyboardFollow()
+          scrollElementIntoVisibleBand(input)
         })
       })
     }
@@ -1231,19 +1223,13 @@ export class TableWidget extends WidgetType {
     // 系统键盘动画与应用缩小编辑区不一定同一帧结束；以实际滚动视口尺寸再校正一次。
     const viewportObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleKeyboardFollow)
     if (editorViewport) viewportObserver?.observe(editorViewport)
-    editorViewport?.addEventListener("scroll", syncCaretPaint, { passive: true })
     input.addEventListener("input", scheduleKeyboardFollow)
-    input.addEventListener("select", scheduleKeyboardFollow)
     detachKeyboardFollow = () => {
       if (followFrame) cancelAnimationFrame(followFrame)
-      if (paintFrame) cancelAnimationFrame(paintFrame)
       followFrame = 0
-      paintFrame = 0
       window.visualViewport?.removeEventListener("resize", scheduleKeyboardFollow)
       viewportObserver?.disconnect()
-      editorViewport?.removeEventListener("scroll", syncCaretPaint)
       input.removeEventListener("input", scheduleKeyboardFollow)
-      input.removeEventListener("select", scheduleKeyboardFollow)
     }
     input.addEventListener("paste", (event) => {
       const transfer = event.clipboardData

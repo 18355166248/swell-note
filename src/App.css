@@ -1304,9 +1304,9 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .note-editor[data-compact="true"] .markdown-table-shell[data-overflow="true"][data-at-start="true"] .markdown-table-scroll-hint { opacity: 1; transform: translateX(0); }
   .note-editor[data-compact="true"] .markdown-editor-shell .cm-editor { font-size: var(--editor-font-size,16px); }
   .note-editor[data-compact="true"] .markdown-editor-shell .cm-scroller { line-height: 1.8; }
-  /* iOS 原生 textarea 光标可能作为独立绘制层越过滚动视口；把正文收进下层，
-     快捷栏放到上层并保留向上弹出的“更多”菜单。 */
-  .note-editor[data-compact="true"] .editor-body { position: relative; z-index: 0; isolation: isolate; }
+  /* 正文与格式栏同在 WKWebView：iOS 原生插入光标不一定遵守兄弟元素的 z-index。
+     在正文容器的边界裁切整个绘制层，让光标保持原生显示，但不能画进下方快捷栏。 */
+  .note-editor[data-compact="true"] .editor-body { position: relative; z-index: 0; isolation: isolate; overflow: hidden; clip-path: inset(0); }
   .excalidraw-plugin .App-toolbar-container { max-width: calc(100vw - 20px); overflow-x: auto; scrollbar-width: none; }
   .excalidraw-plugin .App-toolbar-container::-webkit-scrollbar { display: none; }
   .excalidraw-plugin .App-toolbar-container .ToolIcon__icon { height: 40px !important; }

@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 // @vitest-environment jsdom
-import type { EditorView } from "@codemirror/view"
-import { bottomOverlayHeightFromRects, clampBandByBars, computeScrollAdjustment, isVerticalScroller, keepTextareaCaretInVisibleBand, scrollElementIntoVisibleBand, syncCodeMirrorCaretPaint } from "./cursor-visibility"
+import { bottomOverlayHeightFromRects, clampBandByBars, computeScrollAdjustment, isVerticalScroller, scrollElementIntoVisibleBand } from "./cursor-visibility"
 
 // 可视带取编辑器滚动容器与底部工具栏之间的那段，键盘弹起后 bottom 会大幅上移。
 const band = { bottom: 460, top: 60 }
@@ -122,81 +121,5 @@ it("表格横滑层纵向也溢出时，仍滚动编辑器视口以露出输入�
     expect(tableScroll.scrollTop).toBe(0)
   } finally {
     viewport.remove()
-  }
-})
-
-it("原生光标进入工具栏区域时隐藏，返回编辑区后恢复", () => {
-  const editor = document.createElement("div")
-  editor.className = "note-editor"
-  const viewport = document.createElement("div")
-  viewport.dataset.slot = "scroll-area-viewport"
-  const input = document.createElement("textarea")
-  const toolbar = document.createElement("div")
-  toolbar.className = "formatting-toolbar"
-  editor.append(viewport, toolbar)
-  viewport.append(input)
-  document.body.append(editor)
-  viewport.getBoundingClientRect = () => ({ top: 0, bottom: 400, left: 0, right: 300, width: 300, height: 400, x: 0, y: 0, toJSON: () => ({}) })
-  toolbar.getBoundingClientRect = () => ({ top: 360, bottom: 420, left: 0, right: 300, width: 300, height: 60, x: 0, y: 360, toJSON: () => ({}) })
-  let inputTop = 380
-  input.getBoundingClientRect = () => ({ top: inputTop, bottom: inputTop + 40, left: 0, right: 100, width: 100, height: 40, x: 0, y: inputTop, toJSON: () => ({}) })
-  try {
-    keepTextareaCaretInVisibleBand(input, false)
-    expect(input.style.caretColor).toBe("transparent")
-    inputTop = 100
-    keepTextareaCaretInVisibleBand(input, false)
-    expect(input.style.caretColor).toBe("")
-  } finally {
-    editor.remove()
-  }
-})
-
-it("iOS 正文光标滚到格式栏时隐藏，滚回正文后恢复", () => {
-  const editor = document.createElement("div")
-  editor.className = "note-editor"
-  const viewport = document.createElement("div")
-  viewport.dataset.slot = "scroll-area-viewport"
-  const root = document.createElement("div")
-  root.dataset.selectionRendering = "native"
-  const content = document.createElement("div")
-  root.append(content)
-  viewport.append(root)
-  const toolbar = document.createElement("div")
-  toolbar.className = "formatting-toolbar"
-  editor.append(viewport, toolbar)
-  document.body.append(editor)
-  viewport.getBoundingClientRect = () => ({ top: 0, bottom: 400, left: 0, right: 300, width: 300, height: 400, x: 0, y: 0, toJSON: () => ({}) })
-  toolbar.getBoundingClientRect = () => ({ top: 360, bottom: 420, left: 0, right: 300, width: 300, height: 60, x: 0, y: 360, toJSON: () => ({}) })
-  let caretTop = 350
-  const view = {
-    dom: root,
-    contentDOM: content,
-    hasFocus: true,
-    state: { selection: { main: { empty: true, head: 0 } } },
-    coordsAtPos: () => ({ top: caretTop, bottom: caretTop + 30 }),
-    lineBlockAt: () => ({ top: caretTop, bottom: caretTop + 30 }),
-    documentTop: 0,
-  } as unknown as EditorView
-  try {
-    syncCodeMirrorCaretPaint(view)
-    expect(content.style.caretColor).toBe("transparent")
-    caretTop = 100
-    syncCodeMirrorCaretPaint(view)
-    expect(content.style.caretColor).toBe("")
-    // 系统 Range 与 CodeMirror 坐标不一致时，以真正在工具栏里的原生光标为准。
-    content.textContent = "正文"
-    const range = document.createRange()
-    range.setStart(content.firstChild!, 1)
-    range.collapse(true)
-    range.getBoundingClientRect = () => ({ top: 350, bottom: 380, left: 0, right: 0, width: 0, height: 30, x: 0, y: 350, toJSON: () => ({}) })
-    const selection = document.getSelection()!
-    selection.removeAllRanges()
-    selection.addRange(range)
-    syncCodeMirrorCaretPaint(view)
-    expect(content.style.caretColor).toBe("transparent")
-    selection.removeAllRanges()
-  } finally {
-    document.getSelection()?.removeAllRanges()
-    editor.remove()
   }
 })

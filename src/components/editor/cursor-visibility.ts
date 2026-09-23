@@ -85,50 +85,19 @@ function resolveVisibleBand(container: HTMLElement, scroller: HTMLElement): Edge
   return clampBandByBars(band, rects)
 }
 
-function nativeContentCaretRect(view: EditorView): CursorRect | null {
-  const selection = document.getSelection()
-  if (!selection?.isCollapsed || !selection.anchorNode || !view.contentDOM.contains(selection.anchorNode) || !selection.rangeCount) return null
-  const range = selection.getRangeAt(0)
-  if (typeof range.getBoundingClientRect !== "function") return null
-  const rect = range.getBoundingClientRect()
-  return rect.height > 0 ? rect : null
-}
-
-function editorCaretRect(view: EditorView): CursorRect {
-  const head = view.state.selection.main.head
-  const native = view.dom.dataset.selectionRendering === "native" ? nativeContentCaretRect(view) : null
-  if (native) return native
-  // 虚拟化卸载文末行时 coordsAtPos 会为空；行块位置仍能用于先滚回可见区域。
-  const block = view.lineBlockAt(head)
-  return view.coordsAtPos(head) ?? {
-    top: view.documentTop + block.top,
-    bottom: view.documentTop + block.bottom,
-  }
-}
-
-export function syncCodeMirrorCaretPaint(view: EditorView) {
-  if (view.dom.dataset.selectionRendering !== "native") return
-  const content = view.contentDOM
-  if (!view.hasFocus || !view.state.selection.main.empty) {
-    content.style.removeProperty("caret-color")
-    return
-  }
-  const scroller = findScrollParent(view.dom)
-  if (!scroller) return
-  const band = resolveVisibleBand(view.dom, scroller)
-  const caret = editorCaretRect(view)
-  // iOS 的插入线可能比 CodeMirror 测得的行框更长，临近工具栏时保留余量。
-  if (caret.top >= band.top && caret.bottom <= band.bottom - 16) content.style.removeProperty("caret-color")
-  else content.style.caretColor = "transparent"
-}
-
 export function scrollCursorIntoView(view: EditorView) {
   const scroller = findScrollParent(view.dom)
   if (!scroller) return
-  const cursor = editorCaretRect(view)
-  const delta = computeScrollAdjustment(cursor, resolveVisibleBand(view.dom, scroller), view.dom.dataset.selectionRendering === "native" ? 32 : 24)
+  const head = view.state.selection.main.head
+  // 键盘缩小外层视口后，文末所在行可能已被 CodeMirror 虚拟化卸载，coordsAtPos
+  // 会返回 null。使用始终可查询的行块位置先把它滚回来，否则只有再次输入才恢复。
+  const block = view.lineBlockAt(head)
+  const cursor = view.coordsAtPos(head) ?? {
+    top: view.documentTop + block.top,
+    bottom: view.documentTop + block.bottom,
+  }
+  const delta = computeScrollAdjustment(cursor, resolveVisibleBand(view.dom, scroller))
   if (delta !== 0) scroller.scrollTop += delta
-  syncCodeMirrorCaretPaint(view)
 }
 
 // 表格单元格的 textarea 持有焦点时 CodeMirror 本身失焦，光标跟随不会触发；
@@ -138,65 +107,4 @@ export function scrollElementIntoVisibleBand(element: HTMLElement, margin = 12) 
   if (!scroller) return
   const delta = computeScrollAdjustment(element.getBoundingClientRect(), resolveVisibleBand(element, scroller), margin)
   if (delta !== 0) scroller.scrollTop += delta
-}
-
-function textareaCaretRect(input: HTMLTextAreaElement): CursorRect {
-  const style = getComputedStyle(input)
-  const inputRect = input.getBoundingClientRect()
-  // textarea 的原生光标没有可读取的 DOM Range。用同宽、同字体的镜像只测光标所在行，
-  // 不改选区和输入法组合态；表格单元格较高时不能拿整个输入框的底边代替光标位置。
-  const mirror = document.createElement("div")
-  Object.assign(mirror.style, {
-    position: "fixed",
-    left: "-10000px",
-    top: "0",
-    visibility: "hidden",
-    boxSizing: style.boxSizing,
-    width: `${inputRect.width}px`,
-    padding: style.padding,
-    border: style.border,
-    fontFamily: style.fontFamily,
-    fontSize: style.fontSize,
-    fontWeight: style.fontWeight,
-    fontStyle: style.fontStyle,
-    lineHeight: style.lineHeight,
-    letterSpacing: style.letterSpacing,
-    textAlign: style.textAlign,
-    textIndent: style.textIndent,
-    whiteSpace: "pre-wrap",
-    overflowWrap: style.overflowWrap,
-    wordBreak: style.wordBreak,
-    tabSize: style.tabSize,
-  })
-  mirror.append(document.createTextNode(input.value.slice(0, input.selectionEnd ?? 0)))
-  const marker = document.createElement("span")
-  marker.textContent = "\u200b"
-  mirror.append(marker)
-  document.body.append(mirror)
-  const markerRect = marker.getBoundingClientRect()
-  const mirrorRect = mirror.getBoundingClientRect()
-  mirror.remove()
-  const lineHeight = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize) * 1.2 || 24
-  const top = inputRect.top + markerRect.top - mirrorRect.top - input.scrollTop
-  return { top, bottom: top + lineHeight }
-}
-
-// WKWebView 的原生插入光标可能独立于 DOM 层级绘制，z-index 盖不住它。
-// 先把光标所在行滚回编辑区；若滚动已到极限或动画尚未结束，暂时关掉原生 caret，
-// 滚动/布局变化后再测量并恢复，避免蓝色竖线画到快捷操作栏上。
-export function keepTextareaCaretInVisibleBand(input: HTMLTextAreaElement, scroll = true): boolean {
-  const scroller = findScrollParent(input)
-  if (!scroller) return false
-  const band = resolveVisibleBand(input, scroller)
-  const caret = textareaCaretRect(input)
-  const before = scroller.scrollTop
-  if (scroll) {
-    const delta = computeScrollAdjustment(caret, band, 12)
-    if (delta !== 0) scroller.scrollTop += delta
-  }
-  const moved = Math.abs(scroller.scrollTop - before) > 0.5
-  const visible = caret.top >= band.top && caret.bottom <= band.bottom
-  if (visible) input.style.removeProperty("caret-color")
-  else input.style.caretColor = "transparent"
-  return moved
 }

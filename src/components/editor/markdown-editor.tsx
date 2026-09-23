@@ -14,7 +14,7 @@ import { EditorControl } from "./core/editor-control"
 import type { EditorExtensionContext } from "./core/create-editor"
 import type { EditorSettings } from "./core/editor-types"
 import { editorSessionStore, sessionFields } from "./editor-session"
-import { bottomOverlayHeight, scrollCursorIntoView, syncCodeMirrorCaretPaint } from "./cursor-visibility"
+import { bottomOverlayHeight, scrollCursorIntoView } from "./cursor-visibility"
 import { applyLinkTarget, detectFormatState, focusExistingLinkUrl, linkInsertion, linkTargetAt, linkTargetInText, removeLinkTarget, type EditorFormatState, type EditorLinkTarget, type InlineMarkKind, markdownInputEnhancements, toggleBlockFormat, toggleInlineMark, wrapSelectionAsLink } from "./markdown-input"
 import { createClipboardImageCoverage, htmlToMarkdown, isInlineMarkdownFragment, shouldInsertClipboardImageFiles, type HtmlImagePlaceholder } from "./html-to-markdown"
 import type {
@@ -213,7 +213,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       const viewport = window.visualViewport
       if (!compact || !viewport) return
       let frame = 0
-      let paintFrame = 0
       const follow = () => {
         frame = 0
         const control = controlRef.current
@@ -225,14 +224,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           frame = requestAnimationFrame(follow)
         })
       }
-      const schedulePaint = () => {
-        if (paintFrame) return
-        paintFrame = requestAnimationFrame(() => {
-          paintFrame = 0
-          const control = controlRef.current
-          if (control) syncCodeMirrorCaretPaint(control.getView())
-        })
-      }
       viewport.addEventListener("resize", schedule)
       // 此 effect 先于 EditorControl 的创建执行，所以监听已挂载的宿主，不能捕获空的 controlRef。
       const host = hostRef.current
@@ -241,18 +232,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       // 尺寸变化为准补一次校正，不监听滚动本身，避免用户手动阅读时被拉回光标。
       const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule)
       if (scroller) observer?.observe(scroller)
-      // 用户手动滚动时只更新系统光标的可见性，不把正文强行拉回原来的输入位置。
-      scroller?.addEventListener("scroll", schedulePaint, { passive: true })
       host?.addEventListener("focusin", schedule)
-      host?.addEventListener("focusout", schedulePaint)
       return () => {
         if (frame) cancelAnimationFrame(frame)
-        if (paintFrame) cancelAnimationFrame(paintFrame)
         viewport.removeEventListener("resize", schedule)
         observer?.disconnect()
-        scroller?.removeEventListener("scroll", schedulePaint)
         host?.removeEventListener("focusin", schedule)
-        host?.removeEventListener("focusout", schedulePaint)
       }
     }, [compact])
 
