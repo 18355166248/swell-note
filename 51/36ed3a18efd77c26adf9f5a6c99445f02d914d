@@ -1,0 +1,37 @@
+src/App.css
+  s_ed1175c7808b26::t_4117dc820bdfdb 1308-1312
+  s_ed1175c7808b26::t_8d997f332a61bc 1305-1306
+src/components/editor/markdown-editor.test.tsx
+  s_ed1175c7808b26::t_2cea7c2796d45b 118,127-129
+src/components/editor/selection-rendering.ts
+  s_ed1175c7808b26::t_2cea7c2796d45b 4,6-9
+src/components/editor/markdown-table.css
+  s_ed1175c7808b26::t_b955df3e7c1332 103-104
+src/components/editor/markdown-editor.tsx
+  s_ed1175c7808b26::t_b955df3e7c1332 207-209
+  s_ed1175c7808b26::t_4117dc820bdfdb 31,206,210-212
+  s_ed1175c7808b26::t_e659a4ed9e913d 213
+src/components/editor/selection-rendering.test.ts
+  s_ed1175c7808b26::t_b955df3e7c1332 50-53
+  s_ed1175c7808b26::t_2cea7c2796d45b 6,16,21,29,38-39,41-44,61
+src/components/editor/textarea-drawn-caret.ts
+  s_ed1175c7808b26::t_4117dc820bdfdb 1-115
+src/components/editor/textarea-drawn-caret.test.ts
+  s_ed1175c7808b26::t_791b265d695807 1-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "5136ed3a18efd77c26adf9f5a6c99445f02d914d",
+  "prompts": {},
+  "sessions": {
+    "s_ed1175c7808b26": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0cd61-5c83-7d71-a77f-63ae92ddf77b",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
