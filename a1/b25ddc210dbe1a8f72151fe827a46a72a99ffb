@@ -1,0 +1,22 @@
+src/App.css
+  s_8128b3b975934a::t_9e5d1d65bb55db 710,720,722,726-731,1240
+src/components/workspace/workspace.tsx
+  s_8128b3b975934a::t_225419f25a8f8a 1789,1795,1803,1805,1807,4136
+  s_8128b3b975934a::t_25a23d8102ee2b 4133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "a1b25ddc210dbe1a8f72151fe827a46a72a99ffb",
+  "prompts": {},
+  "sessions": {
+    "s_8128b3b975934a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0cd92-817e-76e3-b97c-9f5bdd4d786d",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
