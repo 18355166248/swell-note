@@ -1,0 +1,31 @@
+// @vitest-environment jsdom
+import { act } from "react"
+import { createRoot } from "react-dom/client"
+import { expect, it, vi } from "vitest"
+import MarkdownPreview from "./markdown-preview"
+
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+
+it("审计：附件读取失败后重试应发起第二次读取", async () => {
+  const host = document.createElement("div")
+  const root = createRoot(host)
+  const resolver = vi.fn(async () => null)
+  try {
+    await act(async () => root.render(<MarkdownPreview
+      content="[报告](./attachments/report.pdf)"
+      onLoadWikiNote={vi.fn()}
+      onResolveAsset={resolver}
+      onResolveWikiNote={() => ({ status: "missing" })}
+      onWikiLink={vi.fn()}
+    />))
+    const button = host.querySelector<HTMLButtonElement>(".markdown-attachment-button")!
+    expect(button).not.toBeNull()
+    await act(async () => button.click())
+    expect(button.textContent).toBe("重试读取附件")
+    expect(resolver).toHaveBeenCalledTimes(1)
+    await act(async () => button.click())
+    expect(resolver).toHaveBeenCalledTimes(2)
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
