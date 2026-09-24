@@ -889,7 +889,9 @@ function App() {
   autoSyncQueueKeyRef.current = autoSyncQueueKey
   const conflictCount = syncSummary.conflicts
   const folderOrderHasConflict = folderOrderSync?.status === "conflict"
-  const syncLabel = connected
+  const syncLabel = vaultSession && vaultSession.kind !== "webdav"
+    ? `${vaultSession.displayName} · ${vaultNoteCount} 篇`
+    : connected
     ? !isOnline
       ? `${pendingSyncCount} 项待同步 · 当前离线`
       : conflictCount > 0
