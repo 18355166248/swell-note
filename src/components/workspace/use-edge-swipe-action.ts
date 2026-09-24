@@ -7,6 +7,7 @@ const EDGE_ZONE_WIDTH = 32
 // 交接路由的兜底时长：略长于当前层滑出的 CSS 过渡（190ms），
 // transitionend 收不到时（被打断、reduce-motion 等）用它收尾。
 const EDGE_SWIPE_HANDOFF_FALLBACK_MS = 230
+const DRAWER_MAX_WIDTH = 320
 
 type EdgeSwipeKind = "back" | "drawer"
 type EdgeSwipePhase = "completing" | "dragging" | "idle" | "returning"
@@ -46,6 +47,7 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
   // 供下一次手势或组件卸载时处理，避免路由交接被丢掉或在卸载后才触发。
   const pendingHandoffRef = useRef<{ cancel: () => void; run: () => void } | null>(null)
   const [phase, setPhase] = useState<EdgeSwipePhase>("idle")
+  const [drawerOpenedBySwipe, setDrawerOpenedBySwipe] = useState(false)
   const phaseRef = useRef<EdgeSwipePhase>("idle")
   // 每次新手势或路由提交都会推进代际；异步 onComplete 只能收尾它发起时的那一代，
   // 避免旧页清理失败后把新页正在进行的手势强制复位。
@@ -88,12 +90,13 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
     element.style.setProperty("--edge-swipe-offset", `${offset}px`)
     element.style.setProperty("--edge-swipe-progress", `${progress}`)
   }
+  const drawerWidth = () => Math.min(window.innerWidth * 0.84, DRAWER_MAX_WIDTH)
 
   // 相位提交后、绘制前补齐目标变量：transition 随相位生效，变量在同一帧写入，
   // 动画才能从手指松开时的位置起播；idle 没有 transition，同一帧写入即瞬时复位。
   useLayoutEffect(() => {
     if (phase === "idle" || phase === "returning") applyVisual(0, 0)
-    else if (phase === "completing") applyVisual(window.innerWidth, 1)
+    else if (phase === "completing") applyVisual(kind === "drawer" ? drawerWidth() : window.innerWidth, 1)
   }, [phase])
 
   const schedule = (callback: () => void, delay: number) => {
@@ -129,6 +132,11 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
     applyVisual(0, 0)
     changePhase("idle")
   }, [navigationKey])
+  useEffect(() => {
+    if (kind !== "drawer") return
+    if (!enabled && phaseRef.current === "completing") changePhase("idle")
+    if (enabled) setDrawerOpenedBySwipe(false)
+  }, [enabled, kind])
   const updateDrag = (gesture: Gesture, currentX: number, currentY: number) => {
     const now = performance.now()
     const deltaX = Math.max(0, currentX - gesture.startX)
@@ -152,9 +160,10 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
       const focused = document.activeElement
       if (focused instanceof HTMLElement && isEditorSurface(focused)) focused.blur()
     }
-    const progress = getEdgeSwipeProgress(deltaX)
-    // 根目录手势只负责识别“打开导航”，拖动期间不移动正文；只有返回上页才做跟手转场。
-    applyVisual(kind === "drawer" ? 0 : deltaX, progress)
+    const offset = kind === "drawer" ? Math.min(deltaX, drawerWidth()) : deltaX
+    const progress = kind === "drawer" ? offset / drawerWidth() : getEdgeSwipeProgress(deltaX)
+    // 抽屉和遮罩读取同一组 CSS 变量；拖动期间只写 DOM，避免菜单内容跟着触摸频率重渲染。
+    applyVisual(offset, progress)
     changePhase("dragging")
     return "horizontal" as const
   }
@@ -174,12 +183,30 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
       return
     }
     if (kind === "drawer") {
-      try {
-        void Promise.resolve(onCompleteRef.current()).catch(() => undefined)
-      } catch {
-        // 打开抽屉失败不改变 history，根页保持原位即可。
+      changePhase("completing")
+      const drawer = workspaceRef.current?.querySelector<HTMLElement>(".mobile-navigation-drawer") ?? null
+      const completionGeneration = gestureGenerationRef.current
+      let done = false
+      const handoff = () => {
+        if (done) return
+        done = true
+        pendingHandoffRef.current = null
+        drawer?.removeEventListener("transitionend", onTransitionEnd)
+        let completion: boolean | void | Promise<boolean | void>
+        // 先标记手势打开，再提交导航；否则真实抽屉首次绘制会重播按钮入场动画，产生回跳。
+        setDrawerOpenedBySwipe(true)
+        try { completion = onCompleteRef.current() } catch { completion = false }
+        void Promise.resolve(completion).then((committed) => {
+          if (completionGeneration !== gestureGenerationRef.current) return
+          if (committed === false) { setDrawerOpenedBySwipe(false); returnToStart(completionGeneration) }
+        }).catch(() => { setDrawerOpenedBySwipe(false); returnToStart(completionGeneration) })
       }
-      reset()
+      function onTransitionEnd(event: TransitionEvent) {
+        if (event.target === drawer && event.propertyName === "transform") handoff()
+      }
+      drawer?.addEventListener("transitionend", onTransitionEnd)
+      schedule(handoff, EDGE_SWIPE_HANDOFF_FALLBACK_MS)
+      pendingHandoffRef.current = { cancel: () => { done = true; drawer?.removeEventListener("transitionend", onTransitionEnd) }, run: handoff }
       return
     }
     changePhase("completing")
@@ -328,6 +355,7 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
 
   return {
     active: phase !== "idle",
+    drawerOpenedBySwipe,
     bind: {
       ref: workspaceRef,
       "data-edge-swipe-kind": kind,

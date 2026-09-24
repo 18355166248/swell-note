@@ -39,21 +39,22 @@ function touchEvent(type: string, touches: Array<{ identifier: number; x: number
   return event
 }
 
-function Harness({ navigationKey, onComplete }: {
+function Harness({ kind = "back", navigationKey, onComplete }: {
+  kind?: "back" | "drawer"
   navigationKey: string
   onComplete: () => boolean | void | Promise<boolean | void>
 }) {
-  const edge = useEdgeSwipeAction(onComplete, true, "back", navigationKey)
-  return <div {...edge.bind}><div className="mobile-edge-swipe-current" /></div>
+  const edge = useEdgeSwipeAction(onComplete, true, kind, navigationKey)
+  return <div {...edge.bind}><div className="mobile-edge-swipe-current"><div className="mobile-navigation-drawer" /></div></div>
 }
 
-function renderHarness(navigationKey: string, onComplete: () => boolean | void | Promise<boolean | void>) {
+function renderHarness(navigationKey: string, onComplete: () => boolean | void | Promise<boolean | void>, kind: "back" | "drawer" = "back") {
   if (!container) {
     container = document.createElement("div")
     document.body.appendChild(container)
     root = createRoot(container)
   }
-  act(() => { root!.render(<Harness navigationKey={navigationKey} onComplete={onComplete} />) })
+  act(() => { root!.render(<Harness kind={kind} navigationKey={navigationKey} onComplete={onComplete} />) })
   return container.firstElementChild as HTMLElement
 }
 
@@ -74,6 +75,42 @@ afterEach(() => {
 })
 
 describe("useEdgeSwipeAction navigation handoff", () => {
+  it("moves the drawer with the finger and commits only after its transition", async () => {
+    const onComplete = vi.fn()
+    const workspace = renderHarness("root", onComplete, "drawer")
+    act(() => {
+      workspace.dispatchEvent(pointerEvent("pointerdown", 6))
+      workspace.dispatchEvent(pointerEvent("pointermove", 86))
+    })
+    expect(workspace.dataset.edgeSwipeState).toBe("dragging")
+    expect(workspace.style.getPropertyValue("--edge-swipe-offset")).toBe("80px")
+    expect(onComplete).not.toHaveBeenCalled()
+    act(() => { workspace.dispatchEvent(pointerEvent("pointerup", 86)) })
+    expect(workspace.dataset.edgeSwipeState).toBe("completing")
+    expect(onComplete).not.toHaveBeenCalled()
+    await act(async () => {
+      workspace.querySelector(".mobile-navigation-drawer")!.dispatchEvent(transitionEnd())
+      await Promise.resolve()
+    })
+    expect(onComplete).toHaveBeenCalledOnce()
+  })
+
+  it("returns a cancelled drawer drag to the closed position", () => {
+    vi.useFakeTimers()
+    const onComplete = vi.fn()
+    const workspace = renderHarness("root", onComplete, "drawer")
+    act(() => {
+      workspace.dispatchEvent(pointerEvent("pointerdown", 6))
+      workspace.dispatchEvent(pointerEvent("pointermove", 86))
+      workspace.dispatchEvent(pointerEvent("pointercancel", 86))
+    })
+    expect(workspace.dataset.edgeSwipeState).toBe("returning")
+    expect(workspace.style.getPropertyValue("--edge-swipe-offset")).toBe("0px")
+    act(() => { vi.advanceTimersByTime(190) })
+    expect(workspace.dataset.edgeSwipeState).toBe("idle")
+    expect(onComplete).not.toHaveBeenCalled()
+  })
+
   it("keeps the completed transform until the route key commits", async () => {
     const onComplete = vi.fn()
     let workspace = renderHarness("route-a", onComplete)

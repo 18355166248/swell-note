@@ -20,6 +20,7 @@
 
 - 打开目录或笔记使用 `PUSH`，浏览器后退、标题栏返回和完成的侧滑都执行同一个 `POP`。
 - 主导航抽屉是带 `location.state.mobileOverlay` 的 modal history entry。浏览器返回先关闭抽屉；从抽屉选择目标时用 `REPLACE` 消掉 overlay，并把目标作为页面栈的下一项。
+- 根页右滑时先挂载不可交互的抽屉预览，位移和遮罩随手指变化；松手完成后才提交 modal entry，取消则沿原位置回弹。待办和设置首页复用同一套预览手势。
 - 详情重命名使用 `REPLACE` 更新 URL，同时保留 entry 的 `mountKey` 和 `editorSessionKey`，避免 CodeMirror 重挂。
 - 深链没有站内上一条 history 时，保活层先挂载语义 fallback。返回使用 `REPLACE`，不会退出应用或停在空页面。
 - 切换笔记库会用 cache id 重建整个工作区页面栈，防止复用上一笔记库的筛选、滚动或编辑器实例。

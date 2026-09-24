@@ -11,18 +11,28 @@ async function swipeFromLeft(surface: Locator) {
       pointerType: "touch",
     }))
     send("pointerdown", 6)
-    send("pointermove", 110)
-    send("pointerup", 110)
+    send("pointermove", 70)
   })
+  const preview = surface.locator('.mobile-drawer-layer[data-preview="true"]')
+  await expect(preview).toBeVisible()
+  const firstX = await preview.locator(".mobile-navigation-drawer").evaluate((drawer) => drawer.getBoundingClientRect().x)
+  await surface.evaluate((element) => element.dispatchEvent(new PointerEvent("pointermove", {
+    bubbles: true, clientX: 150, clientY: 180, isPrimary: true, pointerId: 1, pointerType: "touch",
+  })))
+  const secondX = await preview.locator(".mobile-navigation-drawer").evaluate((drawer) => drawer.getBoundingClientRect().x)
+  expect(secondX).toBeGreaterThan(firstX + 60)
+  await surface.evaluate((element) => element.dispatchEvent(new PointerEvent("pointerup", {
+    bubbles: true, clientX: 150, clientY: 180, isPrimary: true, pointerId: 1, pointerType: "touch",
+  })))
 }
 
 test.describe("移动端跨功能侧滑", () => {
   test.skip(({ isMobile }) => !isMobile)
 
-  test("待办和设置首页右滑可以打开主导航", async ({ page }) => {
-    for (const route of ["todos", "settings"]) {
+  test("笔记库、待办和设置首页的抽屉跟手展开", async ({ page }) => {
+    for (const route of ["notes", "todos", "settings"]) {
       await page.goto(`/#/${route}`)
-      const surface = page.locator(".mobile-route-swipe")
+      const surface = page.locator(route === "notes" ? ".mobile-workspace" : ".mobile-route-swipe")
       await expect(surface).toBeVisible()
       await swipeFromLeft(surface)
       await expect(page.getByRole("dialog", { name: "主导航" })).toBeVisible()
@@ -45,10 +55,8 @@ test.describe("移动端跨功能侧滑", () => {
     await expect(surface).toHaveAttribute("data-edge-swipe-state", "dragging")
     await expect(surface.locator(".settings-swipe-preview")).toBeVisible()
     await surface.evaluate((element) => element.dispatchEvent(new PointerEvent("pointerup", {
-      bubbles: true, clientX: 110, clientY: 180, isPrimary: true, pointerId: 1, pointerType: "touch",
+      bubbles: true, clientX: 150, clientY: 180, isPrimary: true, pointerId: 1, pointerType: "touch",
     })))
-    await expect(surface).toHaveAttribute("data-edge-swipe-state", "completing")
-    await surface.locator(":scope > .mobile-edge-swipe-current").dispatchEvent("transitionend", { propertyName: "transform" })
     await expect(page).toHaveURL(/#\/settings$/)
     await expect(page.getByRole("heading", { name: "设置" })).toBeVisible()
   })

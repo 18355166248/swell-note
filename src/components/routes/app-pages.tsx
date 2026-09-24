@@ -108,7 +108,7 @@ export function TodoPage({
       <AppNavigationRail activeSection="todos" connected={connected} onNavigate={onNavigate} onOpenSync={onOpenSync} />
       <section className="route-main-panel">
         <header className="route-page-header">
-          <MobileNavigationDrawer activeSection="todos" connected={connected} onNavigate={onNavigate} onOpenChange={setNavigationOpen} open={navigationOpen} />
+          <MobileNavigationDrawer activeSection="todos" connected={connected} onNavigate={onNavigate} onOpenChange={setNavigationOpen} open={navigationOpen} preview={edgeSwipe.active} suppressEntrance={edgeSwipe.drawerOpenedBySwipe} />
           <div>
             <span className="eyebrow">Markdown 任务</span>
             <h1>待办</h1>
@@ -268,7 +268,7 @@ export function SettingsLayout({ connected, onNavigate, onOpenSync }: Navigation
       </aside>
       <section className="settings-detail-panel">
         <header className="settings-detail-header">
-          {!activeEntry ? <MobileNavigationDrawer activeSection="settings" connected={connected} onNavigate={onNavigate} onOpenChange={setNavigationOpen} open={navigationOpen} /> : null}
+          {!activeEntry ? <MobileNavigationDrawer activeSection="settings" connected={connected} onNavigate={onNavigate} onOpenChange={setNavigationOpen} open={navigationOpen} preview={edgeSwipe.kind === "drawer" && edgeSwipe.active} suppressEntrance={edgeSwipe.drawerOpenedBySwipe} /> : null}
           {activeEntry ? (
             <Button aria-label="返回设置" className="settings-mobile-back" onClick={() => onNavigate("/settings")} size="icon" variant="ghost">
               <ArrowLeft />

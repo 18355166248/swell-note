@@ -1159,6 +1159,15 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .mobile-drawer-layer { position: fixed; inset: 0; z-index: 80; }
   .mobile-drawer-backdrop { position: absolute; inset: 0; width: 100%; background: rgb(15 23 42 / .34); backdrop-filter: blur(2px); }
   .mobile-navigation-drawer { position: absolute; inset: 0 auto 0 0; display: flex; box-sizing: border-box; width: min(84vw,320px); flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); padding-top: env(safe-area-inset-top,0px); padding-bottom: env(safe-area-inset-bottom,0px); padding-left: env(safe-area-inset-left,0px); background: white; box-shadow: 18px 0 48px rgb(15 23 42 / .18); animation: mobile-drawer-in 180ms ease-out; }
+  /* 预览层在手势成立时挂载，直接读取触摸位移；松手后的完成/取消才启用过渡。 */
+  .mobile-drawer-layer[data-preview="true"] { pointer-events: none; }
+  .mobile-drawer-layer[data-preview="true"] .mobile-drawer-backdrop { opacity: var(--edge-swipe-progress,0); backdrop-filter: none; }
+  .mobile-drawer-layer[data-preview="true"] .mobile-navigation-drawer { animation: none; transform: translate3d(calc(-100% + var(--edge-swipe-offset,0px)),0,0); }
+  .mobile-workspace[data-edge-swipe-state="returning"] .mobile-drawer-layer[data-preview="true"] .mobile-navigation-drawer,
+  .mobile-workspace[data-edge-swipe-state="completing"] .mobile-drawer-layer[data-preview="true"] .mobile-navigation-drawer { transition: transform 190ms cubic-bezier(.22,.8,.25,1); }
+  .mobile-workspace[data-edge-swipe-state="returning"] .mobile-drawer-layer[data-preview="true"] .mobile-drawer-backdrop,
+  .mobile-workspace[data-edge-swipe-state="completing"] .mobile-drawer-layer[data-preview="true"] .mobile-drawer-backdrop { transition: opacity 190ms ease; }
+  .mobile-drawer-layer[data-suppress-entrance="true"] .mobile-navigation-drawer { animation: none; }
   @keyframes mobile-drawer-in { from { transform: translateX(-16px); opacity: .72; } to { transform: translateX(0); opacity: 1; } }
   .mobile-drawer-brand { display: grid; min-height: 68px; grid-template-columns: 34px minmax(0,1fr) 44px; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); padding: 0 10px 0 16px; }
   .mobile-drawer-brand img { width: 32px; height: 32px; }

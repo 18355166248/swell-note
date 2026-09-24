@@ -3303,6 +3303,8 @@ function RouteStackMobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
                 canGoBack={Boolean(index > 0 && !stack.entries[index - 1]?.synthetic)}
                 entry={entry}
                 navigationOpen={role === "current" && navigationOpen}
+                navigationPreview={role === "current" && edgeSwipeKind === "drawer" && edgeSwipe.active}
+                navigationSwipeOpened={role === "current" && edgeSwipe.drawerOpenedBySwipe}
                 onNavigationOpenChange={(open) => { if (open) openNavigation(); else closeNavigation() }}
                 props={props}
               />
@@ -3314,12 +3316,14 @@ function RouteStackMobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
   )
 }
 
-function MobileRouteEntryPage({ active, backLabel, canGoBack, entry, navigationOpen, onNavigationOpenChange, props: liveProps }: {
+function MobileRouteEntryPage({ active, backLabel, canGoBack, entry, navigationOpen, navigationPreview, navigationSwipeOpened, onNavigationOpenChange, props: liveProps }: {
   active: boolean
   backLabel: string
   canGoBack: boolean
   entry: MobileRouteEntry
   navigationOpen: boolean
+  navigationPreview: boolean
+  navigationSwipeOpened: boolean
   onNavigationOpenChange: (open: boolean) => void
   props: WorkspaceProps & FolderTreeProps
 }) {
@@ -3463,7 +3467,7 @@ function MobileRouteEntryPage({ active, backLabel, canGoBack, entry, navigationO
   if (descriptor.screen === "library") {
     const libraryStateKey = `${liveProps.totalNoteCount}\u0000${liveProps.folders.map((folder) => folder.path).join("\u0000")}`
     entryScrollTopRef.current ??= mobileLibraryScrollMemory.get(libraryStateKey)
-    return <MobileLibrary {...routeProps} initialScrollTop={entryScrollTopRef.current} navigationOpen={navigationOpen} onNavigationOpenChange={onNavigationOpenChange} onScrollPositionChange={(scrollTop) => { entryScrollTopRef.current = scrollTop; mobileLibraryScrollMemory.set(libraryStateKey, scrollTop) }} />
+    return <MobileLibrary {...routeProps} initialScrollTop={entryScrollTopRef.current} navigationOpen={navigationOpen} navigationPreview={navigationPreview} navigationSwipeOpened={navigationSwipeOpened} onNavigationOpenChange={onNavigationOpenChange} onScrollPositionChange={(scrollTop) => { entryScrollTopRef.current = scrollTop; mobileLibraryScrollMemory.set(libraryStateKey, scrollTop) }} />
   }
   if (descriptor.screen === "notes") {
     const listStateKey = `${libraryView}\u0000${selectedFolder ?? "__all__"}\u0000${query.trim().toLocaleLowerCase()}`
@@ -3600,6 +3604,8 @@ function SaveStateIndicator({ cloudConnected, note, state }: { cloudConnected: b
 type MobileLibraryProps = WorkspaceProps & FolderTreeProps & {
   initialScrollTop: number
   navigationOpen: boolean
+  navigationPreview: boolean
+  navigationSwipeOpened: boolean
   onNavigationOpenChange: (open: boolean) => void
   onScrollPositionChange: (scrollTop: number) => void
 }
@@ -3652,6 +3658,8 @@ function MobileLibrary(props: MobileLibraryProps) {
           isRefreshingVault={props.isRefreshingVault}
           mobileConnectionLabel={props.mobileConnectionLabel}
           open={props.navigationOpen}
+          preview={props.navigationPreview}
+          suppressEntrance={props.navigationSwipeOpened}
           noteCount={props.totalNoteCount}
           starredNoteCount={props.starredNoteCount}
           onNavigate={props.onNavigate}
@@ -4149,6 +4157,8 @@ export function MobileNavigationDrawer({
   onRefreshVault,
   onSelectLibraryView,
   open: controlledOpen,
+  preview = false,
+  suppressEntrance = false,
   starredNoteCount,
 }: {
   activeSection: AppSection
@@ -4162,6 +4172,8 @@ export function MobileNavigationDrawer({
   onRefreshVault?: () => void
   onSelectLibraryView?: (view: LibraryView) => void
   open?: boolean
+  preview?: boolean
+  suppressEntrance?: boolean
   starredNoteCount?: number
 }) {
   const [internalOpen, setInternalOpen] = useState(false)
@@ -4193,8 +4205,8 @@ export function MobileNavigationDrawer({
   return (
     <>
       <Button aria-expanded={open} aria-label="打开主导航" className="mobile-drawer-trigger" onClick={() => setOpen(true)} size="icon" variant="ghost"><Menu /></Button>
-      {open ? (
-        <div className="mobile-drawer-layer">
+      {open || preview ? (
+        <div className="mobile-drawer-layer" data-preview={preview && !open || undefined} data-suppress-entrance={suppressEntrance || undefined} inert={preview && !open || undefined}>
           <button aria-label="关闭主导航" className="mobile-drawer-backdrop" onClick={() => setOpen(false)} type="button" />
           <aside aria-label="主导航" aria-modal="true" className="mobile-navigation-drawer" role="dialog">
             <header className="mobile-drawer-brand">
