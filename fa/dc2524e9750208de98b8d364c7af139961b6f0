@@ -1,0 +1,47 @@
+src/components/routes/app-pages.tsx
+  s_13775b5a3f2958::t_6f6c4b57c7435d 47,330,339,404,406-410,493,515-520
+src/services/backup/vault-backup.ts
+  s_13775b5a3f2958::t_1c1ba4db612930 42,47-49,55,66-68
+  s_13775b5a3f2958::t_3d2a9b19fa7b6d 45,53
+  s_13775b5a3f2958::t_7a57d9b37376fb 38
+  s_13775b5a3f2958::t_5db6a6ffc01b89 39
+docs/joplin-feature-gap-2026-09-24.md
+  s_13775b5a3f2958::t_f0eaf3e2b906a0 1-4,7-23,25-54
+  s_13775b5a3f2958::t_fcabcc95424870 5-6,24
+docs/backup-integrity-review-2026-09-24.md
+  s_13775b5a3f2958::t_7a57d9b37376fb 1-29
+src/App.tsx
+  s_13775b5a3f2958::t_f305701d9f50fe 138,4265,4268,4277-4281,4283-4285,4289-4291,4293,4295,4300-4304,4307,4309,4317,4319-4321
+  s_13775b5a3f2958::t_877b5aac3f04c9 4282
+  s_13775b5a3f2958::t_4ce7b44cc13aed 4275-4276,4292,4294,4296,4298
+  s_13775b5a3f2958::t_7c1b46e75bfe16 4297,4299
+src/services/backup/backup-inventory.test.ts
+  s_13775b5a3f2958::t_46bf9cba2e6be9 4,56-75
+  s_13775b5a3f2958::t_877b5aac3f04c9 20-31
+  s_13775b5a3f2958::t_3d2a9b19fa7b6d 1-3,5-19,32-55,76-77
+src/services/backup/vault-backup.test.ts
+  s_13775b5a3f2958::t_3d2a9b19fa7b6d 33-40
+  s_13775b5a3f2958::t_1c1ba4db612930 41-45
+src/services/backup/backup-inventory.ts
+  s_13775b5a3f2958::t_5689333ab2b3a4 1-8,10-43,46-59,61-83
+  s_13775b5a3f2958::t_877b5aac3f04c9 9,44-45
+  s_13775b5a3f2958::t_46bf9cba2e6be9 60
+README.md
+  s_13775b5a3f2958::t_5744b7888d4d85 42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "fadc2524e9750208de98b8d364c7af139961b6f0",
+  "prompts": {},
+  "sessions": {
+    "s_13775b5a3f2958": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d11a-c36c-7930-a94e-d2c197456def",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
