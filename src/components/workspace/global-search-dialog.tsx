@@ -28,6 +28,8 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   const [scope, setScope] = useState<GlobalSearchScope>("all")
   const [tag, setTag] = useState("")
   const [folder, setFolder] = useState("")
+  const [updatedDays, setUpdatedDays] = useState<"any" | "7" | "30" | "90">("any")
+  const [starredOnly, setStarredOnly] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const [indexedMatch, setIndexedMatch] = useState<{ paths: Set<string>; key: string } | null>(null)
   const [visibleCount, setVisibleCount] = useState(RESULT_LIMIT)
@@ -43,6 +45,8 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
     setScope("all")
     setTag("")
     setFolder("")
+    setUpdatedDays("any")
+    setStarredOnly(false)
     setActiveIndex(0)
     setIndexedMatch(null)
     // 弹窗打开动画与聚焦挤在同一帧时，部分浏览器会把焦点请求吞掉。
@@ -51,6 +55,8 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   }, [open])
 
   const normalizedQuery = query.trim().toLocaleLowerCase()
+  const updatedAfter = useMemo(() => updatedDays === "any" ? undefined : Date.now() - Number(updatedDays) * 24 * 60 * 60 * 1000, [updatedDays, open])
+  const hasFilters = Boolean(normalizedQuery || tag || folder || updatedAfter !== undefined || starredOnly)
   const searchKey = `${scope}\u0000${normalizedQuery}`
   const tags = useMemo(() => [...new Set(notes.flatMap((note) => note.tags ?? []))]
     .sort((left, right) => left.localeCompare(right)), [notes])
@@ -82,15 +88,15 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
 
   const searching = Boolean(open && cacheId && normalizedQuery && scope !== "title" && completedQuery !== searchKey)
   const matches = useMemo(() => {
-    if (!normalizedQuery && !tag && !folder) return sortNotes(notes, "updated-desc", { pinnedFirst: false }).slice(0, RECENT_LIMIT)
+    if (!hasFilters) return sortNotes(notes, "updated-desc", { pinnedFirst: false }).slice(0, RECENT_LIMIT)
     const matched = notes.filter((note) => matchesGlobalSearchFilters(note, {
-      folder, query: normalizedQuery, scope, tag,
+      folder, query: normalizedQuery, scope, starredOnly, tag, updatedAfter,
     }, indexedPaths))
     return sortNotes(matched, "updated-desc")
-  }, [folder, indexedPaths, normalizedQuery, notes, scope, tag])
+  }, [folder, hasFilters, indexedPaths, normalizedQuery, notes, scope, starredOnly, tag, updatedAfter])
 
   const results = matches.slice(0, visibleCount)
-  useEffect(() => { setActiveIndex(0); setVisibleCount(RESULT_LIMIT) }, [searchKey, tag, folder, open, cacheId])
+  useEffect(() => { setActiveIndex(0); setVisibleCount(RESULT_LIMIT) }, [searchKey, tag, folder, updatedDays, starredOnly, open, cacheId])
   useEffect(() => { setCompletedQuery("") }, [searchKey, open, cacheId])
   useEffect(() => { setActiveIndex((index) => Math.max(0, Math.min(index, matches.length - 1))) }, [matches])
   useEffect(() => {
@@ -174,15 +180,29 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
               {folders.map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
+          <label>更新
+            <select aria-label="筛选更新时间" value={updatedDays} onChange={(event) => setUpdatedDays(event.target.value as typeof updatedDays)}>
+              <option value="any">不限时间</option>
+              <option value="7">近 7 天</option>
+              <option value="30">近 30 天</option>
+              <option value="90">近 90 天</option>
+            </select>
+          </label>
+          <label>状态
+            <select aria-label="筛选收藏状态" value={starredOnly ? "starred" : "all"} onChange={(event) => setStarredOnly(event.target.value === "starred")}>
+              <option value="all">全部笔记</option>
+              <option value="starred">仅收藏</option>
+            </select>
+          </label>
         </div>
         <div className="global-search-summary" role="status">
-          {searching ? <><LoaderCircle className="animate-spin" />正在搜索正文…</> : normalizedQuery || tag || folder ? `找到 ${matches.length} 篇，已显示 ${results.length} 篇` : "最近更新"}
+          {searching ? <><LoaderCircle className="animate-spin" />正在搜索正文…</> : hasFilters ? `找到 ${matches.length} 篇，已显示 ${results.length} 篇` : "最近更新"}
         </div>
         <div className="global-search-results" data-search-scroll-viewport ref={resultsRef}>
           {results.length === 0 ? (
             <p className="global-search-empty">
               <FileSearch />
-              {searching ? "正在查找，请稍候…" : normalizedQuery || tag || folder ? "没有找到匹配的笔记" : "最近更新的笔记会显示在这里"}
+              {searching ? "正在查找，请稍候…" : hasFilters ? "没有找到匹配的笔记" : "最近更新的笔记会显示在这里"}
             </p>
           ) : (
             <ul id={listId} ref={listRef} role="listbox" aria-label="搜索结果">

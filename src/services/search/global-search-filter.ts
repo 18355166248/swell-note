@@ -6,7 +6,9 @@ export type GlobalSearchFilters = {
   folder: string
   query: string
   scope: GlobalSearchScope
+  starredOnly?: boolean
   tag: string
+  updatedAfter?: number
 }
 
 export const ROOT_FOLDER_FILTER = "__root__"
@@ -16,7 +18,10 @@ export function matchesGlobalSearchFilters(
   filters: GlobalSearchFilters,
   indexedPaths: ReadonlySet<string> | null,
 ) {
-  const { folder, query, scope, tag } = filters
+  const { folder, query, scope, starredOnly, tag, updatedAfter } = filters
+  if (starredOnly && !note.starred) return false
+  // 旧笔记若没有可靠修改时间，不应被误算进“最近更新”。
+  if (updatedAfter !== undefined && (note.modifiedAt === undefined || note.modifiedAt < updatedAfter)) return false
   if (tag && !note.tags?.some((candidate) => candidate.toLocaleLowerCase() === tag.toLocaleLowerCase())) return false
   if (folder) {
     const noteFolder = note.folder && note.folder !== "根目录" ? note.folder : ""

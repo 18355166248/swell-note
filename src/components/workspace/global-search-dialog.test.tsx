@@ -21,9 +21,9 @@ beforeEach(() => {
   root = createRoot(container)
 })
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.useRealTimers() })
-function render(cacheId: string | null = null) {
+function render(cacheId: string | null = null, searchNotes = notes) {
   const onSelectNote = vi.fn(), onOpenChange = vi.fn()
-  act(() => root.render(<GlobalSearchDialog cacheId={cacheId} notes={notes} onOpenChange={onOpenChange} onSelectNote={onSelectNote} open />))
+  act(() => root.render(<GlobalSearchDialog cacheId={cacheId} notes={searchNotes} onOpenChange={onOpenChange} onSelectNote={onSelectNote} open />))
   return { onSelectNote, onOpenChange }
 }
 function input() { return document.querySelector<HTMLInputElement>('[role="combobox"]')! }
@@ -39,7 +39,28 @@ function key(key: string, options: KeyboardEventInit = {}) {
 function click(label: string) {
   act(() => { document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click() })
 }
+function select(label: string, value: string) {
+  act(() => {
+    const element = document.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!
+    element.value = value
+    element.dispatchEvent(new Event("change", { bubbles: true }))
+  })
+}
 describe("global search interactions", () => {
+  it("combines tag, folder, recent update and starred filters without a text query", () => {
+    const recent = Date.now()
+    render(null, [
+      { ...notes[0], folder: "项目", tags: ["工作"], modifiedAt: recent, starred: true },
+      { ...notes[1], folder: "项目", tags: ["工作"], modifiedAt: recent, starred: false },
+      { ...notes[2], folder: "项目", tags: ["工作"], modifiedAt: recent - 100 * 24 * 60 * 60 * 1000, starred: true },
+    ])
+    select("筛选标签", "工作")
+    select("筛选目录", "项目")
+    select("筛选更新时间", "7")
+    select("筛选收藏状态", "starred")
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(1)
+    expect(document.body.textContent).toContain("找到 1 篇")
+  })
   it("paginates results without hiding the total and scrolls its own viewport for keyboard selection", () => {
     render(); query("测试")
     const viewport = document.querySelector<HTMLElement>("[data-search-scroll-viewport]")!

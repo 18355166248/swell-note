@@ -42,4 +42,12 @@ describe("global search filters", () => {
     expect(matchesGlobalSearchFilters(note, { ...filters, folder: ROOT_FOLDER_FILTER }, null)).toBe(false)
     expect(matchesGlobalSearchFilters({ ...note, folder: undefined }, { ...filters, folder: ROOT_FOLDER_FILTER }, null)).toBe(true)
   })
+
+  it("收藏与更新时间可以和目录、标签同时筛选", () => {
+    const recent = { ...note, modifiedAt: 200, starred: true }
+    expect(matchesGlobalSearchFilters(recent, { ...filters, folder: "项目", tag: "规划", starredOnly: true, updatedAfter: 100 }, null)).toBe(true)
+    expect(matchesGlobalSearchFilters({ ...recent, starred: false }, { ...filters, starredOnly: true }, null)).toBe(false)
+    expect(matchesGlobalSearchFilters({ ...recent, modifiedAt: 99 }, { ...filters, updatedAfter: 100 }, null)).toBe(false)
+    expect(matchesGlobalSearchFilters({ ...recent, modifiedAt: undefined }, { ...filters, updatedAfter: 100 }, null)).toBe(false)
+  })
 })
