@@ -1,6 +1,9 @@
 import type { Note } from "@/types/note"
 import type { VaultSourceKind } from "@/services/vault/vault-adapter"
 import type { TrashEntry } from "@/services/trash/trash-entry"
+import { renameNoteTag } from "@/services/markdown/note-tags"
+import { buildNotePreview } from "@/services/markdown/note-preview"
+import { indexNoteContent } from "@/services/app/app-note-utils"
 
 const DATABASE_NAME = "swell-note-vault-cache"
 const DATABASE_VERSION = 3
@@ -466,6 +469,88 @@ export async function saveVaultWorkingCopyEdit(cacheId: string, editedNote: Note
       savedAt: Date.now(),
     })
     await transactionDone(transaction)
+  } finally {
+    database.close()
+  }
+}
+
+export async function renameCachedWebDavTag({
+  cacheId,
+  expectedNotes,
+  source,
+  target,
+}: {
+  cacheId: string
+  expectedNotes: readonly Note[]
+  source: string
+  target: string
+}) {
+  const database = await openDatabase()
+  const transaction = database.transaction([VAULT_STORE, DOCUMENT_STORE], "readwrite")
+  const vaultStore = transaction.objectStore(VAULT_STORE)
+  const documentStore = transaction.objectStore(DOCUMENT_STORE)
+  try {
+    const [stored, documents] = await Promise.all([
+      requestResult<VaultCacheSnapshot | undefined>(vaultStore.get(cacheId)),
+      requestResult<VaultNoteDocument[]>(documentStore.index("cacheId").getAll(cacheId)),
+    ])
+    if (!stored || stored.sourceKind !== "webdav") throw new Error("当前 WebDAV 工作副本不可用")
+    const cachedDocuments = new Map(documents.map((document) => [document.noteId, document]))
+    const expected = new Map(expectedNotes.map((note) => [note.id, note]))
+    const changes = new Map<string, Note>()
+    const issues: string[] = []
+    for (const current of stored.notes) {
+      const request = expected.get(current.id)
+      if (!request) continue
+      // 未打开的 WebDAV 缓存笔记会临时标记 readOnly；有完整正文时仍可修改工作副本。
+      if (current.format === "canvas" || current.pendingOperation === "delete" || current.syncStatus === "conflict") {
+        issues.push(`${current.title}：画布、待删除或同步冲突，已跳过`)
+        continue
+      }
+      const document = cachedDocuments.get(current.id)
+      if (!document) {
+        issues.push(`${current.title}：正文未缓存，已跳过`)
+        continue
+      }
+      // UI 中的旧快照不能覆盖刚提交的编辑；事务内以最新序号与正文再核对一次。
+      if ((current.localEditSequence ?? 0) !== (request.localEditSequence ?? 0)
+        || (request.contentLoaded && request.content !== document.content)) {
+        issues.push(`${current.title}：正文在操作期间已变化，已跳过`)
+        continue
+      }
+      const content = renameNoteTag(document.content, source, target)
+      if (content === document.content) {
+        issues.push(`${current.title}：缓存正文已无此标签，已跳过`)
+        continue
+      }
+      const nextNote: Note = {
+        ...hydrateNoteFromCachedDocument(current, document),
+        ...indexNoteContent(content),
+        content,
+        localEditSequence: (current.localEditSequence ?? 0) + 1,
+        modifiedAt: Date.now(),
+        preview: buildNotePreview(content, current.format),
+        readOnly: false,
+        syncError: undefined,
+        syncStatus: "modified",
+        updatedAt: "刚刚修改 · 待同步",
+        writeContentAfterMove: current.pendingOperation === "move" ? true : current.writeContentAfterMove,
+      }
+      changes.set(current.id, nextNote)
+      documentStore.put(toVaultNoteDocument(cacheId, nextNote))
+    }
+    if (changes.size > 0) {
+      vaultStore.put({
+        ...stored,
+        notes: stored.notes.map((note) => {
+          const changed = changes.get(note.id)
+          return changed ? toMetadataNote(changed, true) : note
+        }),
+        savedAt: Date.now(),
+      })
+    }
+    await transactionDone(transaction)
+    return { changedNotes: [...changes.values()], issues, renamed: changes.size }
   } finally {
     database.close()
   }

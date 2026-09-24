@@ -1398,7 +1398,7 @@ function NoteListPanel({
               onChange={onIncludeNestedFolderNotesChange}
             />
           ) : null}
-          <TagFilterMenu allNotes={allNotes} availableTags={availableTags} canRename={folderManagementMode === "local" && canCreateNote && !isManagingFolder} onChange={onSelectTag} onRename={onRenameTag} selectedTag={selectedTag} />
+          <TagFilterMenu allNotes={allNotes} availableTags={availableTags} canRename={Boolean(folderManagementMode && canCreateNote && !isManagingFolder)} mode={folderManagementMode === "webdav" ? "webdav" : "local"} onChange={onSelectTag} onRename={onRenameTag} selectedTag={selectedTag} />
           <NoteSortMenu onChange={onNoteSortChange} sort={noteSort} />
         </div>
       </div>
@@ -1644,6 +1644,7 @@ export function TagFilterMenu({
   allNotes,
   availableTags,
   canRename,
+  mode,
   onChange,
   onRename,
   selectedTag,
@@ -1651,6 +1652,7 @@ export function TagFilterMenu({
   allNotes: Note[]
   availableTags: string[]
   canRename: boolean
+  mode: "local" | "webdav"
   onChange: (tag: string | null) => void
   onRename: WorkspaceProps["onRenameTag"]
   selectedTag: string | null
@@ -1700,7 +1702,7 @@ export function TagFilterMenu({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>批量重命名标签</DialogTitle>
-            <DialogDescription>将本地笔记库中使用“{renameSource}”的 {affectedCount} 篇笔记改为新标签。逐篇检查磁盘版本；未保存、只读或已变更的文件会跳过。</DialogDescription>
+            <DialogDescription>{mode === "webdav" ? `将 WebDAV 工作副本中使用“${renameSource}”的 ${affectedCount} 篇笔记改为新标签，完成后进入待同步队列。未缓存正文、冲突或已变更的笔记会跳过。` : `将本地笔记库中使用“${renameSource}”的 ${affectedCount} 篇笔记改为新标签。逐篇检查磁盘版本；未保存、只读或已变更的文件会跳过。`}</DialogDescription>
           </DialogHeader>
           <Input aria-label="新标签名称" autoFocus disabled={busy} onChange={(event) => setDraft(event.target.value)} value={draft} />
           {error ? <p role="alert">{error}</p> : null}
@@ -3441,6 +3443,11 @@ function MobileRouteEntryPage({ active, backLabel, canGoBack, entry, navigationO
       setQuery(nextQuery)
       if (active) liveProps.onQueryChange(nextQuery)
     },
+    onRenameTag: async (source, target) => {
+      const result = await liveProps.onRenameTag(source, target)
+      if (selectedTag === source && result.issues.length === 0) setSelectedTag(parseEditableTags(target)[0] ?? target)
+      return result
+    },
     onResolveAsset: resolveRouteAsset,
     onSelectTag: (tag) => {
       setSelectedTag(tag)
@@ -4042,7 +4049,7 @@ function MobileNoteList(props: MobileNoteListProps) {
         <div className="mobile-titlebar-actions">
           {props.selectedFolder && props.folderManagementMode ? <FolderRenameButton disabled={props.isManagingNote} folderPath={props.selectedFolder} mode={props.folderManagementMode} onDelete={props.onDeleteFolder} onRename={props.onRenameFolder} /> : null}
           {childFolders.length > 0 ? <NestedNotesToggle includeNested={props.includeNestedFolderNotes} onChange={props.onIncludeNestedFolderNotesChange} /> : null}
-          <TagFilterMenu allNotes={props.allNotes} availableTags={props.availableTags} canRename={props.folderManagementMode === "local" && props.canCreateNote && !props.isManagingNote} onChange={props.onSelectTag} onRename={props.onRenameTag} selectedTag={props.selectedTag} />
+          <TagFilterMenu allNotes={props.allNotes} availableTags={props.availableTags} canRename={Boolean(props.folderManagementMode && props.canCreateNote && !props.isManagingNote)} mode={props.folderManagementMode === "webdav" ? "webdav" : "local"} onChange={props.onSelectTag} onRename={props.onRenameTag} selectedTag={props.selectedTag} />
           <NoteSortMenu mobile onChange={props.onNoteSortChange} sort={props.noteSort} />
         </div>
         <MobileNavigationDrawer

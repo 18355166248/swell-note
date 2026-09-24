@@ -15,12 +15,14 @@ import {
   loadLastVaultCache,
   loadVaultCache,
   queueVaultAttachment,
+  renameCachedWebDavTag,
   remapVaultAttachmentsForDirectory,
   remapCachedVaultDocumentsForDirectory,
   remapVaultAttachmentNoteId,
   saveVaultCache,
   saveVaultDirectoryQueueCheckpoint,
   saveVaultNoteQueueCheckpoint,
+  saveVaultWorkingCopyEdit,
   searchCachedNoteDocuments,
   updateVaultAttachmentStatus,
 } from "./vault-cache"
@@ -49,6 +51,44 @@ beforeEach(async () => {
 })
 
 describe("vault cache", () => {
+  it("原子重命名 WebDAV 缓存标签，并跳过冲突及未缓存正文", async () => {
+    const content = "---\ntags: [旧标签]\n---\n\n# 正文"
+    const base = { content, contentLoaded: true, preview: "正文", starred: false, syncStatus: "synced" as const, tags: ["旧标签"], updatedAt: "刚刚" }
+    await saveVaultCache({
+      activeNoteId: "a", id: "tags-cache", label: "标签库", notes: [
+        { ...base, id: "a", title: "可修改", remotePath: "/a.md", revision: "v1", source: "webdav", readOnly: true },
+        { ...base, id: "b", title: "冲突", remotePath: "/b.md", source: "webdav", syncStatus: "conflict" },
+        { ...base, id: "c", title: "未缓存", remotePath: "/c.md", source: "webdav", content: "", contentLoaded: false, contentCached: false },
+      ], savedAt: 1, sourceKind: "webdav",
+    })
+    const expectedNotes = (await loadVaultCache("tags-cache", { hydrate: "active" }))!.notes
+    const result = await renameCachedWebDavTag({ cacheId: "tags-cache", expectedNotes, source: "旧标签", target: "新标签" })
+    expect(result.renamed).toBe(1)
+    expect(result.issues).toHaveLength(2)
+    expect(result.changedNotes[0]).toMatchObject({ id: "a", revision: "v1", syncStatus: "modified", tags: ["新标签"] })
+    expect((await loadCachedNoteDocument("tags-cache", "a"))?.content).toContain('tags: ["新标签"]')
+    expect((await loadCachedNoteDocument("tags-cache", "b"))?.content).toBe(content)
+    expect(await loadCachedNoteDocument("tags-cache", "c")).toBeNull()
+  })
+
+  it("标签事务拒绝覆盖预览之后提交的正文编辑", async () => {
+    const oldContent = "---\ntags: [旧标签]\n---\n正文"
+    await saveVaultCache({
+      activeNoteId: "a", id: "tag-race", label: "并发库", notes: [{
+        content: oldContent, contentLoaded: true, id: "a", preview: "正文", remotePath: "/a.md",
+        source: "webdav", starred: false, syncStatus: "synced", tags: ["旧标签"], title: "A", updatedAt: "刚刚",
+      }], savedAt: 1, sourceKind: "webdav",
+    })
+    const expectedNotes = (await loadVaultCache("tag-race", { hydrate: "all" }))!.notes
+    await saveVaultWorkingCopyEdit("tag-race", {
+      ...expectedNotes[0], content: `${oldContent}\n用户新输入`, localEditSequence: 1,
+    })
+    const result = await renameCachedWebDavTag({ cacheId: "tag-race", expectedNotes, source: "旧标签", target: "新标签" })
+    expect(result.renamed).toBe(0)
+    expect(result.issues[0]).toContain("已变化")
+    expect((await loadCachedNoteDocument("tag-race", "a"))?.content).toContain("用户新输入")
+  })
+
   it("使用不可逆哈希生成稳定缓存标识", async () => {
     const identity = "webdav:https://dav.example.com:user@example.com:/notes/"
     expect(await createVaultCacheId(identity)).toBe(await createVaultCacheId(identity))

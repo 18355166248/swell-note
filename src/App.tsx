@@ -72,6 +72,7 @@ import {
   loadLastVaultCache,
   loadVaultCache,
   queueVaultAttachment,
+  renameCachedWebDavTag,
   remapVaultAttachmentNoteId,
   saveVaultCache,
   saveVaultNoteQueueCheckpoint,
@@ -439,6 +440,8 @@ function App() {
   const revisionByPathRef = useRef(new Map<string, string | undefined>())
   const indexGenerationRef = useRef(0)
   const latestCacheSnapshotRef = useRef<VaultCacheSnapshot | null>(null)
+  const cacheSnapshotWritesRef = useRef<Promise<void>>(Promise.resolve())
+  const webDavTagRenameRef = useRef(false)
   const activeCacheIdRef = useRef<string | null>(null)
   const restoreScopeRef = useRef({ cacheId: null as string | null, noteId: "", generation: 0 })
   const noteContentRevisionRef = useRef(new Map<string, number>())
@@ -600,6 +603,7 @@ function App() {
     if (!cacheReady || !activeCacheMeta) return
     // 显式同步的检查点拥有缓存写权；旧渲染产生的整库防抖快照不能覆盖新 ETag。
     if (activeSyncRunRef.current && activeCacheIdRef.current === activeCacheMeta.id) return
+    if (webDavTagRenameRef.current && activeCacheMeta.sourceKind === "webdav") return
     const snapshot: VaultCacheSnapshot = {
       ...activeCacheMeta,
       activeNoteId,
@@ -615,11 +619,13 @@ function App() {
       // 清除/切库/原子目录重命名都会替换 ref；旧闭包不得把过期快照重新写回。
       if (latestCacheSnapshotRef.current !== snapshot) return
       if (activeSyncRunRef.current && activeCacheIdRef.current === snapshot.id) return
+      if (webDavTagRenameRef.current && snapshot.sourceKind === "webdav") return
       // 内容读取、收藏、置顶和本地编辑后统一刷新离线快照；敏感凭据不属于 Note 模型，因此不会进入缓存。
-      void saveVaultCache(snapshot)
+      const write = saveVaultCache(snapshot)
         .then(listVaultCaches)
         .then(setVaultCaches)
         .catch((error) => setVaultError(error instanceof Error ? error.message : "保存离线缓存失败"))
+      cacheSnapshotWritesRef.current = write
     }, 450)
     return () => window.clearTimeout(timer)
   }, [activeCacheMeta, activeNoteId, cachePrivacyMode, cacheReady, notes, pendingWebDavDirectories, pendingWebDavDirectoryMoves, trashEntries, vaultDirectories])
@@ -1315,6 +1321,84 @@ function App() {
       if (activeCacheIdRef.current === cacheId) setIsManagingNote(false)
     }
   }
+
+  const renameWebDavTag = async (source: string, requestedTarget: string): Promise<TagRenameReport> => {
+    const targetTags = parseEditableTags(requestedTarget)
+    if (targetTags.length !== 1) throw new Error("请输入一个有效的新标签名称")
+    const target = targetTags[0]
+    if (target === source) return { issues: [], renamed: 0 }
+    const cacheId = activeCacheMeta?.id
+    if (!cacheId || activeCacheMeta?.sourceKind !== "webdav") throw new Error("当前 WebDAV 工作副本不可用")
+    if (isRefreshingVault || activeSyncRunRef.current || vaultMutationBarrierRef.current > 0) {
+      throw new Error("笔记库正在同步或处理其他操作，请稍后重试")
+    }
+    vaultMutationBarrierRef.current += 1
+    webDavTagRenameRef.current = true
+    latestCacheSnapshotRef.current = null
+    setIsManagingNote(true)
+    setVaultError(null)
+    try {
+      // 等待既有缓存快照和编辑日志落盘，再让事务读取最终工作副本；旧防抖快照已由 ref 作废。
+      await Promise.all([cacheSnapshotWritesRef.current, liveEditWritesRef.current])
+      if (activeCacheIdRef.current !== cacheId) throw new Error("笔记库已切换，标签重命名未执行")
+      // 用户刚编辑但尚未触发 450ms 防抖时，先把当前 UI 快照落盘，再以它作为批量事务的基线。
+      await saveVaultCache({
+        ...activeCacheMeta,
+        activeNoteId,
+        directories: vaultDirectories,
+        pendingDirectories: pendingWebDavDirectories,
+        pendingDirectoryMoves: pendingWebDavDirectoryMoves,
+        notes: prepareNotesForCache(notesRef.current, cachePrivacyMode),
+        savedAt: Date.now(),
+        trash: trashEntries,
+      })
+      if (activeCacheIdRef.current !== cacheId) throw new Error("笔记库已切换，标签重命名未执行")
+      const candidates = notesRef.current.filter((note) => note.tags?.some((tag) => tag.toLocaleLowerCase() === source.toLocaleLowerCase()))
+      const documents = new Map((await listCachedNoteDocuments(cacheId)).map((document) => [document.noteId, document]))
+      const eligible: Note[] = []
+      const issues: string[] = []
+      for (const note of candidates) {
+        if (activeCacheIdRef.current !== cacheId) throw new Error("笔记库已切换，标签重命名未执行")
+        if (saveStates[note.id]?.status === "error") {
+          issues.push(`${note.title}：正文保存失败，已跳过`)
+          continue
+        }
+        const document = documents.get(note.id)
+        if (document && note.format !== "canvas" && note.syncStatus !== "conflict" && note.pendingOperation !== "delete") {
+          try {
+            await saveNoteVersion({ cacheId, content: document.content, noteId: note.id, reason: "编辑前", title: note.title })
+          } catch (error) {
+            issues.push(`${note.title}：无法保存修改前版本：${error instanceof Error ? error.message : "历史保存失败"}`)
+            continue
+          }
+        }
+        eligible.push(note)
+      }
+      if (activeCacheIdRef.current !== cacheId) throw new Error("笔记库已切换，标签重命名未执行")
+      const result = await renameCachedWebDavTag({ cacheId, expectedNotes: eligible, source, target })
+      const report: TagRenameReport = { issues: [...issues, ...result.issues], renamed: result.renamed }
+      if (activeCacheIdRef.current === cacheId) {
+        const changed = new Map(result.changedNotes.map((note) => [note.id, note]))
+        notesRef.current = notesRef.current.map((note) => changed.get(note.id) ?? note)
+        setNotes((current) => current.map((note) => changed.get(note.id) ?? note))
+        setSaveStates((current) => ({
+          ...current,
+          ...Object.fromEntries(result.changedNotes.map((note) => [note.id, { status: "pending" as const }])),
+        }))
+        if (selectedTag === source && report.issues.length === 0) setSelectedTag(target)
+        setVaultError(`已将 ${report.renamed} 篇笔记的“${source}”重命名为“${target}”，待同步${report.issues.length ? `；${report.issues.length} 篇跳过或失败：${report.issues.slice(0, 2).join("；")}` : ""}`)
+      }
+      return report
+    } finally {
+      webDavTagRenameRef.current = false
+      vaultMutationBarrierRef.current = Math.max(0, vaultMutationBarrierRef.current - 1)
+      if (activeCacheIdRef.current === cacheId) setIsManagingNote(false)
+    }
+  }
+
+  const renameTagAcrossVault = (source: string, target: string) => activeCacheMeta?.sourceKind === "webdav"
+    ? renameWebDavTag(source, target)
+    : renameLocalTag(source, target)
 
   const toggleTask = (task: MarkdownTask, checked: boolean) => {
     if (isRefreshingVault) {
@@ -4709,7 +4793,7 @@ function App() {
             onNoteViewModeChange={changeNoteViewMode}
             onMarkdownSourceModeChange={changeMarkdownSourceMode}
             onRenameFolder={renameFolder}
-            onRenameTag={renameLocalTag}
+            onRenameTag={renameTagAcrossVault}
             onRenameNote={(title) => void moveActiveNote(activeNote?.folder === "根目录" ? null : activeNote?.folder ?? null, title)}
             onRenameNoteById={(noteId, title) => {
               const note = notes.find((candidate) => candidate.id === noteId)

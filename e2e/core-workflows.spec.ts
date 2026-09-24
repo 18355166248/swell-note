@@ -3,10 +3,11 @@ import { expect, test, type Page } from "@playwright/test"
 import { lockUnifiedCanvas, useCompatibilityPreview, useUnifiedCanvas } from "./note-view-mode"
 import { createVaultBackup } from "../src/services/backup/vault-backup"
 
-async function seedCachedVault(page: Page) {
+async function seedCachedVault(page: Page, tags: string[] = []) {
   await page.goto("/#/notes")
-  await page.evaluate(async () => {
+  await page.evaluate(async (tags) => {
     const cacheId = "e2e-vault"
+    const tagFrontmatter = tags.length ? `---\ntags: [${tags.join(", ")}]\n---\n\n` : ""
     const noteA = {
       content: "",
       contentCached: true,
@@ -20,6 +21,7 @@ async function seedCachedVault(page: Page) {
       source: "webdav",
       starred: false,
       syncStatus: "synced",
+      tags,
       title: "第一篇",
       updatedAt: "刚刚",
     }
@@ -61,7 +63,8 @@ async function seedCachedVault(page: Page) {
       sourceKind: "webdav",
     })
     transaction.objectStore("settings").put({ key: "last-cache", value: cacheId })
-    for (const [note, content] of [[noteA, "# 第一篇\n\n正文 A"], [noteB, "# 第二篇\n\n正文 B"]] as const) {
+    for (const [note, body] of [[noteA, "# 第一篇\n\n正文 A"], [noteB, "# 第二篇\n\n正文 B"]] as const) {
+      const content = `${tagFrontmatter}${body}`
       transaction.objectStore("documents").put({
         baseContent: content,
         cacheId,
@@ -70,7 +73,7 @@ async function seedCachedVault(page: Page) {
         noteId: note.id,
         outgoingLinks: [],
         path: note.remotePath,
-        tags: [],
+        tags,
         title: note.title,
       })
     }
@@ -79,11 +82,47 @@ async function seedCachedVault(page: Page) {
       transaction.onerror = () => reject(transaction.error)
     })
     database.close()
-  })
+  }, tags)
   await page.reload()
 }
 
 test.describe("核心笔记流程", () => {
+  test("离线 WebDAV 标签批量重命名写入工作副本并进入待同步", async ({ page }, testInfo) => {
+    await seedCachedVault(page, ["旧标签"])
+    await page.evaluate(() => localStorage.setItem("swell-note:webdav-config:v1", JSON.stringify({
+      provider: "jianguoyun", remotePath: "/Swell/", serverUrl: "https://dav.jianguoyun.com/dav/", username: "e2e@example.com",
+    })))
+    await page.reload()
+    await page.goto("/#/notes/folder/%E6%B5%8B%E8%AF%95")
+    const workspace = page.locator(testInfo.project.name === "mobile-chrome" ? ".mobile-workspace:visible" : ".desktop-workspace:visible")
+    const filter = workspace.getByRole("button", { name: "按标签筛选" })
+    await filter.click()
+    await page.getByRole("menuitem", { name: "#旧标签" }).click()
+    await filter.click()
+    await page.getByRole("menuitem", { name: "重命名当前标签…" }).click()
+    const dialog = page.getByRole("dialog", { name: "批量重命名标签" })
+    await expect(dialog).toContainText("2 篇笔记")
+    await dialog.getByRole("textbox", { name: "新标签名称" }).fill("新标签")
+    await dialog.getByRole("button", { name: "确认重命名" }).click()
+    await expect(dialog).not.toBeVisible()
+    await expect(workspace).toContainText("待同步")
+    const documents = await page.evaluate(async () => {
+      const request = indexedDB.open("swell-note-vault-cache", 3)
+      const db = await new Promise<IDBDatabase>((resolve) => { request.onsuccess = () => resolve(request.result) })
+      const transaction = db.transaction("documents", "readonly")
+      const values = await new Promise<Array<{ content: string }>>((resolve) => {
+        const get = transaction.objectStore("documents").index("cacheId").getAll("e2e-vault")
+        get.onsuccess = () => resolve(get.result)
+      })
+      db.close()
+      return values.map((value) => value.content)
+    })
+    expect(documents).toHaveLength(2)
+    expect(documents.every((content) => content.includes('tags: ["新标签"]'))).toBe(true)
+    await page.reload()
+    await expect(workspace).toContainText("待同步")
+  })
+
   test("恢复备份先预览同名与新增文件，确认后才写入", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page)
