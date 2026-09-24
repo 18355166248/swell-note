@@ -1,0 +1,42 @@
+src/services/vault/batch-organize.ts
+  s_4ab4c72d337579::t_139c4548e29753 1-18,31-51,53-75,77,79,82-89,91-94,96-131,133-140,142-153,155-168,170-183
+  s_4ab4c72d337579::t_cdee54a33a84b2 19-30,52,76,78,80-81,90,95,132,141,154,169
+src/components/workspace/batch-organize-dialog.tsx
+  s_4ab4c72d337579::t_8c4315e35a1f93 1-107
+docs/joplin-feature-gap-2026-09-24.md
+  s_4ab4c72d337579::t_e951fd138f58a8 5-6
+docs/joplin-desktop-ios-gap-2026-09-24.md
+  s_4ab4c72d337579::t_f87cb23888d5a0 1-109
+src/components/workspace/batch-organize-dialog.css
+  s_4ab4c72d337579::t_8c4315e35a1f93 1-16
+docs/batch-organize-2026-09-24.md
+  s_4ab4c72d337579::t_fa14d03bae9ede 1-37
+src/App.tsx
+  s_4ab4c72d337579::t_905a179dca8e84 5,144,445,608,624,633,1911,2427,2704,2722,2754,2800,4136-4213,4495,4548,4551,4866
+src/components/routes/app-pages.tsx
+  s_4ab4c72d337579::t_adddd1d0056055 361,446
+src/components/workspace/global-search-dialog.tsx
+  s_4ab4c72d337579::t_61ea0b4e85d6fc 35,79-80,91,106-108,110,122,128-129,135,137,139,160,315,322
+src/services/export/markdown-export.ts
+  s_4ab4c72d337579::t_6e6957d9ba40b8 44-48,57
+src/services/search/global-search-filter.test.ts
+  s_4ab4c72d337579::t_f243ab3d0f576d 26,31,33,89-98
+src/services/search/global-search-filter.ts
+  s_4ab4c72d337579::t_6ae70f2feea5d3 6,38,51,53,62,64,74-80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "4a1eb5ee44c56da7686c3cf735ef4989c1dddd15",
+  "prompts": {},
+  "sessions": {
+    "s_4ab4c72d337579": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d2b7-5d25-77c2-8c3b-ed8ee4d142f4",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
