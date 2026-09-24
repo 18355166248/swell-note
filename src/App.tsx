@@ -136,6 +136,7 @@ import { buildNotePreview } from "@/services/markdown/note-preview"
 import { remapNoteVersions, saveNoteVersion } from "@/services/history/note-history"
 import { backupFilename, createVaultBackup, parseVaultBackup } from "@/services/backup/vault-backup"
 import { collectBackupInventory, type BackupIssue } from "@/services/backup/backup-inventory"
+import { inspectVaultRestore, type VaultRestorePreview, type VaultRestoreResult } from "@/services/backup/vault-restore-preview"
 import { exportNoteBundle } from "@/services/export/markdown-export"
 import { createNoteExportBundle } from "@/services/export/note-export-bundle"
 import { uniqueHistoryCopyPath } from "@/services/history/note-history-copy"
@@ -4324,35 +4325,52 @@ function App() {
     }
   }
 
-  const restoreVaultBackup = async (file: File) => {
+  const getBackupRestoreDestination = () => {
     const adapter = vaultSession
     const canRestoreOfflineWebDav = !adapter && activeCacheMeta?.sourceKind === "webdav" && webDavConfigured
     if ((!adapter && !canRestoreOfflineWebDav)
       || (adapter && adapter.kind !== "webdav" && (!adapter.createTextFile || !adapter.createBinaryFile || adapter.readOnly))) {
-      setVaultError("请先打开一个可写的笔记库再恢复备份")
-      return false
+      throw new Error("请先打开一个可写的笔记库再恢复备份")
     }
+    if (!activeCacheMeta) throw new Error("当前笔记库不可用")
+    const isWebDav = adapter?.kind === "webdav" || canRestoreOfflineWebDav
+    const config = isWebDav ? loadWebDavConfig() : null
+    const resolveStoragePath = (displayPath: string) => adapter?.getStoragePath?.(displayPath)
+      ?? (isWebDav
+        ? `${config!.remotePath.replace(/\/+$/g, "")}/${displayPath.replace(/^\/+/, "")}`.replace(/\/{2,}/g, "/")
+        : displayPath)
+    return { adapter, cacheId: activeCacheMeta.id, isWebDav, resolveStoragePath, sourceKind: isWebDav ? "webdav" as const : "local" as const }
+  }
+
+  const inspectVaultBackup = async (file: File): Promise<VaultRestorePreview> => {
+    const destination = getBackupRestoreDestination()
+    const backup = parseVaultBackup(new Uint8Array(await file.arrayBuffer()))
+    if (activeCacheIdRef.current !== destination.cacheId) throw new Error("笔记库已切换，请重新选择备份文件")
+    return inspectVaultRestore({
+      backup,
+      cacheId: destination.cacheId,
+      existingPaths: notesRef.current.flatMap((note) => note.remotePath ? [note.remotePath] : []),
+      fileName: file.name,
+      resolveStoragePath: destination.resolveStoragePath,
+      sourceKind: destination.sourceKind,
+    })
+  }
+
+  const restoreVaultBackup = async (preview: VaultRestorePreview): Promise<VaultRestoreResult> => {
     setIsManagingNote(true)
     setVaultError(null)
+    const imported: Note[] = []
+    const errors: string[] = []
+    let restoredAttachmentCount = 0
+    let restoredNoteCount = 0
     try {
-      const backup = parseVaultBackup(new Uint8Array(await file.arrayBuffer()))
-      if (!window.confirm(
-        `备份包含 ${backup.notes.length} 篇笔记和 ${backup.attachments.length} 个附件。恢复会保留原目录，遇到同名文件会跳过，不会覆盖。是否继续？`,
-      )) return false
-
-      const config = loadWebDavConfig()
-      const isWebDav = adapter?.kind === "webdav" || canRestoreOfflineWebDav
-      const resolveStoragePath = (displayPath: string) => adapter?.getStoragePath?.(displayPath)
-        ?? (isWebDav
-          ? `${config.remotePath.replace(/\/+$/g, "")}/${displayPath.replace(/^\/+/, "")}`.replace(/\/{2,}/g, "/")
-          : displayPath)
+      const { adapter, cacheId, isWebDav, resolveStoragePath, sourceKind } = getBackupRestoreDestination()
+      // 预览期间可能切换笔记库；执行前必须再次核对目标，不能把已解析的 ZIP 写入另一库。
+      if (preview.cacheId !== cacheId || preview.sourceKind !== sourceKind) throw new Error("笔记库已切换，请重新选择备份文件")
+      const backup = preview.backup
       const reserved = new Set(notesRef.current
         .map((note) => note.remotePath?.replace(/\\/g, "/").toLocaleLowerCase())
         .filter((path): path is string => Boolean(path)))
-      const imported: Note[] = []
-      const errors: string[] = []
-      let restoredAttachmentCount = 0
-
       const directoryPaths = [...new Set([...backup.notes, ...backup.attachments]
         .flatMap((entry) => {
           const segments = entry.path.split("/").slice(0, -1)
@@ -4428,6 +4446,7 @@ function App() {
               title: entry.path.split("/").pop()?.replace(/\.(?:canvas|md)$/i, "") ?? "未命名笔记",
               updatedAt: "从备份恢复",
             })
+            restoredNoteCount += 1
           }
           reserved.add(storagePath.toLocaleLowerCase())
         } catch (error) {
@@ -4444,7 +4463,7 @@ function App() {
               cacheId: activeCacheMeta.id,
               data: entry.data.slice().buffer,
               mimeType: entry.mimeType,
-              noteId: imported[0]?.id ?? `backup:${file.name}`,
+              noteId: imported[0]?.id ?? `backup:${preview.fileName}`,
               path: storagePath,
             })
           } else {
@@ -4458,6 +4477,7 @@ function App() {
 
       if (imported.length > 0) {
         setNotes((current) => [...imported, ...current])
+        if (isWebDav) restoredNoteCount = imported.length
         setSaveStates((current) => ({
           ...current,
           ...Object.fromEntries(imported.map((note) => [note.id, { status: note.source === "webdav" ? "pending" as const : "saved" as const }])),
@@ -4471,11 +4491,12 @@ function App() {
       if (isWebDav && activeCacheMeta) {
         setPendingAttachmentCount((await listPendingVaultAttachments(activeCacheMeta.id)).length)
       }
-      setVaultError(`已恢复 ${imported.length} 篇笔记、${restoredAttachmentCount} 个附件${errors.length ? `；${errors.length} 项跳过或失败` : ""}`)
-      return true
+      setVaultError(`已恢复 ${restoredNoteCount} 篇笔记、${restoredAttachmentCount} 个附件${errors.length ? `；${errors.length} 项跳过或失败` : ""}`)
+      return { interrupted: false, issues: errors, restoredAttachments: restoredAttachmentCount, restoredNotes: restoredNoteCount }
     } catch (error) {
-      setVaultError(error instanceof Error ? error.message : "恢复整库备份失败")
-      return false
+      const message = error instanceof Error ? error.message : "恢复整库备份失败"
+      setVaultError(`恢复中断：${message}；已写入 ${restoredNoteCount} 篇笔记、${restoredAttachmentCount} 个附件`)
+      return { interrupted: true, issues: [...errors, message], restoredAttachments: restoredAttachmentCount, restoredNotes: restoredNoteCount }
     } finally {
       setIsManagingNote(false)
     }
@@ -4799,6 +4820,7 @@ function App() {
               activeCacheId={activeCacheMeta?.id ?? null}
               notes={notes}
               onExportBackup={exportVaultBackup}
+              onInspectBackup={inspectVaultBackup}
               onRebuildSearchIndex={rebuildSearchIndex}
               onRestoreBackup={restoreVaultBackup}
             />

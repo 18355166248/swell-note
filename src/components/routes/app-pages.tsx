@@ -30,6 +30,7 @@ import {
   MobileNavigationDrawer,
 } from "@/components/workspace/workspace"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,6 +46,7 @@ import {
 } from "@/services/cache/vault-cache"
 import { inspectCachedAttachments, type AttachmentMaintenanceReport } from "@/services/vault/attachment-maintenance"
 import type { BackupIssue } from "@/services/backup/backup-inventory"
+import type { VaultRestorePreview, VaultRestoreResult } from "@/services/backup/vault-restore-preview"
 import { inspectStorageQuota, requestPersistentStorage, type StorageQuotaReport } from "@/services/storage/storage-quota"
 import { getNativeSearchIndexStatus, supportsNativeSearchIndex, type NativeSearchIndexStatus } from "@/services/search/sqlite-note-index"
 import { summarizeSyncQueue, summarizeWebDavSync } from "@/services/sync/sync-summary"
@@ -322,14 +324,16 @@ export function StorageMaintenancePage({
   activeCacheId,
   notes,
   onExportBackup,
+  onInspectBackup,
   onRebuildSearchIndex,
   onRestoreBackup,
 }: {
   activeCacheId: string | null
   notes: Note[]
   onExportBackup: () => Promise<{ ok: boolean; issues: BackupIssue[] }>
+  onInspectBackup: (file: File) => Promise<VaultRestorePreview>
   onRebuildSearchIndex: () => Promise<void>
-  onRestoreBackup: (file: File) => Promise<boolean>
+  onRestoreBackup: (preview: VaultRestorePreview) => Promise<VaultRestoreResult>
 }) {
   const [attachments, setAttachments] = useState<AttachmentMaintenanceReport | null>(null)
   const [indexStatus, setIndexStatus] = useState<NativeSearchIndexStatus | null>(null)
@@ -337,7 +341,13 @@ export function StorageMaintenancePage({
   const [busyAction, setBusyAction] = useState<"attachments" | "backup" | "index" | "persist" | "restore" | null>(null)
   const [message, setMessage] = useState("")
   const [backupIssues, setBackupIssues] = useState<BackupIssue[]>([])
+  const [restorePreview, setRestorePreview] = useState<VaultRestorePreview | null>(null)
+  const [restoreIssues, setRestoreIssues] = useState<string[]>([])
+  const [acceptIncompleteBackup, setAcceptIncompleteBackup] = useState(false)
+  const [visibleRestoreEntries, setVisibleRestoreEntries] = useState(100)
   const restoreInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => { setRestorePreview(null) }, [activeCacheId])
 
   const refresh = async () => {
     const [entries, nativeStatus, quota] = await Promise.all([
@@ -416,12 +426,34 @@ export function StorageMaintenancePage({
   const restoreBackup = async (file: File) => {
     setBusyAction("restore")
     setMessage("")
+    setRestoreIssues([])
     try {
-      const completed = await onRestoreBackup(file)
-      setMessage(completed ? "备份恢复流程已完成；同名文件会保留原文件并跳过" : "恢复已取消或失败，现有同名文件未被覆盖")
+      const preview = await onInspectBackup(file)
+      setRestorePreview(preview)
+      setAcceptIncompleteBackup(false)
+      setVisibleRestoreEntries(100)
+    } catch (error) {
+      setMessage(error instanceof Error ? `无法预览备份：${error.message}` : "无法预览备份，请重新选择文件")
     } finally {
       setBusyAction(null)
       if (restoreInputRef.current) restoreInputRef.current.value = ""
+    }
+  }
+
+  const applyRestoreBackup = async () => {
+    const preview = restorePreview
+    if (!preview || (preview.backup.integrityWarnings.length > 0 && !acceptIncompleteBackup)) return
+    setBusyAction("restore")
+    setMessage("")
+    try {
+      const result = await onRestoreBackup(preview)
+      setRestoreIssues(result.issues)
+      setMessage(`${result.interrupted ? "恢复中断；已写入" : "已恢复"} ${result.restoredNotes} 篇笔记、${result.restoredAttachments} 个附件${result.issues.length ? `；${result.issues.length} 项跳过或失败，详情见下方` : ""}`)
+    } catch (error) {
+      setMessage(error instanceof Error ? `恢复失败：${error.message}` : "恢复失败，请稍后重试")
+    } finally {
+      setRestorePreview(null)
+      setBusyAction(null)
     }
   }
 
@@ -490,7 +522,7 @@ export function StorageMaintenancePage({
           </Button>
         </section>
         <section>
-          <div><strong>整库备份与恢复</strong><small>备份会先核对全部笔记及引用附件；缺失内容时停止下载。恢复遇到同名文件会跳过，不覆盖。</small></div>
+          <div><strong>整库备份与恢复</strong><small>备份会先核对全部笔记及引用附件；恢复前可预览文件清单，同名笔记会跳过。</small></div>
           <div className="storage-backup-actions">
             <Button disabled={!activeCacheId || busyAction !== null} onClick={() => void exportBackup()} variant="outline">
               {busyAction === "backup" ? <RefreshCw className="spin" /> : <Download />}备份 ZIP
@@ -518,6 +550,52 @@ export function StorageMaintenancePage({
           <ul>{backupIssues.map((issue, index) => <li key={`${issue.kind}:${issue.path}:${index}`}>{issue.kind === "note" ? "笔记" : "附件"} · {issue.path}：{issue.reason}</li>)}</ul>
         </div>
       ) : null}
+      {restoreIssues.length > 0 ? (
+        <div aria-label="恢复问题清单" className="maintenance-message" role="alert">
+          <strong>跳过或恢复失败的内容</strong>
+          <ul>{restoreIssues.map((issue, index) => <li key={`${index}:${issue}`}>{issue}</li>)}</ul>
+        </div>
+      ) : null}
+      <Dialog onOpenChange={(open) => { if (!open && busyAction !== "restore") setRestorePreview(null) }} open={Boolean(restorePreview)}>
+        <DialogContent className="backup-restore-dialog">
+          <DialogHeader>
+            <DialogTitle>预览整库恢复</DialogTitle>
+            <DialogDescription>确认文件清单后才会写入当前笔记库；同名笔记执行时复核，附件冲突在写入或同步时提示。</DialogDescription>
+          </DialogHeader>
+          {restorePreview ? (() => {
+            const existing = new Set(restorePreview.existingNotePaths)
+            const entries = [
+              ...restorePreview.backup.notes.map((note) => ({ kind: "笔记", path: note.path, existing: existing.has(note.path) })),
+              ...restorePreview.backup.attachments.map((asset) => ({ kind: "附件", path: asset.path, existing: false })),
+            ]
+            return <>
+              <p className="backup-restore-summary">{restorePreview.fileName} · 来源库：{restorePreview.backup.manifest.label || "未命名"} · {restorePreview.backup.notes.length} 篇笔记、{restorePreview.backup.attachments.length} 个附件 · {existing.size} 篇同名笔记预计跳过</p>
+              {restorePreview.backup.integrityWarnings.length > 0 ? (
+                <div className="backup-restore-warning" role="alert">
+                  <strong>备份清单与实际文件不一致</strong>
+                  <ul>{restorePreview.backup.integrityWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+                  <label><input checked={acceptIncompleteBackup} onChange={(event) => setAcceptIncompleteBackup(event.target.checked)} type="checkbox" />我了解此备份可能不完整，仅恢复其中现存的文件</label>
+                </div>
+              ) : null}
+              <div className="backup-restore-list" role="list" aria-label="备份文件清单">
+                {entries.slice(0, visibleRestoreEntries).map((entry) => (
+                  <div className="backup-restore-entry" key={`${entry.kind}:${entry.path}`} role="listitem">
+                    <span>{entry.kind} · {entry.path}</span>
+                    <small>{entry.existing ? "已存在，跳过" : entry.kind === "附件" ? restorePreview.sourceKind === "webdav" ? "待同步，冲突时提示" : "写入时检查同名" : "将新增"}</small>
+                  </div>
+                ))}
+              </div>
+              {entries.length > visibleRestoreEntries ? <Button onClick={() => setVisibleRestoreEntries((count) => count + 100)} variant="outline">加载更多（剩余 {entries.length - visibleRestoreEntries} 项）</Button> : null}
+              <DialogFooter>
+                <Button disabled={busyAction === "restore"} onClick={() => setRestorePreview(null)} variant="outline">取消</Button>
+                <Button disabled={busyAction === "restore" || (restorePreview.backup.integrityWarnings.length > 0 && !acceptIncompleteBackup)} onClick={() => void applyRestoreBackup()}>
+                  {busyAction === "restore" ? "正在恢复…" : "确认恢复"}
+                </Button>
+              </DialogFooter>
+            </>
+          })() : null}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

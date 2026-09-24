@@ -12,16 +12,17 @@ export type VaultBackupFile = {
 }
 
 export type VaultBackupManifest = {
-  attachmentCount: number
+  attachmentCount: number | null
   createdAt: string
   format: "swell-note-vault"
   label: string
-  noteCount: number
+  noteCount: number | null
   version: 1
 }
 
 export type ParsedVaultBackup = {
   attachments: VaultBackupFile[]
+  integrityWarnings: string[]
   manifest: VaultBackupManifest
   notes: Array<{ content: string; path: string }>
 }
@@ -95,14 +96,27 @@ export function parseVaultBackup(data: Uint8Array): ParsedVaultBackup {
 
   const manifestData = archive[MANIFEST_PATH]
   if (!manifestData) throw new Error("不是有效的 Swell Note 整库备份：缺少 manifest")
-  let manifest: VaultBackupManifest
+  let parsedManifest: unknown
   try {
-    manifest = JSON.parse(strFromU8(manifestData)) as VaultBackupManifest
+    parsedManifest = JSON.parse(strFromU8(manifestData))
   } catch {
     throw new Error("备份 manifest 无法解析")
   }
-  if (manifest.format !== "swell-note-vault" || manifest.version !== 1) {
+  if (!parsedManifest || typeof parsedManifest !== "object" || Array.isArray(parsedManifest)) {
+    throw new Error("备份 manifest 结构无效")
+  }
+  const rawManifest = parsedManifest as Record<string, unknown>
+  if (rawManifest.format !== "swell-note-vault" || rawManifest.version !== 1) {
     throw new Error("备份格式或版本暂不受支持")
+  }
+  const validCount = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null
+  const manifest: VaultBackupManifest = {
+    attachmentCount: validCount(rawManifest.attachmentCount),
+    createdAt: typeof rawManifest.createdAt === "string" ? rawManifest.createdAt : "",
+    format: "swell-note-vault",
+    label: typeof rawManifest.label === "string" ? rawManifest.label : "",
+    noteCount: validCount(rawManifest.noteCount),
+    version: 1,
   }
 
   const notes: ParsedVaultBackup["notes"] = []
@@ -115,7 +129,13 @@ export function parseVaultBackup(data: Uint8Array): ParsedVaultBackup {
     if (/\.(?:canvas|md)$/i.test(path)) notes.push({ content: strFromU8(value), path })
     else attachments.push({ data: value, mimeType: mimeTypeFromPath(path), path })
   }
-  return { attachments, manifest, notes }
+  const integrityWarnings: string[] = []
+  // 旧版或损坏的清单仍允许先预览文件，但需让用户明确确认数量异常。
+  if (manifest.noteCount === null) integrityWarnings.push("清单缺少有效的笔记数量")
+  else if (manifest.noteCount !== notes.length) integrityWarnings.push(`清单声明 ${manifest.noteCount} 篇笔记，实际包含 ${notes.length} 篇`)
+  if (manifest.attachmentCount === null) integrityWarnings.push("清单缺少有效的附件数量")
+  else if (manifest.attachmentCount !== attachments.length) integrityWarnings.push(`清单声明 ${manifest.attachmentCount} 个附件，实际包含 ${attachments.length} 个`)
+  return { attachments, integrityWarnings, manifest, notes }
 }
 
 export function backupFilename(label: string, date = new Date()) {

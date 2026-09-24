@@ -13,6 +13,7 @@ describe("vault backup", () => {
     const parsed = parseVaultBackup(data)
 
     expect(parsed.manifest).toMatchObject({ attachmentCount: 1, noteCount: 1, version: 1 })
+    expect(parsed.integrityWarnings).toEqual([])
     expect(parsed.notes).toEqual([{ content: "# 标题", path: "docs/a.md" }])
     expect(parsed.attachments[0]).toMatchObject({ path: "assets/a.png", mimeType: "image/png" })
     expect([...parsed.attachments[0].data]).toEqual([1, 2, 3])
@@ -24,6 +25,28 @@ describe("vault backup", () => {
       "vault/../secret.md": strToU8("secret"),
     })
     expect(() => parseVaultBackup(archive)).toThrow("非法路径")
+  })
+
+  it("reports a legacy archive whose manifest counts do not match its files", () => {
+    const archive = zipSync({
+      "swell-note-backup.json": strToU8(JSON.stringify({ format: "swell-note-vault", version: 1, noteCount: 2, attachmentCount: 0 })),
+      "vault/only.md": strToU8("content"),
+    })
+    expect(parseVaultBackup(archive).integrityWarnings).toEqual(["清单声明 2 篇笔记，实际包含 1 篇"])
+  })
+
+  it("rejects an invalid manifest shape and warns when counts are missing", () => {
+    const invalid = zipSync({ "swell-note-backup.json": strToU8("null") })
+    expect(() => parseVaultBackup(invalid)).toThrow("manifest 结构无效")
+
+    const missingCounts = zipSync({
+      "swell-note-backup.json": strToU8(JSON.stringify({ format: "swell-note-vault", version: 1 })),
+      "vault/a.md": strToU8("content"),
+    })
+    expect(parseVaultBackup(missingCounts).integrityWarnings).toEqual([
+      "清单缺少有效的笔记数量",
+      "清单缺少有效的附件数量",
+    ])
   })
 
   it("creates a filesystem-safe filename", () => {

@@ -1605,6 +1605,16 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .global-search-summary svg { width: 14px; height: 14px; }
 .global-search-help { border-top: 1px solid var(--border); }
 .global-search-more { display: block; width: calc(100% - 32px); margin: 8px 16px; padding: 8px; border-radius: 6px; background: var(--muted); font-size: 12px; }
+.backup-restore-dialog { display: flex; flex-direction: column; max-height: min(80dvh, 680px); }
+.backup-restore-summary { margin: 0; font-size: 12px; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.backup-restore-warning { padding: 10px; border: 1px solid var(--destructive); border-radius: 6px; font-size: 12px; }
+.backup-restore-warning ul { margin: 6px 0; padding-left: 20px; }
+.backup-restore-warning label { display: flex; align-items: flex-start; gap: 7px; }
+.backup-restore-list { min-height: 0; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+.backup-restore-entry { display: flex; justify-content: space-between; gap: 12px; padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.backup-restore-entry:last-child { border-bottom: 0; }
+.backup-restore-entry span { min-width: 0; overflow-wrap: anywhere; }
+.backup-restore-entry small { flex: 0 0 auto; color: var(--muted-foreground); }
 .editor-body { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .editor-body > .editor-scroll { min-width: 0; flex: 1; }
 .pinned-note-outline { display: flex; flex-direction: column; width: clamp(160px, 24%, 220px); flex-shrink: 0; min-height: 0; border-left: 1px solid var(--border); background: var(--panel-soft); }

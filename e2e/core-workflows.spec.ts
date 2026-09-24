@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test"
 
 import { lockUnifiedCanvas, useCompatibilityPreview, useUnifiedCanvas } from "./note-view-mode"
+import { createVaultBackup } from "../src/services/backup/vault-backup"
 
 async function seedCachedVault(page: Page) {
   await page.goto("/#/notes")
@@ -83,6 +84,41 @@ async function seedCachedVault(page: Page) {
 }
 
 test.describe("核心笔记流程", () => {
+  test("恢复备份先预览同名与新增文件，确认后才写入", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedCachedVault(page)
+    await page.evaluate(() => localStorage.setItem("swell-note:webdav-config:v1", JSON.stringify({
+      provider: "jianguoyun", remotePath: "/Swell/", serverUrl: "https://dav.jianguoyun.com/dav/", username: "e2e@example.com",
+    })))
+    await page.reload()
+    await page.goto("/#/settings/storage")
+    const archive = createVaultBackup({
+      attachments: [{ data: new Uint8Array([1, 2, 3]), path: "attachments/picture.png" }],
+      label: "测试备份",
+      notes: [
+        { content: "# 旧正文", path: "测试/第一篇.md" },
+        { content: "# 恢复正文", path: "测试/恢复笔记.md" },
+      ],
+    })
+    const chooseBackup = () => page.locator('input[type="file"][accept*=".swell.zip"]').setInputFiles({
+      buffer: Buffer.from(archive), mimeType: "application/zip", name: "test.swell.zip",
+    })
+    await chooseBackup()
+    const dialog = page.getByRole("dialog", { name: "预览整库恢复" })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByText("测试/第一篇.md")).toBeVisible()
+    await expect(dialog.getByText("已存在，跳过")).toBeVisible()
+    await expect(dialog.getByText("测试/恢复笔记.md")).toBeVisible()
+    await dialog.getByRole("button", { name: "取消" }).click()
+    await expect(dialog).not.toBeVisible()
+
+    await chooseBackup()
+    await dialog.getByRole("button", { name: "确认恢复" }).click()
+    await expect(dialog).not.toBeVisible()
+    await page.goto("/#/notes")
+    await expect(page.getByText("恢复笔记", { exact: true }).first()).toBeVisible()
+  })
+
   test("标签编辑写回 Markdown 并在刷新后保留", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page)
