@@ -1,0 +1,21 @@
+src/services/vault/local-vault-adapter.ts
+  s_13775b5a3f2958::t_b54e7c25803065 218-219
+src/App.tsx
+  s_13775b5a3f2958::t_cef353b3ecef23 4604-4605,4626
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "b9d16c6d14285457783abb781eefe26644e7ef1b",
+  "prompts": {},
+  "sessions": {
+    "s_13775b5a3f2958": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d11a-c36c-7930-a94e-d2c197456def",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
