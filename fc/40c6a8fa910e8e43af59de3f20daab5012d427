@@ -1,0 +1,29 @@
+src/App.tsx
+  s_13775b5a3f2958::t_6da089eda95872 4444-4447
+src/services/backup/backup-inventory.ts
+  s_13775b5a3f2958::t_f4ab6ecd4778fc 79-82,87
+  s_13775b5a3f2958::t_b9331acc88e554 1,27,34,63,77-78,83-86,88-92
+  s_13775b5a3f2958::t_02156f2fd0b5e5 61,64
+src/services/backup/backup-inventory.test.ts
+  s_13775b5a3f2958::t_b98c5ae4b2678b 77-97
+  s_13775b5a3f2958::t_358397b52429fb 98-106
+src/services/vault/attachment-maintenance.ts
+  s_13775b5a3f2958::t_02156f2fd0b5e5 53,57-61
+  s_13775b5a3f2958::t_b9331acc88e554 49-52,63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "fc40c6a8fa910e8e43af59de3f20daab5012d427",
+  "prompts": {},
+  "sessions": {
+    "s_13775b5a3f2958": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d11a-c36c-7930-a94e-d2c197456def",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
