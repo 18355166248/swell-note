@@ -74,4 +74,34 @@ describe("collectBackupInventory", () => {
     expect(inventory.issues).toEqual([{ kind: "note", path: "未同步笔记", reason: "缺少 Vault 路径" }])
     expect(inventory.notes).toHaveLength(1)
   })
+
+  it("ignores absolute local source links and resolves Obsidian short embeds at the vault root", async () => {
+    const loadAttachment = vi.fn(async (path: string) => {
+      if (path === "/Swell/cover.png") return { data: new Uint8Array([7]), mimeType: "image/png" }
+      throw new Error("远端不存在")
+    })
+    const inventory = await collectBackupInventory({
+      cachedAttachments: [],
+      loadAttachment,
+      notes: [{
+        ...sourceNote,
+        content: "[源码](/Users/me/project/file.ts:43)\n![[cover.png]]",
+        storagePath: "/Swell/docs/a.md",
+      }],
+      toBackupPath: (path) => path.replace(/^\/Swell\//, ""),
+      toStoragePath: (path) => `/Swell/${path}`,
+    })
+    expect(inventory.issues).toEqual([])
+    expect(inventory.attachments).toMatchObject([{ path: "cover.png" }])
+    expect(loadAttachment.mock.calls.map(([path]) => path)).toEqual(["/Swell/docs/cover.png", "/Swell/cover.png"])
+  })
+
+  it("still reports an embedded image from an absolute local path", async () => {
+    const inventory = await collectBackupInventory({
+      cachedAttachments: [],
+      notes: [{ ...sourceNote, content: "![图](/Users/me/private.png)" }],
+      toBackupPath,
+    })
+    expect(inventory.issues).toMatchObject([{ kind: "attachment" }])
+  })
 })

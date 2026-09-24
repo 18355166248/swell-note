@@ -46,13 +46,21 @@ export function inspectCachedAttachments(
 }
 
 export function extractAttachmentSources(content: string) {
-  const sources: string[] = []
+  return extractAttachmentReferences(content).map((reference) => reference.source)
+}
+
+export function extractAttachmentReferences(content: string) {
+  const references: Array<{ source: string; obsidianEmbed: boolean; embedded: boolean }> = []
   for (const pattern of [HYBRID_IMAGE_PATTERN, MARKDOWN_LINK_PATTERN, OBSIDIAN_EMBED_PATTERN]) {
     pattern.lastIndex = 0
     let match: RegExpExecArray | null
-    while ((match = pattern.exec(content))) sources.push(match[1])
+    while ((match = pattern.exec(content))) references.push({
+      source: match[1],
+      obsidianEmbed: pattern === OBSIDIAN_EMBED_PATTERN,
+      embedded: match[0].startsWith("!"),
+    })
   }
-  return sources
+  return references
 }
 
 function normalizePath(path: string) {

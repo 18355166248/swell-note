@@ -1,4 +1,4 @@
-import { extractAttachmentSources } from "@/services/vault/attachment-maintenance"
+import { extractAttachmentReferences } from "@/services/vault/attachment-maintenance"
 import { resolveVaultAssetPath } from "@/services/vault/vault-path"
 import type { VaultBackupFile } from "./vault-backup"
 
@@ -24,12 +24,14 @@ export async function collectBackupInventory({
   loadNote,
   notes,
   toBackupPath,
+  toStoragePath = (path) => path,
 }: {
   cachedAttachments: readonly BackupSourceAttachment[]
   loadAttachment?: (storagePath: string) => Promise<Pick<VaultBackupFile, "data" | "mimeType">>
   loadNote?: (note: BackupSourceNote) => Promise<string>
   notes: readonly BackupSourceNote[]
   toBackupPath: (storagePath: string) => string
+  toStoragePath?: (displayPath: string) => string
 }) {
   const issues: BackupIssue[] = []
   const includedNotes: Array<{ content: string; path: string; storagePath: string }> = []
@@ -56,8 +58,10 @@ export async function collectBackupInventory({
   const attachmentsByPath = new Map(cachedAttachments.map((entry) => [entry.storagePath, entry]))
   const attemptedPaths = new Set<string>()
   for (const note of includedNotes) {
-    for (const source of extractAttachmentSources(note.content)) {
+    for (const { source, obsidianEmbed, embedded } of extractAttachmentReferences(note.content)) {
       if (/^[a-z][a-z\d+.-]*:/i.test(source) || source.startsWith("//") || source.startsWith("#")) continue
+      // 绝对本机源码定位链接不属于 Vault；把它拼进远端路径会产生无意义的 HTTP 400。
+      if (!embedded && /^\/(?:Users|home|Volumes|private|tmp)\//.test(source)) continue
       const storagePath = resolveVaultAssetPath(note.storagePath, source)
       if (!storagePath) {
         issues.push({ kind: "attachment", path: `${note.path} → ${source}`, reason: "附件路径无法解析" })
@@ -70,6 +74,22 @@ export async function collectBackupInventory({
         const asset = await loadAttachment(storagePath)
         attachmentsByPath.set(storagePath, { ...asset, path: toBackupPath(storagePath), storagePath })
       } catch (error) {
+        // Obsidian 的短名嵌入可指向库根目录；相对位置不存在时，尝试根目录同名文件。
+        const rootPath = obsidianEmbed && !source.includes("/") ? toStoragePath(source) : null
+        if (rootPath && rootPath !== storagePath && attachmentsByPath.has(rootPath)) {
+          attemptedPaths.delete(storagePath)
+          continue
+        }
+        if (rootPath && rootPath !== storagePath && loadAttachment) {
+          try {
+            const asset = await loadAttachment(rootPath)
+            attachmentsByPath.set(rootPath, { ...asset, path: toBackupPath(rootPath), storagePath: rootPath })
+            attemptedPaths.delete(storagePath)
+            continue
+          } catch {
+            // 两个候选位置都不可读时，保留原路径的错误供用户修复。
+          }
+        }
         issues.push({ kind: "attachment", path: toBackupPath(storagePath), reason: error instanceof Error ? error.message : "附件读取失败" })
       }
     }

@@ -4441,6 +4441,10 @@ function App() {
           return backupReadBinaryFile(physicalPath)
         } : undefined,
         toBackupPath: toBackupDisplayPath,
+        toStoragePath: (displayPath) => vaultSession?.getStoragePath?.(displayPath)
+          ?? (activeCacheMeta.sourceKind === "webdav"
+            ? `${loadWebDavConfig().remotePath.replace(/\/+$/g, "")}/${displayPath.replace(/^\/+/, "")}`
+            : displayPath),
       })
       if (inventory.issues.length > 0) {
         setVaultError(`备份未生成：${inventory.issues.length} 项内容不可读取`)
