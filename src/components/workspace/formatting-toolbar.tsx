@@ -4,6 +4,7 @@ import { Bold, Braces, CheckCircle2, Code, Code2, Heading3, Image, Italic, Link,
 import { TABLE_INSERT_TEMPLATE, type MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { EditorFormatState } from "@/components/editor/markdown-input"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 import { SelectionButtons, useSelectionActions } from "./selection-action-bar"
 
@@ -49,7 +50,7 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [, quote, code, link, strike, inlineCode, rule, table] = SECONDARY_FORMATS
   // 标题选择器受控：光标落在哪级标题就显示哪级；切换行为不变（选完即触发 onFormat）。
-  const headingValue = formatState?.heading ? "#".repeat(formatState.heading) : ""
+  const headingValue = formatState?.heading ? "#".repeat(formatState.heading) : "body"
   const selectionMode = mobile && hasSelection
   const { hint, run } = useSelectionActions(editorRef)
 
@@ -71,21 +72,23 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
       {/* 手机屏幕一排放不下全部按钮，重做收进“更多”菜单，主栏只留最高频入口。 */}
       {mobile ? null : <FormatButton disabled={!canRedo} icon={Redo2} label="重做（⌘/Ctrl+Shift+Z）" onClick={() => editorRef.current?.redo()} />}
       <span className="toolbar-divider" />
-      <select aria-label="标题级别" className="toolbar-heading-select" data-active={Boolean(headingValue)} disabled={editingTable} onChange={(event) => {
-        const prefix = event.currentTarget.value
-        if (prefix) { onFormat(`\n${prefix} `); return }
-        // 恢复正文：受控选择器里重选当前级别不会触发 onChange，
+      <Select value={headingValue} onValueChange={(prefix) => {
+        if (prefix !== "body") { onFormat(`\n${prefix} `); return }
+        // 恢复正文：受控选择器里重选当前级别不会触发值变化，
         // 用当前级别再切换一次，借块格式的反向开关去掉标题。
         if (formatState?.heading) onFormat(`\n${"#".repeat(formatState.heading)} `)
-      }} value={headingValue}>
-        <option value="">正文</option>
-        <option value="#">一级标题</option>
-        <option value="##">二级标题</option>
-        <option value="###">三级标题</option>
-        <option value="####">四级标题</option>
-        <option value="#####">五级标题</option>
-        <option value="######">六级标题</option>
-      </select>
+      }}>
+        <SelectTrigger aria-label="标题级别" className="toolbar-heading-select" data-active={headingValue !== "body"} disabled={editingTable}><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="body">正文</SelectItem>
+          <SelectItem value="#">一级标题</SelectItem>
+          <SelectItem value="##">二级标题</SelectItem>
+          <SelectItem value="###">三级标题</SelectItem>
+          <SelectItem value="####">四级标题</SelectItem>
+          <SelectItem value="#####">五级标题</SelectItem>
+          <SelectItem value="######">六级标题</SelectItem>
+        </SelectContent>
+      </Select>
       <span className="toolbar-divider" />
       <FormatButton active={Boolean(formatState?.strong)} icon={Bold} label="加粗（⌘/Ctrl+B）" onClick={() => onFormat("**加粗文字**")} />
       <FormatButton active={Boolean(formatState?.emphasis)} icon={Italic} label="斜体（⌘/Ctrl+I）" onClick={() => onFormat("*斜体文字*")} />

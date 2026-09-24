@@ -40,10 +40,16 @@ function click(label: string) {
   act(() => { document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!.click() })
 }
 function select(label: string, value: string) {
+  const optionLabel = ({ "7": "近 7 天", starred: "仅收藏" } as Record<string, string>)[value] ?? value
   act(() => {
-    const element = document.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!
-    element.value = value
-    element.dispatchEvent(new Event("change", { bubbles: true }))
+    const trigger = document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!
+    trigger.focus()
+    trigger.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }))
+  })
+  act(() => {
+    const item = Array.from(document.querySelectorAll<HTMLElement>('[data-slot="select-item"]'))
+      .find((option) => option.textContent?.trim() === optionLabel)!
+    item.click()
   })
 }
 describe("global search interactions", () => {

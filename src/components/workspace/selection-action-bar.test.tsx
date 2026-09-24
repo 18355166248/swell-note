@@ -215,7 +215,24 @@ describe("FormattingToolbar 选区模式（移动端选区操作并入格式栏�
 
     expect(bar.button("有序列表")?.getAttribute("data-active")).toBe("true")
     expect(bar.button("引用")?.getAttribute("data-active")).toBe("true")
-    expect((container!.querySelector(".toolbar-heading-select") as HTMLSelectElement).value).toBe("####")
+    expect(container!.querySelector(".toolbar-heading-select")?.textContent).toContain("四级标题")
+  })
+
+  it("标题下拉选项仍将对应 Markdown 前缀交给编辑器", () => {
+    const onFormat = vi.fn()
+    mountToolbar(createEditor(), false, { mobile: false, onFormat })
+
+    act(() => {
+      const trigger = container!.querySelector<HTMLButtonElement>(".toolbar-heading-select")!
+      trigger.focus()
+      trigger.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }))
+    })
+    act(() => {
+      Array.from(document.querySelectorAll<HTMLElement>('[data-slot="select-item"]'))
+        .find((item) => item.textContent?.trim() === "二级标题")!.click()
+    })
+
+    expect(onFormat).toHaveBeenCalledWith("\n## ")
   })
 
   it("移动端把有序列表放在更多菜单且仍报告激活状态", async () => {

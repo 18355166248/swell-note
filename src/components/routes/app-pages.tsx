@@ -31,6 +31,7 @@ import {
   MobileNavigationDrawer,
 } from "@/components/workspace/workspace"
 import { Button } from "@/components/ui/button"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
   DropdownMenu,
@@ -331,14 +332,16 @@ export function AppearanceSettingsPage({
         <h3>正文显示</h3>
         <p>编辑和阅读共用，只保存在当前设备。窄屏自动适配屏幕宽度。</p>
         <label>正文字号
-          <select value={editorDisplay.editorFontSize} onChange={(event) => onEditorDisplayChange({ ...editorDisplay, editorFontSize: Number(event.target.value) })}>
-            {[16, 18, 20, 24].map((size) => <option key={size} value={size}>{size} px{size === 16 ? "（默认）" : ""}</option>)}
-          </select>
+          <Select value={String(editorDisplay.editorFontSize)} onValueChange={(value) => onEditorDisplayChange({ ...editorDisplay, editorFontSize: Number(value) })}>
+            <SelectTrigger aria-label="正文字号"><SelectValue /></SelectTrigger>
+            <SelectContent>{[16, 18, 20, 24].map((size) => <SelectItem key={size} value={String(size)}>{size} px{size === 16 ? "（默认）" : ""}</SelectItem>)}</SelectContent>
+          </Select>
         </label>
         <label>正文行宽
-          <select value={editorDisplay.editorLineWidth} onChange={(event) => onEditorDisplayChange({ ...editorDisplay, editorLineWidth: event.target.value as EditorLineWidth })}>
-            <option value="narrow">紧凑</option><option value="standard">标准</option><option value="wide">宽阔</option>
-          </select>
+          <Select value={editorDisplay.editorLineWidth} onValueChange={(value) => onEditorDisplayChange({ ...editorDisplay, editorLineWidth: value as EditorLineWidth })}>
+            <SelectTrigger aria-label="正文行宽"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="narrow">紧凑</SelectItem><SelectItem value="standard">标准</SelectItem><SelectItem value="wide">宽阔</SelectItem></SelectContent>
+          </Select>
         </label>
         <div className="editor-display-sample" style={{ fontSize: editorDisplay.editorFontSize }}>
           让长文更舒适，也让每一次记录更轻松。<br />Reading and writing, at your own pace.

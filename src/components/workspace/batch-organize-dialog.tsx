@@ -2,6 +2,7 @@ import { useRef, useState } from "react"
 import { ListChecks } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import type { Note } from "@/types/note"
 import type { VaultFolder } from "@/services/search/vault-folders"
 import { parseEditableTags } from "@/services/markdown/note-tags"
@@ -74,13 +75,20 @@ export function BatchOrganizeDialog({ notes, folders, disabled, onOrganize }: {
             {candidates.length > limit && <Button variant="ghost" onClick={() => setLimit((count) => count + 100)}>显示更多笔记</Button>}
           </div>
           <fieldset className="batch-options" disabled={busy || confirming}>
-            <label>操作<select aria-label="批量操作" value={kind} onChange={(event) => { setKind(event.target.value as typeof kind); setError("") }}>
-              <option value="move">移动到目录</option><option value="add-tags">添加标签</option>
-              <option value="remove-tags">移除标签</option><option value="delete">移入回收站</option>
-            </select></label>
-            {kind === "move" && <label>目标目录<select aria-label="批量移动目标目录" value={folder} onChange={(event) => setFolder(event.target.value)}>
-              <option value="">根目录</option>{folders.map((item) => <option key={item.path} value={item.path}>{item.path}</option>)}
-            </select></label>}
+            <label>操作<Select value={kind} onValueChange={(value) => { setKind(value as typeof kind); setError("") }}>
+              <SelectTrigger aria-label="批量操作"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="move">移动到目录</SelectItem><SelectItem value="add-tags">添加标签</SelectItem>
+                <SelectItem value="remove-tags">移除标签</SelectItem><SelectItem value="delete">移入回收站</SelectItem>
+              </SelectContent>
+            </Select></label>
+            {/* Radix 的选项不能用空字符串，单独映射根目录以保留原有的空路径业务值。 */}
+            {kind === "move" && <label>目标目录<Select value={folder ? `folder:${folder}` : "root"} onValueChange={(value) => setFolder(value === "root" ? "" : value.slice("folder:".length))}>
+              <SelectTrigger aria-label="批量移动目标目录"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="root">根目录</SelectItem>{folders.map((item) => <SelectItem key={item.path} value={`folder:${item.path}`}>{item.path}</SelectItem>)}
+              </SelectContent>
+            </Select></label>}
             {(kind === "add-tags" || kind === "remove-tags") && <label>标签<input aria-label="批量标签" value={tags} onChange={(event) => setTags(event.target.value)} placeholder="用逗号分隔多个标签" /></label>}
           </fieldset>
           <p className="batch-operation-hint">{kind === "move" ? "同名文件会跳过；会一并修复可读取笔记中的相对链接。"

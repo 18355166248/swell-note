@@ -3,6 +3,7 @@ import { CircleX, FileSearch, LoaderCircle, Search, X } from "lucide-react"
 
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { HighlightedText, useSearchMatch } from "@/components/workspace/note-search-match"
 import { searchCachedNoteDocumentBodyExclusions, searchCachedNoteDocuments } from "@/services/cache/vault-cache"
 import { matchesGlobalSearchFilters, parseGlobalSearchQuery, ROOT_FOLDER_FILTER, type GlobalSearchScope } from "@/services/search/global-search-filter"
@@ -243,47 +244,49 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
         </div>
         <div className="global-search-filters" aria-label="搜索筛选">
           <label>范围
-            <select aria-label="搜索范围" value={scope} onChange={(event) => { setScope(event.target.value as GlobalSearchScope); setSelectedSavedSearch("") }}>
-              <option value="all">全部内容</option>
-              <option value="title">仅标题</option>
-              <option value="body">仅正文</option>
-            </select>
+            <Select value={scope} onValueChange={(value) => { setScope(value as GlobalSearchScope); setSelectedSavedSearch("") }}>
+              <SelectTrigger aria-label="搜索范围"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="all">全部内容</SelectItem><SelectItem value="title">仅标题</SelectItem><SelectItem value="body">仅正文</SelectItem></SelectContent>
+            </Select>
           </label>
           <label>标签
-            <select aria-label="筛选标签" value={tag} onChange={(event) => { setTag(event.target.value); setSelectedSavedSearch("") }}>
-              <option value="">全部标签</option>
-              {tag && !tags.includes(tag) && <option value={tag}>{tag}（当前无笔记）</option>}
-              {tags.map((value) => <option key={value} value={value}>{value}</option>)}
-            </select>
+            <Select value={tag ? `tag:${tag}` : "all"} onValueChange={(value) => { setTag(value === "all" ? "" : value.slice(4)); setSelectedSavedSearch("") }}>
+              <SelectTrigger aria-label="筛选标签"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部标签</SelectItem>
+                {tag && !tags.includes(tag) && <SelectItem value={`tag:${tag}`}>{tag}（当前无笔记）</SelectItem>}
+                {tags.map((value) => <SelectItem key={value} value={`tag:${value}`}>{value}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </label>
           <label>目录
-            <select aria-label="筛选目录" value={folder} onChange={(event) => { setFolder(event.target.value); setSelectedSavedSearch("") }}>
-              <option value="">全部目录</option>
-              <option value={ROOT_FOLDER_FILTER}>根目录</option>
-              {folder && folder !== ROOT_FOLDER_FILTER && !folders.includes(folder) && <option value={folder}>{folder}（当前无笔记）</option>}
-              {folders.map((value) => <option key={value} value={value}>{value}</option>)}
-            </select>
+            <Select value={folder ? folder === ROOT_FOLDER_FILTER ? "root" : `folder:${folder}` : "all"} onValueChange={(value) => { setFolder(value === "all" ? "" : value === "root" ? ROOT_FOLDER_FILTER : value.slice(7)); setSelectedSavedSearch("") }}>
+              <SelectTrigger aria-label="筛选目录"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部目录</SelectItem><SelectItem value="root">根目录</SelectItem>
+                {folder && folder !== ROOT_FOLDER_FILTER && !folders.includes(folder) && <SelectItem value={`folder:${folder}`}>{folder}（当前无笔记）</SelectItem>}
+                {folders.map((value) => <SelectItem key={value} value={`folder:${value}`}>{value}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </label>
           <label>更新
-            <select aria-label="筛选更新时间" value={updatedDays} onChange={(event) => { setUpdatedDays(event.target.value as typeof updatedDays); setSelectedSavedSearch("") }}>
-              <option value="any">不限时间</option>
-              <option value="7">近 7 天</option>
-              <option value="30">近 30 天</option>
-              <option value="90">近 90 天</option>
-            </select>
+            <Select value={updatedDays} onValueChange={(value) => { setUpdatedDays(value as typeof updatedDays); setSelectedSavedSearch("") }}>
+              <SelectTrigger aria-label="筛选更新时间"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="any">不限时间</SelectItem><SelectItem value="7">近 7 天</SelectItem><SelectItem value="30">近 30 天</SelectItem><SelectItem value="90">近 90 天</SelectItem></SelectContent>
+            </Select>
           </label>
           <label>状态
-            <select aria-label="筛选收藏状态" value={starredOnly ? "starred" : "all"} onChange={(event) => { setStarredOnly(event.target.value === "starred"); setSelectedSavedSearch("") }}>
-              <option value="all">全部笔记</option>
-              <option value="starred">仅收藏</option>
-            </select>
+            <Select value={starredOnly ? "starred" : "all"} onValueChange={(value) => { setStarredOnly(value === "starred"); setSelectedSavedSearch("") }}>
+              <SelectTrigger aria-label="筛选收藏状态"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectItem value="all">全部笔记</SelectItem><SelectItem value="starred">仅收藏</SelectItem></SelectContent>
+            </Select>
           </label>
         </div>
         {cacheId && <div className="global-search-saved">
-          <select aria-label="已保存搜索" value={selectedSavedSearch} onChange={(event) => loadSavedSearch(event.target.value)}>
-            <option value="">已保存搜索</option>
-            {savedSearches.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
-          </select>
+          <Select value={selectedSavedSearch ? `saved:${selectedSavedSearch}` : "none"} onValueChange={(value) => loadSavedSearch(value === "none" ? "" : value.slice(6))}>
+            <SelectTrigger aria-label="已保存搜索"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="none">已保存搜索</SelectItem>{savedSearches.map((item) => <SelectItem key={item.name} value={`saved:${item.name}`}>{item.name}</SelectItem>)}</SelectContent>
+          </Select>
           {savingSearch ? <form onSubmit={(event) => { event.preventDefault(); persistSearch() }}>
             <input aria-label="搜索名称" autoFocus maxLength={40} onChange={(event) => setSavedSearchName(event.target.value)} placeholder="给搜索命名" value={savedSearchName} />
             <button type="submit">确定</button>
