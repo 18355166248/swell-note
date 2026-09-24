@@ -25,11 +25,11 @@ function transitionEnd() {
   return event
 }
 
-function touchEvent(type: string, touches: Array<{ identifier: number; x: number }>, changed = touches) {
+function touchEvent(type: string, touches: Array<{ identifier: number; x: number; y?: number }>, changed = touches) {
   const event = new Event(type, { bubbles: true, cancelable: true })
-  const toTouch = ({ identifier, x }: { identifier: number; x: number }) => ({
+  const toTouch = ({ identifier, x, y = 120 }: { identifier: number; x: number; y?: number }) => ({
     clientX: x,
-    clientY: 120,
+    clientY: y,
     identifier,
   })
   Object.defineProperties(event, {
@@ -75,6 +75,24 @@ afterEach(() => {
 })
 
 describe("useEdgeSwipeAction navigation handoff", () => {
+  it("prevents background scrolling only after a horizontal edge intent", () => {
+    const workspace = renderHarness("root", vi.fn(), "drawer")
+    const horizontalMove = touchEvent("touchmove", [{ identifier: 1, x: 20, y: 121 }])
+    act(() => {
+      workspace.dispatchEvent(touchEvent("touchstart", [{ identifier: 1, x: 6 }]))
+      workspace.dispatchEvent(horizontalMove)
+    })
+    expect(horizontalMove.defaultPrevented).toBe(true)
+    act(() => { workspace.dispatchEvent(touchEvent("touchcancel", [])) })
+
+    const verticalMove = touchEvent("touchmove", [{ identifier: 2, x: 8, y: 150 }])
+    act(() => {
+      workspace.dispatchEvent(touchEvent("touchstart", [{ identifier: 2, x: 6 }]))
+      workspace.dispatchEvent(verticalMove)
+    })
+    expect(verticalMove.defaultPrevented).toBe(false)
+  })
+
   it("moves the drawer with the finger and commits only after its transition", async () => {
     const onComplete = vi.fn()
     const workspace = renderHarness("root", onComplete, "drawer")

@@ -1,6 +1,8 @@
 import { expect, test, type Locator } from "@playwright/test"
 
 async function swipeFromLeft(surface: Locator) {
+  const currentPage = surface.locator(":scope > .mobile-edge-swipe-current")
+  const pageX = await currentPage.evaluate((element) => element.getBoundingClientRect().x)
   await surface.evaluate((element) => {
     const send = (type: string, x: number) => element.dispatchEvent(new PointerEvent(type, {
       bubbles: true,
@@ -16,11 +18,13 @@ async function swipeFromLeft(surface: Locator) {
   const preview = surface.locator('.mobile-drawer-layer[data-preview="true"]')
   await expect(preview).toBeVisible()
   const firstX = await preview.locator(".mobile-navigation-drawer").evaluate((drawer) => drawer.getBoundingClientRect().x)
+  expect(await currentPage.evaluate((element) => element.getBoundingClientRect().x)).toBe(pageX)
   await surface.evaluate((element) => element.dispatchEvent(new PointerEvent("pointermove", {
     bubbles: true, clientX: 150, clientY: 180, isPrimary: true, pointerId: 1, pointerType: "touch",
   })))
   const secondX = await preview.locator(".mobile-navigation-drawer").evaluate((drawer) => drawer.getBoundingClientRect().x)
   expect(secondX).toBeGreaterThan(firstX + 60)
+  expect(await currentPage.evaluate((element) => element.getBoundingClientRect().x)).toBe(pageX)
   await surface.evaluate((element) => element.dispatchEvent(new PointerEvent("pointerup", {
     bubbles: true, clientX: 150, clientY: 180, isPrimary: true, pointerId: 1, pointerType: "touch",
   })))
@@ -45,18 +49,14 @@ test.describe("移动端跨功能侧滑", () => {
     await page.getByRole("button", { name: /外观/ }).last().click()
     await expect(page).toHaveURL(/#\/settings\/appearance$/)
     const surface = page.locator(".mobile-route-swipe")
-    await surface.evaluate((element) => {
-      const send = (type: string, x: number) => element.dispatchEvent(new PointerEvent(type, {
-        bubbles: true, clientX: x, clientY: 180, isPrimary: true, pointerId: 1, pointerType: "touch",
-      }))
-      send("pointerdown", 6)
-      send("pointermove", 110)
-    })
+    await expect(surface).toHaveAttribute("data-edge-swipe-kind", "back")
+    await expect(page.getByRole("heading", { name: "外观", exact: true })).toBeVisible()
+    await page.mouse.move(6, 180)
+    await page.mouse.down()
+    await page.mouse.move(150, 180, { steps: 5 })
     await expect(surface).toHaveAttribute("data-edge-swipe-state", "dragging")
     await expect(surface.locator(".settings-swipe-preview")).toBeVisible()
-    await surface.evaluate((element) => element.dispatchEvent(new PointerEvent("pointerup", {
-      bubbles: true, clientX: 150, clientY: 180, isPrimary: true, pointerId: 1, pointerType: "touch",
-    })))
+    await page.mouse.up()
     await expect(page).toHaveURL(/#\/settings$/)
     await expect(page.getByRole("heading", { name: "设置" })).toBeVisible()
   })

@@ -72,16 +72,29 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
   useEffect(() => {
     const element = workspaceRef.current
     if (!element || !enabled) return
-    // React 把 touchstart 统一挂成 passive 监听，onTouchStart 里调用 preventDefault 是无效的。
-    // 真机走的正是触摸这条路径，所以单独补一个非 passive 的原生监听来拦截编辑器抢焦点。
+    // React 的触摸监听可能是 passive；真机要在浏览器滚动前用原生非 passive 监听抢下边缘横滑。
     const blockEditorFocus = (event: TouchEvent) => {
       const touch = event.touches[0]
       if (!touch || event.touches.length !== 1 || touch.clientX > EDGE_ZONE_WIDTH) return
       if (!isEditorSurface(event.target)) return
       event.preventDefault()
     }
+    const blockBackgroundScroll = (event: TouchEvent) => {
+      const gesture = touchGestureRef.current
+      if (!gesture || event.touches.length !== 1 || !event.cancelable) return
+      const touch = Array.from(event.touches).find((candidate) => candidate.identifier === gesture.identifier)
+      if (!touch) return
+      const deltaX = touch.clientX - gesture.startX
+      const deltaY = Math.abs(touch.clientY - gesture.startY)
+      // 略早于可见拖动阈值阻止默认纵向滚动，避免抽屉跟手时底下列表被轻微下拉；竖向意图照常放行。
+      if (gesture.horizontal || (deltaX >= 6 && deltaX > deltaY * 1.1)) event.preventDefault()
+    }
     element.addEventListener("touchstart", blockEditorFocus, { passive: false })
-    return () => element.removeEventListener("touchstart", blockEditorFocus)
+    element.addEventListener("touchmove", blockBackgroundScroll, { passive: false })
+    return () => {
+      element.removeEventListener("touchstart", blockEditorFocus)
+      element.removeEventListener("touchmove", blockBackgroundScroll)
+    }
   }, [enabled])
 
   const applyVisual = (offset: number, progress: number) => {
@@ -151,8 +164,7 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
       if (deltaY >= 10 && deltaY > deltaX * 1.1) return "vertical" as const
       if (deltaX < 8 || deltaX < deltaY * 1.1) return "pending" as const
       gesture.horizontal = true
-      // 横向拖动一旦成立，这一轮补发的 click 必须吞掉。React 把 touchmove 挂成 passive 监听，
-      // onTouchMove 里的 preventDefault 拦不住它，松手时手指下方的笔记会被当成点击直接打开，
+      // 横向拖动一旦成立，这一轮补发的 click 必须吞掉。松手时手指下方的笔记若被当成点击打开，
       // 紧接着手势再把页面切到上一级，看起来就是侧滑中间闪一下别的页面。
       suppressClickRef.current = true
       // 带着键盘侧滑时，焦点要等编辑器卸载才消失，键盘于是在列表已经落位之后才收起，
@@ -327,7 +339,6 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
     const touch = Array.from(event.touches).find((candidate) => candidate.identifier === gesture?.identifier)
     if (!gesture || !touch) return
     const intent = updateDrag(gesture, touch.clientX, touch.clientY)
-    if (intent === "horizontal" && event.cancelable) event.preventDefault()
     if (intent === "vertical" || touch.clientX < gesture.startX - 8) {
       clearTouchGesture()
       returnToStart()
