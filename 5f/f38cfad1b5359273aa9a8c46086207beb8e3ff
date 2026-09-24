@@ -1,0 +1,28 @@
+src/App.css
+  s_e688d99d35b2a1::t_a43af396f7a9b5 1140-1141,1151
+src/components/workspace/use-edge-swipe-action.ts
+  s_e688d99d35b2a1::t_9835bd42f9969e 75,82-91,93-97,167
+e2e/mobile-route-swipe.spec.ts
+  s_e688d99d35b2a1::t_a43af396f7a9b5 4-5,21,27
+  s_e688d99d35b2a1::t_2f17a26c027406 52
+  s_e688d99d35b2a1::t_efa2a57ef5e92f 53
+  s_e688d99d35b2a1::t_ac3f85a5461d49 54-56,59
+src/components/workspace/use-edge-swipe-action.test.tsx
+  s_e688d99d35b2a1::t_a46256a7ca2200 28,30,32,78-95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "5ff38cfad1b5359273aa9a8c46086207beb8e3ff",
+  "prompts": {},
+  "sessions": {
+    "s_e688d99d35b2a1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d275-d8c6-7260-9f33-58ddbb1075b5",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
