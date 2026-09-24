@@ -1,0 +1,33 @@
+docs/joplin-feature-gap-2026-09-24.md
+  s_13775b5a3f2958::t_9000c0420a8598 14,29
+src/services/search/global-search-filter.ts
+  s_13775b5a3f2958::t_02a1a8ecf2ab52 59,76-77
+  s_13775b5a3f2958::t_99621ba62e832e 6,42,44,47-49,51,58,61,71-75,78
+e2e/six-regressions.spec.ts
+  s_13775b5a3f2958::t_36399284a6136f 159-162
+src/components/workspace/global-search-dialog.tsx
+  s_13775b5a3f2958::t_37908c5c26a31b 7,34,83,87-91,93,109,119,121
+  s_13775b5a3f2958::t_dc3d125a0ec612 62-64,75,82,84-86,105,108,111-113,117,250
+src/services/cache/vault-cache.ts
+  s_13775b5a3f2958::t_f42c2e6d9aab11 715-728
+src/services/search/global-search-filter.test.ts
+  s_13775b5a3f2958::t_4f3b27cc04f4aa 25-26,31,33,60-65,69
+  s_13775b5a3f2958::t_98a30dce4f298b 66-68,70-71
+  s_13775b5a3f2958::t_7e38b6169ad3ee 72-73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "8904262599465333edd7775394fc10b77853c290",
+  "prompts": {},
+  "sessions": {
+    "s_13775b5a3f2958": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d11a-c36c-7930-a94e-d2c197456def",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
