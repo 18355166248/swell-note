@@ -1,0 +1,29 @@
+src/services/backup/vault-backup.ts
+  s_13775b5a3f2958::t_0efa61715690f9 19,34,39,62-66,72,130-131,153
+  s_13775b5a3f2958::t_7860c0a1df0e39 122-123,129,152
+src/App.tsx
+  s_13775b5a3f2958::t_e210d7af18a4f5 4408,4449-4451,4458,4463-4465,4469
+e2e/backup-local-roundtrip.spec.ts
+  s_13775b5a3f2958::t_94025a2e4e1448 145,161-168,170-178
+  s_13775b5a3f2958::t_be1c4003979d17 169
+src/components/routes/app-pages.tsx
+  s_13775b5a3f2958::t_3a60647bc9a82f 333,411,416,418-422,537-541,584,586-588
+src/services/backup/vault-backup.test.ts
+  s_13775b5a3f2958::t_3af9cb621c96e7 22-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "ab96783e6ffac1b856b5f5c5d04b819bdb991b0c",
+  "prompts": {},
+  "sessions": {
+    "s_13775b5a3f2958": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d11a-c36c-7930-a94e-d2c197456def",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
