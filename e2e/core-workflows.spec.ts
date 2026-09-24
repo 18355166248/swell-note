@@ -83,6 +83,39 @@ async function seedCachedVault(page: Page) {
 }
 
 test.describe("核心笔记流程", () => {
+  test("标签编辑写回 Markdown 并在刷新后保留", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome")
+    await seedCachedVault(page)
+    const workspace = page.locator(".desktop-workspace:visible")
+    await expect(workspace.getByRole("button", { name: "编辑笔记标签" })).toBeVisible()
+    await workspace.getByRole("button", { name: "编辑笔记标签" }).click()
+    await page.getByRole("textbox", { name: "笔记标签" }).fill("#工作, 待办")
+    await page.getByRole("button", { name: "保存标签" }).click()
+    await expect(workspace.getByLabel("笔记标签").getByText("#工作")).toBeVisible()
+    await expect(workspace.getByLabel("笔记标签").getByText("#待办")).toBeVisible()
+    const readCachedContent = async () => page.evaluate(async () => {
+      const request = indexedDB.open("swell-note-vault-cache", 3)
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error)
+      })
+      const transaction = database.transaction("documents", "readonly")
+      const documentRequest = transaction.objectStore("documents").get("e2e-vault\u0000webdav:/Swell/测试/第一篇.md")
+      const content = await new Promise<string>((resolve, reject) => {
+        documentRequest.onsuccess = () => resolve(documentRequest.result?.content ?? "")
+        documentRequest.onerror = () => reject(documentRequest.error)
+      })
+      database.close()
+      return content
+    })
+    await expect.poll(readCachedContent).toContain('tags: ["工作", "待办"]')
+    await page.reload()
+    await expect(workspace.getByLabel("笔记标签").getByText("#工作")).toBeVisible()
+    const saved = await readCachedContent()
+    expect(saved).toContain('tags: ["工作", "待办"]')
+    expect(saved).toContain("# 第一篇")
+  })
+
   test("桌面端统一画布锁定、解锁、刷新保持和版本历史入口", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page)

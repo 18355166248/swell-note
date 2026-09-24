@@ -102,6 +102,7 @@ import { normalizeNoteTarget } from "@/services/search/note-index"
 import { openExternalUrl } from "@/services/open-external-url"
 import { HighlightedText, useSearchMatch } from "@/components/workspace/note-search-match"
 import { countWords, estimateReadingMinutes } from "@/services/markdown/note-stats"
+import { parseEditableTags, setNoteTags } from "@/services/markdown/note-tags"
 import { extractNoteOutline } from "@/services/markdown/note-outline"
 import { buildMarkdownNoteLink, buildRelativeMarkdownHref } from "@/services/markdown/markdown-link"
 import { getLocalDayIndex, groupNotesByDate } from "@/services/search/note-groups"
@@ -1929,6 +1930,9 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   const sourceMode = markdownSourceMode === "source"
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
+  const [tagDialogOpen, setTagDialogOpen] = useState(false)
+  const [tagDraft, setTagDraft] = useState("")
+  const [tagError, setTagError] = useState<string | null>(null)
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false)
   const [outlineDialogOpen, setOutlineDialogOpen] = useState(false)
   const [outlinePinned, setOutlinePinned] = useState(false)
@@ -1966,7 +1970,20 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   useEffect(() => {
     previewRequestRef.current += 1
     setViewSwitchError(null)
+    setTagDialogOpen(false)
+    setTagError(null)
   }, [note.id])
+  const saveTags = () => {
+    if (writeProtected || viewLocked || !note.contentLoaded || isSpecialPreview) return
+    try {
+      const content = setNoteTags(note.content, parseEditableTags(tagDraft))
+      if (content !== note.content) onUpdateNote({ content, preview: buildNotePreview(content, note.format) })
+      setTagDialogOpen(false)
+      setTagError(null)
+    } catch (error) {
+      setTagError(error instanceof Error ? error.message : "标签格式无效")
+    }
+  }
   // 预览是懒加载 chunk：切换瞬间如果还没取到，原正文会整块换成加载占位。
   // 先等同一个模块缓存就绪再翻状态（启动预取已覆盖时只是一个微任务），
   // 没取到时编辑器多停一拍，也比正文整块消失更容易接受。路径必须与上方 lazyWithRetry 一致。
@@ -2799,6 +2816,19 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
             ) : null}
             <span>·</span>
             <span>{deriveFolder(note)}</span>
+            {!isSpecialPreview && note.contentLoaded && (note.tags?.length || (!writeProtected && !viewLocked)) ? (
+              <span className="document-tags" aria-label="笔记标签">
+                {(note.tags ?? []).map((tag) => <span className="document-tag" key={tag}>#{tag}</span>)}
+                {!writeProtected && !viewLocked ? (
+                  <button
+                    aria-label="编辑笔记标签"
+                    className="document-tag-edit"
+                    onClick={() => { setTagDraft((note.tags ?? []).join(", ")); setTagError(null); setTagDialogOpen(true) }}
+                    type="button"
+                  ><Tag />{note.tags?.length ? "编辑标签" : "添加标签"}</button>
+                ) : null}
+              </span>
+            ) : null}
           </div>
           {isCanvas ? (
             <Suspense fallback={<EditorLoadingState label="Canvas 画布" />}>
@@ -2993,6 +3023,31 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
           <DialogFooter>
             <Button onClick={() => setRenameDialogOpen(false)} variant="outline">取消</Button>
             <Button disabled={!renameTitle.trim() || renameTitle.trim() === note.title} onClick={() => { setRenameDialogOpen(false); onRenameNote(renameTitle) }}>确认重命名</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog onOpenChange={setTagDialogOpen} open={tagDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>编辑笔记标签</DialogTitle>
+            <DialogDescription>用逗号分隔标签；修改会写入 Markdown 文件开头的 frontmatter。</DialogDescription>
+          </DialogHeader>
+          <Input
+            aria-label="笔记标签"
+            autoFocus
+            onChange={(event) => { setTagDraft(event.target.value); setTagError(null) }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.nativeEvent.isComposing) return
+              event.preventDefault()
+              saveTags()
+            }}
+            placeholder="例如：工作, 待办"
+            value={tagDraft}
+          />
+          {tagError ? <p role="alert">{tagError}</p> : null}
+          <DialogFooter>
+            <Button onClick={() => setTagDialogOpen(false)} variant="outline">取消</Button>
+            <Button disabled={writeProtected || viewLocked || !note.contentLoaded} onClick={saveTags}>保存标签</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
