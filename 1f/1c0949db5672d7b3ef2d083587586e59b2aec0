@@ -1,0 +1,31 @@
+src/services/search/global-search-filter.ts
+  s_13775b5a3f2958::t_f3cee3529dd83c 6-7,39-40,42,44-45,47,55,63-64
+docs/joplin-feature-gap-2026-09-24.md
+  s_13775b5a3f2958::t_669c39f4971bc5 14,29
+src/services/search/global-search-filter.test.ts
+  s_13775b5a3f2958::t_c78d7605a22029 25-26,30,39-41
+src/components/workspace/global-search-dialog.tsx
+  s_13775b5a3f2958::t_f3cee3529dd83c 62,106,239
+e2e/six-regressions.spec.ts
+  s_13775b5a3f2958::t_669c39f4971bc5 155-158
+README.md
+  s_13775b5a3f2958::t_035f3ccbe4a199 16
+src/components/workspace/global-search-dialog.test.tsx
+  s_13775b5a3f2958::t_c78d7605a22029 76-86
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "1f1c0949db5672d7b3ef2d083587586e59b2aec0",
+  "prompts": {},
+  "sessions": {
+    "s_13775b5a3f2958": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d11a-c36c-7930-a94e-d2c197456def",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
