@@ -7,6 +7,7 @@ import { HighlightedText, useSearchMatch } from "@/components/workspace/note-sea
 import { searchCachedNoteDocumentBodyExclusions, searchCachedNoteDocuments } from "@/services/cache/vault-cache"
 import { matchesGlobalSearchFilters, parseGlobalSearchQuery, ROOT_FOLDER_FILTER, type GlobalSearchScope } from "@/services/search/global-search-filter"
 import { sortNotes } from "@/services/search/note-sort"
+import { deleteSavedSearch, readSavedSearches, saveSavedSearch, type SavedSearch } from "@/services/search/saved-searches"
 import type { Note } from "@/types/note"
 
 const RESULT_LIMIT = 50
@@ -35,6 +36,11 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   const [indexErrorKey, setIndexErrorKey] = useState("")
   const [visibleCount, setVisibleCount] = useState(RESULT_LIMIT)
   const [completedQuery, setCompletedQuery] = useState("")
+  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([])
+  const [selectedSavedSearch, setSelectedSavedSearch] = useState("")
+  const [savingSearch, setSavingSearch] = useState(false)
+  const [savedSearchName, setSavedSearchName] = useState("")
+  const [savedSearchError, setSavedSearchError] = useState("")
   const listId = useId()
   const listRef = useRef<HTMLUListElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
@@ -51,10 +57,20 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
     setActiveIndex(0)
     setIndexedMatch(null)
     setIndexErrorKey("")
+    setSelectedSavedSearch("")
+    setSavingSearch(false)
+    setSavedSearchName("")
+    try {
+      setSavedSearches(cacheId ? readSavedSearches(cacheId) : [])
+      setSavedSearchError("")
+    } catch {
+      setSavedSearches([])
+      setSavedSearchError("无法读取当前设备保存的搜索")
+    }
     // 弹窗打开动画与聚焦挤在同一帧时，部分浏览器会把焦点请求吞掉。
     const timer = window.setTimeout(() => inputRef.current?.focus(), 0)
     return () => window.clearTimeout(timer)
-  }, [open])
+  }, [cacheId, open])
 
   const parsedQuery = useMemo(() => parseGlobalSearchQuery(query), [query])
   const normalizedQuery = parsedQuery.query.toLocaleLowerCase()
@@ -142,6 +158,45 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
     onSelectNote(note, parsedQuery.query || parsedQuery.titleTerms[0] || "")
   }
 
+  const loadSavedSearch = (name: string) => {
+    const saved = savedSearches.find((item) => item.name === name)
+    setSelectedSavedSearch(saved ? name : "")
+    if (!saved) return
+    setQuery(saved.query)
+    setScope(saved.scope)
+    setTag(saved.tag)
+    setFolder(saved.folder)
+    setUpdatedDays(saved.updatedDays)
+    setStarredOnly(saved.starredOnly)
+    setSavedSearchError("")
+    inputRef.current?.focus()
+  }
+
+  const persistSearch = () => {
+    if (!cacheId) return
+    try {
+      const next = saveSavedSearch(cacheId, { name: savedSearchName, query, scope, tag, folder, updatedDays, starredOnly })
+      setSavedSearches(next)
+      setSelectedSavedSearch(savedSearchName.trim())
+      setSavingSearch(false)
+      setSavedSearchName("")
+      setSavedSearchError("")
+    } catch (error) {
+      setSavedSearchError(error instanceof Error ? error.message : "保存搜索失败")
+    }
+  }
+
+  const removeSavedSearch = () => {
+    if (!cacheId || !selectedSavedSearch) return
+    try {
+      setSavedSearches(deleteSavedSearch(cacheId, selectedSavedSearch))
+      setSelectedSavedSearch("")
+      setSavedSearchError("")
+    } catch {
+      setSavedSearchError("删除搜索失败，请检查当前设备的存储空间")
+    }
+  }
+
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent
@@ -176,37 +231,39 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
             aria-expanded="true"
             aria-controls={results.length ? listId : undefined}
             aria-activedescendant={results[activeIndex] ? `${listId}-${activeIndex}` : undefined}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => { setQuery(event.target.value); setSelectedSavedSearch("") }}
             placeholder="搜索所有笔记的标题、标签与正文"
             ref={inputRef}
             value={query}
           />
-          {query && <button type="button" aria-label="清空搜索" title="清空搜索" onClick={() => { setQuery(""); inputRef.current?.focus() }}><CircleX /></button>}
+          {query && <button type="button" aria-label="清空搜索" title="清空搜索" onClick={() => { setQuery(""); setSelectedSavedSearch(""); inputRef.current?.focus() }}><CircleX /></button>}
           <button type="button" aria-label="关闭全局搜索" title="关闭（Esc）" onClick={() => onOpenChange(false)}><X /></button>
         </div>
         <div className="global-search-filters" aria-label="搜索筛选">
           <label>范围
-            <select aria-label="搜索范围" value={scope} onChange={(event) => setScope(event.target.value as GlobalSearchScope)}>
+            <select aria-label="搜索范围" value={scope} onChange={(event) => { setScope(event.target.value as GlobalSearchScope); setSelectedSavedSearch("") }}>
               <option value="all">全部内容</option>
               <option value="title">仅标题</option>
               <option value="body">仅正文</option>
             </select>
           </label>
           <label>标签
-            <select aria-label="筛选标签" value={tag} onChange={(event) => setTag(event.target.value)}>
+            <select aria-label="筛选标签" value={tag} onChange={(event) => { setTag(event.target.value); setSelectedSavedSearch("") }}>
               <option value="">全部标签</option>
+              {tag && !tags.includes(tag) && <option value={tag}>{tag}（当前无笔记）</option>}
               {tags.map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
           <label>目录
-            <select aria-label="筛选目录" value={folder} onChange={(event) => setFolder(event.target.value)}>
+            <select aria-label="筛选目录" value={folder} onChange={(event) => { setFolder(event.target.value); setSelectedSavedSearch("") }}>
               <option value="">全部目录</option>
               <option value={ROOT_FOLDER_FILTER}>根目录</option>
+              {folder && folder !== ROOT_FOLDER_FILTER && !folders.includes(folder) && <option value={folder}>{folder}（当前无笔记）</option>}
               {folders.map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
           <label>更新
-            <select aria-label="筛选更新时间" value={updatedDays} onChange={(event) => setUpdatedDays(event.target.value as typeof updatedDays)}>
+            <select aria-label="筛选更新时间" value={updatedDays} onChange={(event) => { setUpdatedDays(event.target.value as typeof updatedDays); setSelectedSavedSearch("") }}>
               <option value="any">不限时间</option>
               <option value="7">近 7 天</option>
               <option value="30">近 30 天</option>
@@ -214,12 +271,25 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
             </select>
           </label>
           <label>状态
-            <select aria-label="筛选收藏状态" value={starredOnly ? "starred" : "all"} onChange={(event) => setStarredOnly(event.target.value === "starred")}>
+            <select aria-label="筛选收藏状态" value={starredOnly ? "starred" : "all"} onChange={(event) => { setStarredOnly(event.target.value === "starred"); setSelectedSavedSearch("") }}>
               <option value="all">全部笔记</option>
               <option value="starred">仅收藏</option>
             </select>
           </label>
         </div>
+        {cacheId && <div className="global-search-saved">
+          <select aria-label="已保存搜索" value={selectedSavedSearch} onChange={(event) => loadSavedSearch(event.target.value)}>
+            <option value="">已保存搜索</option>
+            {savedSearches.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+          </select>
+          {savingSearch ? <form onSubmit={(event) => { event.preventDefault(); persistSearch() }}>
+            <input aria-label="搜索名称" autoFocus maxLength={40} onChange={(event) => setSavedSearchName(event.target.value)} placeholder="给搜索命名" value={savedSearchName} />
+            <button type="submit">确定</button>
+            <button type="button" onClick={() => { setSavingSearch(false); setSavedSearchError("") }}>取消</button>
+          </form> : <button disabled={!hasFilters} onClick={() => { setSavingSearch(true); setSavedSearchError("") }} type="button">保存当前搜索</button>}
+          {selectedSavedSearch && <button aria-label="删除已保存搜索" onClick={removeSavedSearch} type="button">删除</button>}
+          {savedSearchError && <span role="alert">{savedSearchError}</span>}
+        </div>}
         <div className="global-search-summary" role="status">
           {searching ? <><LoaderCircle className="animate-spin" />正在搜索正文…</> : hasFilters ? `找到 ${matches.length} 篇，已显示 ${results.length} 篇${indexUnavailable ? "；正文索引暂不可用，结果可能不完整" : ""}` : "最近更新"}
         </div>
@@ -247,7 +317,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
           )}
           {results.length < matches.length && <button className="global-search-more" type="button" onClick={() => setVisibleCount((count) => count + RESULT_LIMIT)}>加载更多（剩余 {matches.length - results.length} 篇）</button>}
         </div>
-        <div className="global-search-help">可用 title:、tag: 筛选，-title:、-tag:、-body: 排除；带空格的值加引号 · {scope === "body" ? "正文包含已缓存与当前打开的内容 · " : ""}↑↓ 选择 · Enter 打开 · Esc 关闭</div>
+        <div className="global-search-help">可用 title:、tag: 筛选，-title:、-tag:、-body: 排除；带空格的值加引号 · 搜索保存在当前设备 · {scope === "body" ? "正文包含已缓存与当前打开的内容 · " : ""}↑↓ 选择 · Enter 打开 · Esc 关闭</div>
       </DialogContent>
     </Dialog>
   )

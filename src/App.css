@@ -1532,6 +1532,13 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .global-search-filters label { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--muted-foreground); font-size: 11.5px; }
 .global-search-filters select { max-width: 180px; min-height: 30px; padding: 4px 22px 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--foreground); font: inherit; }
 .global-search-filters select:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.global-search-saved { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 7px 14px; border-bottom: 1px solid var(--border); font-size: 11.5px; }
+.global-search-saved select, .global-search-saved input { min-width: 0; max-width: 190px; min-height: 30px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--foreground); font: inherit; }
+.global-search-saved form { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.global-search-saved button { min-height: 30px; padding: 4px 8px; border-radius: 6px; background: var(--muted); color: var(--foreground); }
+.global-search-saved button:disabled { opacity: .45; cursor: default; }
+.global-search-saved span[role="alert"] { flex-basis: 100%; color: var(--destructive); }
+.global-search-saved :is(select, input, button):focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 
 .global-search-results {
   flex: 1 1 0;
