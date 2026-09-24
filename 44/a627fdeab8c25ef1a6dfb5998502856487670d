@@ -1,0 +1,33 @@
+e2e/mobile-route-swipe.spec.ts
+  s_e688d99d35b2a1::t_e47e5410a572ff 14,16-26,32-33,35
+  s_e688d99d35b2a1::t_0351dc87283697 58
+docs/mobile-route-navigation.md
+  s_e688d99d35b2a1::t_137687dccbd8e9 23
+src/App.css
+  s_e688d99d35b2a1::t_f2893e1836cb05 1162-1170
+src/components/workspace/use-edge-swipe-action.test.tsx
+  s_e688d99d35b2a1::t_c2ce9f866d6848 42-43,47-48,51,57,78-113
+src/components/workspace/workspace.tsx
+  s_e688d99d35b2a1::t_491ed9ad1191e2 3306-3307,3319,3325-3326,3470,3607-3608,3661-3662,4160-4161,4175-4176,4208-4209
+src/components/routes/app-pages.tsx
+  s_e688d99d35b2a1::t_c6148eea1b0754 111,271
+src/components/workspace/use-edge-swipe-action.ts
+  s_e688d99d35b2a1::t_773fa08291503a 10,50,93,99,135-139,163-166,186-195,198-200,203-205,207-209,358
+  s_e688d99d35b2a1::t_d331158a2d25cd 196-197,201-202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "44a627fdeab8c25ef1a6dfb5998502856487670d",
+  "prompts": {},
+  "sessions": {
+    "s_e688d99d35b2a1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d275-d8c6-7260-9f33-58ddbb1075b5",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
