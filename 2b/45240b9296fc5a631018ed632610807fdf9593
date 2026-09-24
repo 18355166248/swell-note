@@ -1,0 +1,54 @@
+src/components/workspace/workspace.tsx
+  s_13775b5a3f2958::t_c8e5327c79b9c0 1401,1647,1655,1705,4052
+  s_13775b5a3f2958::t_bf214c740ce083 3446-3450
+src/App.tsx
+  s_13775b5a3f2958::t_b32593c50ee0b9 1325-1343,1356-1361,1366,1368-1402
+  s_13775b5a3f2958::t_5d10e33ae2322e 1344-1355
+  s_13775b5a3f2958::t_62475ed9ea26f2 75,443-444,606,622,624,628
+  s_13775b5a3f2958::t_054797221a5e51 1362-1365,4796
+  s_13775b5a3f2958::t_d94d231ddf3cab 1367
+docs/joplin-feature-gap-2026-09-24.md
+  s_13775b5a3f2958::t_4917f43481091c 5,28
+README.md
+  s_13775b5a3f2958::t_4917f43481091c 10
+src/services/cache/vault-cache.test.ts
+  s_13775b5a3f2958::t_5811a05e473f6b 18,54-58,60-71,90-91
+  s_13775b5a3f2958::t_a53416704932f1 25,72-89
+  s_13775b5a3f2958::t_c73f17acb330e8 59
+src/services/cache/vault-cache.ts
+  s_13775b5a3f2958::t_44a3e13e936481 4-6,477-504,508-553
+  s_13775b5a3f2958::t_d94d231ddf3cab 505-507
+  s_456d991c38cd45::t_985a2d017177c6 554-558
+e2e/core-workflows.spec.ts
+  s_13775b5a3f2958::t_025d3f1d5e849b 97,123
+  s_13775b5a3f2958::t_98d7b0498151b3 90,95-96,98-121,124-125
+  s_13775b5a3f2958::t_1a1b32954013d9 6,8,10,24,66-67,76,85,91-94
+  s_13775b5a3f2958::t_17bff481752970 122
+src/components/workspace/tag-filter-menu.test.tsx
+  s_13775b5a3f2958::t_4917f43481091c 42-50
+  s_13775b5a3f2958::t_c8e5327c79b9c0 27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "2b45240b9296fc5a631018ed632610807fdf9593",
+  "prompts": {},
+  "sessions": {
+    "s_13775b5a3f2958": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d11a-c36c-7930-a94e-d2c197456def",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    },
+    "s_456d991c38cd45": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0cd38-9098-7a23-841e-1299590afc8c",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
