@@ -235,6 +235,7 @@ type WorkspaceProps = {
   onMoveNote: (folderPath: string | null) => void
   onMoveNoteById: (noteId: string, folderPath: string | null) => void
   onRenameFolder: (folderPath: string, nextName: string) => void
+  onRenameTag: (source: string, target: string) => Promise<{ issues: string[]; renamed: number }>
   onRenameNote: (title: string) => void
   onRenameNoteById: (noteId: string, title: string) => void
   onRenameNoteFromEditor: (noteId: string, title: string) => void
@@ -586,6 +587,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
       ) : null}
       {!immersiveExcalidraw ? <NoteListPanel
         activeNoteId={props.activeNoteId}
+        allNotes={props.allNotes}
         canCreateNote={props.canCreateNote}
         folderContextActions={folderContextActions}
         folders={props.folders}
@@ -605,6 +607,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         onNoteSortChange={props.onNoteSortChange}
         onDeleteFolder={props.onDeleteFolder}
         onRenameFolder={props.onRenameFolder}
+        onRenameTag={props.onRenameTag}
         onSelectNote={selectNote}
         onSelectFolder={selectFolder}
         availableTags={props.availableTags}
@@ -1284,6 +1287,7 @@ function SortableLibraryFolderRow({
 }
 
 type NoteListPanelProps = {
+  allNotes: Note[]
   activeNoteId: string
   availableTags: string[]
   canCreateNote: boolean
@@ -1309,6 +1313,7 @@ type NoteListPanelProps = {
   onNoteSortChange: (sort: NoteSort) => void
   onDeleteFolder: (folderPath: string) => void
   onRenameFolder: (folderPath: string, nextName: string) => void
+  onRenameTag: WorkspaceProps["onRenameTag"]
   onSelectNote: (note: Note) => void
   onSelectFolder: (folder: string | null) => void
   onSelectTag: (tag: string | null) => void
@@ -1320,6 +1325,7 @@ type NoteListPanelProps = {
 
 function NoteListPanel({
   activeNoteId,
+  allNotes,
   availableTags,
   canCreateNote,
   folderContextActions,
@@ -1342,6 +1348,7 @@ function NoteListPanel({
   onNoteSortChange,
   onDeleteFolder,
   onRenameFolder,
+  onRenameTag,
   onSelectNote,
   onSelectFolder,
   onSelectTag,
@@ -1391,7 +1398,7 @@ function NoteListPanel({
               onChange={onIncludeNestedFolderNotesChange}
             />
           ) : null}
-          <TagFilterMenu availableTags={availableTags} onChange={onSelectTag} selectedTag={selectedTag} />
+          <TagFilterMenu allNotes={allNotes} availableTags={availableTags} canRename={folderManagementMode === "local" && canCreateNote && !isManagingFolder} onChange={onSelectTag} onRename={onRenameTag} selectedTag={selectedTag} />
           <NoteSortMenu onChange={onNoteSortChange} sort={noteSort} />
         </div>
       </div>
@@ -1633,29 +1640,78 @@ function NoteSortMenu({
   )
 }
 
-function TagFilterMenu({
+export function TagFilterMenu({
+  allNotes,
   availableTags,
+  canRename,
   onChange,
+  onRename,
   selectedTag,
 }: {
+  allNotes: Note[]
   availableTags: string[]
+  canRename: boolean
   onChange: (tag: string | null) => void
+  onRename: WorkspaceProps["onRenameTag"]
   selectedTag: string | null
 }) {
+  const [renameSource, setRenameSource] = useState<string | null>(null)
+  const [draft, setDraft] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  const [report, setReport] = useState<{ issues: string[]; renamed: number } | null>(null)
+  const affectedCount = renameSource
+    ? allNotes.filter((note) => note.tags?.some((tag) => tag.toLocaleLowerCase() === renameSource.toLocaleLowerCase())).length
+    : 0
+  const submitRename = async () => {
+    if (!renameSource || !draft.trim()) return
+    setBusy(true)
+    setError("")
+    try {
+      const result = await onRename(renameSource, draft)
+      setReport(result)
+      if (result.issues.length === 0) setRenameSource(null)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "标签重命名失败")
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button aria-label="按标签筛选" data-active={Boolean(selectedTag)} size="icon-sm" variant="ghost"><Tag /></Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
-        <DropdownMenuItem onClick={() => onChange(null)}><Check className={selectedTag ? "opacity-0" : "opacity-100"} />全部标签</DropdownMenuItem>
-        {availableTags.map((tag) => (
-          <DropdownMenuItem key={tag} onClick={() => onChange(tag)}>
-            <Check className={selectedTag === tag ? "opacity-100" : "opacity-0"} />#{tag}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button aria-label="按标签筛选" data-active={Boolean(selectedTag)} size="icon-sm" variant="ghost"><Tag /></Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+          <DropdownMenuItem onClick={() => onChange(null)}><Check className={selectedTag ? "opacity-0" : "opacity-100"} />全部标签</DropdownMenuItem>
+          {availableTags.map((tag) => (
+            <DropdownMenuItem key={tag} onClick={() => onChange(tag)}>
+              <Check className={selectedTag === tag ? "opacity-100" : "opacity-0"} />#{tag}
+            </DropdownMenuItem>
+          ))}
+          {canRename && selectedTag ? <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => { setRenameSource(selectedTag); setDraft(selectedTag); setError(""); setReport(null) }}>重命名当前标签…</DropdownMenuItem>
+          </> : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Dialog onOpenChange={(open) => { if (!open && !busy) setRenameSource(null) }} open={renameSource !== null}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>批量重命名标签</DialogTitle>
+            <DialogDescription>将本地笔记库中使用“{renameSource}”的 {affectedCount} 篇笔记改为新标签。逐篇检查磁盘版本；未保存、只读或已变更的文件会跳过。</DialogDescription>
+          </DialogHeader>
+          <Input aria-label="新标签名称" autoFocus disabled={busy} onChange={(event) => setDraft(event.target.value)} value={draft} />
+          {error ? <p role="alert">{error}</p> : null}
+          {report?.issues.length ? <div className="maintenance-message" role="alert"><strong>已修改 {report.renamed} 篇，以下内容已跳过或失败</strong><ul>{report.issues.slice(0, 10).map((issue, index) => <li key={`${index}:${issue}`}>{issue}</li>)}</ul>{report.issues.length > 10 ? <p>另有 {report.issues.length - 10} 项</p> : null}</div> : null}
+          <DialogFooter>
+            <Button disabled={busy} onClick={() => setRenameSource(null)} variant="outline">关闭</Button>
+            <Button disabled={busy || !draft.trim() || draft.trim() === renameSource} onClick={() => void submitRename()}>{busy ? "正在处理…" : "确认重命名"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
@@ -1916,7 +1972,8 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   const isSpecialPreview = isCanvas || isExcalidraw
   const webDavNote = note.source === "webdav"
   const fileReadOnly = isCanvas || (note.readOnly ?? webDavNote) || (syncing && webDavNote && !allowSyncEditing)
-  const writeProtected = resolveWriteProtected(fileReadOnly, note.source, saveState.status, allowSyncEditing)
+  // 批量目录/标签操作持有结构写锁；此时编辑器也必须只读，避免键入后回调被锁拒绝而留下未保存的视觉草稿。
+  const writeProtected = isManagingNote || resolveWriteProtected(fileReadOnly, note.source, saveState.status, allowSyncEditing)
   const editorRef = useRef<MarkdownEditorHandle>(null)
   const editorArticleRef = useRef<HTMLElement>(null)
   const dismissSelectionOriginRef = useRef<PointerOrigin | null>(null)
@@ -3985,7 +4042,7 @@ function MobileNoteList(props: MobileNoteListProps) {
         <div className="mobile-titlebar-actions">
           {props.selectedFolder && props.folderManagementMode ? <FolderRenameButton disabled={props.isManagingNote} folderPath={props.selectedFolder} mode={props.folderManagementMode} onDelete={props.onDeleteFolder} onRename={props.onRenameFolder} /> : null}
           {childFolders.length > 0 ? <NestedNotesToggle includeNested={props.includeNestedFolderNotes} onChange={props.onIncludeNestedFolderNotesChange} /> : null}
-          <TagFilterMenu availableTags={props.availableTags} onChange={props.onSelectTag} selectedTag={props.selectedTag} />
+          <TagFilterMenu allNotes={props.allNotes} availableTags={props.availableTags} canRename={props.folderManagementMode === "local" && props.canCreateNote && !props.isManagingNote} onChange={props.onSelectTag} onRename={props.onRenameTag} selectedTag={props.selectedTag} />
           <NoteSortMenu mobile onChange={props.onNoteSortChange} sort={props.noteSort} />
         </div>
         <MobileNavigationDrawer

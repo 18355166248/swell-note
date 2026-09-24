@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { extractFrontmatter } from "@/services/search/note-index"
-import { parseEditableTags, setNoteTags } from "./note-tags"
+import { parseEditableTags, renameNoteTag, setNoteTags } from "./note-tags"
 
 describe("note tags", () => {
   it("adds tags to an ordinary Markdown note", () => {
@@ -36,5 +36,12 @@ describe("note tags", () => {
   it("parses unique labels and rejects characters unsafe for the frontmatter format", () => {
     expect(parseEditableTags("#工作, 待办，工作")).toEqual(["工作", "待办"])
     expect(() => parseEditableTags('ok, bad"tag')).toThrow("不支持")
+  })
+
+  it("renames one tag across a Markdown document without duplicating an existing target", () => {
+    const source = "---\ntitle: 示例\ntags: [旧标签, 新标签]\nauthor: 张三\n---\n正文"
+    expect(renameNoteTag(source, "旧标签", "新标签"))
+      .toBe('---\ntitle: 示例\ntags: ["新标签"]\nauthor: 张三\n---\n正文')
+    expect(renameNoteTag(source, "不存在", "新标签")).toBe(source)
   })
 })

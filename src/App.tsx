@@ -133,6 +133,8 @@ import {
   type MarkdownPathMove,
 } from "@/services/markdown/markdown-link-rewrite"
 import { buildNotePreview } from "@/services/markdown/note-preview"
+import { parseEditableTags } from "@/services/markdown/note-tags"
+import { renameTagInLocalVault, type TagRenameReport } from "@/services/markdown/local-tag-rename"
 import { remapNoteVersions, saveNoteVersion } from "@/services/history/note-history"
 import { backupFilename, createVaultBackup, parseVaultBackup } from "@/services/backup/vault-backup"
 import { collectBackupInventory, type BackupIssue } from "@/services/backup/backup-inventory"
@@ -1256,6 +1258,62 @@ function App() {
       })
     }, 650)
     saveTimersRef.current.set(note.id, timer)
+  }
+
+  const renameLocalTag = async (source: string, requestedTarget: string): Promise<TagRenameReport> => {
+    const targetTags = parseEditableTags(requestedTarget)
+    if (targetTags.length !== 1) throw new Error("请输入一个有效的新标签名称")
+    const target = targetTags[0]
+    if (target === source) return { issues: [], renamed: 0 }
+    const adapter = vaultSession
+    const cacheId = activeCacheMeta?.id
+    if (!adapter || adapter.kind === "webdav" || adapter.readOnly || !adapter.writeTextFile || !cacheId) {
+      throw new Error("请先打开可写的本地笔记库")
+    }
+    if (isRefreshingVault || vaultMutationBarrierRef.current > 0) throw new Error("笔记库正在处理其他操作，请稍后重试")
+    vaultMutationBarrierRef.current += 1
+    setIsManagingNote(true)
+    setVaultError(null)
+    try {
+      const report = await renameTagInLocalVault({
+        adapter,
+        hasPendingSave: (noteId) => localSaveCoordinatorRef.current.hasPending(noteId)
+          || saveStates[noteId]?.status === "conflict",
+        notes: notesRef.current,
+        onBeforeWrite: async (note, content) => {
+          await saveNoteVersion({ cacheId, content, noteId: note.id, reason: "编辑前", title: note.title })
+        },
+        onRenamed: (note, content, revision) => {
+          if (activeCacheIdRef.current !== cacheId) return
+          const nextNote: Note = {
+            ...note,
+            ...indexNoteContent(content),
+            content,
+            contentCached: true,
+            contentLoaded: true,
+            modifiedAt: Date.now(),
+            preview: buildNotePreview(content, note.format),
+            revision,
+            updatedAt: "刚刚",
+          }
+          revisionByPathRef.current.set(note.remotePath!, revision)
+          notesRef.current = notesRef.current.map((current) => current.id === note.id ? nextNote : current)
+          setNotes((current) => current.map((entry) => entry.id === note.id ? nextNote : entry))
+          setSaveStates((current) => ({ ...current, [note.id]: { status: "saved" } }))
+        },
+        shouldContinue: () => activeCacheIdRef.current === cacheId,
+        source,
+        target,
+      })
+      if (activeCacheIdRef.current === cacheId) {
+        if (selectedTag === source && report.issues.length === 0) setSelectedTag(target)
+        setVaultError(`已将 ${report.renamed} 篇笔记的“${source}”重命名为“${target}”${report.issues.length ? `；${report.issues.length} 篇跳过或失败：${report.issues.slice(0, 2).join("；")}` : ""}`)
+      }
+      return report
+    } finally {
+      vaultMutationBarrierRef.current = Math.max(0, vaultMutationBarrierRef.current - 1)
+      if (activeCacheIdRef.current === cacheId) setIsManagingNote(false)
+    }
   }
 
   const toggleTask = (task: MarkdownTask, checked: boolean) => {
@@ -4651,6 +4709,7 @@ function App() {
             onNoteViewModeChange={changeNoteViewMode}
             onMarkdownSourceModeChange={changeMarkdownSourceMode}
             onRenameFolder={renameFolder}
+            onRenameTag={renameLocalTag}
             onRenameNote={(title) => void moveActiveNote(activeNote?.folder === "根目录" ? null : activeNote?.folder ?? null, title)}
             onRenameNoteById={(noteId, title) => {
               const note = notes.find((candidate) => candidate.id === noteId)

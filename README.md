@@ -7,7 +7,7 @@
 - Tauri 2 + React 19 + TypeScript + Vite 基础工程
 - Tailwind CSS 4 与 shadcn/ui（Nova / Radix）
 - 宽屏四栏、平板三栏与手机三级页面的响应式笔记界面
-- 笔记搜索、选择、收藏，以及可写本地 Vault 中的真实 Markdown 新建与编辑
+- 笔记搜索、选择、收藏，以及可写本地 Vault 中的真实 Markdown 新建与编辑；本地 Vault 支持跨笔记标签重命名并逐篇检查文件版本
 - CodeMirror 6 Markdown 编辑器与光标位置格式插入
 - 坚果云 WebDAV 参数配置、递归目录扫描、Markdown 按需读取与限速后台全文索引
 - Web / Tauri 统一笔记库适配层，可选择并递归读取现有本地 Markdown Vault

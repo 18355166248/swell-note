@@ -58,3 +58,10 @@ export function setNoteTags(content: string, tags: readonly string[]) {
   }
   return `---${newline}${preserved.join(newline)}${newline}---${content.slice(frontmatter[0].length)}`
 }
+
+export function renameNoteTag(content: string, source: string, target: string) {
+  const current = extractFrontmatter(content).tags
+  if (!current.some((tag) => tag.toLocaleLowerCase() === source.toLocaleLowerCase())) return content
+  const renamed = current.map((tag) => tag.toLocaleLowerCase() === source.toLocaleLowerCase() ? target : tag)
+  return setNoteTags(content, parseEditableTags(renamed.join(", ")))
+}
