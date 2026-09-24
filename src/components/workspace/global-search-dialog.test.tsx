@@ -15,7 +15,7 @@ let container: HTMLDivElement
 const notes: Note[] = Array.from({ length: 65 }, (_, i) => ({ id: `note-${i}`, title: `测试 ${i}`, content: "正文", preview: "测试正文", updatedAt: "刚刚", starred: false }))
 beforeEach(() => {
   vi.useFakeTimers()
-  cachedSearch.mockResolvedValue([])
+  cachedSearch.mockReset().mockResolvedValue([])
   container = document.createElement("div")
   document.body.append(container)
   root = createRoot(container)
@@ -72,6 +72,20 @@ describe("global search interactions", () => {
     expect(cachedSearch).not.toHaveBeenCalled()
     key("Enter")
     expect(onSelectNote).toHaveBeenCalledWith(expect.objectContaining({ id: "note-0" }), "会议 纪要")
+  })
+  it("combines body prefixes with title filters and intersects cached bodies", async () => {
+    render("cache", [
+      { ...notes[0], title: "会议", content: "苹果 计划", contentLoaded: true },
+      { ...notes[1], title: "会议 苹果 计划", content: "其他", contentLoaded: true },
+      { ...notes[2], title: "会议", contentLoaded: false, remotePath: "/cached.md", syncStatus: "synced" },
+      { ...notes[3], title: "会议", contentLoaded: false, remotePath: "/one-term.md", syncStatus: "synced" },
+    ])
+    cachedSearch.mockImplementation(async (_cache, term) => term === "苹果" ? ["/cached.md", "/one-term.md"] : ["/cached.md"])
+    query("title:会议 body:苹果 body:计划")
+    await act(async () => { await vi.advanceTimersByTimeAsync(150) })
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(2)
+    expect(cachedSearch).toHaveBeenCalledWith("cache", "苹果", 5000, "body")
+    expect(cachedSearch).toHaveBeenCalledWith("cache", "计划", 5000, "body")
   })
   it("combines exclusion operators with a positive tag operator", () => {
     render("cache", [

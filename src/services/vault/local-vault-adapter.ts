@@ -117,10 +117,14 @@ export function createBrowserVaultAdapter(root: BrowserFileSystemDirectoryHandle
       const file = await getBrowserFileHandle(root, path, false).then((handle) => handle.getFile())
       return { data: new Uint8Array(await file.arrayBuffer()), mimeType: file.type || undefined }
     },
-    async moveTextFile(path, targetPath) {
+    async moveTextFile(path, targetPath, expectedRevision) {
       if (handles.has(targetPath)) throw new Error(`目标文件已存在：${targetPath}`)
       const sourceHandle = handles.get(path) ?? await getBrowserFileHandle(root, path, false)
-      const content = await sourceHandle.getFile().then((file) => file.text())
+      const sourceFile = await sourceHandle.getFile()
+      if (expectedRevision && browserRevision(sourceFile) !== expectedRevision) throw new Error("源文件已变更，未执行移动")
+      // 缓存句柄不包含外部新建的目标，必须再次核对实际目录，防止覆盖同名文件。
+      if (await browserFileExists(root, targetPath)) throw new Error(`目标文件已存在：${targetPath}`)
+      const content = await sourceFile.text()
       const targetHandle = await getBrowserFileHandle(root, targetPath, true)
       await writeBrowserFile(targetHandle, content)
       try {
@@ -216,7 +220,8 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
     import("@tauri-apps/api/path"),
   ])
   // Vault 的笔记与附件可位于任意子目录；目录选择器必须一并授权递归文件访问。
-  const rootPath = await open({ directory: true, multiple: false, recursive: true })
+  // iOS 必须原位访问用户选中的目录，默认 copy 会把文件复制进沙盒，导致编辑未写回原库。
+  const rootPath = await open({ directory: true, multiple: false, recursive: true, fileAccessMode: "scoped" })
   if (!rootPath) return null
   const pathSegments = rootPath.split(/[\\/]/).filter(Boolean)
 
@@ -287,7 +292,7 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
       const { openPath } = await import("@tauri-apps/plugin-opener")
       await openPath(await join(rootPath, path))
     },
-    async moveTextFile(path, targetPath) {
+    async moveTextFile(path, targetPath, expectedRevision) {
       const [absolutePath, absoluteTargetPath] = await Promise.all([
         join(rootPath, path),
         join(rootPath, targetPath),
@@ -295,6 +300,7 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
       if (await exists(absoluteTargetPath)) throw new Error(`目标文件已存在：${targetPath}`)
       const targetParent = targetPath.split("/").slice(0, -1).join("/")
       if (targetParent) await mkdir(await join(rootPath, targetParent), { recursive: true })
+      if (expectedRevision && tauriRevision(await stat(absolutePath)) !== expectedRevision) throw new Error("源文件已变更，未执行移动")
       await rename(absolutePath, absoluteTargetPath)
       return { path: targetPath, revision: tauriRevision(await stat(absoluteTargetPath)) }
     },

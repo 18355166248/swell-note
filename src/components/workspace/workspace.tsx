@@ -114,6 +114,7 @@ import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { EditorFormatState } from "@/components/editor/markdown-input"
 import { FormattingToolbar } from "@/components/workspace/formatting-toolbar"
 import { NoteVersionHistoryDialog } from "@/components/workspace/note-version-history-dialog"
+import { BatchOrganizeDialog, type OrganizeNotesHandler } from "@/components/workspace/batch-organize-dialog"
 import { GlobalSearchDialog } from "@/components/workspace/global-search-dialog"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
 import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
@@ -159,6 +160,7 @@ export type AppSection = "notes" | "settings" | "todos"
 export type LibraryView = "all" | "recent" | "starred"
 
 type WorkspaceProps = {
+  onOrganizeNotes?: OrganizeNotesHandler
   activeCacheId: string | null
   activeNote: Note | null
   activeNoteId: string
@@ -586,6 +588,8 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
         />
       ) : null}
       {!immersiveExcalidraw ? <NoteListPanel
+        batchScopeKey={props.activeCacheId ?? "none"}
+        onOrganizeNotes={props.onOrganizeNotes}
         activeNoteId={props.activeNoteId}
         allNotes={props.allNotes}
         canCreateNote={props.canCreateNote}
@@ -1287,6 +1291,8 @@ function SortableLibraryFolderRow({
 }
 
 type NoteListPanelProps = {
+  batchScopeKey: string
+  onOrganizeNotes?: OrganizeNotesHandler
   allNotes: Note[]
   activeNoteId: string
   availableTags: string[]
@@ -1324,6 +1330,8 @@ type NoteListPanelProps = {
 }
 
 function NoteListPanel({
+  batchScopeKey,
+  onOrganizeNotes,
   activeNoteId,
   allNotes,
   availableTags,
@@ -1391,6 +1399,7 @@ function NoteListPanel({
           <h2>{folderLabel}</h2>
         </div>
         <div className="note-list-actions">
+          {onOrganizeNotes && <BatchOrganizeDialog key={batchScopeKey} notes={notes} folders={folders} disabled={isManagingFolder || isLoading} onOrganize={onOrganizeNotes} />}
           {selectedFolder && folderManagementMode ? <FolderRenameButton disabled={isManagingFolder} folderPath={selectedFolder} mode={folderManagementMode} onDelete={onDeleteFolder} onRename={onRenameFolder} /> : null}
           {childFolders.length > 0 ? (
             <NestedNotesToggle
@@ -4055,6 +4064,7 @@ function MobileNoteList(props: MobileNoteListProps) {
         <Button aria-label={parentFolder ? `返回${parentFolder}` : "返回笔记库"} onClick={goBack} size="icon" variant="ghost"><ArrowLeft /></Button>
         <h1>{title}</h1>
         <div className="mobile-titlebar-actions">
+          {props.onOrganizeNotes && <BatchOrganizeDialog key={props.activeCacheId} notes={props.notes} folders={props.folders} disabled={props.isManagingNote || props.isRefreshingVault} onOrganize={props.onOrganizeNotes} />}
           {props.selectedFolder && props.folderManagementMode ? <FolderRenameButton disabled={props.isManagingNote} folderPath={props.selectedFolder} mode={props.folderManagementMode} onDelete={props.onDeleteFolder} onRename={props.onRenameFolder} /> : null}
           {childFolders.length > 0 ? <NestedNotesToggle includeNested={props.includeNestedFolderNotes} onChange={props.onIncludeNestedFolderNotesChange} /> : null}
           <TagFilterMenu allNotes={props.allNotes} availableTags={props.availableTags} canRename={Boolean(props.folderManagementMode && props.canCreateNote && !props.isManagingNote)} mode={props.folderManagementMode === "webdav" ? "webdav" : "local"} onChange={props.onSelectTag} onRename={props.onRenameTag} selectedTag={props.selectedTag} />

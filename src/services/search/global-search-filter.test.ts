@@ -23,14 +23,14 @@ const filters = { folder: "", query: "", scope: "all" as const, tag: "" }
 describe("global search filters", () => {
   it("解析标题和标签限定词，保留未识别内容为普通搜索词", () => {
     expect(parseGlobalSearchQuery('title:"会议 纪要" tag:规划 -title:草稿 -tag:"仅内部" -body:"旧 正文" 正文')).toEqual({
-      excludedBodyTerms: ["旧 正文"],
+      bodyTerms: [], excludedBodyTerms: ["旧 正文"],
       excludedTagTerms: ["仅内部"], excludedTitleTerms: ["草稿"],
       query: "正文", tagTerms: ["规划"], titleTerms: ["会议 纪要"],
     })
     expect(parseGlobalSearchQuery("author:me title:")).toEqual({
-      excludedBodyTerms: [], excludedTagTerms: [], excludedTitleTerms: [], query: "author:me title:", tagTerms: [], titleTerms: [],
+      bodyTerms: [], excludedBodyTerms: [], excludedTagTerms: [], excludedTitleTerms: [], query: "author:me title:", tagTerms: [], titleTerms: [],
     })
-    expect(parseGlobalSearchQuery("body:测试 -body:")).toMatchObject({ query: "body:测试 -body:", excludedBodyTerms: [] })
+    expect(parseGlobalSearchQuery("body:测试 -body:")).toMatchObject({ query: "-body:", bodyTerms: ["测试"], excludedBodyTerms: [] })
   })
 
   it("标题和标签限定词与正文、控件筛选共同生效", () => {
@@ -85,4 +85,14 @@ describe("global search filters", () => {
     expect(matchesGlobalSearchFilters({ ...recent, modifiedAt: 99 }, { ...filters, updatedAfter: 100 }, null)).toBe(false)
     expect(matchesGlobalSearchFilters({ ...recent, modifiedAt: undefined }, { ...filters, updatedAfter: 100 }, null)).toBe(false)
   })
+})
+
+it("正文前缀只匹配正文，多个词取交集且不相信过期工作副本缓存", () => {
+  const parsed = parseGlobalSearchQuery('body:最新 body:"正文" title:会议')
+  const scoped = { ...filters, ...parsed }
+  expect(matchesGlobalSearchFilters(note, scoped, null)).toBe(true)
+  expect(matchesGlobalSearchFilters({ ...note, content: "其他", title: "最新正文会议" }, scoped, null)).toBe(false)
+  const cached = { ...note, contentLoaded: false, syncStatus: "synced" as const }
+  expect(matchesGlobalSearchFilters(cached, scoped, null, null, null, new Set([note.remotePath!]))).toBe(true)
+  expect(matchesGlobalSearchFilters({ ...cached, syncStatus: "modified" }, scoped, null, null, null, new Set([note.remotePath!]))).toBe(false)
 })

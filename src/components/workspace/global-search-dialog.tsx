@@ -32,7 +32,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   const [updatedDays, setUpdatedDays] = useState<"any" | "7" | "30" | "90">("any")
   const [starredOnly, setStarredOnly] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
-  const [indexedMatch, setIndexedMatch] = useState<{ paths: Set<string>; excludedBodyPaths: Set<string>; cachedBodyPaths: Set<string>; key: string } | null>(null)
+  const [indexedMatch, setIndexedMatch] = useState<{ paths: Set<string>; requiredBodyPaths: Set<string>; excludedBodyPaths: Set<string>; cachedBodyPaths: Set<string>; key: string } | null>(null)
   const [indexErrorKey, setIndexErrorKey] = useState("")
   const [visibleCount, setVisibleCount] = useState(RESULT_LIMIT)
   const [completedQuery, setCompletedQuery] = useState("")
@@ -76,8 +76,8 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   const normalizedQuery = parsedQuery.query.toLocaleLowerCase()
   const updatedAfter = useMemo(() => updatedDays === "any" ? undefined : Date.now() - Number(updatedDays) * 24 * 60 * 60 * 1000, [updatedDays, open])
   const excludedBodyTerms = useMemo(() => parsedQuery.excludedBodyTerms.map((term) => term.toLocaleLowerCase()), [parsedQuery])
-  const hasFilters = Boolean(normalizedQuery || parsedQuery.titleTerms.length || parsedQuery.tagTerms.length || parsedQuery.excludedTitleTerms.length || parsedQuery.excludedTagTerms.length || excludedBodyTerms.length || tag || folder || updatedAfter !== undefined || starredOnly)
-  const searchKey = `${cacheId}\u0000${scope}\u0000${normalizedQuery}\u0000${JSON.stringify(excludedBodyTerms)}`
+  const hasFilters = Boolean(parsedQuery.bodyTerms.length || normalizedQuery || parsedQuery.titleTerms.length || parsedQuery.tagTerms.length || parsedQuery.excludedTitleTerms.length || parsedQuery.excludedTagTerms.length || excludedBodyTerms.length || tag || folder || updatedAfter !== undefined || starredOnly)
+  const searchKey = `${cacheId}\u0000${scope}\u0000${normalizedQuery}\u0000${JSON.stringify([excludedBodyTerms, parsedQuery.bodyTerms])}`
   const tags = useMemo(() => [...new Set(notes.flatMap((note) => note.tags ?? []))]
     .sort((left, right) => left.localeCompare(right)), [notes])
   const folders = useMemo(() => [...new Set(notes.flatMap((note) => {
@@ -88,7 +88,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
     .sort((left, right) => left.localeCompare(right)), [notes])
 
   useEffect(() => {
-    if (!open || !cacheId || (!excludedBodyTerms.length && (!normalizedQuery || scope === "title"))) {
+    if (!open || !cacheId || (!parsedQuery.bodyTerms.length && !excludedBodyTerms.length && (!normalizedQuery || scope === "title"))) {
       setIndexedMatch(null)
       return
     }
@@ -103,10 +103,11 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
       const excluded = excludedBodyTerms.length
         ? searchCachedNoteDocumentBodyExclusions(cacheId, excludedBodyTerms)
         : Promise.resolve({ cachedPaths: [], excludedPaths: [] })
-      void Promise.all([positive, excluded])
-        .then(([paths, bodyExclusions]) => {
+      const required = Promise.all(parsedQuery.bodyTerms.map((term) => searchCachedNoteDocuments(cacheId, term.toLocaleLowerCase(), limit, "body")))
+      void Promise.all([positive, excluded, required])
+        .then(([paths, bodyExclusions, requiredMatches]) => {
           if (cancelled) return
-          setIndexedMatch({ paths: new Set(paths), excludedBodyPaths: new Set(bodyExclusions.excludedPaths), cachedBodyPaths: new Set(bodyExclusions.cachedPaths), key: searchKey })
+          setIndexedMatch({ requiredBodyPaths: new Set(requiredMatches[0]?.filter((path) => requiredMatches.every((matches) => matches.includes(path))) ?? []), paths: new Set(paths), excludedBodyPaths: new Set(bodyExclusions.excludedPaths), cachedBodyPaths: new Set(bodyExclusions.cachedPaths), key: searchKey })
           setIndexErrorKey("")
         })
         .catch(() => {
@@ -118,23 +119,24 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
         .finally(() => { if (!cancelled) setCompletedQuery(searchKey) })
     }, 120)
     return () => { cancelled = true; window.clearTimeout(timer) }
-  }, [cacheId, excludedBodyTerms, normalizedQuery, open, notes, scope, searchKey])
+  }, [cacheId, excludedBodyTerms, normalizedQuery, open, notes, scope, searchKey, parsedQuery.bodyTerms])
 
   const indexedPaths = indexedMatch?.key === searchKey ? indexedMatch.paths : null
   const excludedBodyPaths = indexedMatch?.key === searchKey ? indexedMatch.excludedBodyPaths : null
   const cachedBodyPaths = indexedMatch?.key === searchKey ? indexedMatch.cachedBodyPaths : null
 
-  const needsIndex = Boolean((normalizedQuery && scope !== "title") || excludedBodyTerms.length)
+  const requiredBodyPaths = indexedMatch?.key === searchKey ? indexedMatch.requiredBodyPaths : null
+  const needsIndex = Boolean(parsedQuery.bodyTerms.length || (normalizedQuery && scope !== "title") || excludedBodyTerms.length)
   const searching = Boolean(open && cacheId && needsIndex && completedQuery !== searchKey)
   const indexUnavailable = Boolean(open && indexErrorKey === searchKey && needsIndex)
   const matches = useMemo(() => {
     if (!hasFilters) return sortNotes(notes, "updated-desc", { pinnedFirst: false }).slice(0, RECENT_LIMIT)
     const matched = notes.filter((note) => matchesGlobalSearchFilters(note, {
-      excludedBodyTerms, excludedTagTerms: parsedQuery.excludedTagTerms, excludedTitleTerms: parsedQuery.excludedTitleTerms,
+      bodyTerms: parsedQuery.bodyTerms, excludedBodyTerms, excludedTagTerms: parsedQuery.excludedTagTerms, excludedTitleTerms: parsedQuery.excludedTitleTerms,
       folder, query: normalizedQuery, scope, starredOnly, tag, tagTerms: parsedQuery.tagTerms, titleTerms: parsedQuery.titleTerms, updatedAfter,
-    }, indexedPaths, excludedBodyPaths, cachedBodyPaths))
+    }, indexedPaths, excludedBodyPaths, cachedBodyPaths, requiredBodyPaths))
     return sortNotes(matched, "updated-desc")
-  }, [cachedBodyPaths, excludedBodyPaths, excludedBodyTerms, folder, hasFilters, indexedPaths, normalizedQuery, notes, parsedQuery, scope, starredOnly, tag, updatedAfter])
+  }, [requiredBodyPaths, cachedBodyPaths, excludedBodyPaths, excludedBodyTerms, folder, hasFilters, indexedPaths, normalizedQuery, notes, parsedQuery, scope, starredOnly, tag, updatedAfter])
 
   const results = matches.slice(0, visibleCount)
   useEffect(() => { setActiveIndex(0); setVisibleCount(RESULT_LIMIT) }, [searchKey, tag, folder, updatedDays, starredOnly, open, cacheId])
@@ -155,7 +157,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
 
   const selectResult = (note: Note) => {
     onOpenChange(false)
-    onSelectNote(note, parsedQuery.query || parsedQuery.titleTerms[0] || "")
+    onSelectNote(note, parsedQuery.query || parsedQuery.bodyTerms[0] || parsedQuery.titleTerms[0] || "")
   }
 
   const loadSavedSearch = (name: string) => {
@@ -310,14 +312,14 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
                   note={note}
                   onHover={() => setActiveIndex(index)}
                   onSelect={() => selectResult(note)}
-                  query={normalizedQuery || parsedQuery.titleTerms[0] || ""}
+                  query={normalizedQuery || parsedQuery.bodyTerms[0] || parsedQuery.titleTerms[0] || ""}
                 />
               ))}
             </ul>
           )}
           {results.length < matches.length && <button className="global-search-more" type="button" onClick={() => setVisibleCount((count) => count + RESULT_LIMIT)}>加载更多（剩余 {matches.length - results.length} 篇）</button>}
         </div>
-        <div className="global-search-help">可用 title:、tag: 筛选，-title:、-tag:、-body: 排除；带空格的值加引号 · 搜索保存在当前设备 · {scope === "body" ? "正文包含已缓存与当前打开的内容 · " : ""}↑↓ 选择 · Enter 打开 · Esc 关闭</div>
+        <div className="global-search-help">可用 title:、body:、tag: 筛选，-title:、-tag:、-body: 排除；带空格的值加引号 · 搜索保存在当前设备 · {scope === "body" ? "正文包含已缓存与当前打开的内容 · " : ""}↑↓ 选择 · Enter 打开 · Esc 关闭</div>
       </DialogContent>
     </Dialog>
   )

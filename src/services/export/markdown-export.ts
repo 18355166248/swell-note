@@ -41,6 +41,11 @@ export async function exportMarkdownDocument(content: string, suggestedName: str
 
 export async function exportNoteBundle(data: Uint8Array, suggestedName: string) {
   const filename = markdownExportFilename(suggestedName).replace(/\.md$/i, ".zip")
+  return exportZipArchive(data, filename, "导出笔记与附件包")
+}
+
+export async function exportZipArchive(data: Uint8Array, filename: string, title = "导出整库备份") {
+  // 原生端统一使用系统保存对话框；WKWebView 的 a.download 不能保证产生可找回的文件。
   if (isTauri()) {
     const [{ save }, { writeFile }] = await Promise.all([
       import("@tauri-apps/plugin-dialog"),
@@ -49,7 +54,7 @@ export async function exportNoteBundle(data: Uint8Array, suggestedName: string) 
     const path = await save({
       defaultPath: filename,
       filters: [{ extensions: ["zip"], name: "ZIP" }],
-      title: "导出笔记与附件包",
+      title,
     })
     if (!path) return false
     await writeFile(path, data)

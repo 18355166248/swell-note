@@ -177,6 +177,18 @@ describe("browser vault adapter", () => {
     if (file instanceof FakeFileHandle) expect(await (await file.getFile()).text()).toBe("外部内容")
   })
 
+  it("拒绝移动到扫描后被外部新建的目标，也拒绝过期源版本", async () => {
+    const { adapter, root, note } = createVault()
+    await adapter.listMarkdownFiles()
+    const document = await adapter.readTextFile("docs/note.md")
+    root.entries.set("target.md", new FakeFileHandle("target.md", "外部文件"))
+    await expect(adapter.moveTextFile!("docs/note.md", "target.md", document.revision)).rejects.toThrow("已存在")
+    expect(await (root.entries.get("target.md") as FakeFileHandle).getFile().then((file) => file.text())).toBe("外部文件")
+    note.mutateOutsideApp("外部修改源文件")
+    await expect(adapter.moveTextFile!("docs/note.md", "other.md", document.revision)).rejects.toThrow("源文件已变更")
+    expect(root.entries.has("other.md")).toBe(false)
+  })
+
   it("移动和删除 Markdown 文件时同步更新适配器路径", async () => {
     const { adapter } = createVault()
     await adapter.listMarkdownFiles()

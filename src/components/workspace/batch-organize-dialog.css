@@ -1,0 +1,16 @@
+.batch-organize-dialog { width: min(600px, calc(100vw - 24px)); max-width: 600px; max-height: calc(100dvh - 32px); overflow-y: auto; }
+.batch-selection-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.batch-selection-summary > span { margin-right: auto; }
+.batch-note-list { max-height: 32dvh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.batch-note-list label { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 12px; cursor: pointer; }
+.batch-note-list label + label { border-top: 1px solid var(--border); }
+.batch-note-list input { width: 20px; height: 20px; flex-shrink: 0; accent-color: var(--primary); }
+.batch-note-list label span { min-width: 0; }
+.batch-note-list strong, .batch-note-list small { display: block; overflow-wrap: anywhere; }
+.batch-note-list small, .batch-operation-hint { color: var(--muted-foreground); }
+.batch-options { display: grid; gap: 12px; min-width: 0; }
+.batch-options label { display: grid; gap: 6px; }
+.batch-options select, .batch-options input { width: 100%; min-height: 44px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--foreground); }
+.batch-report { max-height: 48dvh; overflow: auto; overflow-wrap: anywhere; }
+.batch-report ul { padding-left: 20px; list-style: disc; }
+@media (max-width: 767px) { .batch-organize-dialog button { min-height: 44px; } }

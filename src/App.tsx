@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { flushSync } from "react-dom"
 import { Navigate, Route, Routes, useLocation, useMatch, useNavigate } from "react-router-dom"
 
+import { batchWebDavPath, organizeNotes, type BatchOrganizeAction, type BatchOrganizeState } from "@/services/vault/batch-organize"
 import { Workspace, type LibraryView } from "@/components/workspace/workspace"
 import { AppInitializationState } from "@/components/app-initialization-state"
 import {
@@ -140,7 +141,7 @@ import { remapNoteVersions, saveNoteVersion } from "@/services/history/note-hist
 import { backupFilename, createVaultBackup, parseVaultBackup } from "@/services/backup/vault-backup"
 import { collectBackupInventory, type BackupIssue } from "@/services/backup/backup-inventory"
 import { inspectVaultRestore, type VaultRestorePreview, type VaultRestoreResult } from "@/services/backup/vault-restore-preview"
-import { exportNoteBundle } from "@/services/export/markdown-export"
+import { exportNoteBundle, exportZipArchive } from "@/services/export/markdown-export"
 import { createNoteExportBundle } from "@/services/export/note-export-bundle"
 import { uniqueHistoryCopyPath } from "@/services/history/note-history-copy"
 import { MAX_MARKDOWN_IMPORT_BYTES, sanitizeImportedMarkdownName, uniqueMarkdownPath } from "@/services/import/markdown-import"
@@ -441,6 +442,7 @@ function App() {
   const indexGenerationRef = useRef(0)
   const latestCacheSnapshotRef = useRef<VaultCacheSnapshot | null>(null)
   const cacheSnapshotWritesRef = useRef<Promise<void>>(Promise.resolve())
+  const batchOrganizeRef = useRef(false)
   const webDavTagRenameRef = useRef(false)
   const activeCacheIdRef = useRef<string | null>(null)
   const restoreScopeRef = useRef({ cacheId: null as string | null, noteId: "", generation: 0 })
@@ -603,7 +605,7 @@ function App() {
     if (!cacheReady || !activeCacheMeta) return
     // 显式同步的检查点拥有缓存写权；旧渲染产生的整库防抖快照不能覆盖新 ETag。
     if (activeSyncRunRef.current && activeCacheIdRef.current === activeCacheMeta.id) return
-    if (webDavTagRenameRef.current && activeCacheMeta.sourceKind === "webdav") return
+    if (batchOrganizeRef.current || (webDavTagRenameRef.current && activeCacheMeta.sourceKind === "webdav")) return
     const snapshot: VaultCacheSnapshot = {
       ...activeCacheMeta,
       activeNoteId,
@@ -619,7 +621,7 @@ function App() {
       // 清除/切库/原子目录重命名都会替换 ref；旧闭包不得把过期快照重新写回。
       if (latestCacheSnapshotRef.current !== snapshot) return
       if (activeSyncRunRef.current && activeCacheIdRef.current === snapshot.id) return
-      if (webDavTagRenameRef.current && snapshot.sourceKind === "webdav") return
+      if (batchOrganizeRef.current || (webDavTagRenameRef.current && snapshot.sourceKind === "webdav")) return
       // 内容读取、收藏、置顶和本地编辑后统一刷新离线快照；敏感凭据不属于 Note 模型，因此不会进入缓存。
       const write = saveVaultCache(snapshot)
         .then(listVaultCaches)
@@ -628,7 +630,7 @@ function App() {
       cacheSnapshotWritesRef.current = write
     }, 450)
     return () => window.clearTimeout(timer)
-  }, [activeCacheMeta, activeNoteId, cachePrivacyMode, cacheReady, notes, pendingWebDavDirectories, pendingWebDavDirectoryMoves, trashEntries, vaultDirectories])
+  }, [activeCacheMeta, activeNoteId, cachePrivacyMode, cacheReady, isManagingNote, notes, pendingWebDavDirectories, pendingWebDavDirectoryMoves, trashEntries, vaultDirectories])
 
   useEffect(() => {
     if (!activeCacheMeta || activeCacheMeta.sourceKind !== "webdav") {
@@ -1906,6 +1908,7 @@ function App() {
   }
 
   const connectWebDav = async (config: WebDavConfig, password: string) => {
+    if (batchOrganizeRef.current) throw new Error("正在批量整理，请等待完成")
     // 设置页与快捷连接也可能在旧列表仍可操作时同步；同样挡住置顶编辑，避免晚到快照覆盖新意图。
     vaultMutationBarrierRef.current += 1
     try {
@@ -2421,6 +2424,7 @@ function App() {
   }
 
   const refreshVault = async (noteIds?: ReadonlySet<string>, options: { automatic?: boolean } = {}) => {
+    if (batchOrganizeRef.current) { setVaultError("正在批量整理，请等待完成"); return }
     // 新一轮重试先收起旧错误；若仍失败会立即用本轮原因替换，成功则不会残留过期提示。
     setSyncFailure(null)
     setFolderOrderConflictDismissed((current) =>
@@ -2697,7 +2701,7 @@ function App() {
     void vaultSession.watchChanges(() => {
       window.clearTimeout(refreshTimer)
       refreshTimer = window.setTimeout(() => {
-        if (disposed || activeSyncRunRef.current) return
+        if (disposed || activeSyncRunRef.current || batchOrganizeRef.current) return
         // 外部编辑只重新读取本地 Vault；保留当前路由、滚动位置和仍在编辑的工作副本。
         void loadVault(vaultSession, true, notesRef.current).catch((error) => {
           if (!disposed) setVaultError(error instanceof Error ? error.message : "刷新本地笔记库失败")
@@ -2715,6 +2719,7 @@ function App() {
   }, [vaultSession])
 
   const selectVaultCache = async (cacheId: string) => {
+    if (batchOrganizeRef.current) { setVaultError("正在批量整理，请等待完成"); return }
     // 同库重新选择会把读取时的旧快照整库写回，可能抹去正在上传的检查点。
     if (activeSyncRunRef.current && cacheId === activeCacheIdRef.current) return
     const selectionToken = ++syncScopeSequenceRef.current
@@ -2746,6 +2751,7 @@ function App() {
   }
 
   const clearActiveVaultCache = async () => {
+    if (batchOrganizeRef.current) { setVaultError("正在批量整理，请等待完成"); return }
     const target = activeCacheMeta
     if (!target) return
     if (activeSyncRunRef.current) {
@@ -2791,6 +2797,7 @@ function App() {
   }
 
   const openLocalVault = async () => {
+    if (batchOrganizeRef.current) { setVaultError("正在批量整理，请等待完成"); return }
     setIsOpeningVault(true)
     setVaultError(null)
     try {
@@ -4126,6 +4133,84 @@ function App() {
     }
   }
 
+  const organizeSelectedNotes = async (ids: string[], action: BatchOrganizeAction, progress: (completed: number, total: number) => void) => {
+    const meta = activeCacheMeta
+    const adapter = vaultSession
+    if (!meta || isOpeningVault || isManagingNote || activeSyncRunRef.current || isRefreshingVault || vaultMutationBarrierRef.current > 0 || loadingNoteIdsRef.current.size) {
+      throw new Error("笔记库正在读取、保存或同步，请稍后重试")
+    }
+    if (attachmentQueue.getSnapshot().some((batch) => batch.status === "queued" || batch.status === "writing" || batch.retrying || batch.reinserting)) {
+      throw new Error("附件仍在插入，请等待完成后再批量整理")
+    }
+    const webdav = meta.sourceKind === "webdav"
+    if (!webdav && (!adapter || adapter.readOnly)) throw new Error("请先连接可写的本地笔记库")
+    batchOrganizeRef.current = true
+    vaultMutationBarrierRef.current += 1
+    latestCacheSnapshotRef.current = null
+    setIsManagingNote(true)
+    setVaultError(null)
+    let previous: BatchOrganizeState = { notes: notesRef.current, trash: trashEntries, activeNoteId }
+    const current = () => activeCacheIdRef.current === meta.id
+    try {
+      // 等旧防抖快照落盘后再持有工作副本写权，避免批量修改被先前渲染覆盖。
+      await Promise.all([cacheSnapshotWritesRef.current, liveEditWritesRef.current])
+      if (!current()) throw new Error("笔记库已切换")
+      const result = await organizeNotes({
+        action, ids, initial: previous, adapter, webdav, isCurrent: current,
+        resolvePath: (path) => adapter?.getStoragePath?.(path)
+          ?? (webdav ? batchWebDavPath(notesRef.current, path) : path),
+        blocked: (note) => localSaveCoordinatorRef.current.hasPending(note.id)
+          || ["saving", "error", "conflict"].includes(saveStates[note.id]?.status ?? "")
+          || Boolean(attachmentQueueRef.current?.getSnapshot().some((batch) => batch.target.noteId === note.id && (batch.status === "queued" || batch.status === "writing" || batch.retrying || batch.reinserting))),
+        loadDocument: async (note) => (await loadCachedNoteDocument(meta.id, note.id)) ?? undefined,
+        beforeWrite: async (note, content) => { await saveNoteVersion({ cacheId: meta.id, noteId: note.id, title: note.title, content, reason: "编辑前" }) },
+        progress,
+        commit: async (state) => {
+          if (!current()) throw new Error("笔记库已切换")
+          // 未参与本次修改的笔记沿用最新内存对象，保留在途自动保存完成后的版本号与索引。
+          state.notes = state.notes.map((note) => previous.notes.find((old) => old.id === note.id) === note
+            ? notesRef.current.find((latest) => latest.id === note.id) ?? note : note)
+          const snapshot = { ...meta, ...state, directories: vaultDirectories,
+            pendingDirectories: pendingWebDavDirectories, pendingDirectoryMoves: pendingWebDavDirectoryMoves,
+            notes: prepareNotesForCache(state.notes, cachePrivacyMode), savedAt: Date.now() }
+          try {
+            await saveVaultCache(snapshot)
+          } finally {
+            // 原生文件操作已经完成时，即使缓存报错也必须展示实际状态；工作副本错误则留在内存供重试。
+            if (current()) {
+              notesRef.current = state.notes
+              setNotes(state.notes); setTrashEntries(state.trash); setActiveNoteId(state.activeNoteId)
+              setVaultNoteCount(state.notes.filter((note) => note.pendingOperation !== "delete").length)
+              for (const note of state.notes) if (note.remotePath) revisionByPathRef.current.set(note.remotePath, note.revision)
+              const changedStatuses = Object.fromEntries(state.notes
+                .filter((note) => previous.notes.find((old) => old.id === note.id) !== note)
+                .map((note) => [note.id, { status: webdav ? "pending" as const : "saved" as const }]))
+              setSaveStates((states) => ({ ...states, ...changedStatuses }))
+              if (noteRouteMatch && previous.activeNoteId !== state.activeNoteId) {
+                navigate(state.activeNoteId ? `/notes/${encodeURIComponent(state.activeNoteId)}` : "/notes", { replace: true })
+              }
+            }
+          }
+          for (const old of previous.notes) {
+            if (state.notes.some((note) => note.id === old.id)) continue
+            const moved = state.notes.find((note) => note.editorSessionKey === (old.editorSessionKey ?? old.id))
+            if (moved) {
+              await remapNoteVersions(meta.id, old.id, moved.id)
+              if (webdav) await remapVaultAttachmentNoteId(meta.id, old.id, moved.id)
+            }
+          }
+          previous = state
+        },
+      })
+      setVaultError(result.issues.length ? `批量整理完成 ${result.succeededIds.length} 篇，详情见结果清单` : null)
+      return result
+    } finally {
+      batchOrganizeRef.current = false
+      vaultMutationBarrierRef.current = Math.max(0, vaultMutationBarrierRef.current - 1)
+      if (current()) setIsManagingNote(false)
+    }
+  }
+
   const deleteActiveNote = () => deleteNote(activeNoteId)
 
   const restoreTrashEntries = async (entryIds: ReadonlySet<string>) => {
@@ -4407,7 +4492,7 @@ function App() {
     return storagePath.replace(/^\/+/, "")
   }
 
-  const exportVaultBackup = async (allowMissingAttachments = false): Promise<{ ok: boolean; issues: BackupIssue[] }> => {
+  const exportVaultBackup = async (allowMissingAttachments = false): Promise<{ ok: boolean; cancelled?: boolean; issues: BackupIssue[] }> => {
     if (!activeCacheMeta) {
       setVaultError("请先打开一个笔记库")
       return { ok: false, issues: [{ kind: "note", path: "笔记库", reason: "请先打开一个笔记库" }] }
@@ -4460,14 +4545,10 @@ function App() {
         missingAttachments: missingAttachments.map((issue) => issue.path),
         notes: inventory.notes,
       })
-      const url = URL.createObjectURL(new Blob([data.slice().buffer], { type: "application/zip" }))
-      const anchor = document.createElement("a")
-      anchor.download = missingAttachments.length > 0
+      const filename = missingAttachments.length > 0
         ? backupFilename(activeCacheMeta.label).replace(/\.swell\.zip$/, ".incomplete.swell.zip")
         : backupFilename(activeCacheMeta.label)
-      anchor.href = url
-      anchor.click()
-      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+      if (!await exportZipArchive(data, filename)) return { ok: false, cancelled: true, issues: inventory.issues }
       return { ok: true, issues: inventory.issues }
     } catch (error) {
       const message = error instanceof Error ? error.message : "整库备份失败"
@@ -4782,6 +4863,7 @@ function App() {
               setSyncFailure(null)
               setVaultError(null)
             }}
+            onOrganizeNotes={organizeSelectedNotes}
             onDeleteNote={() => void deleteActiveNote()}
             onDeleteNoteById={(noteId) => void deleteNote(noteId, false)}
             onDeleteFolder={deleteFolder}

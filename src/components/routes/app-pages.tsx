@@ -358,7 +358,7 @@ export function StorageMaintenancePage({
 }: {
   activeCacheId: string | null
   notes: Note[]
-  onExportBackup: (allowMissingAttachments?: boolean) => Promise<{ ok: boolean; issues: BackupIssue[] }>
+  onExportBackup: (allowMissingAttachments?: boolean) => Promise<{ ok: boolean; cancelled?: boolean; issues: BackupIssue[] }>
   onInspectBackup: (file: File) => Promise<VaultRestorePreview>
   onRebuildSearchIndex: () => Promise<void>
   onRestoreBackup: (preview: VaultRestorePreview) => Promise<VaultRestoreResult>
@@ -443,7 +443,7 @@ export function StorageMaintenancePage({
     try {
       const result = await onExportBackup(allowMissingAttachments)
       setBackupIssues(result.issues)
-      setMessage(result.ok
+      setMessage(result.cancelled ? "已取消备份保存" : result.ok
         ? result.issues.length > 0
           ? `已下载不完整备份：${result.issues.length} 个引用附件缺失，ZIP 清单已记录；请勿作为完整备份使用`
           : "完整备份已生成，请妥善保管下载的 ZIP 文件"
