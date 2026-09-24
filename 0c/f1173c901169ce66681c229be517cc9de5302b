@@ -1,0 +1,23 @@
+docs/backup-rehearsal-2026-09-24.md
+  s_13775b5a3f2958::t_0393f027e5e896 8,28
+  s_13775b5a3f2958::t_da97b422cca74f 30-35
+  s_13775b5a3f2958::t_a295ab72f69e77 29
+src/App.tsx
+  s_13775b5a3f2958::t_21d917942b5b9f 892-894
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "0cf1173c901169ce66681c229be517cc9de5302b",
+  "prompts": {},
+  "sessions": {
+    "s_13775b5a3f2958": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d11a-c36c-7930-a94e-d2c197456def",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
