@@ -22,13 +22,15 @@ const filters = { folder: "", query: "", scope: "all" as const, tag: "" }
 
 describe("global search filters", () => {
   it("解析标题和标签限定词，保留未识别内容为普通搜索词", () => {
-    expect(parseGlobalSearchQuery('title:"会议 纪要" tag:规划 -title:草稿 -tag:"仅内部" 正文')).toEqual({
+    expect(parseGlobalSearchQuery('title:"会议 纪要" tag:规划 -title:草稿 -tag:"仅内部" -body:"旧 正文" 正文')).toEqual({
+      excludedBodyTerms: ["旧 正文"],
       excludedTagTerms: ["仅内部"], excludedTitleTerms: ["草稿"],
       query: "正文", tagTerms: ["规划"], titleTerms: ["会议 纪要"],
     })
     expect(parseGlobalSearchQuery("author:me title:")).toEqual({
-      excludedTagTerms: [], excludedTitleTerms: [], query: "author:me title:", tagTerms: [], titleTerms: [],
+      excludedBodyTerms: [], excludedTagTerms: [], excludedTitleTerms: [], query: "author:me title:", tagTerms: [], titleTerms: [],
     })
+    expect(parseGlobalSearchQuery("body:测试 -body:")).toMatchObject({ query: "body:测试 -body:", excludedBodyTerms: [] })
   })
 
   it("标题和标签限定词与正文、控件筛选共同生效", () => {
@@ -53,6 +55,20 @@ describe("global search filters", () => {
     expect(matchesGlobalSearchFilters({ ...note, content: "", contentLoaded: false, syncStatus: "synced" }, { ...filters, query: "缓存正文", scope: "body" }, indexed)).toBe(true)
     expect(matchesGlobalSearchFilters({ ...note, content: "", contentLoaded: false }, { ...filters, query: "缓存正文", scope: "body" }, indexed)).toBe(false)
     expect(matchesGlobalSearchFilters({ ...note, content: "", contentLoaded: false, syncStatus: "synced", searchText: "旧版兼容索引" }, { ...filters, query: "兼容索引" }, null)).toBe(true)
+  })
+
+  it("正文排除词优先使用实时正文；未加载时只信任完整缓存", () => {
+    const excluding = { ...filters, excludedBodyTerms: ["最新正文"] }
+    const indexed = new Set([note.remotePath!])
+    expect(matchesGlobalSearchFilters(note, excluding, null, new Set())).toBe(false)
+    expect(matchesGlobalSearchFilters(note, { ...excluding, excludedBodyTerms: ["旧正文"] }, null, indexed)).toBe(true)
+    const cached = { ...note, content: "", contentLoaded: false, syncStatus: "synced" as const, contentCached: true }
+    expect(matchesGlobalSearchFilters(cached, excluding, null, indexed, indexed)).toBe(false)
+    expect(matchesGlobalSearchFilters(cached, excluding, null, new Set(), indexed)).toBe(true)
+    expect(matchesGlobalSearchFilters(cached, excluding, null, new Set(), new Set())).toBe(false)
+    expect(matchesGlobalSearchFilters(cached, excluding, null, null)).toBe(false)
+    expect(matchesGlobalSearchFilters({ ...cached, contentCached: false }, excluding, null, new Set(), indexed)).toBe(false)
+    expect(matchesGlobalSearchFilters({ ...cached, syncStatus: "modified" }, excluding, null, new Set(), indexed)).toBe(false)
   })
 
   it("标签精确筛选，父目录包含子目录，根目录只含根笔记", () => {

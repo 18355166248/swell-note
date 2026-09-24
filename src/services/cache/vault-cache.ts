@@ -712,6 +712,20 @@ export async function searchCachedNoteDocuments(cacheId: string, query: string, 
   return paths
 }
 
+export async function searchCachedNoteDocumentBodyExclusions(cacheId: string, terms: readonly string[]) {
+  const documents = await listCachedNoteDocuments(cacheId)
+  const cachedPaths: string[] = []
+  const excludedPaths: string[] = []
+  // 排除搜索需要同时知道哪些正文确实被扫描过，不能把缺失缓存误判为“未包含”。
+  for (const document of documents) {
+    if (!document.path) continue
+    cachedPaths.push(document.path)
+    const content = document.content.toLocaleLowerCase()
+    if (terms.some((term) => content.includes(term))) excludedPaths.push(document.path)
+  }
+  return { cachedPaths, excludedPaths }
+}
+
 export async function listVaultCaches(): Promise<VaultCacheSummary[]> {
   const database = await openDatabase()
   const snapshots = await requestResult<VaultCacheSnapshot[]>(

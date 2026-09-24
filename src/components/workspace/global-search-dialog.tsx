@@ -4,7 +4,7 @@ import { CircleX, FileSearch, LoaderCircle, Search, X } from "lucide-react"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { HighlightedText, useSearchMatch } from "@/components/workspace/note-search-match"
-import { searchCachedNoteDocuments } from "@/services/cache/vault-cache"
+import { searchCachedNoteDocumentBodyExclusions, searchCachedNoteDocuments } from "@/services/cache/vault-cache"
 import { matchesGlobalSearchFilters, parseGlobalSearchQuery, ROOT_FOLDER_FILTER, type GlobalSearchScope } from "@/services/search/global-search-filter"
 import { sortNotes } from "@/services/search/note-sort"
 import type { Note } from "@/types/note"
@@ -31,7 +31,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   const [updatedDays, setUpdatedDays] = useState<"any" | "7" | "30" | "90">("any")
   const [starredOnly, setStarredOnly] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
-  const [indexedMatch, setIndexedMatch] = useState<{ paths: Set<string>; key: string } | null>(null)
+  const [indexedMatch, setIndexedMatch] = useState<{ paths: Set<string>; excludedBodyPaths: Set<string>; cachedBodyPaths: Set<string>; key: string } | null>(null)
   const [indexErrorKey, setIndexErrorKey] = useState("")
   const [visibleCount, setVisibleCount] = useState(RESULT_LIMIT)
   const [completedQuery, setCompletedQuery] = useState("")
@@ -59,8 +59,9 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   const parsedQuery = useMemo(() => parseGlobalSearchQuery(query), [query])
   const normalizedQuery = parsedQuery.query.toLocaleLowerCase()
   const updatedAfter = useMemo(() => updatedDays === "any" ? undefined : Date.now() - Number(updatedDays) * 24 * 60 * 60 * 1000, [updatedDays, open])
-  const hasFilters = Boolean(normalizedQuery || parsedQuery.titleTerms.length || parsedQuery.tagTerms.length || parsedQuery.excludedTitleTerms.length || parsedQuery.excludedTagTerms.length || tag || folder || updatedAfter !== undefined || starredOnly)
-  const searchKey = `${scope}\u0000${normalizedQuery}`
+  const excludedBodyTerms = useMemo(() => parsedQuery.excludedBodyTerms.map((term) => term.toLocaleLowerCase()), [parsedQuery])
+  const hasFilters = Boolean(normalizedQuery || parsedQuery.titleTerms.length || parsedQuery.tagTerms.length || parsedQuery.excludedTitleTerms.length || parsedQuery.excludedTagTerms.length || excludedBodyTerms.length || tag || folder || updatedAfter !== undefined || starredOnly)
+  const searchKey = `${cacheId}\u0000${scope}\u0000${normalizedQuery}\u0000${JSON.stringify(excludedBodyTerms)}`
   const tags = useMemo(() => [...new Set(notes.flatMap((note) => note.tags ?? []))]
     .sort((left, right) => left.localeCompare(right)), [notes])
   const folders = useMemo(() => [...new Set(notes.flatMap((note) => {
@@ -71,18 +72,25 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
     .sort((left, right) => left.localeCompare(right)), [notes])
 
   useEffect(() => {
-    if (!open || !normalizedQuery || !cacheId || scope === "title") {
+    if (!open || !cacheId || (!excludedBodyTerms.length && (!normalizedQuery || scope === "title"))) {
       setIndexedMatch(null)
       return
     }
     let cancelled = false
     const timer = window.setTimeout(() => {
       // 全局筛选统一以文档缓存为后备索引；原生 FTS 额外搜索路径且分词不同，会让范围筛选两端不一致。
-      const search = searchCachedNoteDocuments(cacheId, normalizedQuery, Math.max(5_000, notes.length), scope === "body" ? "body" : "all")
-      void search
-        .then((paths) => {
+      const limit = Math.max(5_000, notes.length)
+      // 正文排除一次扫描缓存，同时记录实际存在的文档；失败时不声称未加载笔记满足排除条件。
+      const positive = normalizedQuery && scope !== "title"
+        ? searchCachedNoteDocuments(cacheId, normalizedQuery, limit, scope === "body" ? "body" : "all")
+        : Promise.resolve([])
+      const excluded = excludedBodyTerms.length
+        ? searchCachedNoteDocumentBodyExclusions(cacheId, excludedBodyTerms)
+        : Promise.resolve({ cachedPaths: [], excludedPaths: [] })
+      void Promise.all([positive, excluded])
+        .then(([paths, bodyExclusions]) => {
           if (cancelled) return
-          setIndexedMatch({ paths: new Set(paths), key: searchKey })
+          setIndexedMatch({ paths: new Set(paths), excludedBodyPaths: new Set(bodyExclusions.excludedPaths), cachedBodyPaths: new Set(bodyExclusions.cachedPaths), key: searchKey })
           setIndexErrorKey("")
         })
         .catch(() => {
@@ -94,20 +102,23 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
         .finally(() => { if (!cancelled) setCompletedQuery(searchKey) })
     }, 120)
     return () => { cancelled = true; window.clearTimeout(timer) }
-  }, [cacheId, normalizedQuery, open, notes, scope, searchKey])
+  }, [cacheId, excludedBodyTerms, normalizedQuery, open, notes, scope, searchKey])
 
   const indexedPaths = indexedMatch?.key === searchKey ? indexedMatch.paths : null
+  const excludedBodyPaths = indexedMatch?.key === searchKey ? indexedMatch.excludedBodyPaths : null
+  const cachedBodyPaths = indexedMatch?.key === searchKey ? indexedMatch.cachedBodyPaths : null
 
-  const searching = Boolean(open && cacheId && normalizedQuery && scope !== "title" && completedQuery !== searchKey)
-  const indexUnavailable = Boolean(open && indexErrorKey === searchKey && normalizedQuery && scope !== "title")
+  const needsIndex = Boolean((normalizedQuery && scope !== "title") || excludedBodyTerms.length)
+  const searching = Boolean(open && cacheId && needsIndex && completedQuery !== searchKey)
+  const indexUnavailable = Boolean(open && indexErrorKey === searchKey && needsIndex)
   const matches = useMemo(() => {
     if (!hasFilters) return sortNotes(notes, "updated-desc", { pinnedFirst: false }).slice(0, RECENT_LIMIT)
     const matched = notes.filter((note) => matchesGlobalSearchFilters(note, {
-      excludedTagTerms: parsedQuery.excludedTagTerms, excludedTitleTerms: parsedQuery.excludedTitleTerms,
+      excludedBodyTerms, excludedTagTerms: parsedQuery.excludedTagTerms, excludedTitleTerms: parsedQuery.excludedTitleTerms,
       folder, query: normalizedQuery, scope, starredOnly, tag, tagTerms: parsedQuery.tagTerms, titleTerms: parsedQuery.titleTerms, updatedAfter,
-    }, indexedPaths))
+    }, indexedPaths, excludedBodyPaths, cachedBodyPaths))
     return sortNotes(matched, "updated-desc")
-  }, [folder, hasFilters, indexedPaths, normalizedQuery, notes, parsedQuery, scope, starredOnly, tag, updatedAfter])
+  }, [cachedBodyPaths, excludedBodyPaths, excludedBodyTerms, folder, hasFilters, indexedPaths, normalizedQuery, notes, parsedQuery, scope, starredOnly, tag, updatedAfter])
 
   const results = matches.slice(0, visibleCount)
   useEffect(() => { setActiveIndex(0); setVisibleCount(RESULT_LIMIT) }, [searchKey, tag, folder, updatedDays, starredOnly, open, cacheId])
@@ -236,7 +247,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
           )}
           {results.length < matches.length && <button className="global-search-more" type="button" onClick={() => setVisibleCount((count) => count + RESULT_LIMIT)}>加载更多（剩余 {matches.length - results.length} 篇）</button>}
         </div>
-        <div className="global-search-help">可用 title:、tag: 筛选，前加 - 排除；带空格的值加引号 · {scope === "body" ? "正文包含已缓存与当前打开的内容 · " : ""}↑↓ 选择 · Enter 打开 · Esc 关闭</div>
+        <div className="global-search-help">可用 title:、tag: 筛选，-title:、-tag:、-body: 排除；带空格的值加引号 · {scope === "body" ? "正文包含已缓存与当前打开的内容 · " : ""}↑↓ 选择 · Enter 打开 · Esc 关闭</div>
       </DialogContent>
     </Dialog>
   )

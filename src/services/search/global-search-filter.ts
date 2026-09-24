@@ -3,6 +3,7 @@ import type { Note } from "@/types/note"
 export type GlobalSearchScope = "all" | "title" | "body"
 
 export type GlobalSearchFilters = {
+  excludedBodyTerms?: readonly string[]
   excludedTagTerms?: readonly string[]
   excludedTitleTerms?: readonly string[]
   folder: string
@@ -38,21 +39,26 @@ export function parseGlobalSearchQuery(input: string) {
   const tagTerms: string[] = []
   const excludedTitleTerms: string[] = []
   const excludedTagTerms: string[] = []
+  const excludedBodyTerms: string[] = []
   for (const value of tokens) {
-    const operator = /^(-?)(title|tag):(.+)$/i.exec(value)
+    const operator = /^(-?)(title|tag|body):(.+)$/i.exec(value)
     if (!operator) text.push(value)
     else if (operator[2].toLocaleLowerCase() === "title") (operator[1] ? excludedTitleTerms : titleTerms).push(operator[3])
-    else (operator[1] ? excludedTagTerms : tagTerms).push(operator[3])
+    else if (operator[2].toLocaleLowerCase() === "tag") (operator[1] ? excludedTagTerms : tagTerms).push(operator[3])
+    else if (operator[1]) excludedBodyTerms.push(operator[3])
+    else text.push(value)
   }
-  return { excludedTagTerms, excludedTitleTerms, query: text.join(" ").trim(), tagTerms, titleTerms }
+  return { excludedBodyTerms, excludedTagTerms, excludedTitleTerms, query: text.join(" ").trim(), tagTerms, titleTerms }
 }
 
 export function matchesGlobalSearchFilters(
   note: Note,
   filters: GlobalSearchFilters,
   indexedPaths: ReadonlySet<string> | null,
+  excludedBodyPaths: ReadonlySet<string> | null = null,
+  cachedBodyPaths: ReadonlySet<string> | null = null,
 ) {
-  const { excludedTagTerms = [], excludedTitleTerms = [], folder, query, scope, starredOnly, tag, tagTerms = [], titleTerms = [], updatedAfter } = filters
+  const { excludedBodyTerms = [], excludedTagTerms = [], excludedTitleTerms = [], folder, query, scope, starredOnly, tag, tagTerms = [], titleTerms = [], updatedAfter } = filters
   if (starredOnly && !note.starred) return false
   // 旧笔记若没有可靠修改时间，不应被误算进“最近更新”。
   if (updatedAfter !== undefined && (note.modifiedAt === undefined || note.modifiedAt < updatedAfter)) return false
@@ -62,6 +68,14 @@ export function matchesGlobalSearchFilters(
   if (titleTerms.some((term) => !note.title.toLocaleLowerCase().includes(term.toLocaleLowerCase()))) return false
   if (excludedTagTerms.some((term) => note.tags?.some((candidate) => candidate.toLocaleLowerCase() === term.toLocaleLowerCase()))) return false
   if (excludedTitleTerms.some((term) => note.title.toLocaleLowerCase().includes(term.toLocaleLowerCase()))) return false
+  if (excludedBodyTerms.length) {
+    // 排除条件必须能证实正文不含目标词；未加载且缓存缺失/过期的正文不可当作未命中。
+    if (note.contentLoaded) {
+      if (excludedBodyTerms.some((term) => note.content.toLocaleLowerCase().includes(term.toLocaleLowerCase()))) return false
+    } else if (!note.contentCached || note.syncStatus === "modified" || note.syncStatus === "conflict"
+      || !excludedBodyPaths || !note.remotePath || !cachedBodyPaths?.has(note.remotePath)
+      || excludedBodyPaths.has(note.remotePath)) return false
+  }
   if (folder) {
     const noteFolder = note.folder && note.folder !== "根目录" ? note.folder : ""
     if (folder === ROOT_FOLDER_FILTER ? Boolean(noteFolder) : noteFolder !== folder && !noteFolder.startsWith(`${folder} / `)) return false
