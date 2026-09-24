@@ -1,0 +1,44 @@
+src/components/workspace/batch-organize-dialog.tsx
+  s_ec1a347be86db5::t_8cf02eb0132659 5,78-84,87-88,90-91
+  s_ec1a347be86db5::t_7718dbd78e7bdd 85
+  s_ec1a347be86db5::t_2a8c5b0cc1fc75 86,89
+src/components/workspace/batch-organize-dialog.css
+  s_ec1a347be86db5::t_a172316fc57909 13
+src/components/workspace/formatting-toolbar.tsx
+  s_ec1a347be86db5::t_d749b65c8eb203 7,53,75-76,80-91
+  s_ec1a347be86db5::t_2d0d33ee19c147 77
+src/components/ui/select.tsx
+  s_ec1a347be86db5::t_b2f1d4117bec46 1-11,16-32,34-48,50-54
+  s_ec1a347be86db5::t_898038245ded27 12-15,33,49
+src/components/workspace/global-search-dialog.tsx
+  s_ec1a347be86db5::t_d52c0d0777c52c 6,247-250,253-260,263-270,273-276,279-282,286-289
+src/components/workspace/global-search-dialog.test.tsx
+  s_ec1a347be86db5::t_1ec8bc0f8a55bb 43,51
+  s_ec1a347be86db5::t_c939840338e396 45-50,52
+src/App.css
+  s_ec1a347be86db5::t_2d0d33ee19c147 1553
+  s_ec1a347be86db5::t_c04722ec62b744 1593,1597
+  s_ec1a347be86db5::t_c3afdab4299617 1552,1555,1560,1658
+src/components/routes/app-pages.tsx
+  s_ec1a347be86db5::t_d7d82115366aa5 34,335-338,341-344
+src/components/workspace/selection-action-bar.test.tsx
+  s_ec1a347be86db5::t_c939840338e396 218
+  s_ec1a347be86db5::t_f2a5aada71a5af 221-235
+  s_ec1a347be86db5::t_4c21c799ad8d26 219-220
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "c18c2bf4851034378ea06fa9f7cc2f64aa470a7d",
+  "prompts": {},
+  "sessions": {
+    "s_ec1a347be86db5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d2d7-1838-7fc1-a6d8-f5f013704fcf",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
