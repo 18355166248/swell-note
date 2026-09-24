@@ -127,4 +127,18 @@ describe("global search interactions", () => {
     await act(async () => resolve([]))
     expect(document.body.textContent).toContain("没有找到匹配")
   })
+  it("reports an unavailable body index without claiming a complete empty result", async () => {
+    cachedSearch.mockRejectedValueOnce(new Error("IndexedDB unavailable"))
+    render("cache", [{ ...notes[0], title: "其他笔记", preview: "" }])
+    query("仅在缓存正文")
+    await act(async () => { vi.advanceTimersByTime(120) })
+    expect(document.body.textContent).toContain("正文索引暂不可用，结果可能不完整")
+    expect(document.body.textContent).toContain("当前没有已加载笔记匹配")
+    expect(document.body.textContent).not.toContain("没有找到匹配的笔记")
+
+    query("其他笔记")
+    await act(async () => { vi.advanceTimersByTime(120) })
+    expect(document.body.textContent).not.toContain("正文索引暂不可用")
+    expect(document.body.textContent).toContain("找到 1 篇")
+  })
 })

@@ -32,6 +32,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   const [starredOnly, setStarredOnly] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const [indexedMatch, setIndexedMatch] = useState<{ paths: Set<string>; key: string } | null>(null)
+  const [indexErrorKey, setIndexErrorKey] = useState("")
   const [visibleCount, setVisibleCount] = useState(RESULT_LIMIT)
   const [completedQuery, setCompletedQuery] = useState("")
   const listId = useId()
@@ -49,6 +50,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
     setStarredOnly(false)
     setActiveIndex(0)
     setIndexedMatch(null)
+    setIndexErrorKey("")
     // 弹窗打开动画与聚焦挤在同一帧时，部分浏览器会把焦点请求吞掉。
     const timer = window.setTimeout(() => inputRef.current?.focus(), 0)
     return () => window.clearTimeout(timer)
@@ -78,8 +80,17 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
       // 全局筛选统一以文档缓存为后备索引；原生 FTS 额外搜索路径且分词不同，会让范围筛选两端不一致。
       const search = searchCachedNoteDocuments(cacheId, normalizedQuery, Math.max(5_000, notes.length), scope === "body" ? "body" : "all")
       void search
-        .then((paths) => { if (!cancelled) setIndexedMatch({ paths: new Set(paths), key: searchKey }) })
-        .catch(() => { if (!cancelled) setIndexedMatch(null) })
+        .then((paths) => {
+          if (cancelled) return
+          setIndexedMatch({ paths: new Set(paths), key: searchKey })
+          setIndexErrorKey("")
+        })
+        .catch(() => {
+          if (cancelled) return
+          // 已加载笔记仍能本地匹配，但缓存正文缺席时不能把结果称作完整命中集。
+          setIndexedMatch(null)
+          setIndexErrorKey(searchKey)
+        })
         .finally(() => { if (!cancelled) setCompletedQuery(searchKey) })
     }, 120)
     return () => { cancelled = true; window.clearTimeout(timer) }
@@ -88,6 +99,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   const indexedPaths = indexedMatch?.key === searchKey ? indexedMatch.paths : null
 
   const searching = Boolean(open && cacheId && normalizedQuery && scope !== "title" && completedQuery !== searchKey)
+  const indexUnavailable = Boolean(open && indexErrorKey === searchKey && normalizedQuery && scope !== "title")
   const matches = useMemo(() => {
     if (!hasFilters) return sortNotes(notes, "updated-desc", { pinnedFirst: false }).slice(0, RECENT_LIMIT)
     const matched = notes.filter((note) => matchesGlobalSearchFilters(note, {
@@ -197,13 +209,13 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
           </label>
         </div>
         <div className="global-search-summary" role="status">
-          {searching ? <><LoaderCircle className="animate-spin" />正在搜索正文…</> : hasFilters ? `找到 ${matches.length} 篇，已显示 ${results.length} 篇` : "最近更新"}
+          {searching ? <><LoaderCircle className="animate-spin" />正在搜索正文…</> : hasFilters ? `找到 ${matches.length} 篇，已显示 ${results.length} 篇${indexUnavailable ? "；正文索引暂不可用，结果可能不完整" : ""}` : "最近更新"}
         </div>
         <div className="global-search-results" data-search-scroll-viewport ref={resultsRef}>
           {results.length === 0 ? (
             <p className="global-search-empty">
               <FileSearch />
-              {searching ? "正在查找，请稍候…" : hasFilters ? "没有找到匹配的笔记" : "最近更新的笔记会显示在这里"}
+              {searching ? "正在查找，请稍候…" : indexUnavailable ? "正文索引暂不可用，当前没有已加载笔记匹配" : hasFilters ? "没有找到匹配的笔记" : "最近更新的笔记会显示在这里"}
             </p>
           ) : (
             <ul id={listId} ref={listRef} role="listbox" aria-label="搜索结果">
