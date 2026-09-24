@@ -3,6 +3,8 @@ import type { Note } from "@/types/note"
 export type GlobalSearchScope = "all" | "title" | "body"
 
 export type GlobalSearchFilters = {
+  excludedTagTerms?: readonly string[]
+  excludedTitleTerms?: readonly string[]
   folder: string
   query: string
   scope: GlobalSearchScope
@@ -34,13 +36,15 @@ export function parseGlobalSearchQuery(input: string) {
   const text: string[] = []
   const titleTerms: string[] = []
   const tagTerms: string[] = []
+  const excludedTitleTerms: string[] = []
+  const excludedTagTerms: string[] = []
   for (const value of tokens) {
-    const operator = /^(title|tag):(.+)$/i.exec(value)
+    const operator = /^(-?)(title|tag):(.+)$/i.exec(value)
     if (!operator) text.push(value)
-    else if (operator[1].toLocaleLowerCase() === "title") titleTerms.push(operator[2])
-    else tagTerms.push(operator[2])
+    else if (operator[2].toLocaleLowerCase() === "title") (operator[1] ? excludedTitleTerms : titleTerms).push(operator[3])
+    else (operator[1] ? excludedTagTerms : tagTerms).push(operator[3])
   }
-  return { query: text.join(" ").trim(), tagTerms, titleTerms }
+  return { excludedTagTerms, excludedTitleTerms, query: text.join(" ").trim(), tagTerms, titleTerms }
 }
 
 export function matchesGlobalSearchFilters(
@@ -48,7 +52,7 @@ export function matchesGlobalSearchFilters(
   filters: GlobalSearchFilters,
   indexedPaths: ReadonlySet<string> | null,
 ) {
-  const { folder, query, scope, starredOnly, tag, tagTerms = [], titleTerms = [], updatedAfter } = filters
+  const { excludedTagTerms = [], excludedTitleTerms = [], folder, query, scope, starredOnly, tag, tagTerms = [], titleTerms = [], updatedAfter } = filters
   if (starredOnly && !note.starred) return false
   // 旧笔记若没有可靠修改时间，不应被误算进“最近更新”。
   if (updatedAfter !== undefined && (note.modifiedAt === undefined || note.modifiedAt < updatedAfter)) return false
@@ -56,6 +60,8 @@ export function matchesGlobalSearchFilters(
   // 查询语法与筛选控件叠加；多个限定词都需满足，避免在大库中把条件误当成正文关键词。
   if (tagTerms.some((term) => !note.tags?.some((candidate) => candidate.toLocaleLowerCase() === term.toLocaleLowerCase()))) return false
   if (titleTerms.some((term) => !note.title.toLocaleLowerCase().includes(term.toLocaleLowerCase()))) return false
+  if (excludedTagTerms.some((term) => note.tags?.some((candidate) => candidate.toLocaleLowerCase() === term.toLocaleLowerCase()))) return false
+  if (excludedTitleTerms.some((term) => note.title.toLocaleLowerCase().includes(term.toLocaleLowerCase()))) return false
   if (folder) {
     const noteFolder = note.folder && note.folder !== "根目录" ? note.folder : ""
     if (folder === ROOT_FOLDER_FILTER ? Boolean(noteFolder) : noteFolder !== folder && !noteFolder.startsWith(`${folder} / `)) return false

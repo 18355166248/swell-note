@@ -59,7 +59,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   const parsedQuery = useMemo(() => parseGlobalSearchQuery(query), [query])
   const normalizedQuery = parsedQuery.query.toLocaleLowerCase()
   const updatedAfter = useMemo(() => updatedDays === "any" ? undefined : Date.now() - Number(updatedDays) * 24 * 60 * 60 * 1000, [updatedDays, open])
-  const hasFilters = Boolean(normalizedQuery || parsedQuery.titleTerms.length || parsedQuery.tagTerms.length || tag || folder || updatedAfter !== undefined || starredOnly)
+  const hasFilters = Boolean(normalizedQuery || parsedQuery.titleTerms.length || parsedQuery.tagTerms.length || parsedQuery.excludedTitleTerms.length || parsedQuery.excludedTagTerms.length || tag || folder || updatedAfter !== undefined || starredOnly)
   const searchKey = `${scope}\u0000${normalizedQuery}`
   const tags = useMemo(() => [...new Set(notes.flatMap((note) => note.tags ?? []))]
     .sort((left, right) => left.localeCompare(right)), [notes])
@@ -103,6 +103,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   const matches = useMemo(() => {
     if (!hasFilters) return sortNotes(notes, "updated-desc", { pinnedFirst: false }).slice(0, RECENT_LIMIT)
     const matched = notes.filter((note) => matchesGlobalSearchFilters(note, {
+      excludedTagTerms: parsedQuery.excludedTagTerms, excludedTitleTerms: parsedQuery.excludedTitleTerms,
       folder, query: normalizedQuery, scope, starredOnly, tag, tagTerms: parsedQuery.tagTerms, titleTerms: parsedQuery.titleTerms, updatedAfter,
     }, indexedPaths))
     return sortNotes(matched, "updated-desc")
@@ -235,7 +236,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
           )}
           {results.length < matches.length && <button className="global-search-more" type="button" onClick={() => setVisibleCount((count) => count + RESULT_LIMIT)}>加载更多（剩余 {matches.length - results.length} 篇）</button>}
         </div>
-        <div className="global-search-help">可用 title:关键词、tag:标签，带空格的值加引号 · {scope === "body" ? "正文包含已缓存与当前打开的内容 · " : ""}↑↓ 选择 · Enter 打开 · Esc 关闭</div>
+        <div className="global-search-help">可用 title:、tag: 筛选，前加 - 排除；带空格的值加引号 · {scope === "body" ? "正文包含已缓存与当前打开的内容 · " : ""}↑↓ 选择 · Enter 打开 · Esc 关闭</div>
       </DialogContent>
     </Dialog>
   )

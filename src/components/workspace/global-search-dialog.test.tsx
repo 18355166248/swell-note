@@ -73,6 +73,17 @@ describe("global search interactions", () => {
     key("Enter")
     expect(onSelectNote).toHaveBeenCalledWith(expect.objectContaining({ id: "note-0" }), "会议 纪要")
   })
+  it("combines exclusion operators with a positive tag operator", () => {
+    render("cache", [
+      { ...notes[0], title: "会议纪要", tags: ["项目"] },
+      { ...notes[1], title: "草稿会议纪要", tags: ["项目"] },
+      { ...notes[2], title: "会议纪要", tags: ["项目", "内部"] },
+    ])
+    query("tag:项目 -title:草稿 -tag:内部")
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(1)
+    expect(document.body.textContent).toContain("找到 1 篇")
+    expect(cachedSearch).not.toHaveBeenCalled()
+  })
   it("paginates results without hiding the total and scrolls its own viewport for keyboard selection", () => {
     render(); query("测试")
     const viewport = document.querySelector<HTMLElement>("[data-search-scroll-viewport]")!
