@@ -1,0 +1,30 @@
+e2e/mobile-route-swipe.spec.ts
+  s_e688d99d35b2a1::t_557b2bf6b2e916 1-2,4-26,28,30-49,51-55
+  s_e688d99d35b2a1::t_3fc1ed504bcd98 29,50
+  s_e688d99d35b2a1::t_5e54c19df6946d 3,27
+docs/mobile-route-navigation.md
+  s_e688d99d35b2a1::t_9f5d505f13b953 35
+src/components/routes/app-pages.tsx
+  s_e688d99d35b2a1::t_f32251639663e2 28,95-98,106-107,111,205,223-230,243-250,271,287
+  s_e688d99d35b2a1::t_8a64f59dca6283 233-235
+  s_e688d99d35b2a1::t_ad55aff58fea34 231-232
+src/App.css
+  s_e688d99d35b2a1::t_8a64f59dca6283 1387
+  s_e688d99d35b2a1::t_89e2a227e25d0e 1105-1107,1135,1142-1143,1358
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "3f98bb7ae11ec6a5e3a5487c1493f512d77bcd7b",
+  "prompts": {},
+  "sessions": {
+    "s_e688d99d35b2a1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d275-d8c6-7260-9f33-58ddbb1075b5",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
