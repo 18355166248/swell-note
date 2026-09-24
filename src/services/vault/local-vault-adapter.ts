@@ -215,7 +215,8 @@ async function selectTauriVault(): Promise<VaultAdapter | null> {
     import("@tauri-apps/plugin-fs"),
     import("@tauri-apps/api/path"),
   ])
-  const rootPath = await open({ directory: true, multiple: false })
+  // Vault 的笔记与附件可位于任意子目录；目录选择器必须一并授权递归文件访问。
+  const rootPath = await open({ directory: true, multiple: false, recursive: true })
   if (!rootPath) return null
   const pathSegments = rootPath.split(/[\\/]/).filter(Boolean)
 

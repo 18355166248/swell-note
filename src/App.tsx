@@ -4601,7 +4601,8 @@ function App() {
           }
           reserved.add(storagePath.toLocaleLowerCase())
         } catch (error) {
-          errors.push(`${entry.path}：${error instanceof Error ? error.message : "恢复失败"}`)
+          // Tauri IPC 拒绝可能直接返回字符串；保留原因才能定位本地目录权限等恢复故障。
+          errors.push(`${entry.path}：${error instanceof Error ? error.message : typeof error === "string" ? error : "恢复失败"}`)
         }
       }
 
@@ -4622,7 +4623,7 @@ function App() {
           }
           restoredAttachmentCount += 1
         } catch (error) {
-          errors.push(`${entry.path}：${error instanceof Error ? error.message : "附件恢复失败"}`)
+          errors.push(`${entry.path}：${error instanceof Error ? error.message : typeof error === "string" ? error : "附件恢复失败"}`)
         }
       }
 
