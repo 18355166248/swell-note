@@ -25,6 +25,7 @@ import {
 } from "lucide-react"
 import { Outlet, useLocation } from "react-router-dom"
 
+import { useEdgeSwipeAction } from "@/components/workspace/use-edge-swipe-action"
 import {
   AppNavigationRail,
   MobileNavigationDrawer,
@@ -91,6 +92,10 @@ export function TodoPage({
 }) {
   const [filter, setFilter] = useState<"all" | "completed" | "pending">("pending")
   const [newTask, setNewTask] = useState("")
+  const [navigationOpen, setNavigationOpen] = useState(false)
+  const location = useLocation()
+  // 待办是一级页面，边缘右滑与笔记库根页一样打开主导航。
+  const edgeSwipe = useEdgeSwipeAction(() => setNavigationOpen(true), !navigationOpen, "drawer", location.key)
   const tasks = useMemo(() => extractMarkdownTasks(notes), [notes])
   const visibleTasks = filter === "all"
     ? tasks
@@ -98,11 +103,12 @@ export function TodoPage({
   const notesById = useMemo(() => new Map(notes.map((note) => [note.id, note])), [notes])
 
   return (
-    <main className="route-page-shell">
+    <div className="mobile-workspace mobile-route-swipe" {...edgeSwipe.bind}>
+    <main className="route-page-shell mobile-edge-swipe-current">
       <AppNavigationRail activeSection="todos" connected={connected} onNavigate={onNavigate} onOpenSync={onOpenSync} />
       <section className="route-main-panel">
         <header className="route-page-header">
-          <MobileNavigationDrawer activeSection="todos" connected={connected} onNavigate={onNavigate} />
+          <MobileNavigationDrawer activeSection="todos" connected={connected} onNavigate={onNavigate} onOpenChange={setNavigationOpen} open={navigationOpen} />
           <div>
             <span className="eyebrow">Markdown 任务</span>
             <h1>待办</h1>
@@ -196,6 +202,7 @@ export function TodoPage({
         </ScrollArea>
       </section>
     </main>
+    </div>
   )
 }
 
@@ -213,6 +220,19 @@ export function SettingsLayout({ connected, onNavigate, onOpenSync }: Navigation
   const location = useLocation()
   const activeEntry = settingsEntries.find((entry) => location.pathname === entry.path)
   const headingRef = useRef<HTMLHeadingElement>(null)
+  const [navigationOpen, setNavigationOpen] = useState(false)
+  // 设置二级页统一回到设置首页；根页右滑打开主导航，和待办、笔记库入口一致。
+  const edgeSwipe = useEdgeSwipeAction(
+    () => { if (activeEntry) onNavigate("/settings"); else setNavigationOpen(true) },
+    !navigationOpen,
+    activeEntry ? "back" : "drawer",
+    location.key,
+  )
+
+  useEffect(() => {
+    // 从抽屉进入同一设置布局的子页时，旧抽屉状态不能继续禁用新页的返回手势。
+    setNavigationOpen(false)
+  }, [location.key])
 
   useEffect(() => {
     // 二级路由切换后把读屏与键盘焦点送到新页面标题，避免焦点停在已经卸载的菜单按钮上。
@@ -220,7 +240,14 @@ export function SettingsLayout({ connected, onNavigate, onOpenSync }: Navigation
   }, [activeEntry])
 
   return (
-    <main className="settings-route-shell">
+    <div className="mobile-workspace mobile-route-swipe" {...edgeSwipe.bind}>
+      {activeEntry ? (
+        <div aria-hidden className="mobile-edge-swipe-previous settings-swipe-preview" inert>
+          <header className="settings-detail-header"><div><span className="eyebrow">应用设置</span><h1>设置</h1></div></header>
+          <div className="route-scroll-area"><SettingsOverview onNavigate={onNavigate} /></div>
+        </div>
+      ) : null}
+    <main className="settings-route-shell mobile-edge-swipe-current">
       <AppNavigationRail activeSection="settings" connected={connected} onNavigate={onNavigate} onOpenSync={onOpenSync} />
       <aside className="settings-sidebar">
         <div className="settings-sidebar-title"><Settings /><strong>设置</strong></div>
@@ -241,7 +268,7 @@ export function SettingsLayout({ connected, onNavigate, onOpenSync }: Navigation
       </aside>
       <section className="settings-detail-panel">
         <header className="settings-detail-header">
-          {!activeEntry ? <MobileNavigationDrawer activeSection="settings" connected={connected} onNavigate={onNavigate} /> : null}
+          {!activeEntry ? <MobileNavigationDrawer activeSection="settings" connected={connected} onNavigate={onNavigate} onOpenChange={setNavigationOpen} open={navigationOpen} /> : null}
           {activeEntry ? (
             <Button aria-label="返回设置" className="settings-mobile-back" onClick={() => onNavigate("/settings")} size="icon" variant="ghost">
               <ArrowLeft />
@@ -257,6 +284,7 @@ export function SettingsLayout({ connected, onNavigate, onOpenSync }: Navigation
         </ScrollArea>
       </section>
     </main>
+    </div>
   )
 }
 
