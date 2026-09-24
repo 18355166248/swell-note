@@ -13,6 +13,7 @@ import {
   moveMarkdownFile,
   moveWebDavDirectory,
   readJsonDocument,
+  readWebDavAsset,
   updateJsonDocument,
   WebDavAuthenticationError,
   WebDavContentTooLargeError,
@@ -34,6 +35,13 @@ afterEach(() => {
 })
 
 describe("WebDAV conditional create", () => {
+  it("读取缺失附件时明确报告文件缺失", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 404 })))
+
+    await expect(readWebDavAsset(config, "app-password", "/Swell/attachments/missing.png"))
+      .rejects.toThrow("远端附件不存在")
+  })
+
   it("附件使用条件创建并保留 MIME 类型", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 201 }))
     vi.stubGlobal("fetch", fetchMock)

@@ -249,7 +249,9 @@ export async function readWebDavAsset(
   password: string,
   path: string,
 ) {
-  const response = await webDavFetch(config, password, path, { method: "GET" })
+  // 备份按附件逐个 GET；单个文件的 404 不表示整个笔记库根目录消失。
+  const response = await webDavFetch(config, password, path, { method: "GET" }, [404])
+  if (response.status === 404) throw new Error("远端附件不存在")
   return {
     data: new Uint8Array(await response.arrayBuffer()),
     mimeType: response.headers.get("content-type") ?? undefined,
