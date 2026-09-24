@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { HighlightedText, useSearchMatch } from "@/components/workspace/note-search-match"
 import { searchCachedNoteDocuments } from "@/services/cache/vault-cache"
-import { matchesGlobalSearchFilters, ROOT_FOLDER_FILTER, type GlobalSearchScope } from "@/services/search/global-search-filter"
+import { matchesGlobalSearchFilters, parseGlobalSearchQuery, ROOT_FOLDER_FILTER, type GlobalSearchScope } from "@/services/search/global-search-filter"
 import { sortNotes } from "@/services/search/note-sort"
 import type { Note } from "@/types/note"
 
@@ -54,9 +54,10 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
     return () => window.clearTimeout(timer)
   }, [open])
 
-  const normalizedQuery = query.trim().toLocaleLowerCase()
+  const parsedQuery = useMemo(() => parseGlobalSearchQuery(query), [query])
+  const normalizedQuery = parsedQuery.query.toLocaleLowerCase()
   const updatedAfter = useMemo(() => updatedDays === "any" ? undefined : Date.now() - Number(updatedDays) * 24 * 60 * 60 * 1000, [updatedDays, open])
-  const hasFilters = Boolean(normalizedQuery || tag || folder || updatedAfter !== undefined || starredOnly)
+  const hasFilters = Boolean(normalizedQuery || parsedQuery.titleTerms.length || parsedQuery.tagTerms.length || tag || folder || updatedAfter !== undefined || starredOnly)
   const searchKey = `${scope}\u0000${normalizedQuery}`
   const tags = useMemo(() => [...new Set(notes.flatMap((note) => note.tags ?? []))]
     .sort((left, right) => left.localeCompare(right)), [notes])
@@ -90,10 +91,10 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
   const matches = useMemo(() => {
     if (!hasFilters) return sortNotes(notes, "updated-desc", { pinnedFirst: false }).slice(0, RECENT_LIMIT)
     const matched = notes.filter((note) => matchesGlobalSearchFilters(note, {
-      folder, query: normalizedQuery, scope, starredOnly, tag, updatedAfter,
+      folder, query: normalizedQuery, scope, starredOnly, tag, tagTerms: parsedQuery.tagTerms, titleTerms: parsedQuery.titleTerms, updatedAfter,
     }, indexedPaths))
     return sortNotes(matched, "updated-desc")
-  }, [folder, hasFilters, indexedPaths, normalizedQuery, notes, scope, starredOnly, tag, updatedAfter])
+  }, [folder, hasFilters, indexedPaths, normalizedQuery, notes, parsedQuery, scope, starredOnly, tag, updatedAfter])
 
   const results = matches.slice(0, visibleCount)
   useEffect(() => { setActiveIndex(0); setVisibleCount(RESULT_LIMIT) }, [searchKey, tag, folder, updatedDays, starredOnly, open, cacheId])
@@ -114,7 +115,7 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
 
   const selectResult = (note: Note) => {
     onOpenChange(false)
-    onSelectNote(note, query.trim())
+    onSelectNote(note, parsedQuery.query || parsedQuery.titleTerms[0] || "")
   }
 
   return (
@@ -215,14 +216,14 @@ export function GlobalSearchDialog({ cacheId, notes, onOpenChange, onSelectNote,
                   note={note}
                   onHover={() => setActiveIndex(index)}
                   onSelect={() => selectResult(note)}
-                  query={normalizedQuery}
+                  query={normalizedQuery || parsedQuery.titleTerms[0] || ""}
                 />
               ))}
             </ul>
           )}
           {results.length < matches.length && <button className="global-search-more" type="button" onClick={() => setVisibleCount((count) => count + RESULT_LIMIT)}>加载更多（剩余 {matches.length - results.length} 篇）</button>}
         </div>
-        <div className="global-search-help">{scope === "body" ? "正文范围包含已缓存与当前打开的正文 · " : ""}↑↓ 选择 · Enter 打开 · Esc 关闭</div>
+        <div className="global-search-help">可用 title:关键词、tag:标签，带空格的值加引号 · {scope === "body" ? "正文包含已缓存与当前打开的内容 · " : ""}↑↓ 选择 · Enter 打开 · Esc 关闭</div>
       </DialogContent>
     </Dialog>
   )

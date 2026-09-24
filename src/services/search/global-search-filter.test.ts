@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { Note } from "@/types/note"
-import { matchesGlobalSearchFilters, ROOT_FOLDER_FILTER } from "./global-search-filter"
+import { matchesGlobalSearchFilters, parseGlobalSearchQuery, ROOT_FOLDER_FILTER } from "./global-search-filter"
 
 const note: Note = {
   content: "正在编辑的最新正文",
@@ -21,6 +21,21 @@ const note: Note = {
 const filters = { folder: "", query: "", scope: "all" as const, tag: "" }
 
 describe("global search filters", () => {
+  it("解析标题和标签限定词，保留未识别内容为普通搜索词", () => {
+    expect(parseGlobalSearchQuery('title:"会议 纪要" tag:规划 正文')).toEqual({
+      query: "正文", tagTerms: ["规划"], titleTerms: ["会议 纪要"],
+    })
+    expect(parseGlobalSearchQuery("author:me title:")).toEqual({
+      query: "author:me title:", tagTerms: [], titleTerms: [],
+    })
+  })
+
+  it("标题和标签限定词与正文、控件筛选共同生效", () => {
+    const scoped = { ...filters, query: "最新正文", scope: "body" as const, tag: "规划", tagTerms: ["规划"], titleTerms: ["会议"] }
+    expect(matchesGlobalSearchFilters(note, scoped, null)).toBe(true)
+    expect(matchesGlobalSearchFilters(note, { ...scoped, titleTerms: ["周报"] }, null)).toBe(false)
+    expect(matchesGlobalSearchFilters(note, { ...scoped, tagTerms: ["归档"] }, null)).toBe(false)
+  })
   it("标题和正文范围独立，始终以已加载的新正文覆盖旧索引", () => {
     const staleIndex = new Set([note.remotePath!])
     expect(matchesGlobalSearchFilters(note, { ...filters, query: "会议", scope: "title" }, staleIndex)).toBe(true)

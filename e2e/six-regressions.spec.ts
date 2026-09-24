@@ -147,6 +147,11 @@ test.describe("六项反馈浏览器回归", () => {
     await expect(page.locator(".global-search-summary")).toContainText("找到 0 篇")
     await page.getByLabel("筛选目录").selectOption("目标")
     await expect(page.locator(".global-search-summary")).toContainText("找到 1 篇")
+    await query.fill('title:"搜索结果 002" tag:计划 公共检索词')
+    await expect(page.locator(".global-search-summary")).toContainText("找到 1 篇")
+    await expect(page.locator(".global-search-results [role=option]")).toContainText(["搜索结果 002"])
+    await query.fill('title:"搜索结果 003" tag:计划 公共检索词')
+    await expect(page.locator(".global-search-summary")).toContainText("找到 0 篇")
   })
 
   test("全局搜索键盘跨页往返后活动项仍在结果视口内", async ({ page }) => {

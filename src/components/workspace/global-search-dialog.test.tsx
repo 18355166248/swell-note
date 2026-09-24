@@ -61,6 +61,18 @@ describe("global search interactions", () => {
     expect(document.querySelectorAll('[role="option"]')).toHaveLength(1)
     expect(document.body.textContent).toContain("找到 1 篇")
   })
+  it("uses title and tag query operators without searching cached body", () => {
+    const { onSelectNote } = render("cache", [
+      { ...notes[0], title: "会议 纪要", tags: ["项目 规划"] },
+      { ...notes[1], title: "会议 纪要", tags: ["其他"] },
+    ])
+    query('title:"会议 纪要" tag:"项目 规划"')
+    expect(document.querySelectorAll('[role="option"]')).toHaveLength(1)
+    expect(document.body.textContent).toContain("找到 1 篇")
+    expect(cachedSearch).not.toHaveBeenCalled()
+    key("Enter")
+    expect(onSelectNote).toHaveBeenCalledWith(expect.objectContaining({ id: "note-0" }), "会议 纪要")
+  })
   it("paginates results without hiding the total and scrolls its own viewport for keyboard selection", () => {
     render(); query("测试")
     const viewport = document.querySelector<HTMLElement>("[data-search-scroll-viewport]")!

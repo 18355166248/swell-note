@@ -8,21 +8,54 @@ export type GlobalSearchFilters = {
   scope: GlobalSearchScope
   starredOnly?: boolean
   tag: string
+  tagTerms?: readonly string[]
+  titleTerms?: readonly string[]
   updatedAfter?: number
 }
 
 export const ROOT_FOLDER_FILTER = "__root__"
+
+export function parseGlobalSearchQuery(input: string) {
+  const tokens: string[] = []
+  let token = ""
+  let quoted = false
+  for (const character of input.trim()) {
+    if (character === '"') {
+      quoted = !quoted
+    } else if (/\s/.test(character) && !quoted) {
+      if (token) tokens.push(token)
+      token = ""
+    } else {
+      token += character
+    }
+  }
+  if (token) tokens.push(token)
+
+  const text: string[] = []
+  const titleTerms: string[] = []
+  const tagTerms: string[] = []
+  for (const value of tokens) {
+    const operator = /^(title|tag):(.+)$/i.exec(value)
+    if (!operator) text.push(value)
+    else if (operator[1].toLocaleLowerCase() === "title") titleTerms.push(operator[2])
+    else tagTerms.push(operator[2])
+  }
+  return { query: text.join(" ").trim(), tagTerms, titleTerms }
+}
 
 export function matchesGlobalSearchFilters(
   note: Note,
   filters: GlobalSearchFilters,
   indexedPaths: ReadonlySet<string> | null,
 ) {
-  const { folder, query, scope, starredOnly, tag, updatedAfter } = filters
+  const { folder, query, scope, starredOnly, tag, tagTerms = [], titleTerms = [], updatedAfter } = filters
   if (starredOnly && !note.starred) return false
   // 旧笔记若没有可靠修改时间，不应被误算进“最近更新”。
   if (updatedAfter !== undefined && (note.modifiedAt === undefined || note.modifiedAt < updatedAfter)) return false
   if (tag && !note.tags?.some((candidate) => candidate.toLocaleLowerCase() === tag.toLocaleLowerCase())) return false
+  // 查询语法与筛选控件叠加；多个限定词都需满足，避免在大库中把条件误当成正文关键词。
+  if (tagTerms.some((term) => !note.tags?.some((candidate) => candidate.toLocaleLowerCase() === term.toLocaleLowerCase()))) return false
+  if (titleTerms.some((term) => !note.title.toLocaleLowerCase().includes(term.toLocaleLowerCase()))) return false
   if (folder) {
     const noteFolder = note.folder && note.folder !== "根目录" ? note.folder : ""
     if (folder === ROOT_FOLDER_FILTER ? Boolean(noteFolder) : noteFolder !== folder && !noteFolder.startsWith(`${folder} / `)) return false
