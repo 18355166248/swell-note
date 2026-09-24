@@ -1,0 +1,28 @@
+docs/backup-rehearsal-2026-09-24.md
+  s_13775b5a3f2958::t_38f7dccbd365f5 1-7,9-27
+  s_13775b5a3f2958::t_18d0472da0a05b 8
+src/services/backup/real-vault.rehearsal.test.ts
+  s_13775b5a3f2958::t_f52fc557225645 53-54,61
+  s_13775b5a3f2958::t_f862c5ffec0911 15,20-21,26-29,42-43,55-60
+  s_13775b5a3f2958::t_169258b592d90c 1-11,13-14,16-19,22-25,30-41,44-52,62-63,72-102,104-106,109
+  s_13775b5a3f2958::t_7bf1cbb682aa9f 12,64-71
+  s_13775b5a3f2958::t_8b2fb3e55084ea 103,107-108
+docs/joplin-feature-gap-2026-09-24.md
+  s_13775b5a3f2958::t_9a095904c2c528 24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "665705c5d90f7b9fcbf6c0ede7aa0aa0911371c9",
+  "prompts": {},
+  "sessions": {
+    "s_13775b5a3f2958": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d11a-c36c-7930-a94e-d2c197456def",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
