@@ -39,6 +39,7 @@
 - 外观支持跟随系统、浅色和深色模式，并在 React 挂载前恢复本机偏好以避免刷新闪屏
 - 笔记详情、文件夹、最近更新和收藏二级路由，支持刷新恢复
 - 本地 Markdown 待办勾选写回、文件移动与二次确认永久删除
+- 整库 ZIP 备份在下载前核对笔记正文与引用附件；缺失内容时停止导出并显示清单
 - 当前目录支持批量导入标准 `.md` 文件并自动处理重名；单篇笔记可在 Web 或原生端导出 Markdown
 - Tauri 原生 HTTP 接入，WebDAV 在 macOS、Windows、Android、iOS 中不依赖 WebView CORS
 - Android Studio 与 Xcode 工程；已通过 arm64 Android 调试 APK 和 iOS arm64 模拟器包构建

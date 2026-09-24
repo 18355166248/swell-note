@@ -30,4 +30,17 @@ describe("vault backup", () => {
     expect(backupFilename("坚果云 / Swell", new Date("2026-08-30T00:00:00Z")))
       .toBe("坚果云-Swell-2026-08-30.swell.zip")
   })
+
+  it("rejects duplicate archive paths instead of silently dropping a file", () => {
+    expect(() => createVaultBackup({
+      attachments: [{ data: new Uint8Array([1]), path: "docs/a.md" }],
+      label: "vault",
+      notes: [{ content: "original", path: "docs/a.md" }],
+    })).toThrow("重复")
+  })
+
+  it("does not create an archive with more files than the importer accepts", () => {
+    const notes = Array.from({ length: 10_000 }, (_, index) => ({ content: "", path: `n${index}.md` }))
+    expect(() => createVaultBackup({ attachments: [], label: "vault", notes })).toThrow("最多恢复 10000 个文件")
+  })
 })

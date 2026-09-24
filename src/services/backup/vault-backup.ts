@@ -35,18 +35,24 @@ export function createVaultBackup({
   label: string
   notes: ReadonlyArray<{ content: string; path: string }>
 }) {
+  // 导出与导入使用同一容量边界，避免生成当前版本无法恢复的 ZIP。
+  if (notes.length + attachments.length + 1 > MAX_ARCHIVE_FILES) throw new Error(`当前版本最多恢复 ${MAX_ARCHIVE_FILES} 个文件，备份未生成`)
   const archive: Record<string, Uint8Array> = {}
   const usedPaths = new Set<string>()
+  let totalBytes = 0
   for (const note of notes) {
     const path = safeRelativePath(note.path)
-    if (!path || usedPaths.has(path)) continue
+    if (!path || path !== note.path || usedPaths.has(path)) throw new Error(`备份中存在非法或重复的笔记路径：${note.path}`)
     usedPaths.add(path)
-    archive[`${ARCHIVE_ROOT}${path}`] = strToU8(note.content)
+    const data = strToU8(note.content)
+    totalBytes += data.byteLength
+    archive[`${ARCHIVE_ROOT}${path}`] = data
   }
   for (const attachment of attachments) {
     const path = safeRelativePath(attachment.path)
-    if (!path || usedPaths.has(path)) continue
+    if (!path || path !== attachment.path || usedPaths.has(path)) throw new Error(`备份中存在非法或重复的附件路径：${attachment.path}`)
     usedPaths.add(path)
+    totalBytes += attachment.data.byteLength
     archive[`${ARCHIVE_ROOT}${path}`] = attachment.data
   }
   const manifest: VaultBackupManifest = {
@@ -57,7 +63,9 @@ export function createVaultBackup({
     noteCount: notes.length,
     version: 1,
   }
-  archive[MANIFEST_PATH] = strToU8(JSON.stringify(manifest, null, 2))
+  const manifestData = strToU8(JSON.stringify(manifest, null, 2))
+  if (totalBytes + manifestData.byteLength > MAX_UNCOMPRESSED_BYTES) throw new Error("当前版本最多恢复 512 MB 数据，备份未生成")
+  archive[MANIFEST_PATH] = manifestData
   return zipSync(archive, { level: 6 })
 }
 

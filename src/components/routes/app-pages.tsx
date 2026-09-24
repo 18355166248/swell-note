@@ -44,6 +44,7 @@ import {
   type VaultCacheSummary,
 } from "@/services/cache/vault-cache"
 import { inspectCachedAttachments, type AttachmentMaintenanceReport } from "@/services/vault/attachment-maintenance"
+import type { BackupIssue } from "@/services/backup/backup-inventory"
 import { inspectStorageQuota, requestPersistentStorage, type StorageQuotaReport } from "@/services/storage/storage-quota"
 import { getNativeSearchIndexStatus, supportsNativeSearchIndex, type NativeSearchIndexStatus } from "@/services/search/sqlite-note-index"
 import { summarizeSyncQueue, summarizeWebDavSync } from "@/services/sync/sync-summary"
@@ -326,7 +327,7 @@ export function StorageMaintenancePage({
 }: {
   activeCacheId: string | null
   notes: Note[]
-  onExportBackup: () => Promise<boolean>
+  onExportBackup: () => Promise<{ ok: boolean; issues: BackupIssue[] }>
   onRebuildSearchIndex: () => Promise<void>
   onRestoreBackup: (file: File) => Promise<boolean>
 }) {
@@ -335,6 +336,7 @@ export function StorageMaintenancePage({
   const [storageQuota, setStorageQuota] = useState<StorageQuotaReport | null>(null)
   const [busyAction, setBusyAction] = useState<"attachments" | "backup" | "index" | "persist" | "restore" | null>(null)
   const [message, setMessage] = useState("")
+  const [backupIssues, setBackupIssues] = useState<BackupIssue[]>([])
   const restoreInputRef = useRef<HTMLInputElement>(null)
 
   const refresh = async () => {
@@ -399,9 +401,13 @@ export function StorageMaintenancePage({
   const exportBackup = async () => {
     setBusyAction("backup")
     setMessage("")
+    setBackupIssues([])
     try {
-      const completed = await onExportBackup()
-      setMessage(completed ? "整库备份已生成，请妥善保管下载的 ZIP 文件" : "整库备份未完成，请查看错误提示后重试")
+      const result = await onExportBackup()
+      setBackupIssues(result.issues)
+      setMessage(result.ok ? "完整备份已生成，请妥善保管下载的 ZIP 文件" : `备份未下载：${result.issues.length} 项内容无法纳入，请查看下方清单`)
+    } catch (error) {
+      setMessage(error instanceof Error ? `备份未下载：${error.message}` : "备份未下载，请稍后重试")
     } finally {
       setBusyAction(null)
     }
@@ -484,7 +490,7 @@ export function StorageMaintenancePage({
           </Button>
         </section>
         <section>
-          <div><strong>整库备份与恢复</strong><small>ZIP 保留 Markdown 目录结构和已缓存/可读取附件；恢复遇到同名文件会跳过，不覆盖。</small></div>
+          <div><strong>整库备份与恢复</strong><small>备份会先核对全部笔记及引用附件；缺失内容时停止下载。恢复遇到同名文件会跳过，不覆盖。</small></div>
           <div className="storage-backup-actions">
             <Button disabled={!activeCacheId || busyAction !== null} onClick={() => void exportBackup()} variant="outline">
               {busyAction === "backup" ? <RefreshCw className="spin" /> : <Download />}备份 ZIP
@@ -506,6 +512,12 @@ export function StorageMaintenancePage({
         </section>
       </div>
       {message ? <p aria-live="polite" className="maintenance-message">{message}</p> : null}
+      {backupIssues.length > 0 ? (
+        <div aria-label="备份缺失清单" className="maintenance-message" role="alert">
+          <strong>未纳入备份的内容</strong>
+          <ul>{backupIssues.map((issue, index) => <li key={`${issue.kind}:${issue.path}:${index}`}>{issue.kind === "note" ? "笔记" : "附件"} · {issue.path}：{issue.reason}</li>)}</ul>
+        </div>
+      ) : null}
     </div>
   )
 }

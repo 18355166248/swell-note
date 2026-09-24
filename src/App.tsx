@@ -135,7 +135,7 @@ import {
 import { buildNotePreview } from "@/services/markdown/note-preview"
 import { remapNoteVersions, saveNoteVersion } from "@/services/history/note-history"
 import { backupFilename, createVaultBackup, parseVaultBackup } from "@/services/backup/vault-backup"
-import { extractAttachmentSources } from "@/services/vault/attachment-maintenance"
+import { collectBackupInventory, type BackupIssue } from "@/services/backup/backup-inventory"
 import { exportNoteBundle } from "@/services/export/markdown-export"
 import { createNoteExportBundle } from "@/services/export/note-export-bundle"
 import { uniqueHistoryCopyPath } from "@/services/history/note-history-copy"
@@ -4262,58 +4262,51 @@ function App() {
     return storagePath.replace(/^\/+/, "")
   }
 
-  const exportVaultBackup = async () => {
+  const exportVaultBackup = async (): Promise<{ ok: boolean; issues: BackupIssue[] }> => {
     if (!activeCacheMeta) {
       setVaultError("请先打开一个笔记库")
-      return false
+      return { ok: false, issues: [{ kind: "note", path: "笔记库", reason: "请先打开一个笔记库" }] }
     }
     setIsManagingNote(true)
     setVaultError(null)
     try {
       const cachedDocuments = await listCachedNoteDocuments(activeCacheMeta.id)
       const cachedById = new Map(cachedDocuments.map((document) => [document.noteId, document.content]))
-      const backupNotes: Array<{ content: string; path: string; storagePath: string }> = []
-      let missingNotes = 0
-      for (const note of notesRef.current) {
-        if (!note.remotePath || note.pendingOperation === "delete") continue
-        let content = note.contentLoaded ? note.content : cachedById.get(note.id)
-        if (content === undefined && vaultSession?.readTextFile) {
-          try {
-            const physicalPath = resolveWebDavPhysicalPath(note.remotePath, pendingDirectoryMovesRef.current, vaultSession)
-            content = (await vaultSession.readTextFile(physicalPath)).content
-          } catch { missingNotes += 1 }
-        }
-        if (content === undefined) continue
-        backupNotes.push({ content, path: toBackupDisplayPath(note.remotePath), storagePath: note.remotePath })
-      }
-
-      const attachmentsByPath = new Map<string, { data: Uint8Array; mimeType?: string; path: string }>()
-      for (const entry of await listVaultAttachments(activeCacheMeta.id)) {
-        attachmentsByPath.set(entry.path, {
+      const backupReadTextFile = vaultSession?.readTextFile?.bind(vaultSession)
+      const backupReadBinaryFile = vaultSession?.readBinaryFile?.bind(vaultSession)
+      const inventory = await collectBackupInventory({
+        notes: notesRef.current.filter((note) => note.pendingOperation !== "delete").map((note) => ({
+          content: note.contentLoaded ? note.content : cachedById.get(note.id),
+          id: note.id,
+          path: note.remotePath ? toBackupDisplayPath(note.remotePath) : note.title,
+          requiresLocalContent: note.syncStatus === "modified" || note.syncStatus === "conflict" || note.pendingOperation === "create" || note.writeContentAfterMove,
+          storagePath: note.remotePath ?? "",
+        })),
+        cachedAttachments: (await listVaultAttachments(activeCacheMeta.id)).map((entry) => ({
           data: new Uint8Array(entry.data),
           mimeType: entry.mimeType,
           path: toBackupDisplayPath(entry.path),
-        })
+          storagePath: entry.path,
+        })),
+        // 同步中的移动目录仍需从实际物理路径读取；备份中的路径则使用用户当前看到的逻辑路径。
+        loadNote: backupReadTextFile ? async (note) => {
+          const physicalPath = resolveWebDavPhysicalPath(note.storagePath, pendingDirectoryMovesRef.current, vaultSession)
+          return (await backupReadTextFile(physicalPath)).content
+        } : undefined,
+        loadAttachment: backupReadBinaryFile ? async (path) => {
+          const physicalPath = resolveWebDavPhysicalPath(path, pendingDirectoryMovesRef.current, vaultSession)
+          return backupReadBinaryFile(physicalPath)
+        } : undefined,
+        toBackupPath: toBackupDisplayPath,
+      })
+      if (inventory.issues.length > 0) {
+        setVaultError(`备份未生成：${inventory.issues.length} 项内容不可读取`)
+        return { ok: false, issues: inventory.issues }
       }
-      if (vaultSession?.readBinaryFile) {
-        for (const note of backupNotes) {
-          for (const source of extractAttachmentSources(note.content)) {
-            const storagePath = resolveVaultAssetPath(note.storagePath, source)
-            if (!storagePath || /\.(?:canvas|md)$/i.test(storagePath) || attachmentsByPath.has(storagePath)) continue
-            try {
-              const asset = await vaultSession.readBinaryFile(storagePath)
-              attachmentsByPath.set(storagePath, { ...asset, path: toBackupDisplayPath(storagePath) })
-            } catch {
-              // 单个附件不可读时继续生成其余备份，最终用明确数量提示用户这不是完整副本。
-            }
-          }
-        }
-      }
-
       const data = createVaultBackup({
-        attachments: [...attachmentsByPath.values()],
+        attachments: inventory.attachments,
         label: activeCacheMeta.label,
-        notes: backupNotes.map(({ content, path }) => ({ content, path })),
+        notes: inventory.notes,
       })
       const url = URL.createObjectURL(new Blob([data.slice().buffer], { type: "application/zip" }))
       const anchor = document.createElement("a")
@@ -4321,11 +4314,11 @@ function App() {
       anchor.href = url
       anchor.click()
       window.setTimeout(() => URL.revokeObjectURL(url), 0)
-      if (missingNotes > 0) setVaultError(`备份已生成，但有 ${missingNotes} 篇正文不可读取，未包含在本次备份中`)
-      return true
+      return { ok: true, issues: [] }
     } catch (error) {
-      setVaultError(error instanceof Error ? error.message : "整库备份失败")
-      return false
+      const message = error instanceof Error ? error.message : "整库备份失败"
+      setVaultError(message)
+      return { ok: false, issues: [{ kind: "note", path: "备份", reason: message }] }
     } finally {
       setIsManagingNote(false)
     }
