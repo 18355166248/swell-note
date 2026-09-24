@@ -1,0 +1,20 @@
+src-tauri/capabilities/default.json
+  s_13775b5a3f2958::t_0593a5e970f056 14
+  s_13775b5a3f2958::t_b64f8209e1fb08 23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "24b4f914e56c03b628bd21ffecc50da1b8f823da",
+  "prompts": {},
+  "sessions": {
+    "s_13775b5a3f2958": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0d11a-c36c-7930-a94e-d2c197456def",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
