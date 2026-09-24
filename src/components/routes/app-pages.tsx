@@ -330,7 +330,7 @@ export function StorageMaintenancePage({
 }: {
   activeCacheId: string | null
   notes: Note[]
-  onExportBackup: () => Promise<{ ok: boolean; issues: BackupIssue[] }>
+  onExportBackup: (allowMissingAttachments?: boolean) => Promise<{ ok: boolean; issues: BackupIssue[] }>
   onInspectBackup: (file: File) => Promise<VaultRestorePreview>
   onRebuildSearchIndex: () => Promise<void>
   onRestoreBackup: (preview: VaultRestorePreview) => Promise<VaultRestoreResult>
@@ -408,14 +408,18 @@ export function StorageMaintenancePage({
     }
   }
 
-  const exportBackup = async () => {
+  const exportBackup = async (allowMissingAttachments = false) => {
     setBusyAction("backup")
     setMessage("")
     setBackupIssues([])
     try {
-      const result = await onExportBackup()
+      const result = await onExportBackup(allowMissingAttachments)
       setBackupIssues(result.issues)
-      setMessage(result.ok ? "完整备份已生成，请妥善保管下载的 ZIP 文件" : `备份未下载：${result.issues.length} 项内容无法纳入，请查看下方清单`)
+      setMessage(result.ok
+        ? result.issues.length > 0
+          ? `已下载不完整备份：${result.issues.length} 个引用附件缺失，ZIP 清单已记录；请勿作为完整备份使用`
+          : "完整备份已生成，请妥善保管下载的 ZIP 文件"
+        : `备份未下载：${result.issues.length} 项内容无法纳入，请查看下方清单`)
     } catch (error) {
       setMessage(error instanceof Error ? `备份未下载：${error.message}` : "备份未下载，请稍后重试")
     } finally {
@@ -530,6 +534,11 @@ export function StorageMaintenancePage({
             <Button disabled={!activeCacheId || busyAction !== null} onClick={() => restoreInputRef.current?.click()} variant="outline">
               {busyAction === "restore" ? <RefreshCw className="spin" /> : <FileUp />}恢复 ZIP
             </Button>
+            {backupIssues.length > 0 && backupIssues.every((issue) => issue.kind === "attachment") ? (
+              <Button disabled={busyAction !== null} onClick={() => void exportBackup(true)} variant="outline">
+                {busyAction === "backup" ? <RefreshCw className="spin" /> : <Download />}导出可读取内容（不完整）
+              </Button>
+            ) : null}
             <input
               accept=".zip,.swell.zip,application/zip"
               className="sr-only"
@@ -572,8 +581,11 @@ export function StorageMaintenancePage({
               <p className="backup-restore-summary">{restorePreview.fileName} · 来源库：{restorePreview.backup.manifest.label || "未命名"} · {restorePreview.backup.notes.length} 篇笔记、{restorePreview.backup.attachments.length} 个附件 · {existing.size} 篇同名笔记预计跳过</p>
               {restorePreview.backup.integrityWarnings.length > 0 ? (
                 <div className="backup-restore-warning" role="alert">
-                  <strong>备份清单与实际文件不一致</strong>
+                  <strong>备份不完整或清单异常</strong>
                   <ul>{restorePreview.backup.integrityWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+                  {restorePreview.backup.manifest.missingAttachments?.length ? (
+                    <ul>{restorePreview.backup.manifest.missingAttachments.map((path) => <li key={path}>缺失附件 · {path}</li>)}</ul>
+                  ) : null}
                   <label><input checked={acceptIncompleteBackup} onChange={(event) => setAcceptIncompleteBackup(event.target.checked)} type="checkbox" />我了解此备份可能不完整，仅恢复其中现存的文件</label>
                 </div>
               ) : null}

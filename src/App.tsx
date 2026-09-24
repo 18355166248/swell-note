@@ -4405,7 +4405,7 @@ function App() {
     return storagePath.replace(/^\/+/, "")
   }
 
-  const exportVaultBackup = async (): Promise<{ ok: boolean; issues: BackupIssue[] }> => {
+  const exportVaultBackup = async (allowMissingAttachments = false): Promise<{ ok: boolean; issues: BackupIssue[] }> => {
     if (!activeCacheMeta) {
       setVaultError("请先打开一个笔记库")
       return { ok: false, issues: [{ kind: "note", path: "笔记库", reason: "请先打开一个笔记库" }] }
@@ -4446,22 +4446,27 @@ function App() {
             ? `${loadWebDavConfig().remotePath.replace(/\/+$/g, "")}/${displayPath.replace(/^\/+/, "")}`
             : displayPath),
       })
-      if (inventory.issues.length > 0) {
+      const missingAttachments = inventory.issues.filter((issue) => issue.kind === "attachment")
+      // 正文缺失时不能生成救援备份；附件缺失只能在用户显式选择后写入清单。
+      if (inventory.issues.length > 0 && (!allowMissingAttachments || missingAttachments.length !== inventory.issues.length)) {
         setVaultError(`备份未生成：${inventory.issues.length} 项内容不可读取`)
         return { ok: false, issues: inventory.issues }
       }
       const data = createVaultBackup({
         attachments: inventory.attachments,
         label: activeCacheMeta.label,
+        missingAttachments: missingAttachments.map((issue) => issue.path),
         notes: inventory.notes,
       })
       const url = URL.createObjectURL(new Blob([data.slice().buffer], { type: "application/zip" }))
       const anchor = document.createElement("a")
-      anchor.download = backupFilename(activeCacheMeta.label)
+      anchor.download = missingAttachments.length > 0
+        ? backupFilename(activeCacheMeta.label).replace(/\.swell\.zip$/, ".incomplete.swell.zip")
+        : backupFilename(activeCacheMeta.label)
       anchor.href = url
       anchor.click()
       window.setTimeout(() => URL.revokeObjectURL(url), 0)
-      return { ok: true, issues: [] }
+      return { ok: true, issues: inventory.issues }
     } catch (error) {
       const message = error instanceof Error ? error.message : "整库备份失败"
       setVaultError(message)

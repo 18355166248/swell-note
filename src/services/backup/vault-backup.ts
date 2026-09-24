@@ -16,6 +16,7 @@ export type VaultBackupManifest = {
   createdAt: string
   format: "swell-note-vault"
   label: string
+  missingAttachments?: string[]
   noteCount: number | null
   version: 1
 }
@@ -30,10 +31,12 @@ export type ParsedVaultBackup = {
 export function createVaultBackup({
   attachments,
   label,
+  missingAttachments = [],
   notes,
 }: {
   attachments: readonly VaultBackupFile[]
   label: string
+  missingAttachments?: readonly string[]
   notes: ReadonlyArray<{ content: string; path: string }>
 }) {
   // 导出与导入使用同一容量边界，避免生成当前版本无法恢复的 ZIP。
@@ -56,11 +59,17 @@ export function createVaultBackup({
     totalBytes += attachment.data.byteLength
     archive[`${ARCHIVE_ROOT}${path}`] = attachment.data
   }
+  const missingPaths = [...new Set(missingAttachments)].map((value) => {
+    const path = safeRelativePath(value)
+    if (!path || path !== value || usedPaths.has(path)) throw new Error(`缺失附件清单包含非法路径：${value}`)
+    return path
+  })
   const manifest: VaultBackupManifest = {
     attachmentCount: attachments.length,
     createdAt: new Date().toISOString(),
     format: "swell-note-vault",
     label,
+    ...(missingPaths.length > 0 ? { missingAttachments: missingPaths } : {}),
     noteCount: notes.length,
     version: 1,
   }
@@ -110,11 +119,16 @@ export function parseVaultBackup(data: Uint8Array): ParsedVaultBackup {
     throw new Error("备份格式或版本暂不受支持")
   }
   const validCount = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null
+  const validMissingAttachments = Array.isArray(rawManifest.missingAttachments)
+    && rawManifest.missingAttachments.every((value) => typeof value === "string" && safeRelativePath(value) === value)
   const manifest: VaultBackupManifest = {
     attachmentCount: validCount(rawManifest.attachmentCount),
     createdAt: typeof rawManifest.createdAt === "string" ? rawManifest.createdAt : "",
     format: "swell-note-vault",
     label: typeof rawManifest.label === "string" ? rawManifest.label : "",
+    ...(validMissingAttachments
+      ? { missingAttachments: [...new Set(rawManifest.missingAttachments as string[])] }
+      : {}),
     noteCount: validCount(rawManifest.noteCount),
     version: 1,
   }
@@ -135,6 +149,8 @@ export function parseVaultBackup(data: Uint8Array): ParsedVaultBackup {
   else if (manifest.noteCount !== notes.length) integrityWarnings.push(`清单声明 ${manifest.noteCount} 篇笔记，实际包含 ${notes.length} 篇`)
   if (manifest.attachmentCount === null) integrityWarnings.push("清单缺少有效的附件数量")
   else if (manifest.attachmentCount !== attachments.length) integrityWarnings.push(`清单声明 ${manifest.attachmentCount} 个附件，实际包含 ${attachments.length} 个`)
+  if (rawManifest.missingAttachments !== undefined && !validMissingAttachments) integrityWarnings.push("缺失附件清单格式无效")
+  if (manifest.missingAttachments?.length) integrityWarnings.push(`来源库有 ${manifest.missingAttachments.length} 个引用附件未纳入此备份`)
   return { attachments, integrityWarnings, manifest, notes }
 }
 

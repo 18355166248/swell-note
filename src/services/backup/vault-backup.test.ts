@@ -19,6 +19,25 @@ describe("vault backup", () => {
     expect([...parsed.attachments[0].data]).toEqual([1, 2, 3])
   })
 
+  it("marks an explicitly incomplete backup and carries missing attachment paths into restore preview", () => {
+    const data = createVaultBackup({
+      attachments: [],
+      label: "vault",
+      missingAttachments: ["assets/missing.png"],
+      notes: [{ content: "![[missing.png]]", path: "docs/a.md" }],
+    })
+    const parsed = parseVaultBackup(data)
+    expect(parsed.manifest.missingAttachments).toEqual(["assets/missing.png"])
+    expect(parsed.integrityWarnings).toContain("来源库有 1 个引用附件未纳入此备份")
+    expect(parsed.notes).toHaveLength(1)
+    expect(parsed.attachments).toHaveLength(0)
+  })
+
+  it("rejects malformed missing attachment paths in an exported backup", () => {
+    expect(() => createVaultBackup({ attachments: [], label: "vault", missingAttachments: ["../outside.png"], notes: [] }))
+      .toThrow("缺失附件清单包含非法路径")
+  })
+
   it("rejects traversal paths", () => {
     const archive = zipSync({
       "swell-note-backup.json": strToU8(JSON.stringify({ format: "swell-note-vault", version: 1 })),

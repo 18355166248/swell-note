@@ -142,7 +142,7 @@ test("本地库从应用导出 ZIP 并恢复到空库后逐文件一致", async 
   }
 })
 
-test("引用附件缺失时阻止下载并显示缺失清单", async ({ page }, testInfo) => {
+test("引用附件缺失时阻止完整备份，并允许明确标记的不完整备份", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chrome")
   await installMockVaultPicker(page, {
     ...sourceFiles,
@@ -158,4 +158,22 @@ test("引用附件缺失时阻止下载并显示缺失清单", async ({ page }, 
   await expect(page.getByText("备份未下载：1 项内容无法纳入，请查看下方清单")).toBeVisible()
   await expect(page.getByRole("alert", { name: "备份缺失清单" })).toContainText("attachments/missing.png")
   expect(downloads).toBe(0)
+
+  const downloadPromise = page.waitForEvent("download")
+  await page.getByRole("button", { name: "导出可读取内容（不完整）" }).click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toContain(".incomplete.swell.zip")
+  const archive = new Uint8Array(await readFile((await download.path())!))
+  const backup = parseVaultBackup(archive)
+  expect(backup.notes).toHaveLength(2)
+  expect(backup.attachments).toHaveLength(0)
+  expect(backup.manifest.missingAttachments).toEqual(["attachments/missing.png"])
+  expect(backup.integrityWarnings).toContain("来源库有 1 个引用附件未纳入此备份")
+
+  await page.locator('input[type="file"][accept*=".swell.zip"]').setInputFiles({
+    buffer: Buffer.from(archive), mimeType: "application/zip", name: "partial.incomplete.swell.zip",
+  })
+  const dialog = page.getByRole("dialog", { name: "预览整库恢复" })
+  await expect(dialog).toContainText("缺失附件 · attachments/missing.png")
+  await expect(dialog.getByRole("button", { name: "确认恢复" })).toBeDisabled()
 })
