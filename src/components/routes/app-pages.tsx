@@ -522,7 +522,7 @@ export function StorageMaintenancePage({
           </Button>
         </section>
         <section>
-          <div><strong>整库备份与恢复</strong><small>备份会先核对全部笔记及引用附件；恢复前可预览文件清单，同名笔记会跳过。</small></div>
+          <div><strong>整库备份与恢复</strong><small>备份会先核对全部笔记及引用附件；本机版本历史不包含在 ZIP 内。恢复前可预览文件清单，同名笔记会跳过。</small></div>
           <div className="storage-backup-actions">
             <Button disabled={!activeCacheId || busyAction !== null} onClick={() => void exportBackup()} variant="outline">
               {busyAction === "backup" ? <RefreshCw className="spin" /> : <Download />}备份 ZIP
@@ -560,7 +560,7 @@ export function StorageMaintenancePage({
         <DialogContent className="backup-restore-dialog">
           <DialogHeader>
             <DialogTitle>预览整库恢复</DialogTitle>
-            <DialogDescription>确认文件清单后才会写入当前笔记库；同名笔记执行时复核，附件冲突在写入或同步时提示。</DialogDescription>
+            <DialogDescription>确认文件清单后才会写入当前笔记库；同名笔记执行时复核，附件冲突在写入或同步时提示。备份不包含原设备的版本历史。</DialogDescription>
           </DialogHeader>
           {restorePreview ? (() => {
             const existing = new Set(restorePreview.existingNotePaths)

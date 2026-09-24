@@ -92,6 +92,7 @@ test.describe("核心笔记流程", () => {
     })))
     await page.reload()
     await page.goto("/#/settings/storage")
+    await expect(page.getByText("本机版本历史不包含在 ZIP 内", { exact: false })).toBeVisible()
     const archive = createVaultBackup({
       attachments: [{ data: new Uint8Array([1, 2, 3]), path: "attachments/picture.png" }],
       label: "测试备份",
@@ -106,6 +107,7 @@ test.describe("核心笔记流程", () => {
     await chooseBackup()
     const dialog = page.getByRole("dialog", { name: "预览整库恢复" })
     await expect(dialog).toBeVisible()
+    await expect(dialog.getByText("备份不包含原设备的版本历史", { exact: false })).toBeVisible()
     await expect(dialog.getByText("测试/第一篇.md")).toBeVisible()
     await expect(dialog.getByText("已存在，跳过")).toBeVisible()
     await expect(dialog.getByText("测试/恢复笔记.md")).toBeVisible()
