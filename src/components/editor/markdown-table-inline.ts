@@ -6,6 +6,8 @@ import { resolveCachedImageUrl } from "./markdown-image-cache"
 import type { EditorLinkTap } from "./markdown-input"
 
 export type TableInlineOptions = {
+  // 表格 Widget 按平台与只读状态传入，与正文的链接激活规则一致。
+  requireLinkModifier?: boolean
   // 移动端点按 [文字](地址) 链接时不直接打开，交给宿主弹出操作菜单；返回 true 表示已接管。
   onLinkTap?: (tap: EditorLinkTap) => boolean
   onOpenExternalLink?: (href: string) => void
@@ -152,9 +154,12 @@ function appendLink(parent: HTMLElement, label: string, href: string, options: T
   const noteTarget = parseMarkdownNoteHref(href)
   if (noteTarget) link.dataset.mdNoteTarget = noteTarget
   else if (/^(?:https?|mailto):/i.test(href)) link.dataset.mdHref = href
-  link.title = noteTarget ? WIKI_HINT : link.dataset.mdHref ? LINK_HINT : href
+  const hint = noteTarget ? WIKI_HINT : link.dataset.mdHref ? LINK_HINT : href
+  link.title = options.requireLinkModifier ? hint.replace("点击", "⌘ 点击") : hint
   link.addEventListener("click", (event) => {
     event.preventDefault()
+    // 普通点击继续冒泡给单元格编辑/选区处理；Cmd 点击才交给跳转。
+    if (options.requireLinkModifier && !event.metaKey) return
     event.stopPropagation()
     if (noteTarget) options.onOpenWikiLink?.(noteTarget)
     else if (link.dataset.mdHref) openExternalLink(link.dataset.mdHref, options)

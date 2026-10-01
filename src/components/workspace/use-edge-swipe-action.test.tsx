@@ -75,6 +75,91 @@ afterEach(() => {
 })
 
 describe("useEdgeSwipeAction navigation handoff", () => {
+  function focusedEditor(workspace: HTMLElement) {
+    const host = document.createElement("div")
+    host.className = "cm-editor"
+    const input = document.createElement("textarea")
+    input.value = "中文输入与选区"
+    host.appendChild(input)
+    workspace.querySelector(".mobile-edge-swipe-current")!.appendChild(host)
+    input.focus()
+    input.setSelectionRange(1, 4, "backward")
+    return input
+  }
+
+  it.each(["pointercancel", "touchcancel", "short-release", "second-finger"])("%s keeps editor focus and selection through repeated cancelled swipes", (cancel) => {
+    vi.useFakeTimers()
+    const complete = vi.fn()
+    const workspace = renderHarness("route-a", complete)
+    const input = focusedEditor(workspace)
+    const blur = vi.fn()
+    input.addEventListener("blur", blur)
+    // Synthetic composition only checks that cancellation never blurs the composing field.
+    input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "中" }))
+    for (let round = 0; round < 10; round++) {
+      act(() => {
+        if (cancel === "pointercancel" || cancel === "short-release") {
+          workspace.dispatchEvent(pointerEvent("pointerdown", 6))
+          workspace.dispatchEvent(pointerEvent("pointermove", 20))
+          vi.advanceTimersByTime(100)
+          workspace.dispatchEvent(pointerEvent(cancel === "short-release" ? "pointerup" : "pointercancel", 20))
+        } else {
+          workspace.dispatchEvent(touchEvent("touchstart", [{ identifier: 7, x: 6 }]))
+          workspace.dispatchEvent(touchEvent("touchmove", [{ identifier: 7, x: 20 }]))
+          workspace.dispatchEvent(cancel === "touchcancel" ? touchEvent("touchcancel", [])
+            : touchEvent("touchstart", [{ identifier: 7, x: 20 }, { identifier: 8, x: 18 }]))
+        }
+      })
+      expect(document.activeElement).toBe(input)
+      act(() => vi.advanceTimersByTime(190))
+      expect(workspace.dataset.edgeSwipeState).toBe("idle")
+      expect(workspace.style.getPropertyValue("--edge-swipe-offset")).toBe("0px")
+      expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([1, 4, "backward"])
+    }
+    expect(blur).not.toHaveBeenCalled()
+    expect(complete).not.toHaveBeenCalled()
+  })
+
+  it("blurs only when the released gesture commits, before route handoff", async () => {
+    const complete = vi.fn()
+    const workspace = renderHarness("route-a", complete)
+    const input = focusedEditor(workspace)
+    act(() => {
+      workspace.dispatchEvent(pointerEvent("pointerdown", 6))
+      workspace.dispatchEvent(pointerEvent("pointermove", 120))
+    })
+    expect(document.activeElement).toBe(input)
+    act(() => workspace.dispatchEvent(pointerEvent("pointerup", 120)))
+    expect(document.activeElement).not.toBe(input)
+    expect(workspace.dataset.edgeSwipeState).toBe("completing")
+    expect(complete).not.toHaveBeenCalled()
+    await act(async () => workspace.querySelector(".mobile-edge-swipe-current")!.dispatchEvent(transitionEnd()))
+    expect(complete).toHaveBeenCalledOnce()
+  })
+
+  it.each(["back", "drawer"] as const)("failed %s navigation restores the original editor without stealing a new focus", async (kind) => {
+    const workspace = renderHarness("route-a", () => false, kind)
+    const input = focusedEditor(workspace)
+    completePointerGesture(workspace)
+    const outgoing = workspace.querySelector(kind === "drawer" ? ".mobile-navigation-drawer" : ".mobile-edge-swipe-current")!
+    await act(async () => outgoing.dispatchEvent(transitionEnd()))
+    expect(document.activeElement).toBe(input)
+    expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([1, 4, "backward"])
+    expect(workspace.dataset.edgeSwipeState).toBe("returning")
+  })
+
+  it("does not steal focus if navigation fails after the user focused another input", async () => {
+    let resolve: ((value: boolean) => void) | undefined
+    const workspace = renderHarness("route-a", () => new Promise<boolean>((done) => { resolve = done }))
+    focusedEditor(workspace)
+    completePointerGesture(workspace)
+    act(() => workspace.querySelector(".mobile-edge-swipe-current")!.dispatchEvent(transitionEnd()))
+    const other = document.createElement("input")
+    workspace.appendChild(other)
+    other.focus()
+    await act(async () => resolve?.(false))
+    expect(document.activeElement).toBe(other)
+  })
   it("prevents background scrolling only after a horizontal edge intent", () => {
     const workspace = renderHarness("root", vi.fn(), "drawer")
     const horizontalMove = touchEvent("touchmove", [{ identifier: 1, x: 20, y: 121 }])

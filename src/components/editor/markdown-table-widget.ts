@@ -4,6 +4,7 @@ import { EditorView, WidgetType } from "@codemirror/view"
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
 
 import { scrollElementIntoVisibleBand } from "./cursor-visibility"
+import { requiresLinkModifier } from "./editor-link-activation"
 
 import {
   alignTableColumn,
@@ -470,7 +471,7 @@ export class TableWidget extends WidgetType {
   }
 
   private renderCell(parent: HTMLElement, value: string) {
-    renderTableInlineMarkdown(parent, value, this.options, (url) => this.objectUrls.add(url))
+    renderTableInlineMarkdown(parent, value, { ...this.options, requireLinkModifier: requiresLinkModifier(this.readOnly) }, (url) => this.objectUrls.add(url))
   }
 
   private renderedColumnWidths(wrapper: HTMLElement) {
@@ -1326,11 +1327,21 @@ export class TableWidget extends WidgetType {
   private attachTableInteraction(wrapper: HTMLElement, table: MarkdownTable) {
     const mouseDown = (event: MouseEvent) => this.onTableMouseDown(wrapper, table, event)
     const keyDown = (event: KeyboardEvent) => this.onWrapperKeyDown(wrapper, table, event)
+    // 链接的 click 监听先于单元格监听执行；在捕获阶段消费拖选尾随的 click，
+    // 否则它会绕过 beginEditing 中的 suppressClick 检查而误打开链接。
+    const suppressLinkClick = (event: MouseEvent) => {
+      if (!this.session().suppressClick || !(event.target instanceof Element) || !event.target.closest(".cm-md-table-link")) return
+      this.session().suppressClick = false
+      event.preventDefault()
+      event.stopPropagation()
+    }
     wrapper.addEventListener("mousedown", mouseDown)
     wrapper.addEventListener("keydown", keyDown)
+    wrapper.addEventListener("click", suppressLinkClick, true)
     this.cleanupCallbacks.add(() => {
       wrapper.removeEventListener("mousedown", mouseDown)
       wrapper.removeEventListener("keydown", keyDown)
+      wrapper.removeEventListener("click", suppressLinkClick, true)
     })
     const session = this.session()
     // 拖选途中发生的重建（例如开始拖选时写回了上一个单元格的输入）由新实例接管。

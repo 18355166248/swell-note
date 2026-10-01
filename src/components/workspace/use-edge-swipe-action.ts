@@ -167,10 +167,6 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
       // 横向拖动一旦成立，这一轮补发的 click 必须吞掉。松手时手指下方的笔记若被当成点击打开，
       // 紧接着手势再把页面切到上一级，看起来就是侧滑中间闪一下别的页面。
       suppressClickRef.current = true
-      // 带着键盘侧滑时，焦点要等编辑器卸载才消失，键盘于是在列表已经落位之后才收起，
-      // 布局又跳一次。手势一确立就主动失焦，让键盘收起与页面滑出并成同一个动作。
-      const focused = document.activeElement
-      if (focused instanceof HTMLElement && isEditorSurface(focused)) focused.blur()
     }
     const offset = kind === "drawer" ? Math.min(deltaX, drawerWidth()) : deltaX
     const progress = kind === "drawer" ? offset / drawerWidth() : getEdgeSwipeProgress(deltaX)
@@ -194,10 +190,20 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
       returnToStart()
       return
     }
+    // 拖动仍可能取消，保留原焦点、选区与 IME；松手确认完成才收键盘，
+    // 让键盘收起与滑出动画并行，而非等路由卸载后再改变布局。
+    const focused = document.activeElement
+    const editor = focused instanceof HTMLElement && workspaceRef.current?.contains(focused) && isEditorSurface(focused) ? focused : null
+    editor?.blur()
+    const completionGeneration = gestureGenerationRef.current
+    const restoreFocus = () => {
+      if (completionGeneration !== gestureGenerationRef.current || !editor?.isConnected || !workspaceRef.current?.contains(editor)) return
+      // 导航失败时恢复原编辑位置，但不能抢走用户已转移的焦点。
+      if (document.activeElement === document.body) editor.focus({ preventScroll: true })
+    }
     if (kind === "drawer") {
       changePhase("completing")
       const drawer = workspaceRef.current?.querySelector<HTMLElement>(".mobile-navigation-drawer") ?? null
-      const completionGeneration = gestureGenerationRef.current
       let done = false
       const handoff = () => {
         if (done) return
@@ -210,8 +216,11 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
         try { completion = onCompleteRef.current() } catch { completion = false }
         void Promise.resolve(completion).then((committed) => {
           if (completionGeneration !== gestureGenerationRef.current) return
-          if (committed === false) { setDrawerOpenedBySwipe(false); returnToStart(completionGeneration) }
-        }).catch(() => { setDrawerOpenedBySwipe(false); returnToStart(completionGeneration) })
+          if (committed === false) { restoreFocus(); setDrawerOpenedBySwipe(false); returnToStart(completionGeneration) }
+        }).catch(() => {
+          if (completionGeneration !== gestureGenerationRef.current) return
+          restoreFocus(); setDrawerOpenedBySwipe(false); returnToStart(completionGeneration)
+        })
       }
       function onTransitionEnd(event: TransitionEvent) {
         if (event.target === drawer && event.propertyName === "transform") handoff()
@@ -222,7 +231,6 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
       return
     }
     changePhase("completing")
-    const completionGeneration = gestureGenerationRef.current
     completingNavigationKeyRef.current = navigationKey ?? ""
     // 底层此刻已是真实上一页。交接路由会把正在滑出的当前层整棵子树卸载，
     // 真机上 var() 驱动的 transform 过渡跑在主线程、还要和列表回收抢占，
@@ -244,10 +252,12 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
       }
       void Promise.resolve(completion).then((committed) => {
         if (committed !== false || completionGeneration !== gestureGenerationRef.current) return
+        restoreFocus()
         completingNavigationKeyRef.current = null
         returnToStart(completionGeneration)
       }).catch(() => {
         if (completionGeneration !== gestureGenerationRef.current) return
+        restoreFocus()
         completingNavigationKeyRef.current = null
         returnToStart(completionGeneration)
       })

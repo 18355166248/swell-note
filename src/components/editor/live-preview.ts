@@ -1,11 +1,12 @@
 import { isolateHistory } from "@codemirror/commands"
 import { syntaxTree } from "@codemirror/language"
 import type { EditorState, Range } from "@codemirror/state"
-import { Facet, StateEffect, StateField } from "@codemirror/state"
-import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view"
+import { Facet, Prec, StateEffect, StateField } from "@codemirror/state"
+import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view"
 
 import { isImageAssetPath, parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
 import { openExternalUrl } from "@/services/open-external-url"
+import { requiresLinkModifier } from "./editor-link-activation"
 
 import { collectCompatibilityBlocks, CompatibilityBlockWidget, type CompatibilityBlock, type CompatibilityBlockOptions } from "./compatibility-blocks"
 import { parseMarkdownTable } from "./markdown-table-model"
@@ -52,8 +53,9 @@ export const livePreviewOptions = Facet.define<LivePreviewOptions, LivePreviewOp
   combine: (values) => values[0] ?? {},
 })
 
-const LINK_HINT = "点击打开链接"
-const WIKI_HINT = "点击打开笔记"
+function linkHint(state: EditorState, note = false) {
+  return `${requiresLinkModifier(state.readOnly) ? "⌘ 点击" : "点击"}打开${note ? "笔记" : "链接"}`
+}
 
 export class TaskCheckboxWidget extends WidgetType {
   readonly readOnly: boolean
@@ -433,7 +435,7 @@ function decorateWikiLinks(
     if (labelStart >= labelEnd) continue
     // 只把可见文字设为跳转热区；编辑态仍可点击括号或目标源码定位修改。
     push(Decoration.mark({
-      attributes: { "data-wiki-target": target, title: WIKI_HINT },
+      attributes: { "data-wiki-target": target, title: linkHint(state, true) },
       class: "cm-md-link-actionable",
     }).range(labelStart, labelEnd))
 
@@ -466,7 +468,7 @@ function decorateBareUrls(
     // 正式 Markdown 链接和代码区域由语法树处理，裸 URL 扫描只补齐 GFM 自动链接。
     if (isInsideParsedLinkOrCode(state, start + 1)) continue
     push(Decoration.mark({
-      attributes: { "data-md-href": href, title: LINK_HINT },
+      attributes: { "data-md-href": href, title: linkHint(state) },
       class: "cm-md-link cm-md-link-actionable",
     }).range(start, end))
   }
@@ -519,6 +521,19 @@ function openActionableLink(element: Element, options: LivePreviewOptions) {
   openExternalLink(href, options)
   return true
 }
+
+function openLinkAtCursor(view: EditorView) {
+  const dom = view.domAtPos(view.state.selection.main.head).node
+  const element = dom instanceof Element ? dom : dom.parentElement
+  return Boolean(element && openActionableLink(element, view.state.facet(livePreviewOptions)))
+}
+
+// basicSetup 的 Mod+Enter 会插入空行，必须在它之前只消费链接上下文；
+// 普通段落返回 false，保留默认命令。两种修饰键沿用原有跨平台行为。
+const markdownLinkKeymap = Prec.high(keymap.of([
+  { key: "Cmd-Enter", run: openLinkAtCursor },
+  { key: "Ctrl-Enter", run: openLinkAtCursor },
+]))
 
 // 表格整块替换属于块级装饰，CodeMirror 要求块级装饰由 StateField 提供，插件只能携带行内装饰。
 type TableBlock = { from: number; source: string; to: number }
@@ -902,9 +917,9 @@ function buildLivePreviewDecorations(view: EditorView, forcedRanges?: readonly D
             const href = view.state.sliceDoc(url.from, url.to)
             const noteTarget = parseMarkdownNoteHref(href)
             const linkAttributes: Record<string, string> | undefined = noteTarget
-              ? { "data-md-note-target": noteTarget, title: WIKI_HINT }
+              ? { "data-md-note-target": noteTarget, title: linkHint(view.state, true) }
               : externalHrefPattern.test(href)
-                ? { "data-md-href": href, title: LINK_HINT }
+                ? { "data-md-href": href, title: linkHint(view.state) }
                 : undefined
             const marks: MdSyntaxNode[] = []
             for (let child = node.node.firstChild; child; child = child.nextSibling) {
@@ -1058,18 +1073,10 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
   },
   {
     decorations: (plugin) => plugin.decorations,
-    // 编辑态也允许单击链接文字跳转；括号和 URL 区域仍用于源码定位与修改。
+    // Mac 编辑态留出单击定位与拖选，Cmd 点击打开；阅读态和移动端保留原有点按行为。
     eventHandlers: {
-      keydown(event: KeyboardEvent, view: EditorView) {
-        if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey) || event.altKey) return false
-        const dom = view.domAtPos(view.state.selection.main.head).node
-        const element = dom instanceof Element ? dom : dom.parentElement
-        if (!element || !openActionableLink(element, view.state.facet(livePreviewOptions))) return false
-        event.preventDefault()
-        return true
-      },
       mousedown(event: MouseEvent, view: EditorView) {
-        if (event.button !== 0) return false
+        if (event.button !== 0 || (requiresLinkModifier(view.state.readOnly) && !event.metaKey)) return false
         if (interceptLinkTap(event, view)) {
           event.preventDefault()
           lastLinkActivationAt = Date.now()
@@ -1084,6 +1091,7 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
       // iOS WebView 的点按不一定合成 mousedown，触屏端靠 click 兜底；桌面端 mousedown
       // 已经跳转过的话，紧随的 click 直接吞掉。
       click(event: MouseEvent, view: EditorView) {
+        if (event.button !== 0 || (requiresLinkModifier(view.state.readOnly) && !event.metaKey)) return false
         const element = event.target instanceof Element ? event.target : null
         if (!element) return false
         if (Date.now() - lastLinkActivationAt < 500) {
@@ -1107,7 +1115,7 @@ export { markdownLivePreviewPlugin, richBlockDecorationsField, tableDecorationsF
 
 // 表格块替换必须经 StateField 提供，与行内装饰插件一起注册。
 export function markdownLivePreview(options: LivePreviewOptions = {}) {
-  return [livePreviewOptions.of(options), markdownLivePreviewPlugin, tableDecorationsField, richBlockDecorationsField]
+  return [livePreviewOptions.of(options), markdownLinkKeymap, markdownLivePreviewPlugin, tableDecorationsField, richBlockDecorationsField]
 }
 
 /**
@@ -1116,7 +1124,7 @@ export function markdownLivePreview(options: LivePreviewOptions = {}) {
  * 使「实时预览」与「表格编辑」能各自独立地经 Compartment 开关。
  */
 export function markdownLivePreviewBase(options: LivePreviewOptions = {}) {
-  return [livePreviewOptions.of(options), markdownLivePreviewPlugin, richBlockDecorationsField]
+  return [livePreviewOptions.of(options), markdownLinkKeymap, markdownLivePreviewPlugin, richBlockDecorationsField]
 }
 
 /** 表格网格 widget。注册它才会出现可编辑的表格；不注册则表格保持 Markdown 源码。 */

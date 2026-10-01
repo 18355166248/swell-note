@@ -142,6 +142,8 @@ describe("SelectionActionBar", () => {
 
 describe("FormattingToolbar 选区模式（移动端选区操作并入格式栏）", () => {
   function mountToolbar(editor: MarkdownEditorHandle, hasSelection: boolean, options: {
+    canUndo?: boolean
+    editingTable?: boolean
     formatState?: EditorFormatState
     mobile?: boolean
     onFormat?: (syntax: string) => void
@@ -157,6 +159,8 @@ describe("FormattingToolbar 选区模式（移动端选区操作并入格式栏�
           <FormattingToolbar
             attachmentBusy={false}
             canInsertAttachment={false}
+            canUndo={options.canUndo}
+            editingTable={options.editingTable}
             editorRef={ref}
             formatState={options.formatState}
             hasSelection={hasSelection}
@@ -196,6 +200,37 @@ describe("FormattingToolbar 选区模式（移动端选区操作并入格式栏�
     expect(bar.button("复制")).toBeNull()
     expect(container!.querySelector(".toolbar-heading-select")).not.toBeNull()
     expect(bar.button("撤销")).not.toBeNull()
+  })
+
+  it("选区模式更多菜单提供撤销，按下不夺走编辑焦点与选区", async () => {
+    const editor = createEditor()
+    const bar = mountToolbar(editor, true)
+    const input = document.createElement("textarea")
+    input.value = "中文选区文字"
+    container!.appendChild(input)
+    input.focus()
+    input.setSelectionRange(1, 4, "backward")
+    await click(bar.button("更多格式")!)
+    const undo = Array.from(container!.querySelectorAll<HTMLButtonElement>("[role='menuitem']"))
+      .find((button) => button.textContent === "撤销")
+    expect(undo).toBeDefined()
+    const press = new MouseEvent("pointerdown", { bubbles: true, cancelable: true })
+    act(() => undo!.dispatchEvent(press))
+    expect(press.defaultPrevented).toBe(true)
+    await click(undo!)
+    expect(editor.undo).toHaveBeenCalledOnce()
+    expect(document.activeElement).toBe(input)
+    expect([input.selectionStart, input.selectionEnd, input.selectionDirection]).toEqual([1, 4, "backward"])
+    expect(container!.querySelector("[role='menu']")).toBeNull()
+  })
+
+  it.each([false, true])("选区态撤销沿用正文/表格可用性 (editingTable=%s)", async (editingTable) => {
+    const bar = mountToolbar(createEditor(), true, { canUndo: false, editingTable })
+    await click(bar.button("更多格式")!)
+    const undo = Array.from(container!.querySelectorAll<HTMLButtonElement>("[role='menuitem']"))
+      .find((button) => button.textContent === "撤销")
+    expect(undo).toBeDefined()
+    expect(undo!.disabled).toBe(!editingTable)
   })
 
   it("选区模式里的复制同样走编辑器方法", async () => {

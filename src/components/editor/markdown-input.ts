@@ -62,7 +62,7 @@ function firstListItemNumber(list: MdSyntaxNode, state: EditorState): number | n
   return null
 }
 
-// Alt+↑/↓ 移动、Shift+Alt+↑/↓ 复制整行是 CodeMirror 默认键位（basicSetup 自带，未在工具栏出现），
+// 非 Mac 用 Alt+↑/↓ 移动、Shift+Alt+↑/↓ 复制整行；Mac 用 Cmd+Ctrl（复制再加 Shift），
 // 但它们只是逐行搬文本：有序列表项挪了位置或被复制一份，编号仍留在原处，读起来像「1. 2. 1.」错位。
 // 命令跑完之后，从移动前记下的起始号开始，把同一个有序列表重新连续编号——
 // 不能以移动后排在最前的那一项的号码为准，它未必是原来的首项。
@@ -105,6 +105,25 @@ function withOrderedListRenumber(
   }
 }
 
+// Mac 的 Option+上下按逻辑段落导航，不能落到 basicSetup 的移行/复制命令。
+// 用文档行而非视觉折行作边界；已到边界时继续上一/下一段，Shift 保留选区锚点。
+function paragraphBoundary(forward: boolean, extend = false) {
+  return (view: EditorView) => {
+    const { state } = view
+    const ranges = state.selection.ranges.map((range) => {
+      const position = extend ? range.head : forward ? range.to : range.from
+      const line = state.doc.lineAt(position)
+      const target = forward
+        ? position < line.to ? line.to : line.number < state.doc.lines ? state.doc.line(line.number + 1).to : line.to
+        : position > line.from ? line.from : line.number > 1 ? state.doc.line(line.number - 1).from : line.from
+      return extend ? EditorSelection.range(range.anchor, target) : EditorSelection.cursor(target)
+    })
+    view.dispatch({ selection: EditorSelection.create(ranges, state.selection.mainIndex), scrollIntoView: true, userEvent: "select" })
+    // 即使已到文档边界也消费按键，防止后续默认键位改正文。
+    return true
+  }
+}
+
 const markdownInputKeymap = Prec.high(
   keymap.of([
     // 官方命令：在列表 / 引用 / 任务项里回车续写标记，空项回车则删标记退出；普通段落回退到默认换行。
@@ -116,10 +135,12 @@ const markdownInputKeymap = Prec.high(
       run: (view) => (shouldHandleIndent(view) ? indentMore(view) : false),
       shift: (view) => (shouldHandleIndent(view) ? indentLess(view) : false),
     },
-    { key: "Alt-ArrowUp", run: withOrderedListRenumber(moveLineUp) },
-    { key: "Alt-ArrowDown", run: withOrderedListRenumber(moveLineDown) },
-    { key: "Shift-Alt-ArrowUp", run: withOrderedListRenumber(copyLineUp) },
-    { key: "Shift-Alt-ArrowDown", run: withOrderedListRenumber(copyLineDown) },
+    { mac: "Alt-ArrowUp", run: paragraphBoundary(false), shift: paragraphBoundary(false, true) },
+    { mac: "Alt-ArrowDown", run: paragraphBoundary(true), shift: paragraphBoundary(true, true) },
+    { key: "Alt-ArrowUp", mac: "Cmd-Ctrl-ArrowUp", run: withOrderedListRenumber(moveLineUp) },
+    { key: "Alt-ArrowDown", mac: "Cmd-Ctrl-ArrowDown", run: withOrderedListRenumber(moveLineDown) },
+    { key: "Shift-Alt-ArrowUp", mac: "Shift-Cmd-Ctrl-ArrowUp", run: withOrderedListRenumber(copyLineUp) },
+    { key: "Shift-Alt-ArrowDown", mac: "Shift-Cmd-Ctrl-ArrowDown", run: withOrderedListRenumber(copyLineDown) },
   ]),
 )
 

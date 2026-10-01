@@ -109,7 +109,7 @@ async function seedCachedVault(page: Page, noteContent?: string, readOnly = fals
 }
 
 test.describe("编辑态链接点击跳转", () => {
-  test("桌面端点击笔记链接与外链", async ({ page }, testInfo) => {
+  test("桌面端按平台键位点击笔记链接与外链", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page)
     const workspace = page.locator(".desktop-workspace:visible")
@@ -117,17 +117,18 @@ test.describe("编辑态链接点击跳转", () => {
 
     const editor = page.locator(".cm-content")
     await expect(editor).toBeVisible()
+    const modifiers: Array<"Meta"> = process.platform === "darwin" ? ["Meta"] : []
     // 点走编辑器，确保链接行不处于光标激活态。
     await page.mouse.click(20, 20)
 
-    // 标准 Markdown 笔记链接：点击文字直接跳转。
-    await editor.getByText("第二篇", { exact: true }).first().click()
+    // Mac 编辑态 Cmd 点击；其他桌面平台保留既有点击行为。
+    await editor.getByText("第二篇", { exact: true }).first().click({ modifiers })
     await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
 
-    // wiki 双链：同样单击跳转。
+    // wiki 双链：同样按平台键位打开。
     await workspace.getByText("第一篇", { exact: true }).first().click()
     await page.mouse.click(20, 20)
-    await page.locator(".cm-content .cm-md-link-actionable[data-wiki-target]").first().click()
+    await page.locator(".cm-content .cm-md-link-actionable[data-wiki-target]").first().click({ modifiers })
     await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
 
     // 外链：mousedown 与 click 去重后恰好打开一次。
@@ -140,10 +141,210 @@ test.describe("编辑态链接点击跳转", () => {
         return null
       }
     })
-    await page.locator(".cm-content .cm-md-link-actionable[data-md-href]").first().click()
+    await page.locator(".cm-content .cm-md-link-actionable[data-md-href]").first().click({ modifiers })
     await expect
       .poll(() => page.evaluate(() => (window as unknown as { __openCalls: string[] }).__openCalls))
       .toEqual(["https://example.com/page"])
+  })
+
+  test("Mac 编辑链接单击和拖选保留当前位置", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome" || process.platform !== "darwin")
+    await seedCachedVault(page)
+    const editor = page.locator(".cm-content")
+    const link = editor.locator("[data-md-note-target]").first()
+    const currentUrl = page.url()
+    await link.click()
+    await expect(page).toHaveURL(currentUrl)
+    await expect(editor).toBeFocused()
+    const rect = await link.boundingBox()
+    expect(rect).not.toBeNull()
+    await page.mouse.move(rect!.x + 2, rect!.y + rect!.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(rect!.x + rect!.width - 2, rect!.y + rect!.height / 2, { steps: 5 })
+    await page.mouse.up()
+    await expect(page).toHaveURL(currentUrl)
+    expect(await page.evaluate(() => document.getSelection()?.toString())).toContain("第二篇")
+    await page.screenshot({ path: testInfo.outputPath("mac-link-selection.png") })
+  })
+
+  test("Mac Option 上下按段落导航和扩选而不改正文", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome" || process.platform !== "darwin")
+    const content = "第一段文字\n第二段文字\n第三段文字"
+    await seedCachedVault(page, content)
+    const editor = page.locator(".cm-content")
+    await expect(editor.locator(".cm-line")).toHaveText(content.split("\n"))
+    const selection = async (reset = false) => editor.evaluate(async (element, reset) => {
+      // Read the same CodeMirror view used by the running app, via its public DOM lookup API.
+      const modulePath = "/node_modules/.vite/deps/@codemirror_view.js"
+      const { EditorView } = await import(/* @vite-ignore */ modulePath)
+      const view = EditorView.findFromDOM(element)
+      if (reset) { view.dispatch({ selection: { anchor: 8 } }); view.focus() }
+      const { anchor, head } = view.state.selection.main
+      return { anchor, head, content: view.state.doc.toString() }
+    }, reset)
+    for (const [key, anchor, head] of [
+      ["Alt+ArrowUp", 6, 6], ["Alt+ArrowDown", 11, 11],
+      ["Shift+Alt+ArrowUp", 8, 6], ["Shift+Alt+ArrowDown", 8, 11],
+    ] as const) {
+      await selection(true)
+      await editor.press(key)
+      expect(await selection()).toEqual({ anchor, head, content })
+    }
+    await page.screenshot({ path: testInfo.outputPath("mac-option-selection.png") })
+  })
+
+  test("Mac 完整编辑器 Cmd Enter 打开链接且不产生正文事务", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome" || process.platform !== "darwin")
+    for (const source of ["[[第二篇]]", "[第二篇](./第二篇.md)", "https://example.com/page"]) {
+      await seedCachedVault(page, `正文\n\n${source}`)
+      const editor = page.locator(".cm-content")
+      await expect(editor.locator(".cm-md-link-actionable")).toBeVisible()
+      await editor.evaluate(async (element, source) => {
+        const viewModule = "/node_modules/.vite/deps/@codemirror_view.js"
+        const stateModule = "/node_modules/.vite/deps/@codemirror_state.js"
+        const { EditorView } = await import(/* @vite-ignore */ viewModule)
+        const { StateEffect } = await import(/* @vite-ignore */ stateModule)
+        const view = EditorView.findFromDOM(element)
+        const log: string[] = []
+        const opened: string[] = []
+        Object.assign(window, { __keyboardLinkChanges: log, __keyboardLinkOpened: opened })
+        window.open = (url) => { opened.push(String(url)); return null }
+        view.dispatch({ effects: StateEffect.appendConfig.of(EditorView.updateListener.of((update: { docChanged: boolean; state: { doc: { toString: () => string } } }) => {
+          if (update.docChanged) log.push(update.state.doc.toString())
+        })), selection: { anchor: view.state.doc.toString().indexOf(source.startsWith("http") ? "https" : "第二篇") + 1 } })
+        view.focus()
+      }, source)
+      await editor.press("Meta+Enter")
+      if (source.startsWith("http")) {
+        await expect.poll(() => page.evaluate(() => (window as unknown as { __keyboardLinkOpened: string[] }).__keyboardLinkOpened)).toEqual(["https://example.com/page"])
+      } else {
+        await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
+      }
+      expect(await page.evaluate(() => (window as unknown as { __keyboardLinkChanges: string[] }).__keyboardLinkChanges)).toEqual([])
+    }
+  })
+
+  test("Mac 表格链接普通点击编辑且 Cmd 点击打开", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome" || process.platform !== "darwin")
+    for (const href of ["./第二篇.md", "https://example.com/page"]) {
+      await seedCachedVault(page, `| 名称 |\n| --- |\n| [标签](${href}) |`)
+      const editor = page.locator(".cm-content")
+      const link = editor.locator(".cm-md-table-link")
+      const url = page.url()
+      await link.click()
+      await expect(page).toHaveURL(url)
+      const input = editor.locator(".cm-md-table-cell-input")
+      await expect(input).toBeFocused()
+      await expect(input).toHaveValue(`[标签](${href})`)
+      await input.press("Escape")
+      await expect(link).toBeVisible()
+      await page.evaluate(() => {
+        const calls: string[] = []
+        Object.assign(window, { __tableLinkOpened: calls })
+        window.open = (url) => { calls.push(String(url)); return null }
+      })
+      await link.click({ modifiers: ["Meta"] })
+      if (href.startsWith("http")) {
+        expect(await page.evaluate(() => (window as unknown as { __tableLinkOpened: string[] }).__tableLinkOpened)).toEqual([href])
+      } else {
+        await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
+      }
+    }
+  })
+
+  test("Mac 表格链接拖选尾随点击不跳转", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome" || process.platform !== "darwin")
+    await seedCachedVault(page, "| 名称 |\n| --- |\n| [标签](https://example.com/page) |")
+    const link = page.locator(".cm-md-table-link")
+    await expect(link).toBeVisible()
+    await page.evaluate(() => {
+      const calls: string[] = []
+      Object.assign(window, { __tableLinkOpened: calls })
+      window.open = (url) => { calls.push(String(url)); return null }
+    })
+    const rect = await link.boundingBox()
+    await page.keyboard.down("Meta")
+    await page.mouse.move(rect!.x + 2, rect!.y + rect!.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(rect!.x + rect!.width - 2, rect!.y + rect!.height / 2, { steps: 5 })
+    await page.mouse.up()
+    await page.keyboard.up("Meta")
+    expect(await page.evaluate(() => (window as unknown as { __tableLinkOpened: string[] }).__tableLinkOpened)).toEqual([])
+    await expect(page.locator(".cm-md-table-cell-input")).toHaveCount(0)
+    await page.screenshot({ path: testInfo.outputPath("mac-table-link-selection.png") })
+  })
+
+  test("移动端选区更多菜单撤销保持编辑焦点", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await seedCachedVault(page, "撤销测试")
+    const workspace = page.locator(".mobile-workspace:visible")
+    await workspace.getByText("测试", { exact: true }).first().click()
+    await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    const editor = workspace.locator(".mobile-edge-swipe-current .cm-content")
+    await expect(editor).toHaveText("撤销测试")
+    await editor.press("End")
+    await page.waitForTimeout(550)
+    await editor.press("X")
+    await editor.press("ControlOrMeta+A")
+    await workspace.getByRole("button", { name: "更多格式", exact: true }).tap()
+    await expect(editor).toBeFocused()
+    expect(await page.evaluate(() => document.getSelection()?.toString())).toBe("撤销测试X")
+    await page.screenshot({ path: testInfo.outputPath("mobile-selection-undo-menu.png") })
+    await workspace.getByRole("menuitem", { name: "撤销", exact: true }).tap()
+    await expect(editor).toHaveText("撤销测试")
+    await expect(editor).toBeFocused()
+  })
+
+  test("移动端十轮侧滑取消保持焦点选区并能继续输入", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    await seedCachedVault(page, "中文输入与选区")
+    const workspace = page.locator(".mobile-workspace:visible")
+    await workspace.getByText("测试", { exact: true }).first().click()
+    await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    const editor = workspace.locator(".mobile-edge-swipe-current .cm-content")
+    await expect(editor).toHaveText("中文输入与选区")
+    await editor.press("ControlOrMeta+A")
+    const initial = await editor.boundingBox()
+    for (let round = 0; round < 10; round++) {
+      await editor.evaluate((element) => {
+        const send = (type: string, x: number, ended = false) => {
+          const touch = new Touch({ identifier: 7, target: element, clientX: x, clientY: 180 })
+          element.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true,
+            touches: ended ? [] : [touch], changedTouches: [touch] }))
+        }
+        send("touchstart", 6)
+        send("touchmove", 45)
+        send("touchcancel", 45, true)
+      })
+      await expect(workspace).toHaveAttribute("data-edge-swipe-state", "idle")
+      await expect(editor).toBeFocused()
+      await expect.poll(() => page.evaluate(() => document.getSelection()?.toString())).toBe("中文输入与选区")
+      const rect = await editor.boundingBox()
+      expect(Math.abs(rect!.y - initial!.y)).toBeLessThan(2)
+    }
+    await editor.press("ArrowRight")
+    await editor.press("X")
+    await expect(editor).toHaveText("中文输入与选区X")
+    await page.screenshot({ path: testInfo.outputPath("mobile-cancelled-swipe.png") })
+  })
+
+  test("验证查找栏第一次关闭即生效", async ({ page }, testInfo) => {
+    await seedCachedVault(page, "中文 猫")
+    const mobile = testInfo.project.name === "mobile-chrome"
+    const workspace = page.locator(mobile ? ".mobile-workspace:visible" : ".desktop-workspace:visible")
+    if (mobile) {
+      await workspace.getByText("测试", { exact: true }).first().click()
+      await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    }
+    const editor = workspace.locator(".cm-content")
+    await expect(editor).toHaveText("中文 猫")
+    await editor.press("ControlOrMeta+f")
+    await workspace.getByLabel("查找当前笔记").fill("猫")
+    const close = workspace.getByRole("button", { name: "关闭查找", exact: true })
+    if (mobile) await close.tap()
+    else await close.click()
+    await expect(workspace.locator(".editor-find-bar")).toHaveCount(0)
+    await expect(editor).toHaveText("中文 猫")
   })
 
   test("移动端触屏点按笔记链接先弹出操作菜单", async ({ page }, testInfo) => {

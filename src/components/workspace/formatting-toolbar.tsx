@@ -61,7 +61,7 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
         <SelectionButtons run={run} />
         <FormatButton active={Boolean(formatState?.strong)} icon={Bold} label="加粗（⌘/Ctrl+B）" onClick={() => onFormat("**加粗文字**")} />
         <FormatButton active={Boolean(formatState?.emphasis)} icon={Italic} label="斜体（⌘/Ctrl+I）" onClick={() => onFormat("*斜体文字*")} />
-        <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} formatState={formatState} onFormat={onFormat} onToggleSourceMode={onToggleSourceMode} sourceMode={sourceMode} />
+        <SecondaryFormatsMenu canUndo={canUndo} canRedo={canRedo} showUndo editingTable={editingTable} editorRef={editorRef} formatState={formatState} onFormat={onFormat} onToggleSourceMode={onToggleSourceMode} sourceMode={sourceMode} />
       </div>
     )
   }
@@ -138,8 +138,10 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
 
 // 用工具栏内部的浮层而不是通用下拉菜单：菜单一旦接管焦点，手机键盘会收起再弹出，
 // 工具栏也会跟着键盘上下跳一次；自绘浮层可以让焦点始终留在 CodeMirror 里。
-function SecondaryFormatsMenu({ canRedo = true, editorRef, formatState, onFormat, editingTable, onToggleSourceMode, sourceMode = false }: {
+function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false, editorRef, formatState, onFormat, editingTable, onToggleSourceMode, sourceMode = false }: {
+  canUndo?: boolean
   canRedo?: boolean
+  showUndo?: boolean
   editorRef: RefObject<MarkdownEditorHandle | null>
   editingTable: boolean
   formatState: EditorFormatState | null
@@ -171,6 +173,18 @@ function SecondaryFormatsMenu({ canRedo = true, editorRef, formatState, onFormat
       <FormatButton expanded={open} icon={MoreHorizontal} label="更多格式" onClick={() => setOpen((current) => !current)} />
       {open ? (
         <div className="toolbar-more-menu" role="menu">
+          {showUndo ? (
+            <button
+              disabled={!canUndo && !editingTable}
+              onClick={() => { setOpen(false); editorRef.current?.undo() }}
+              onPointerDown={(event) => event.preventDefault()}
+              role="menuitem"
+              type="button"
+            >
+              <Undo2 />
+              <span>撤销</span>
+            </button>
+          ) : null}
           <button
             disabled={!canRedo}
             onClick={() => {
