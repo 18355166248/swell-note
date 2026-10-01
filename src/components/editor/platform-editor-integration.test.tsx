@@ -2,12 +2,18 @@
 import { act, createRef } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { undoDepth } from "@codemirror/commands"
+import * as language from "@codemirror/language"
 import { EditorView } from "@codemirror/view"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { FormattingToolbar } from "@/components/workspace/formatting-toolbar"
 import MarkdownEditor, { type MarkdownEditorHandle } from "./markdown-editor"
+
+vi.mock("@codemirror/language", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@codemirror/language")>()
+  return { ...actual, ensureSyntaxTree: vi.fn(actual.ensureSyntaxTree) }
+})
 
 // The production editor includes EditorControl/basicSetup. Platform is read by CM at import time.
 vi.hoisted(() => Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" }))
@@ -29,10 +35,11 @@ afterEach(() => {
   Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" })
   if (originalElementFromPoint) Object.defineProperty(document, "elementFromPoint", originalElementFromPoint)
   else Reflect.deleteProperty(document, "elementFromPoint")
+  vi.mocked(language.ensureSyntaxTree).mockReset()
   vi.restoreAllMocks()
 })
 
-async function mountEditor(doc: string, options: { readOnly?: boolean; touchPoints?: number; platform?: string; toolbar?: boolean; editingTable?: boolean } = {}) {
+async function mountEditor(doc: string, options: { readOnly?: boolean; touchPoints?: number; platform?: string; toolbar?: boolean; editingTable?: boolean; sourceMode?: boolean } = {}) {
   Object.defineProperty(navigator, "maxTouchPoints", { configurable: true, value: options.touchPoints ?? 0 })
   Object.defineProperty(navigator, "platform", { configurable: true, value: options.platform ?? "MacIntel" })
   const ref = createRef<MarkdownEditorHandle>()
@@ -43,15 +50,18 @@ async function mountEditor(doc: string, options: { readOnly?: boolean; touchPoin
   document.body.appendChild(container)
   root = createRoot(container)
   const sessionKey = `integration-note-${++session}`
-  await act(async () => {
+  const renderEditor = (nextDoc = doc, nextSessionKey = sessionKey, nextOptions = options) => {
     root!.render(<TooltipProvider>
-      <MarkdownEditor onChange={changed} onOpenWikiLink={opened} readOnly={options.readOnly} ref={ref} sessionKey={sessionKey} storageKey={sessionKey} value={doc} />
+      <MarkdownEditor onChange={changed} onOpenWikiLink={opened} readOnly={nextOptions.readOnly} sourceMode={nextOptions.sourceMode} ref={ref} sessionKey={nextSessionKey} storageKey={nextSessionKey} value={nextDoc} />
       {options.toolbar ? <FormattingToolbar attachmentBusy={false} canInsertAttachment={false} canUndo editingTable={options.editingTable} editorRef={ref} hasSelection mobile onFormat={vi.fn()} onInsertFiles={vi.fn()} /> : null}
     </TooltipProvider>)
-  })
+  }
+  await act(async () => renderEditor())
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
   const view = EditorView.findFromDOM(container.querySelector<HTMLElement>(".cm-editor")!)!
-  return { view, opened, changed, ref }
+  return { view, opened, changed, ref, rerender: async (nextDoc: string, nextSessionKey = sessionKey, nextOptions = options) => {
+    await act(async () => renderEditor(nextDoc, nextSessionKey, nextOptions))
+  } }
 }
 
 function click(element: Element, modifiers: MouseEventInit = {}) {
@@ -59,6 +69,112 @@ function click(element: Element, modifiers: MouseEventInit = {}) {
 }
 
 describe("production editor link activation", () => {
+
+  it("an incomplete parse consumes Cmd+Enter then opens once in bounded slices", async () => {
+    const doc = "[标签](https://example.com/path)"
+    const { view, opened, changed } = await mountEditor(doc)
+    act(() => view.dispatch({ changes: { from: 0, insert: "更新 " }, userEvent: "input.type" }))
+    const edited = view.state.doc.toString()
+    changed.mockClear()
+    act(() => { view.dispatch({ selection: { anchor: edited.length - 1 } }); view.focus() })
+    const selection = view.state.selection.toJSON()
+    const parse = vi.mocked(language.ensureSyntaxTree).mockReturnValueOnce(null)
+    act(() => {
+      for (let repeat = 0; repeat < 3; repeat++) view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true }))
+    })
+    expect(parse).toHaveBeenCalledTimes(1)
+    expect(opened).not.toHaveBeenCalled()
+    expect(view.state.doc.toString()).toBe(edited)
+    expect(view.state.selection.toJSON()).toEqual(selection)
+    expect(changed).not.toHaveBeenCalled()
+    expect(undoDepth(view.state)).toBe(1)
+    await act(async () => { await vi.waitFor(() => expect(opened).toHaveBeenCalledExactlyOnceWith("https://example.com/path")) })
+    expect(parse.mock.calls.map((call) => call[2])).toEqual([50, 10])
+    expect(view.state.doc.toString()).toBe(edited)
+    expect(view.state.selection.toJSON()).toEqual(selection)
+    expect(changed).not.toHaveBeenCalled()
+    expect(undoDepth(view.state)).toBe(1)
+  })
+
+  it("an incomplete non-link parse leaves this key intact and the next parsed key retains default newline", async () => {
+    const doc = "普通段落"
+    const { view, opened, changed } = await mountEditor(doc)
+    act(() => { view.dispatch({ selection: { anchor: 2 } }); view.focus() })
+    const parse = vi.mocked(language.ensureSyntaxTree).mockReturnValueOnce(null)
+    act(() => view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })))
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(changed).not.toHaveBeenCalled()
+    await act(async () => { await vi.waitFor(() => expect(parse).toHaveBeenCalledTimes(2)) })
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(undoDepth(view.state)).toBe(0)
+    act(() => view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })))
+    expect(view.state.doc.toString()).toBe(doc + "\n")
+    expect(opened).not.toHaveBeenCalled()
+    expect(undoDepth(view.state)).toBe(1)
+  })
+
+  it("parse exhaustion stops after eight slices and announces retry without opening or editing", async () => {
+    const doc = "[标签](https://example.com/path)"
+    const { view, opened, changed } = await mountEditor(doc)
+    act(() => { view.dispatch({ selection: { anchor: doc.length - 1 } }); view.focus() })
+    const selection = view.state.selection.toJSON()
+    const parse = vi.mocked(language.ensureSyntaxTree).mockReturnValue(null)
+    act(() => view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })))
+    expect(view.state.doc.toString()).toBe(doc)
+    await act(async () => { await vi.waitFor(() => expect(view.dom.querySelector(".cm-announced")?.textContent).toContain("内容仍在解析，请稍后再试")) })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 80)) })
+    expect(parse.mock.calls.map((call) => call[2])).toEqual([50, ...Array(8).fill(10)])
+    expect(opened).not.toHaveBeenCalled()
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(view.state.selection.toJSON()).toEqual(selection)
+    expect(changed).not.toHaveBeenCalled()
+    expect(undoDepth(view.state)).toBe(0)
+  })
+
+  it.each(["selection", "document", "blur", "same-content note switch", "source mode", "unmount"])("pending activation cancels on %s without late opening", async (reason) => {
+    const doc = "[标签](https://example.com/path)"
+    const { view, opened, changed, rerender } = await mountEditor(doc)
+    act(() => { view.dispatch({ selection: { anchor: doc.length - 1 } }); view.focus() })
+    const parse = vi.mocked(language.ensureSyntaxTree).mockReturnValueOnce(null)
+    act(() => view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })))
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(changed).not.toHaveBeenCalled()
+    if (reason === "selection") act(() => {
+      view.dispatch({ selection: { anchor: 0 } })
+      view.dispatch({ selection: { anchor: doc.length - 1 } })
+    })
+    if (reason === "document") act(() => view.dispatch({ changes: { from: 0, insert: "修改 " } }))
+    if (reason === "blur") act(() => view.contentDOM.dispatchEvent(new FocusEvent("blur", { bubbles: false })))
+    if (reason === "same-content note switch") await rerender(doc, `integration-note-next-${++session}`)
+    if (reason === "source mode") await rerender(doc, undefined, { sourceMode: true })
+    if (reason === "unmount") act(() => { root!.unmount(); root = undefined })
+    const after = view.state.doc.toString()
+    const depth = undoDepth(view.state)
+    changed.mockClear()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 90)) })
+    expect(parse).toHaveBeenCalledTimes(1)
+    expect(opened).not.toHaveBeenCalled()
+    expect(view.state.doc.toString()).toBe(after)
+    expect(changed).not.toHaveBeenCalled()
+    expect(undoDepth(view.state)).toBe(depth)
+  })
+
+  it.each([20000, 100000])("large-document tail (%i paragraphs) consumes immediately and opens or safely requests retry", async (paragraphs) => {
+    const doc = "普通段落\n\n".repeat(paragraphs) + "[标签](https://example.com/path)"
+    const { view, opened, changed } = await mountEditor(doc)
+    act(() => { view.dispatch({ selection: { anchor: doc.length - 1 }, scrollIntoView: true }); view.focus() })
+    const selection = view.state.selection.toJSON()
+    act(() => view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })))
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(changed).not.toHaveBeenCalled()
+    await act(async () => { await vi.waitFor(() => expect(opened.mock.calls.length === 1 || view.dom.querySelector(".cm-announced")?.textContent?.includes("内容仍在解析，请稍后再试")).toBe(true), { timeout: 2000 }) })
+    if (opened.mock.calls.length) expect(opened).toHaveBeenCalledExactlyOnceWith("https://example.com/path")
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(view.state.selection.toJSON()).toEqual(selection)
+    expect(changed).not.toHaveBeenCalled()
+    expect(undoDepth(view.state)).toBe(0)
+  }, 15000)
+
   it.each([
     { doc: "前文\n\n[[另一篇|标签]]", anchor: 10, target: "另一篇" },
     { doc: "前文\n\n[标签](https://example.com)", anchor: 6, target: "https://example.com" },
@@ -71,6 +187,133 @@ describe("production editor link activation", () => {
     expect(opened).toHaveBeenCalledExactlyOnceWith(target)
     expect(changed).not.toHaveBeenCalled()
     expect(undoDepth(view.state)).toBe(0)
+  })
+
+
+  // ¦ marks the caret. At a shared boundary the right-hand link wins; an isolated
+  // link accepts both outer boundaries, but an intervening space is not a link.
+  it.each([
+    ["label", "[标¦签](https://example.com/path)", "https://example.com/path"],
+    ["code-formatted label", "[\u0060标¦签\u0060](https://example.com/path)", "https://example.com/path"],
+    ["linked-image outer destination", "[![图](https://example.com/image.png)](https://example.com/pa¦th)", "https://example.com/path"],
+    ["URL middle", "[标签](https://exam¦ple.com/path)", "https://example.com/path"],
+    ["URL tail", "[标签](https://example.com/path¦)", "https://example.com/path"],
+    ["label close", "[标签¦](https://example.com/path)", "https://example.com/path"],
+    ["between ] and (", "[标签]¦(https://example.com/path)", "https://example.com/path"],
+    ["URL start", "[标签](¦https://example.com/path)", "https://example.com/path"],
+    ["link start", "¦[标签](https://example.com/path)", "https://example.com/path"],
+    ["link end", "[标签](https://example.com/path)¦", "https://example.com/path"],
+    ["title", '[标签](https://example.com/path "提¦示")', "https://example.com/path"],
+    ["nested parentheses", "[标签](https://example.com/a(b(c))¦)", "https://example.com/a(b(c))"],
+    ["escaped parentheses", "[标签](https://example.com/a\\(b\\)¦)", "https://example.com/a(b)"],
+    ["escaped trailing greater-than", "[标签](https://example.com/a\\>¦)", "https://example.com/a>"],
+    ["angle destination", "[标签](<https://example.com/a¦b>)", "https://example.com/ab"],
+    ["internal URL tail", "[标签](./另一篇.md¦)", "./另一篇.md"],
+    ["internal encoded URL", "[标签](./%E5%8F%A6%E4%B8%80%E7%AF%87.md¦)", "./另一篇.md"],
+    ["internal escaped parentheses", "[标签](./笔记\\(甲\\).md¦)", "./笔记(甲).md"],
+    ["mailto", "[邮件](mailto:test@exam¦ple.com)", "mailto:test@example.com"],
+    ["wiki target", "[[另¦一篇|标签]]", "另一篇"],
+    ["wiki label", "[[另一篇|标¦签]]", "另一篇"],
+    ["wiki start", "¦[[另一篇|标签]]", "另一篇"],
+    ["wiki close", "[[另一篇|标签]¦]", "另一篇"],
+    ["wiki end", "[[另一篇|标签]]¦", "另一篇"],
+    ["bare URL middle", "https://example.com/pa¦th", "https://example.com/path"],
+    ["bare URL end", "https://example.com/path¦", "https://example.com/path"],
+    ["bare URL punctuation boundary", "https://example.com/path¦。", "https://example.com/path"],
+    ["autolink", "<https://example.com/pa¦th>", "https://example.com/path"],
+    ["autolink close", "<https://example.com/path>¦", "https://example.com/path"],
+    ["adjacent Markdown links", "[甲](https://a.example)¦[乙](https://b.example)", "https://b.example"],
+    ["Markdown then wiki", "[甲](https://a.example)¦[[另一篇]]", "另一篇"],
+    ["wiki then Markdown", "[[另一篇]]¦[乙](https://b.example)", "https://b.example"],
+  ])("Cmd+Enter resolves %s in the complete editor without content/history changes", async (_label, marked, target) => {
+    const anchor = marked.indexOf("¦")
+    const doc = marked.replace("¦", "")
+    const { view, opened, changed } = await mountEditor(doc)
+    act(() => { view.dispatch({ selection: { anchor } }); view.focus() })
+    const selection = view.state.selection.toJSON()
+    act(() => view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })))
+    expect(opened).toHaveBeenCalledExactlyOnceWith(target)
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(view.state.selection.toJSON()).toEqual(selection)
+    expect(changed).not.toHaveBeenCalled()
+    expect(undoDepth(view.state)).toBe(0)
+  })
+
+  it.each([
+    ["after intervening space", "[标签](https://example.com) ¦后文"],
+    ["before intervening space", "前文¦ [标签](https://example.com)"],
+    ["linked-image inner destination", "[![图](https://example.com/im¦age.png)](https://example.com/path)"],
+    ["image destination", "![图](https://example.com/im¦age.png)"],
+    ["image label", "![图¦片](https://example.com/image.png)"],
+    ["wiki image embed", "![[图¦片.png]]"],
+    ["wiki note embed", "![[另¦一篇]]"],
+    ["inline code Markdown", "\u0060[标签](https://example.com/pa¦th)\u0060"],
+    ["inline code wiki", "\u0060[[另¦一篇]]\u0060"],
+    ["inline code URL", "\u0060https://example.com/pa¦th\u0060"],
+    ["fenced code", "\u0060\u0060\u0060md\n[标签](https://example.com/pa¦th)\n\u0060\u0060\u0060"],
+    ["indented code", "    [标签](https://example.com/pa¦th)"],
+    ["unsupported protocol", "[标签](javascript:ale¦rt(1))"],
+    ["relative attachment", "[附件](./报告.p¦df)"],
+    ["frontmatter wiki", "---\nvalue: [[另¦一篇]]\n---\n正文"],
+    ["frontmatter URL", "---\nvalue: https://example.com/pa¦th\n---\n正文"],
+    ["past trailing URL punctuation", "https://example.com/path。¦"],
+  ])("Cmd+Enter excludes %s and retains the default editing command", async (_label, marked) => {
+    const anchor = marked.indexOf("¦")
+    const doc = marked.replace("¦", "")
+    const { view, opened } = await mountEditor(doc)
+    act(() => { view.dispatch({ selection: { anchor } }); view.focus() })
+    act(() => view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })))
+    expect(opened).not.toHaveBeenCalled()
+    expect(view.state.doc.toString()).not.toBe(doc)
+    expect(undoDepth(view.state)).toBe(1)
+  })
+
+  it("Ctrl+Enter resolves the same address without an extra transaction", async () => {
+    const doc = "[标签](https://example.com/path)"
+    const { view, opened, changed } = await mountEditor(doc)
+    act(() => { view.dispatch({ selection: { anchor: doc.length - 1 } }); view.focus() })
+    act(() => view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true, cancelable: true })))
+    expect(opened).toHaveBeenCalledExactlyOnceWith("https://example.com/path")
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(changed).not.toHaveBeenCalled()
+    expect(undoDepth(view.state)).toBe(0)
+  })
+
+  it("Cmd+Enter in a read-only destination opens without edits", async () => {
+    const doc = "[标签](https://example.com/path)"
+    const { view, opened, changed } = await mountEditor(doc, { readOnly: true })
+    act(() => view.dispatch({ selection: { anchor: doc.length - 1 } }))
+    act(() => view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })))
+    expect(opened).toHaveBeenCalledExactlyOnceWith("https://example.com/path")
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(changed).not.toHaveBeenCalled()
+    expect(undoDepth(view.state)).toBe(0)
+  })
+
+  it("source mode retains basicSetup instead of activating live-preview links", async () => {
+    const doc = "[标签](https://example.com/path)"
+    const { view, opened } = await mountEditor(doc, { sourceMode: true })
+    act(() => { view.dispatch({ selection: { anchor: doc.length - 1 } }); view.focus() })
+    act(() => view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })))
+    expect(opened).not.toHaveBeenCalled()
+    expect(view.state.doc.toString()).toBe(doc + "\n")
+    expect(undoDepth(view.state)).toBe(1)
+  })
+
+  it("opening a destination preserves an existing undo entry", async () => {
+    const doc = "[标签](https://example.com/path)"
+    const { view, opened, changed, ref } = await mountEditor(doc)
+    act(() => view.dispatch({ changes: { from: 0, insert: "更新 " }, userEvent: "input.type" }))
+    const edited = view.state.doc.toString()
+    changed.mockClear()
+    act(() => { view.dispatch({ selection: { anchor: edited.length - 1 } }); view.focus() })
+    act(() => view.contentDOM.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true })))
+    expect(opened).toHaveBeenCalledExactlyOnceWith("https://example.com/path")
+    expect(view.state.doc.toString()).toBe(edited)
+    expect(changed).not.toHaveBeenCalled()
+    expect(undoDepth(view.state)).toBe(1)
+    act(() => ref.current!.undo())
+    expect(view.state.doc.toString()).toBe(doc)
   })
 
   it("Cmd+Enter outside a link retains basicSetup insertBlankLine", async () => {
@@ -157,5 +400,67 @@ describe("selection More Undo with real editor transactions", () => {
     expect(view.state.doc.toString()).toBe(doc)
     expect(view.contentDOM.querySelector("textarea")).toBeNull()
     expect(view.hasFocus).toBe(true)
+  })
+})
+
+describe("production task widget activation", () => {
+  function taskPointer(type: string, x: number) {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: 20, button: 0 })
+    Object.defineProperties(event, { pointerId: { value: 7 }, isPrimary: { value: true } })
+    return event
+  }
+
+  it("a task drag returning to the control never toggles and a following tap still works", async () => {
+    const doc = "前文\n\n- [ ] 任务\n\n末段"
+    const { view, changed } = await mountEditor(doc)
+    act(() => { view.dispatch({ selection: { anchor: doc.length } }); view.focus() })
+    const selection = view.state.selection.toJSON()
+    const box = view.contentDOM.querySelector<HTMLInputElement>(".cm-md-task-checkbox")!
+    const control = box.closest(".cm-md-task-control") ?? box
+    act(() => {
+      control.dispatchEvent(taskPointer("pointerdown", 20))
+      control.dispatchEvent(taskPointer("pointermove", 50))
+      control.dispatchEvent(taskPointer("pointermove", 20))
+      control.dispatchEvent(taskPointer("pointerup", 20))
+      control.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }))
+    })
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(changed).not.toHaveBeenCalled()
+    expect(undoDepth(view.state)).toBe(0)
+    act(() => {
+      control.dispatchEvent(taskPointer("pointerdown", 20))
+      control.dispatchEvent(taskPointer("pointerup", 20))
+      box.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }))
+    })
+    expect(view.state.doc.toString()).toBe(doc.replace("[ ]", "[x]"))
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(view.state.selection.toJSON()).toEqual(selection)
+    expect(view.hasFocus).toBe(true)
+    expect(undoDepth(view.state)).toBe(1)
+  })
+
+  it("a cancelled pointer does not poison subsequent keyboard/programmatic checkbox activation", async () => {
+    const doc = "前文\n\n- [ ] 任务"
+    const { view, changed } = await mountEditor(doc)
+    act(() => view.dispatch({ selection: { anchor: 0 } }))
+    const box = view.contentDOM.querySelector<HTMLInputElement>(".cm-md-task-checkbox")!
+    const control = box.closest(".cm-md-task-control") ?? box
+    act(() => { control.dispatchEvent(taskPointer("pointerdown", 20)); control.dispatchEvent(taskPointer("pointercancel", 20)); box.click() })
+    expect(view.state.doc.toString()).toBe(doc.replace("[ ]", "[x]"))
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(undoDepth(view.state)).toBe(1)
+  })
+
+  it("task controls remain disabled and do not write after a live readonly transition", async () => {
+    const doc = "前文\n\n- [ ] 任务"
+    const { view, changed, rerender } = await mountEditor(doc)
+    const old = view.contentDOM.querySelector<HTMLInputElement>(".cm-md-task-checkbox")!
+    await rerender(doc, undefined, { readOnly: true })
+    const box = view.contentDOM.querySelector<HTMLInputElement>(".cm-md-task-checkbox")!
+    act(() => { old.click(); (box.closest<HTMLElement>(".cm-md-task-control") ?? box).click() })
+    expect(box.disabled).toBe(true)
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(changed).not.toHaveBeenCalled()
+    expect(undoDepth(view.state)).toBe(0)
   })
 })

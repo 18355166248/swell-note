@@ -1,5 +1,5 @@
 import { isolateHistory } from "@codemirror/commands"
-import { syntaxTree } from "@codemirror/language"
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language"
 import type { EditorState, Range } from "@codemirror/state"
 import { Facet, Prec, StateEffect, StateField } from "@codemirror/state"
 import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view"
@@ -75,28 +75,54 @@ export class TaskCheckboxWidget extends WidgetType {
   }
 
   toDOM() {
+    // 外层只扩触区，input 继续提供原生 checkbox 的键盘和读屏语义。
+    const control = document.createElement("span")
+    control.className = "cm-md-task-control"
     const box = document.createElement("input")
     box.type = "checkbox"
     box.checked = this.checked
     box.className = "cm-md-task-checkbox"
     box.setAttribute("aria-label", "切换任务状态")
+    control.appendChild(box)
     if (this.readOnly) {
       box.disabled = true
-      return box
+      control.setAttribute("aria-disabled", "true")
+      return control
     }
-    // 阻止 mousedown 默认行为，点击勾选框不会让编辑器失焦。
-    box.addEventListener("mousedown", (event) => event.preventDefault())
-    box.addEventListener("click", (event) => {
+    // 保留编辑焦点与选区；触屏默认动作不在 touchstart 上取消，仍由一次 click 激活。
+    control.addEventListener("mousedown", (event) => event.preventDefault())
+    let pointer: { id: number; x: number; y: number } | null = null
+    let dragged = false
+    control.addEventListener("pointerdown", (event) => {
+      if (!event.isPrimary || event.button !== 0) return
+      pointer = null
+      // 触屏可能把行间空隙的点吸附到最近控件；只接受实际落在本控件触区的起手。
+      const hit = document.elementFromPoint?.(event.clientX, event.clientY)
+      dragged = Boolean(typeof document.elementFromPoint === "function" && hit?.closest(".cm-md-task-control") !== control)
+      if (dragged) return
+      // 取消指针的默认夺焦/折叠选区，touchstart 仍放行，最终只处理浏览器 click。
       event.preventDefault()
-      // 同一编辑器热切只读时旧 DOM 可能在本次更新结束前仍存在，事件落笔前再次读取实时状态。
-      if (this.view.state.readOnly) return
+      pointer = { id: event.pointerId, x: event.clientX, y: event.clientY }
+      control.setPointerCapture?.(event.pointerId)
+    })
+    control.addEventListener("pointermove", (event) => {
+      if (pointer?.id === event.pointerId && Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) > 8) dragged = true
+    })
+    control.addEventListener("pointerup", (event) => { if (pointer?.id === event.pointerId) pointer = null })
+    control.addEventListener("pointercancel", () => { pointer = null; dragged = true })
+    control.addEventListener("click", (event) => {
+      event.preventDefault()
+      // 真正拖动后即使回到原控件也不勾选；detail=0 的键盘/程序激活不受旧指针状态影响。
+      if (dragged && event.detail > 0) return
+      if (!control.isConnected || this.view.state.readOnly) return
       this.view.dispatch({ changes: { from: this.from, to: this.to, insert: this.checked ? "[ ]" : "[x]" } })
     })
-    return box
+    return control
   }
 
   ignoreEvent() {
-    return false
+    // 扩展触区是交互控件，不能让 CodeMirror 把 padding 点按解释为源码标记选区。
+    return true
   }
 }
 
@@ -522,14 +548,138 @@ function openActionableLink(element: Element, options: LivePreviewOptions) {
   return true
 }
 
+// 未完成的语法树不能当成「不是链接」：basicSetup 的后续命令会改正文。
+// 每个编辑器只留一个待处理请求，短时间片重试；切笔记的 setState 会销毁此插件。
+const pendingLinkActivation = ViewPlugin.fromClass(class {
+  pending: EditorState | null = null
+  private timer: ReturnType<typeof setTimeout> | undefined
+  private attempts = 0
+
+  constructor(private view: EditorView) {}
+
+  defer(state: EditorState) {
+    this.pending = state
+    this.attempts = 0
+    this.schedule()
+  }
+
+  cancel() {
+    if (this.timer !== undefined) clearTimeout(this.timer)
+    this.timer = undefined
+    this.pending = null
+  }
+
+  private schedule() {
+    this.timer = setTimeout(() => this.retry(), 25)
+  }
+
+  private retry() {
+    this.timer = undefined
+    const request = this.pending
+    const state = this.view.state
+    if (!request || !this.view.dom.isConnected || !this.view.hasFocus
+      || state.doc !== request.doc || !state.selection.eq(request.selection)
+      || state.facet(livePreviewOptions) !== request.facet(livePreviewOptions)) {
+      this.cancel()
+      return
+    }
+    const tree = ensureSyntaxTree(state, Math.min(state.selection.main.head + 1, state.doc.length), 10)
+    if (tree) {
+      this.cancel()
+      // 异步阶段只允许打开，确定为非链接后也不能补执行修改正文的默认命令。
+      openParsedLinkAtCursor(state, tree)
+    } else if (++this.attempts < 8) {
+      this.schedule()
+    } else {
+      this.cancel()
+      this.view.dispatch({ effects: EditorView.announce.of("内容仍在解析，请稍后再试") })
+    }
+  }
+
+  update(update: ViewUpdate) {
+    if (update.docChanged || update.selectionSet
+      || update.state.readOnly !== update.startState.readOnly
+      || update.state.facet(livePreviewOptions) !== update.startState.facet(livePreviewOptions)) this.cancel()
+  }
+
+  destroy() { this.cancel() }
+}, {
+  eventHandlers: { blur(_event, view) { view.plugin(pendingLinkActivation)?.cancel() } },
+})
+
 function openLinkAtCursor(view: EditorView) {
-  const dom = view.domAtPos(view.state.selection.main.head).node
-  const element = dom instanceof Element ? dom : dom.parentElement
-  return Boolean(element && openActionableLink(element, view.state.facet(livePreviewOptions)))
+  const pending = view.plugin(pendingLinkActivation)
+  // 自动重复按键复用同一次请求，不累积解析工作或多个晚到的打开动作。
+  if (pending?.pending) return true
+  const state = view.state
+  const position = state.selection.main.head
+  const frontmatter = findFrontmatterRange(state)
+  if (frontmatter && position <= frontmatter.to) return false
+  // 链接地址、括号和 title 都属于同一个语法节点，不能依赖仅覆盖标签的 DOM 热区。
+  const tree = ensureSyntaxTree(state, Math.min(position + 1, state.doc.length), 50)
+  if (!tree) {
+    pending?.defer(state)
+    return true
+  }
+  return openParsedLinkAtCursor(state, tree)
 }
 
-// basicSetup 的 Mod+Enter 会插入空行，必须在它之前只消费链接上下文；
-// 普通段落返回 false，保留默认命令。两种修饰键沿用原有跨平台行为。
+function openParsedLinkAtCursor(state: EditorState, tree: NonNullable<ReturnType<typeof ensureSyntaxTree>>) {
+  const position = state.selection.main.head
+  type Target = DocRange & { href?: string; noteTarget?: string }
+  const candidates: Target[] = []
+  const excluded = (at: number, parsedLinks = false) => {
+    for (let node: MdSyntaxNode | null = tree.resolveInner(at, 1); node; node = node.parent) {
+      if (node.name.includes("Code") || node.name === "Image") return true
+      if (parsedLinks && (node.name === "Link" || node.name === "Autolink")) return true
+    }
+    return false
+  }
+  // 左右两侧都检查：链接首尾边界仍可打开；两个链接相接时，先选包含右侧字符的链接。
+  for (const side of [1, -1] as const) {
+    let link: MdSyntaxNode | null = null
+    let blocked = false
+    for (let node: MdSyntaxNode | null = tree.resolveInner(position, side); node; node = node.parent) {
+      // 标签自身可以含行内代码；只有包住链接的代码区域或图片才禁止打开。
+      if (node.name === "Image" || (link && node.name.includes("Code"))) { blocked = true; break }
+      if (!link && (node.name === "Link" || node.name === "Autolink") && node.getChild("URL")) link = node
+    }
+    if (blocked || !link) continue
+    const url = link.getChild("URL")!
+    // CommonMark 的尖括号目的地址与 ASCII 标点转义只影响源码，不属于实际跳转地址。
+    const rawHref = state.sliceDoc(url.from, url.to)
+    const href = (rawHref.startsWith("<") && rawHref.endsWith(">") ? rawHref.slice(1, -1) : rawHref)
+      .replace(/\\([\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e])/g, "$1")
+    const noteTarget = parseMarkdownNoteHref(href)
+    if (noteTarget) candidates.push({ from: link.from, to: link.to, noteTarget })
+    else if (externalHrefPattern.test(href)) candidates.push({ from: link.from, to: link.to, href })
+  }
+  // wiki 与裸 URL 沿用显示层的范围、协议和代码排除规则；只扫描光标所在行。
+  const line = state.doc.lineAt(position)
+  for (const match of line.text.matchAll(wikiLinkPattern)) {
+    const from = line.from + match.index
+    const to = from + match[0].length
+    if (match[1] || position < from || position > to || excluded(from + 2)) continue
+    const noteTarget = match[2].split("|", 1)[0].trim()
+    if (noteTarget) candidates.push({ from, to, noteTarget })
+  }
+  for (const match of line.text.matchAll(bareUrlPattern)) {
+    const href = match[0].replace(bareUrlTrailingPunctuation, "")
+    const from = line.from + match.index
+    const to = from + href.length
+    if (href && from <= position && position <= to && !excluded(from + 1, true)) candidates.push({ from, to, href })
+  }
+  const target = candidates.find(({ from, to }) => from <= position && position < to)
+    ?? candidates.find(({ to }) => to === position)
+  if (!target) return false
+  const options = state.facet(livePreviewOptions)
+  if (target.noteTarget) options.onOpenWikiLink?.(target.noteTarget)
+  else openExternalLink(target.href!, options)
+  return true
+}
+
+// basicSetup 的 Mod+Enter 会插入空行：链接与解析未知时消费按键；
+// 已解析的普通段落返回 false，保留默认命令。两种修饰键沿用原有跨平台行为。
 const markdownLinkKeymap = Prec.high(keymap.of([
   { key: "Cmd-Enter", run: openLinkAtCursor },
   { key: "Ctrl-Enter", run: openLinkAtCursor },
@@ -1115,7 +1265,7 @@ export { markdownLivePreviewPlugin, richBlockDecorationsField, tableDecorationsF
 
 // 表格块替换必须经 StateField 提供，与行内装饰插件一起注册。
 export function markdownLivePreview(options: LivePreviewOptions = {}) {
-  return [livePreviewOptions.of(options), markdownLinkKeymap, markdownLivePreviewPlugin, tableDecorationsField, richBlockDecorationsField]
+  return [livePreviewOptions.of(options), pendingLinkActivation, markdownLinkKeymap, markdownLivePreviewPlugin, tableDecorationsField, richBlockDecorationsField]
 }
 
 /**
@@ -1124,7 +1274,7 @@ export function markdownLivePreview(options: LivePreviewOptions = {}) {
  * 使「实时预览」与「表格编辑」能各自独立地经 Compartment 开关。
  */
 export function markdownLivePreviewBase(options: LivePreviewOptions = {}) {
-  return [livePreviewOptions.of(options), markdownLinkKeymap, markdownLivePreviewPlugin, richBlockDecorationsField]
+  return [livePreviewOptions.of(options), pendingLinkActivation, markdownLinkKeymap, markdownLivePreviewPlugin, richBlockDecorationsField]
 }
 
 /** 表格网格 widget。注册它才会出现可编辑的表格；不注册则表格保持 Markdown 源码。 */

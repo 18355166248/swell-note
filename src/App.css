@@ -901,7 +901,13 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
    给续行留出悬挂缩进，折行位置一眼可辨；代码块自身不横向滚动，避免与外层滚动容器打架。 */
 .markdown-editor-shell .cm-md-codeblock { padding-left: 3ch; background: #f5f7fa; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; font-size: .9em; text-indent: -3ch; }
 .markdown-editor-shell .cm-widgetBuffer { display: inline !important; width: 0 !important; }
-.markdown-editor-shell .cm-md-task-checkbox { display: inline-block !important; box-sizing: border-box; width: 15px; height: 15px; margin: 0 .5em 0 0; accent-color: var(--primary); cursor: pointer; vertical-align: -2px; }
+.markdown-editor-shell .cm-md-task-control { position: relative; display: inline-block; width: 15px; height: 15px; margin: 0 .5em 0 0; vertical-align: -2px; cursor: pointer; }
+.markdown-editor-shell .cm-md-task-control[aria-disabled="true"] { cursor: default; }
+.markdown-editor-shell .cm-md-task-checkbox { position: relative; z-index: 1; display: block !important; box-sizing: border-box; width: 15px; height: 15px; margin: 0; accent-color: var(--primary); cursor: inherit; }
+@media (pointer: coarse) {
+  /* 31×27 的透明触区不改变排版，垂直不跨相邻任务行（当前行距约29px）。 */
+  .markdown-editor-shell .cm-md-task-control::before { position: absolute; inset: -6px -8px; content: ""; }
+}
 .markdown-editor-shell .cm-md-link, .markdown-editor-shell .cm-md-wiki-link { color: var(--primary); text-decoration-line: underline; text-decoration-color: color-mix(in oklab,var(--primary) 52%,transparent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .markdown-editor-shell .cm-md-heading :is(.cm-md-link,.cm-md-wiki-link),
 .markdown-editor-shell .cm-md-heading :is(.cm-md-link,.cm-md-wiki-link) * { color: var(--primary); }

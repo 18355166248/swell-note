@@ -11,7 +11,7 @@ let container: HTMLElement | null = null
 let root: Root | null = null
 
 function pointerEvent(type: string, x: number, pointerId = 1) {
-  const event = new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: 120 })
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: 120 })
   Object.defineProperties(event, {
     isPrimary: { value: true },
     pointerId: { value: pointerId },
@@ -340,5 +340,32 @@ describe("useEdgeSwipeAction navigation handoff", () => {
     })
     expect(workspace.dataset.edgeSwipeState).toBe("idle")
     expect(onComplete).not.toHaveBeenCalled()
+  })
+})
+
+describe("task controls retain activation inside the edge zone", () => {
+  it.each(["cm-md-task-checkbox", "cm-md-task-control", "task-checkbox"])("%s does not prevent native touch/pointer defaults or start navigation", (className) => {
+    vi.useFakeTimers()
+    const complete = vi.fn()
+    const workspace = renderHarness("task-note", complete)
+    const host = document.createElement("div")
+    host.className = "cm-editor"
+    const control = document.createElement(className === "cm-md-task-control" ? "span" : "input")
+    control.className = className
+    if (control instanceof HTMLInputElement) control.type = "checkbox"
+    host.appendChild(control)
+    workspace.querySelector(".mobile-edge-swipe-current")!.appendChild(host)
+    const pointer = pointerEvent("pointerdown", 27)
+    const touch = touchEvent("touchstart", [{ identifier: 7, x: 27 }])
+    act(() => { control.dispatchEvent(pointer); control.dispatchEvent(touch) })
+    expect(pointer.defaultPrevented).toBe(false)
+    expect(touch.defaultPrevented).toBe(false)
+    act(() => {
+      control.dispatchEvent(touchEvent("touchmove", [{ identifier: 7, x: 500 }]))
+      control.dispatchEvent(touchEvent("touchend", [], [{ identifier: 7, x: 500 }]))
+      vi.advanceTimersByTime(500)
+    })
+    expect(complete).not.toHaveBeenCalled()
+    expect(workspace.dataset.edgeSwipeState).toBe("idle")
   })
 })

@@ -224,6 +224,89 @@ test.describe("编辑态链接点击跳转", () => {
     }
   })
 
+  test("Mac Cmd Enter 从目的地址和邻接边界打开并保留撤销", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome" || process.platform !== "darwin")
+    const cases = [
+      { marked: "[示例站](https://example.com/a\\>¦)", target: "https://example.com/a>" },
+      { marked: "[示例站](https://example.com/a(b)¦)", target: "https://example.com/a(b)" },
+      { marked: "[示例站](https://example.com/a\\(b\\)¦)", target: "https://example.com/a(b)" },
+      { marked: '[示例站](https://example.com/path "提¦示")', target: "https://example.com/path" },
+      { marked: "[甲](https://a.example)¦[乙](https://b.example)", target: "https://b.example" },
+      { marked: "普通段落\n\n".repeat(100000) + "[长文尾部](https://example.com/pa¦th)", target: "https://example.com/path" },
+      { marked: "[第二篇](./第二篇.md¦)", target: "./第二篇.md" },
+    ]
+    for (const [index, { marked, target }] of cases.entries()) {
+      const initial = "正文\n\n" + marked.replace("¦", "")
+      const anchor = 4 + marked.indexOf("¦")
+      await seedCachedVault(page, initial)
+      const editor = page.locator(".desktop-workspace:visible .cm-content")
+      await expect(editor).toBeVisible()
+      const edited = await editor.evaluate(async (element, anchor) => {
+        const viewModule = "/node_modules/.vite/deps/@codemirror_view.js"
+        const stateModule = "/node_modules/.vite/deps/@codemirror_state.js"
+        const commandsModule = "/node_modules/.vite/deps/@codemirror_commands.js"
+        const { EditorView } = await import(/* @vite-ignore */ viewModule)
+        const { StateEffect } = await import(/* @vite-ignore */ stateModule)
+        const { undoDepth } = await import(/* @vite-ignore */ commandsModule)
+        const view = EditorView.findFromDOM(element)
+        view.dispatch({ changes: { from: 0, insert: "更新 " }, userEvent: "input.type" })
+        const changes: string[] = []
+        const opened: string[] = []
+        Object.assign(window, { __keyboardBoundaryProbe: { view, changes, opened, beforeDepth: undoDepth(view.state) } })
+        window.open = (url) => { opened.push(String(url)); return null }
+        view.dispatch({ effects: StateEffect.appendConfig.of(EditorView.updateListener.of((update: { docChanged: boolean; state: { doc: { toString: () => string } } }) => {
+          if (update.docChanged) changes.push(update.state.doc.toString())
+        })), selection: { anchor: anchor + 3 }, scrollIntoView: true })
+        view.focus()
+        return view.state.doc.toString()
+      }, anchor)
+      await editor.press("Meta+Enter")
+      if (target.startsWith("https:")) {
+        await expect.poll(() => page.evaluate(() => (window as unknown as { __keyboardBoundaryProbe: { opened: string[] } }).__keyboardBoundaryProbe.opened)).toEqual([target])
+        const inspect = async () => page.evaluate(async () => {
+          const commandsModule = "/node_modules/.vite/deps/@codemirror_commands.js"
+          const { undoDepth } = await import(/* @vite-ignore */ commandsModule)
+          const probe = (window as unknown as { __keyboardBoundaryProbe: { view: { state: { doc: { toString: () => string } } }; beforeDepth: number; changes: string[] } }).__keyboardBoundaryProbe
+          return { doc: probe.view.state.doc.toString(), depth: undoDepth(probe.view.state), beforeDepth: probe.beforeDepth, changes: probe.changes }
+        })
+        await expect.poll(inspect).toEqual({ doc: edited, depth: 1, beforeDepth: 1, changes: [] })
+        if (index === 0) await page.screenshot({ path: testInfo.outputPath("mac-link-destination-tail.png") })
+        await editor.press("Meta+z")
+        await expect.poll(async () => (await inspect()).doc).toBe(initial)
+        await expect.poll(async () => (await inspect()).depth).toBe(0)
+      } else {
+        await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
+        expect(await page.evaluate(() => (window as unknown as { __keyboardBoundaryProbe: { changes: string[] } }).__keyboardBoundaryProbe.changes)).toEqual([])
+      }
+    }
+  })
+
+  test("Mac Cmd Enter 在代码和图片伪链接保留默认换行", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chrome" || process.platform !== "darwin")
+    for (const marked of ["\u0060[标签](https://example.com/pa¦th)\u0060", "![图](https://example.com/im¦age.png)", "普通¦段落"]) {
+      const initial = marked.replace("¦", "")
+      await seedCachedVault(page, initial)
+      const editor = page.locator(".desktop-workspace:visible .cm-content")
+      await expect(editor).toBeVisible()
+      await editor.evaluate(async (element, anchor) => {
+        const viewModule = "/node_modules/.vite/deps/@codemirror_view.js"
+        const { EditorView } = await import(/* @vite-ignore */ viewModule)
+        const view = EditorView.findFromDOM(element)
+        const opened: string[] = []
+        Object.assign(window, { __keyboardBoundaryDefault: { view, opened } })
+        window.open = (url) => { opened.push(String(url)); return null }
+        view.dispatch({ selection: { anchor } })
+        view.focus()
+      }, marked.indexOf("¦"))
+      await editor.press("Meta+Enter")
+      const result = await page.evaluate(() => {
+        const probe = (window as unknown as { __keyboardBoundaryDefault: { view: { state: { doc: { toString: () => string } } }; opened: string[] } }).__keyboardBoundaryDefault
+        return { doc: probe.view.state.doc.toString(), opened: probe.opened }
+      })
+      expect(result).toEqual({ doc: initial + "\n", opened: [] })
+    }
+  })
+
   test("Mac 表格链接普通点击编辑且 Cmd 点击打开", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome" || process.platform !== "darwin")
     for (const href of ["./第二篇.md", "https://example.com/page"]) {
@@ -871,5 +954,176 @@ test.describe("编辑细节", () => {
     await expect(heading).toBeFocused()
     await expect(editor).toHaveText("记录今天的想X法")
     await page.screenshot({ path: testInfo.outputPath("heading-format-and-cancel.png") })
+  })
+})
+
+test.describe("移动待办触区与侧滑", () => {
+  test.beforeEach(async ({ page }) => { await page.route("**/api/webdav/**", (route) => route.abort()) })
+  const taskDoc = "# 任务检查\n\n- [ ] 未完成任务\n- [x] 已完成任务\n\n末段用于选区检查"
+  async function openTaskFixture(page: Page, doc = taskDoc) {
+    await seedCachedVault(page, doc)
+    const workspace = page.locator(".mobile-workspace:visible")
+    await workspace.getByText("测试", { exact: true }).first().click()
+    await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    const editor = workspace.locator(".mobile-edge-swipe-current .cm-content")
+    await expect(editor).toBeVisible()
+    await editor.evaluate(async (element) => {
+      const viewModule = "/node_modules/.vite/deps/@codemirror_view.js"
+      const stateModule = "/node_modules/.vite/deps/@codemirror_state.js"
+      const { EditorView } = await import(/* @vite-ignore */ viewModule)
+      const { StateEffect } = await import(/* @vite-ignore */ stateModule)
+      const view = EditorView.findFromDOM(element)
+      const changes: string[] = []
+      Object.assign(window, { __taskToggleProbe: { view, changes } })
+      view.dispatch({ selection: { anchor: view.state.doc.length - 4, head: view.state.doc.length }, effects: StateEffect.appendConfig.of(EditorView.updateListener.of((update: { docChanged: boolean; state: { doc: { toString: () => string } } }) => {
+        if (update.docChanged) changes.push(update.state.doc.toString())
+      })) })
+    })
+    return { workspace, editor }
+  }
+  const inspectTasks = (page: Page) => page.evaluate(() => {
+    const probe = (window as unknown as { __taskToggleProbe: { view: { hasFocus: boolean; state: { doc: { toString: () => string }; selection: { toJSON: () => unknown } } }; changes: string[] } }).__taskToggleProbe
+    return { doc: probe.view.state.doc.toString(), selection: probe.view.state.selection.toJSON(), changes: probe.changes, focused: probe.view.hasFocus }
+  })
+
+  test("中心与32px边界可勾选取消且保持焦点选区", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    test.setTimeout(60_000)
+    for (const focused of [false, true]) for (const x of [27.5, 31, 32, 33, 34]) {
+      const { editor } = await openTaskFixture(page)
+      await editor.evaluate((element, focused) => focused ? (element as HTMLElement).focus() : (element as HTMLElement).blur(), focused)
+      const before = await inspectTasks(page)
+      const box = editor.locator(".cm-md-task-checkbox").first()
+      const rect = (await box.boundingBox())!
+      await page.touchscreen.tap(x, rect.y + rect.height / 2)
+      await expect(box).toBeChecked()
+      let state = await inspectTasks(page)
+      expect(state.doc).toBe(taskDoc.replace("- [ ] 未完成", "- [x] 未完成"))
+      expect(state.changes).toHaveLength(1)
+      expect(state.selection).toEqual(before.selection)
+      expect(state.focused).toBe(focused)
+      await page.touchscreen.tap(x, rect.y + rect.height / 2)
+      await expect(box).not.toBeChecked()
+      state = await inspectTasks(page)
+      expect(state.doc).toBe(taskDoc)
+      expect(state.changes).toHaveLength(2)
+      expect(state.selection).toEqual(before.selection)
+      if (focused && x === 27.5) await page.screenshot({ path: testInfo.outputPath("task-center-focus-selection.png") })
+    }
+  })
+
+  test("扩展触区保持图标行距并独立命中相邻任务", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    const { editor } = await openTaskFixture(page)
+    const boxes = editor.locator(".cm-md-task-checkbox")
+    const first = (await boxes.nth(0).boundingBox())!
+    const second = (await boxes.nth(1).boundingBox())!
+    expect(first.width).toBe(15)
+    expect(first.height).toBe(15)
+    expect(second.y - first.y).toBeGreaterThan(28)
+    expect(second.y - first.y).toBeLessThan(30)
+    await page.touchscreen.tap(first.x - 6, first.y + first.height / 2)
+    await expect(boxes.nth(0)).toBeChecked()
+    await expect(boxes.nth(1)).toBeChecked()
+    await page.touchscreen.tap(second.x + second.width / 2, second.y + second.height / 2 + 11)
+    await expect(boxes.nth(1)).not.toBeChecked()
+    await expect(boxes.nth(0)).toBeChecked()
+    expect((await inspectTasks(page)).changes).toHaveLength(2)
+    const gapY = (first.y + second.y) / 2 + first.height / 2
+    await page.touchscreen.tap(first.x + first.width / 2, gapY)
+    expect((await inspectTasks(page)).changes).toHaveLength(2)
+    await page.screenshot({ path: testInfo.outputPath("task-expanded-area-neighbors.png") })
+  })
+
+  test("微移动单次更新而任务起手拖动不勾选不返回", async ({ page, context }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    const { workspace, editor } = await openTaskFixture(page)
+    const session = await context.newCDPSession(page)
+    const rect = (await editor.locator(".cm-md-task-checkbox").first().boundingBox())!
+    const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2
+    const send = (type: string, atX = x, atY = y) => session.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x: atX, y: atY }] })
+    const beforeUrl = page.url()
+    await send("touchStart"); await send("touchMove", x + 4, y + 2); await send("touchEnd")
+    await expect(editor.locator(".cm-md-task-checkbox").first()).toBeChecked()
+    expect((await inspectTasks(page)).changes).toHaveLength(1)
+    await send("touchStart"); await send("touchMove", x + 80); await send("touchMove", x); await send("touchEnd")
+    await page.waitForTimeout(250)
+    expect((await inspectTasks(page)).changes).toHaveLength(1)
+    expect(page.url()).toBe(beforeUrl)
+    await expect(workspace).toHaveAttribute("data-screen", "editor")
+    await expect(editor.locator(".cm-md-task-checkbox").first()).toBeChecked()
+  })
+
+  test("快速连点与嵌套待办只切换目标并保留正文选择", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    const doc = "# 嵌套待办\n\n- [ ] 根任务\n  - [ ] 子任务\n\n末段"
+    const { editor } = await openTaskFixture(page, doc)
+    const box = editor.locator(".cm-md-task-checkbox").nth(1)
+    const rect = (await box.boundingBox())!
+    await page.touchscreen.tap(rect.x + 7.5, rect.y + 7.5)
+    await page.touchscreen.tap(rect.x + 7.5, rect.y + 7.5)
+    await expect(box).not.toBeChecked()
+    expect((await inspectTasks(page)).doc).toBe(doc)
+    expect((await inspectTasks(page)).changes).toHaveLength(2)
+    const textRect = await editor.evaluate((element) => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+      while (walker.nextNode()) {
+        const index = walker.currentNode.textContent?.indexOf("根任务") ?? -1
+        if (index < 0) continue
+        const range = document.createRange()
+        range.setStart(walker.currentNode, index); range.setEnd(walker.currentNode, index + 3)
+        const rect = range.getBoundingClientRect()
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+      }
+      throw new Error("未找到任务正文")
+    })
+    await page.mouse.move(textRect.x + 3, textRect.y + textRect.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(textRect.x + textRect.width - 2, textRect.y + textRect.height / 2, { steps: 5 })
+    await page.mouse.up()
+    const selected = await inspectTasks(page)
+    expect(selected.doc).toBe(doc)
+    expect(selected.changes).toHaveLength(2)
+    expect(selected.selection).not.toEqual({ ranges: [{ anchor: doc.length - 4, head: doc.length }], main: 0 })
+  })
+
+  test("中心勾选可撤销并在离线缓存重载后保留", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    const { editor } = await openTaskFixture(page)
+    await editor.focus()
+    const box = editor.locator(".cm-md-task-checkbox").first()
+    await box.tap()
+    await expect(box).toBeChecked()
+    await page.keyboard.press("Meta+z")
+    await expect(box).not.toBeChecked()
+    expect((await inspectTasks(page)).doc).toBe(taskDoc)
+    await box.tap()
+    await expect(box).toBeChecked()
+    await expect.poll(() => page.evaluate(async () => {
+      const request = indexedDB.open("swell-note-vault-cache", 3)
+      const db = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+      const read = db.transaction("documents", "readonly").objectStore("documents").get("e2e-vault\u0000webdav:/Swell/测试/第一篇.md")
+      const entry = await new Promise<{ content?: string } | undefined>((resolve, reject) => { read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error) })
+      db.close(); return entry?.content
+    })).toContain("- [x] 未完成任务")
+    await page.reload()
+    await expect(page.locator(".note-editor:visible .cm-md-task-checkbox").first()).toBeChecked()
+  })
+
+  test("锁定阅读保持禁用且兼容阅读仍可勾选", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile-chrome")
+    const { workspace } = await openTaskFixture(page)
+    await workspace.getByRole("button", { name: "更多操作" }).click()
+    await page.getByRole("menuitem", { name: "锁定为只读阅读", exact: true }).click()
+    const locked = workspace.locator(".cm-md-task-checkbox").first()
+    await expect(locked).toBeDisabled()
+    const rect = (await locked.boundingBox())!
+    await page.touchscreen.tap(rect.x + 7.5, rect.y + 7.5)
+    await expect(locked).not.toBeChecked()
+    expect((await inspectTasks(page)).doc).toBe(taskDoc)
+    await useCompatibilityPreview(page)
+    const preview = workspace.locator(".markdown-preview .task-checkbox").first()
+    await preview.tap()
+    await expect(preview).toBeChecked()
   })
 })

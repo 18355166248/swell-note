@@ -52,6 +52,14 @@ describe("keepsSelectionAlive", () => {
     }
   })
 
+  it("点击任务图标与扩展触区时保留正文选区，兼容预览同样处理", () => {
+    document.body.innerHTML = `<span class="cm-md-task-control" id="padding"><input class="cm-md-task-checkbox" id="task"></span><input class="task-checkbox" id="preview-task">`
+
+    for (const id of ["padding", "task", "preview-task"]) {
+      expect(keepsSelectionAlive(document.getElementById(id))).toBe(true)
+    }
+  })
+
   it("正文与留白不属于工具栏，点了就收起选区", () => {
     document.body.innerHTML = `<div class="markdown-editor-shell"><div id="blank"></div></div>`
 

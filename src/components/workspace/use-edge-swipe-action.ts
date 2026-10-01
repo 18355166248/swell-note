@@ -24,6 +24,11 @@ type Gesture = {
   y: number
 }
 
+// 任务控件自己拥有点按/拖动；即使落在左32px，也不能抢走它的原生 click。
+function isTaskControl(target: EventTarget | null) {
+  return target instanceof Element && Boolean(target.closest(".cm-md-task-control, .cm-md-task-checkbox, .task-checkbox"))
+}
+
 function isEditorSurface(target: EventTarget | null) {
   if (!(target instanceof Element)) return false
   // 起手未必正落在编辑器上：落在容器留白里同样会被夺焦——浏览器会把光标塞进这一片中
@@ -76,7 +81,7 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
     const blockEditorFocus = (event: TouchEvent) => {
       const touch = event.touches[0]
       if (!touch || event.touches.length !== 1 || touch.clientX > EDGE_ZONE_WIDTH) return
-      if (!isEditorSurface(event.target)) return
+      if (isTaskControl(event.target) || !isEditorSurface(event.target)) return
       event.preventDefault()
     }
     const blockBackgroundScroll = (event: TouchEvent) => {
@@ -292,7 +297,7 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     // 每次新的按下都先解除抑制，否则上一轮残留的标记会把这次正常点击一起吞掉。
     suppressClickRef.current = false
-    if (!enabled || phaseRef.current === "completing" || !event.isPrimary || event.clientX > EDGE_ZONE_WIDTH) return
+    if (!enabled || phaseRef.current === "completing" || !event.isPrimary || event.clientX > EDGE_ZONE_WIDTH || isTaskControl(event.target)) return
     // 起手落在编辑器上就别让它拿到焦点：contenteditable 一聚焦，iOS 立刻顶起输入辅助栏，
     // 布局跟着收缩，手势走完焦点又消失、布局回落，看起来就是侧滑中途闪一下。
     if (isEditorSurface(event.target)) event.preventDefault()
@@ -332,7 +337,7 @@ export function useEdgeSwipeAction(onComplete: () => boolean | void | Promise<bo
       returnToStart()
       return
     }
-    if (!enabled || phaseRef.current === "completing" || !touch || touch.clientX > EDGE_ZONE_WIDTH) return
+    if (!enabled || phaseRef.current === "completing" || !touch || touch.clientX > EDGE_ZONE_WIDTH || isTaskControl(event.target)) return
     clearScheduled()
     gestureGenerationRef.current += 1
     clearPointerGesture()
