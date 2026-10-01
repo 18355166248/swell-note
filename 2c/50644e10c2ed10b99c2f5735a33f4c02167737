@@ -1,0 +1,29 @@
+e2e/editor-link-click.spec.ts
+  s_57db2c01e7cdde::t_442be60465c8b1 227-309,959-1129
+src/App.css
+  s_57db2c01e7cdde::t_8b9bc6fcd0bd6b 904-910
+src/components/editor/live-preview.ts
+  s_57db2c01e7cdde::t_ccf3fe60d97b19 2,78-80,86,89-90,92-103,105-117,120,124-125,551-609,611-678,681-682,1268,1277
+src/components/editor/platform-editor-integration.test.tsx
+  s_57db2c01e7cdde::t_64cbe75cfca721 5,13-17,38,42,53,55,58-59,62-64,72-177,192-318,405-466
+src/components/workspace/use-edge-swipe-action.test.tsx
+  s_57db2c01e7cdde::t_05373015a4fcf1 14,345-371
+src/components/workspace/use-edge-swipe-action.ts
+  s_57db2c01e7cdde::t_d68896d1cb6396 27-31,84,300,340
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "2c50644e10c2ed10b99c2f5735a33f4c02167737",
+  "prompts": {},
+  "sessions": {
+    "s_57db2c01e7cdde": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06f75-de58-76b0-97c7-d4f7220e4583",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
