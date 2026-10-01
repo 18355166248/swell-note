@@ -44,6 +44,14 @@ describe("keepsSelectionAlive", () => {
     expect(keepsSelectionAlive(document.getElementById("bold"))).toBe(true)
   })
 
+  it("查找与替换控件保留匹配选区，首次操作不应先折叠正文选区", () => {
+    document.body.innerHTML = `<div class="editor-find-bar"><input id="query"><button id="next"><svg id="icon"></svg></button><button id="replace">替换</button><button id="close">关闭</button></div>`
+
+    for (const id of ["query", "next", "icon", "replace", "close"]) {
+      expect(keepsSelectionAlive(document.getElementById(id))).toBe(true)
+    }
+  })
+
   it("正文与留白不属于工具栏，点了就收起选区", () => {
     document.body.innerHTML = `<div class="markdown-editor-shell"><div id="blank"></div></div>`
 

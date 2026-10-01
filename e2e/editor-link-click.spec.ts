@@ -328,7 +328,7 @@ test.describe("编辑态链接点击跳转", () => {
     await page.screenshot({ path: testInfo.outputPath("mobile-cancelled-swipe.png") })
   })
 
-  test("验证查找栏第一次关闭即生效", async ({ page }, testInfo) => {
+  test("查找命中后一次关闭保留匹配选区并可继续输入", async ({ page }, testInfo) => {
     await seedCachedVault(page, "中文 猫")
     const mobile = testInfo.project.name === "mobile-chrome"
     const workspace = page.locator(mobile ? ".mobile-workspace:visible" : ".desktop-workspace:visible")
@@ -340,11 +340,49 @@ test.describe("编辑态链接点击跳转", () => {
     await expect(editor).toHaveText("中文 猫")
     await editor.press("ControlOrMeta+f")
     await workspace.getByLabel("查找当前笔记").fill("猫")
+    await expect(workspace.locator(".editor-find-field [aria-live]")).toHaveText("1/1")
+    // 等真正的匹配选区建立，避免在查找的下一帧前点关闭而漏掉移动端 pointerup 守卫。
+    if (mobile) await expect(workspace.locator('.formatting-toolbar[data-selection-mode="true"]')).toBeVisible()
     const close = workspace.getByRole("button", { name: "关闭查找", exact: true })
     if (mobile) await close.tap()
     else await close.click()
     await expect(workspace.locator(".editor-find-bar")).toHaveCount(0)
     await expect(editor).toHaveText("中文 猫")
+    if (mobile) await expect(workspace.locator('.formatting-toolbar[data-selection-mode="true"]')).toBeVisible()
+    await editor.focus()
+    await page.keyboard.type("X")
+    await expect(editor).toHaveText("中文 X")
+    await page.screenshot({ path: testInfo.outputPath("find-close-first-tap.png") })
+  })
+
+  test("查找控件切换匹配和组合态回车保持正文选区", async ({ page }, testInfo) => {
+    await seedCachedVault(page, "中文 猫 狗 猫")
+    const mobile = testInfo.project.name === "mobile-chrome"
+    const workspace = page.locator(mobile ? ".mobile-workspace:visible" : ".desktop-workspace:visible")
+    if (mobile) {
+      await workspace.getByText("测试", { exact: true }).first().click()
+      await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    }
+    const editor = workspace.locator(".cm-content")
+    await editor.press("ControlOrMeta+f")
+    const query = workspace.getByLabel("查找当前笔记")
+    const result = workspace.locator(".editor-find-field [aria-live]")
+    await query.fill("猫")
+    await expect(result).toHaveText("1/2")
+    await query.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true })
+    await expect(result).toHaveText("1/2")
+    await query.press("Enter")
+    await expect(result).toHaveText("2/2")
+    const previous = workspace.getByRole("button", { name: "上一个匹配项", exact: true })
+    if (mobile) await previous.tap()
+    else await previous.click()
+    await expect(result).toHaveText("1/2")
+    await workspace.getByLabel("替换为", { exact: true }).fill("狐")
+    const replace = workspace.getByRole("button", { name: "替换", exact: true })
+    if (mobile) await replace.tap()
+    else await replace.click()
+    await expect(editor).toHaveText("中文 狐 狗 猫")
+    await expect(result).toHaveText("1/1")
   })
 
   test("移动端触屏点按笔记链接先弹出操作菜单", async ({ page }, testInfo) => {
@@ -736,9 +774,15 @@ test.describe("编辑细节", () => {
     const tableBox = await table.boundingBox()
     const toolbarBox = await toolbar.boundingBox()
     expect(toolbarBox!.y).toBeGreaterThan(tableBox!.y + 100)
+    // 吸顶后只保留抓手；先显式展开，避免下挂工具条遮住可见单元格。
+    if (mobile) await toolbar.tap()
+    else await toolbar.click()
+    await expect(toolbar.getByLabel("行列操作")).toBeVisible()
     await toolbar.getByLabel("行列操作").click()
-    await expect(table.getByRole("button", { name: "添加行", exact: true })).toBeInViewport()
-    await table.getByRole("button", { name: "添加行", exact: true }).click()
+    // 菜单挂到 body 避免滚动祖先裁切，操作按钮不再属于表格 DOM 子树。
+    const addRow = page.getByRole("button", { name: "添加行", exact: true })
+    await expect(addRow).toBeInViewport()
+    await addRow.click()
     await expect(table.locator("tbody tr")).toHaveCount(61)
   })
 
@@ -782,7 +826,7 @@ test.describe("编辑细节", () => {
   })
 
   test("工具栏整行格式保持选区并支持再次取消", async ({ page }, testInfo) => {
-    await seedCachedVault(page)
+    await seedCachedVault(page, "记录今天的想法")
     const mobile = testInfo.project.name === "mobile-chrome"
     const workspace = page.locator(mobile ? ".mobile-workspace:visible" : ".desktop-workspace:visible")
     if (mobile) {
@@ -790,16 +834,42 @@ test.describe("编辑细节", () => {
       await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
     }
     const editor = workspace.locator(".cm-content")
-    await editor.fill("记录今天的想法")
+    await expect(editor).toHaveText("记录今天的想法")
+    const readCachedContent = async () => page.evaluate(async () => {
+      const request = indexedDB.open("swell-note-vault-cache", 3)
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error)
+      })
+      const documentRequest = database.transaction("documents", "readonly").objectStore("documents")
+        .get("e2e-vault\u0000webdav:/Swell/测试/第一篇.md")
+      const content = await new Promise<string>((resolve, reject) => {
+        documentRequest.onsuccess = () => resolve(documentRequest.result?.content ?? "")
+        documentRequest.onerror = () => reject(documentRequest.error)
+      })
+      database.close()
+      return content
+    })
+    await editor.press("End")
     await editor.press("ArrowLeft")
     const heading = workspace.getByRole("combobox", { name: "标题级别", exact: true })
-    await heading.selectOption("##")
-    await expect(editor).toHaveText("## 记录今天的想法")
+    await heading.click()
+    await page.getByRole("option", { name: "二级标题", exact: true }).click()
     await expect(editor).toBeFocused()
+    // 标题正文里的光标不展开 # 标记，验证实际标题样式和已保存 Markdown。
+    await expect(editor.locator(".cm-md-h2")).toHaveText("记录今天的想法")
+    await expect.poll(readCachedContent).toBe("## 记录今天的想法")
     // 受控选择器重选同级不会触发 onChange，取消标题走「正文」选项。
-    await heading.selectOption("")
+    await heading.click()
+    await page.getByRole("option", { name: "正文", exact: true }).click()
     await expect(editor).toHaveText("记录今天的想法")
     await editor.press("X")
     await expect(editor).toHaveText("记录今天的想X法")
+    await expect.poll(readCachedContent).toBe("记录今天的想X法")
+    await heading.click()
+    await page.keyboard.press("Escape")
+    await expect(heading).toBeFocused()
+    await expect(editor).toHaveText("记录今天的想X法")
+    await page.screenshot({ path: testInfo.outputPath("heading-format-and-cancel.png") })
   })
 })

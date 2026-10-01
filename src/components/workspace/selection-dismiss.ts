@@ -16,7 +16,8 @@ export function isSelectionDismissTap(origin: PointerOrigin | null, end: Pointer
   return end.at - origin.at <= TAP_MAX_DURATION
 }
 
-// 工具栏要作用在这段选区上，点它们不能顺手把选区收掉。
+// 工具栏与查找/替换控件要作用在正文选区上，点它们不能先折叠选区；
+// iOS 在 pointerup 修改原生选区会吞掉随后这一次 click，让关闭查找需要点两次。
 export function keepsSelectionAlive(target: Element | null) {
-  return target?.closest(".selection-action-bar, .formatting-toolbar") != null
+  return target?.closest(".selection-action-bar, .formatting-toolbar, .editor-find-bar") != null
 }
