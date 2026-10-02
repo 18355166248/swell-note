@@ -7,6 +7,8 @@ import { scrollElementIntoVisibleBand } from "./cursor-visibility"
 import { requiresLinkModifier } from "./editor-link-activation"
 
 import {
+  organizeMarkdownTable,
+  type TableOrganizeAction,
   alignTableColumn,
   appendTableColumn,
   appendTableRow,
@@ -655,6 +657,13 @@ export class TableWidget extends WidgetType {
         this.createDeleteButton("删除行", "row"),
         this.createDeleteButton("删除列", "column"),
       ]),
+      this.createToolbarMenu("整理", [
+        ...([['当前行上移', 'row-up'], ['当前行下移', 'row-down'], ['复制当前行', 'row-copy'], ['当前列左移', 'column-left'], ['当前列右移', 'column-right'], ['复制当前列', 'column-copy'], ['按当前列升序', 'sort-asc'], ['按当前列降序', 'sort-desc']] as const).map(([label, action]) => {
+          const button = this.createInsertButton(label, 'organize', '先选择单元格', () => this.opOrganize(action))
+          button.dataset.organizeAction = action
+          return button
+        }),
+      ]),
       this.createToolbarMenu("水平", [
         this.createAlignButton("左对齐", "left", wrapper, table),
         this.createAlignButton("居中", "center", wrapper, table),
@@ -953,8 +962,16 @@ export class TableWidget extends WidgetType {
         button.title = title
       }
     }
-    for (const button of wrapper.querySelectorAll<HTMLButtonElement>('[data-table-action="align"]')) {
+    for (const button of wrapper.querySelectorAll<HTMLButtonElement>('[data-table-action="align"], [data-table-action="organize"]')) {
       button.disabled = false
+    }
+    for (const button of wrapper.querySelectorAll<HTMLButtonElement>('[data-organize-action]')) {
+      const action = button.dataset.organizeAction
+      button.disabled = action === "row-up" ? rowIndex <= 0
+        : action === "row-down" ? rowIndex < 0 || rowIndex >= table.rows.length - 1
+          : action === "row-copy" ? rowIndex < 0
+            : action === "column-left" ? columnIndex <= 0
+              : action === "column-right" ? columnIndex >= table.header.length - 1 : false
     }
   }
 
@@ -1788,6 +1805,31 @@ export class TableWidget extends WidgetType {
     const row = Number(wrapper.dataset.selectedRow)
     const column = Number(wrapper.dataset.selectedColumn)
     return Number.isInteger(row) && Number.isInteger(column) ? { column, row } : null
+  }
+
+  opOrganize(action: TableOrganizeAction) {
+    if (this.view.state.readOnly || this.view.composing) return
+    const dom = this.currentDom()
+    if (!dom) return
+    const target = this.session().range?.focus ?? this.targetCell(dom.wrapper)
+    if (!target) return
+    // 未提交的单元格先并入结构事务；复制/移动与输入一起可撤销，不能按旧源码整理而丢字。
+    const current = this.tableWithActiveEdit(dom.wrapper, dom.table)
+    const next = organizeMarkdownTable(current, action, target.row, target.column)
+    if (!next) return
+    let row = target.row, column = target.column
+    if (action === "row-up") row--
+    if (action === "row-down" || action === "row-copy") row++
+    if (action.startsWith("column-")) {
+      column += action === "column-left" ? -1 : 1
+      this.adjustColumnPreference(dom.wrapper, (widths) => {
+        if (action === "column-copy") widths.splice(target.column + 1, 0, widths[target.column] ?? MIN_TABLE_COLUMN_WIDTH)
+        else [widths[target.column], widths[column]] = [widths[column], widths[target.column]]
+        return widths
+      })
+    }
+    this.session().range = null
+    this.replaceTable(next, { row: row + 1, column })
   }
 
   opInsertRow(position: "above" | "below") {

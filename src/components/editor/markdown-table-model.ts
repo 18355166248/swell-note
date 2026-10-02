@@ -301,3 +301,34 @@ export function pasteTableCells(table: MarkdownTable, row: number, column: numbe
   })
   return next
 }
+
+export type TableOrganizeAction = "row-up" | "row-down" | "row-copy" | "column-left" | "column-right" | "column-copy" | "sort-asc" | "sort-desc"
+
+export function organizeMarkdownTable(table: MarkdownTable, action: TableOrganizeAction, row: number, column: number) {
+  if (column < 0 || column >= table.header.length) return null
+  const next = cloneMarkdownTable(table)
+  if (action.startsWith("row-")) {
+    // GFM 表头固定；移动/复制只作用于正文行，不把表头混入排序内容。
+    if (row < 0 || row >= next.rows.length) return null
+    if (action === "row-copy") next.rows.splice(row + 1, 0, [...next.rows[row]])
+    else {
+      const destination = row + (action === "row-up" ? -1 : 1)
+      if (destination < 0 || destination >= next.rows.length) return null
+      ;[next.rows[row], next.rows[destination]] = [next.rows[destination], next.rows[row]]
+    }
+  } else if (action.startsWith("column-")) {
+    const destination = column + (action === "column-left" ? -1 : 1)
+    if (action !== "column-copy" && (destination < 0 || destination >= next.header.length)) return null
+    const transform = <T,>(cells: T[], empty: T) => {
+      while (cells.length < table.header.length) cells.push(empty)
+      if (action === "column-copy") cells.splice(column + 1, 0, cells[column])
+      else [cells[column], cells[destination]] = [cells[destination], cells[column]]
+    }
+    transform(next.header, ""); transform(next.aligns, "left"); next.rows.forEach((cells) => transform(cells, ""))
+  } else {
+    // 按 Markdown 原始单元格文字自然排序；稳定序号保证同值行不乱序。
+    const compare = new Intl.Collator("zh-CN", { numeric: true, sensitivity: "base" })
+    next.rows = next.rows.map((cells, index) => ({ cells, index })).sort((left, right) => (action === "sort-desc" ? -1 : 1) * compare.compare(left.cells[column] ?? "", right.cells[column] ?? "") || left.index - right.index).map((item) => item.cells)
+  }
+  return next
+}
