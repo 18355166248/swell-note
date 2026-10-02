@@ -1689,3 +1689,9 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .formatting-toolbar[data-mobile="true"] .toolbar-more-menu { top: auto; }
 
 .cm-block-completion[hidden] { display: none; }
+
+.cm-md-attachment { padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-soft); }
+.cm-md-attachment button { min-height: 44px; padding: 8px; color: var(--primary); }
+.markdown-attachment-open { display: block; }
+.markdown-attachment-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-block: 6px; }
+.markdown-attachment-actions > * { min-height: 44px; display: inline-flex; align-items: center; }

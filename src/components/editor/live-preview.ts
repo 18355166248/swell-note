@@ -1,3 +1,4 @@
+import { AttachmentBlockWidget, collectAttachmentBlocks, type AttachmentBlock } from "./unified-attachment"
 import { isolateHistory } from "@codemirror/commands"
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language"
 import type { EditorState, Range } from "@codemirror/state"
@@ -858,6 +859,7 @@ const tableDecorationsField = StateField.define<DecorationSet>({
 type UnifiedBlockDescriptor =
   | { block: CompatibilityBlock; family: "compatibility" }
   | { block: UnifiedRichBlock; family: "rich" }
+  | { block: AttachmentBlock; family: "attachment" }
 
 const compatibilityBlockCache = new WeakMap<object, { blocks: CompatibilityBlock[]; tree: object }>()
 
@@ -872,6 +874,7 @@ function compatibilityBlocksFor(state: EditorState) {
 
 function collectUnifiedBlocks(state: EditorState): UnifiedBlockDescriptor[] {
   const candidates: UnifiedBlockDescriptor[] = [
+    ...collectAttachmentBlocks(state).filter((block) => !state.selection.ranges.some((range) => !range.empty && range.from <= block.from && range.to >= block.to)).map((block): UnifiedBlockDescriptor => ({ block, family: "attachment" })),
     ...collectUnifiedRichBlocks(state).map((block): UnifiedBlockDescriptor => ({ block, family: "rich" })),
     ...compatibilityBlocksFor(state).map((block): UnifiedBlockDescriptor => ({ block, family: "compatibility" })),
   ].sort((left, right) => left.block.from - right.block.from || right.block.to - left.block.to)
@@ -901,7 +904,8 @@ function richBlocksDecorations(blocks: readonly UnifiedBlockDescriptor[], view: 
     block: true,
     widget: family === "rich"
       ? new UnifiedRichBlockWidget(block as UnifiedRichBlock, view, options.tableStorageKey)
-      : new CompatibilityBlockWidget(block as CompatibilityBlock, options, view),
+      : family === "attachment" ? new AttachmentBlockWidget(block as AttachmentBlock, options, view)
+        : new CompatibilityBlockWidget(block as CompatibilityBlock, options, view),
   }).range(block.from, block.to)), true)
 }
 
