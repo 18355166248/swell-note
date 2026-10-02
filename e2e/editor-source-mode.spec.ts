@@ -198,11 +198,11 @@ test.describe("Markdown 源码模式", () => {
 
     // 源码模式下正文仍可编辑：这是「源码」而不是「只读」。
     await page.locator(".cm-content:visible").first().click()
-    await page.keyboard.press("Control+End")
+    await page.keyboard.press("ControlOrMeta+End")
     await page.keyboard.type("源码中续写")
     await waitStoredDoc(page, (content) => content.includes("源码中续写"))
-    // 切换 + 编辑全程没有改动原有正文，只是在某处追加了新输入。
-    expect(await readStored(page)).toContain(RICH_CONTENT.replace(/\n结尾段落。$/, ""))
+    // 切换 + 编辑全程没有改动原有正文，只是在文末追加了新输入。
+    expect(await readStored(page)).toBe(RICH_CONTENT + "源码中续写")
 
     // 退出源码模式：预览装饰回到正文上。
     await (await sourceToggleButton(page)).click()
@@ -212,7 +212,7 @@ test.describe("Markdown 源码模式", () => {
     // （切换前后 undoDepth 不变，且切换后 undo() 能把正文撤回原文）。
     // 这里不重复做键盘撤销：点击正文容易落在表格/图片控件上，Ctrl+Z 会交给控件的输入框，
     // 断出来的结果与「撤销栈是否被清空」无关，只会变成一条靠不住的用例。
-    expect(await readStored(page)).toContain(RICH_CONTENT.replace(/\n结尾段落。$/, ""))
+    expect(await readStored(page)).toBe(RICH_CONTENT + "源码中续写")
   })
 
   test("源码模式偏好跨刷新保留，且不写进笔记正文与笔记元数据", async ({ page }, testInfo) => {

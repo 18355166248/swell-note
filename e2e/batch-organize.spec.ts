@@ -1,3 +1,4 @@
+import { selectRadix } from "./select-actions"
 import { expect, test, type Page } from "@playwright/test"
 
 async function seed(page: Page) {
@@ -32,7 +33,7 @@ test("批量标签、移动、删除持久化，未选笔记保留", async ({ pa
   let dialog = await openBatch(page)
   await dialog.getByRole("checkbox", { name: "甲 根目录" }).check()
   await dialog.getByRole("checkbox", { name: "乙 根目录" }).check()
-  await dialog.getByLabel("批量操作", { exact: true }).selectOption("add-tags")
+  await selectRadix(page, dialog.getByLabel("批量操作", { exact: true }), "添加标签")
   await dialog.getByLabel("批量标签").fill("项目, 待处理")
   await page.screenshot({ path: testInfo.outputPath("batch-dialog.png") })
   await dialog.getByRole("button", { name: "执行（2）" }).click()
@@ -46,8 +47,8 @@ test("批量标签、移动、删除持久化，未选笔记保留", async ({ pa
   dialog = await openBatch(page)
   await dialog.getByRole("checkbox", { name: "甲 根目录" }).check()
   await dialog.getByRole("checkbox", { name: "乙 根目录" }).check()
-  await dialog.getByLabel("批量操作", { exact: true }).selectOption("move")
-  await dialog.getByLabel("批量移动目标目录").selectOption("目标")
+  await selectRadix(page, dialog.getByLabel("批量操作", { exact: true }), "移动到目录")
+  await selectRadix(page, dialog.getByLabel("批量移动目标目录"), "目标")
   await dialog.getByRole("button", { name: "执行（2）" }).click()
   await expect(dialog).toContainText("已完成 2 / 2 篇")
   await dialog.getByRole("button", { name: "完成", exact: true }).click()
@@ -56,7 +57,7 @@ test("批量标签、移动、删除持久化，未选笔记保留", async ({ pa
   await page.reload()
   dialog = await openBatch(page)
   await dialog.getByRole("checkbox", { name: "甲 目标" }).check()
-  await dialog.getByLabel("批量操作", { exact: true }).selectOption("delete")
+  await selectRadix(page, dialog.getByLabel("批量操作", { exact: true }), "移入回收站")
   await dialog.getByRole("button", { name: "执行（1）" }).click()
   await expect(dialog).toContainText("确认将所选 1 篇")
   expect((await stored(page)).trash).toHaveLength(0)

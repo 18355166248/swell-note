@@ -1,3 +1,4 @@
+import { selectRadix } from "./select-actions"
 import { expect, test, type Page } from "@playwright/test"
 
 // 表格编辑交互的界面验证。种子数据是独立的离线 vault，不触碰真实笔记。
@@ -265,10 +266,12 @@ test.describe("表格编辑交互", () => {
 
     // 光标落到标题行，标题选择器显示对应级别。
     await page.locator(".cm-content").getByText("表格验证", { exact: true }).click()
-    await expect(page.locator(".toolbar-heading-select")).toHaveValue("#")
+    await expect(page.locator(".toolbar-heading-select")).toHaveText("一级标题")
     // 选「正文」取消标题格式（受控选择器重选同级不触发 onChange，必须有可达入口）。
-    await page.locator(".toolbar-heading-select").selectOption("")
-    await expect(page.locator(".toolbar-heading-select")).toHaveValue("")
+    await selectRadix(page, page.getByRole("combobox", {name:"标题级别"}), "正文")
+    await expect(page.locator(".toolbar-heading-select")).toHaveText("正文")
+    await expect(page.locator(".toolbar-heading-select")).toHaveAttribute("data-active", "false")
+    await expect(page.locator(".cm-line").first()).toHaveText("表格验证")
     await expect(page.locator(".cm-line", { hasText: "表格验证" })).toHaveCount(1)
   })
 

@@ -1,3 +1,4 @@
+import { currentNoteEditor as getEditor, currentWorkspace as workspace, enterFirstNote, switchNote, noteList } from "./note-navigation"
 import {expect,test,type Page} from "@playwright/test"
 async function seedCachedVault(page: Page, noteContent?: string, readOnly = false, secondNoteContent = "# 第二篇\n\n正文 B") {
   await page.goto("/#/notes")
@@ -89,19 +90,20 @@ async function seedCachedVault(page: Page, noteContent?: string, readOnly = fals
     database.close()
   }, { noteContent, readOnly, secondNoteContent })
   await page.reload()
+  await enterFirstNote(page)
 }
 
 
 test('审计：全部替换后仍有匹配时计数应刷新', async ({page}) => {
   await seedCachedVault(page, '猫 猫')
-  const editor = page.locator('.desktop-workspace:visible .cm-content')
+  const editor = getEditor(page)
   await expect(editor).toBeVisible()
   await editor.click()
   await page.keyboard.press('ControlOrMeta+f')
-  await page.getByLabel('查找当前笔记').fill('猫')
-  const bar=page.locator('.editor-find-bar')
+  await workspace(page).getByLabel('查找当前笔记').fill('猫')
+  const bar=workspace(page).locator('.editor-find-bar')
   await expect(bar.locator('[aria-live]')).toHaveText('1/2')
-  await page.getByLabel('替换为').fill('猫咪')
+  await workspace(page).getByLabel('替换为').fill('猫咪')
   await bar.getByRole('button', {name:'全部',exact:true}).click()
   await expect(editor).toHaveText('猫咪 猫咪')
   await expect(bar.locator('[aria-live]')).toContainText('/2')
@@ -109,12 +111,12 @@ test('审计：全部替换后仍有匹配时计数应刷新', async ({page}) =>
 })
 test('审计：打开查找后正文新增匹配应更新计数', async ({page}) => {
   await seedCachedVault(page, '猫')
-  const editor = page.locator('.desktop-workspace:visible .cm-content')
+  const editor = getEditor(page)
   await expect(editor).toBeVisible()
   await editor.click()
   await page.keyboard.press('ControlOrMeta+f')
-  await page.getByLabel('查找当前笔记').fill('猫')
-  const bar=page.locator('.editor-find-bar')
+  await workspace(page).getByLabel('查找当前笔记').fill('猫')
+  const bar=workspace(page).locator('.editor-find-bar')
   await expect(bar.locator('[aria-live]')).toHaveText('1/1')
   await editor.click()
   await editor.press('ControlOrMeta+End')
@@ -129,7 +131,7 @@ test('审计：打开查找后正文新增匹配应更新计数', async ({page})
 })
 test('审计：历史保护副本写入失败不能继续覆盖当前正文', async ({page}) => {
   await seedCachedVault(page, '当前不可丢失正文')
-  const editor = page.locator('.desktop-workspace:visible .cm-content')
+  const editor = getEditor(page)
   await expect(editor).toBeVisible()
   // 独立测试库内注入旧版本；只对「恢复前」写入模拟存储故障。
   await page.evaluate(async () => {
@@ -154,12 +156,14 @@ test('审计：历史保护副本写入失败不能继续覆盖当前正文', as
   await expect(page.locator('.note-history-diff')).toContainText('旧版本正文')
   page.once('dialog', d=>d.accept())
   await page.getByRole('button',{name:'恢复此版本',exact:true}).click()
+  await expect(page.locator('.note-history-dialog [role=alert]')).toHaveText('audit storage full')
+  await expect(page.getByRole('button',{name:'恢复此版本',exact:true})).toBeEnabled()
   await expect(editor).toHaveText('当前不可丢失正文')
 })
 
 test('恢复成功后保留恢复前正文的持久版本', async ({page}) => {
   await seedCachedVault(page, '当前正文')
-  const editor = page.locator('.desktop-workspace:visible .cm-content')
+  const editor = getEditor(page)
   await expect(editor).toBeVisible()
   await page.evaluate(async () => {
     const req = indexedDB.open('swell-note-history', 1)
@@ -191,17 +195,17 @@ test('恢复成功后保留恢复前正文的持久版本', async ({page}) => {
 
 test('全部替换为相同文字或空文本后，匹配状态与撤销一致', async ({page}) => {
   await seedCachedVault(page, '猫 猫')
-  const editor = page.locator('.desktop-workspace:visible .cm-content')
+  const editor = getEditor(page)
   await expect(editor).toBeVisible()
   await editor.click()
   await page.keyboard.press('ControlOrMeta+f')
-  await page.getByLabel('查找当前笔记').fill('猫')
-  const bar = page.locator('.editor-find-bar')
-  await page.getByLabel('替换为').fill('猫')
+  await workspace(page).getByLabel('查找当前笔记').fill('猫')
+  const bar = workspace(page).locator('.editor-find-bar')
+  await workspace(page).getByLabel('替换为').fill('猫')
   await bar.getByRole('button', {name:'全部', exact:true}).click()
   await expect(editor).toHaveText('猫 猫')
   await expect(bar.locator('[aria-live]')).toContainText('/2')
-  await page.getByLabel('替换为').fill('')
+  await workspace(page).getByLabel('替换为').fill('')
   await bar.getByRole('button', {name:'全部', exact:true}).click()
   await expect(editor).toHaveText(' ')
   await expect(bar.locator('[aria-live]')).toHaveText('无匹配')
@@ -211,27 +215,27 @@ test('全部替换为相同文字或空文本后，匹配状态与撤销一致',
 
 test('查找计数刷新与全部替换不抢输入焦点', async ({page}) => {
   await seedCachedVault(page, '猫 猫')
-  const editor = page.locator('.desktop-workspace:visible .cm-content')
+  const editor = getEditor(page)
   await expect(editor).toBeVisible()
   await editor.click()
   await page.keyboard.press('ControlOrMeta+f')
-  const query = page.getByLabel('查找当前笔记')
+  const query = workspace(page).getByLabel('查找当前笔记')
   await query.fill('猫')
   await expect(query).toBeFocused()
-  await expect(page.locator('.editor-find-bar [aria-live]')).toHaveText('1/2')
+  await expect(workspace(page).locator('.editor-find-bar [aria-live]')).toHaveText('1/2')
   await expect(query).toBeFocused()
-  const replacement = page.getByLabel('替换为')
+  const replacement = workspace(page).getByLabel('替换为')
   await replacement.fill('猫咪')
   await expect(replacement).toBeFocused()
-  await page.locator('.editor-find-bar').getByRole('button', {name:'全部', exact:true}).click()
+  await workspace(page).locator('.editor-find-bar').getByRole('button', {name:'全部', exact:true}).click()
   await expect(editor).toHaveText('猫咪 猫咪')
   await expect(editor).not.toBeFocused()
-  await expect(page.locator('.editor-find-bar [aria-live]')).toContainText('/2')
+  await expect(workspace(page).locator('.editor-find-bar [aria-live]')).toContainText('/2')
 })
 
 test('保护版本写入期间切换笔记会取消旧恢复', async ({page}) => {
   await seedCachedVault(page, 'A 当前正文', false, 'B 当前正文')
-  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('A 当前正文')
+  await expect(getEditor(page)).toHaveText('A 当前正文')
   await page.evaluate(async () => {
     const req = indexedDB.open('swell-note-history', 1)
     req.onupgradeneeded = () => {
@@ -269,8 +273,8 @@ test('保护版本写入期间切换笔记会取消旧恢复', async ({page}) =>
   await page.getByRole('button',{name:'恢复此版本',exact:true}).click()
   await expect(page.getByRole('button',{name:'正在保存保护版本…'})).toBeVisible()
   await page.getByRole('button',{name:'关闭',exact:true}).click()
-  await page.locator('.desktop-workspace:visible .note-list-row').filter({hasText:'第二篇'}).click()
-  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('B 当前正文')
+  await switchNote(page,'第二篇')
+  await expect(getEditor(page)).toHaveText('B 当前正文')
   await page.evaluate(() => (window as Window & { releaseHistory: () => void }).releaseHistory())
   await expect.poll(() => page.evaluate(async () => {
     const request = indexedDB.open('swell-note-history', 1)
@@ -284,9 +288,9 @@ test('保护版本写入期间切换笔记会取消旧恢复', async ({page}) =>
     database.close()
     return count
   })).toBe(2)
-  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('B 当前正文')
-  await page.locator('.desktop-workspace:visible .note-list-row').filter({hasText:'第一篇'}).click()
-  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('A 当前正文')
+  await expect(getEditor(page)).toHaveText('B 当前正文')
+  await switchNote(page,'第一篇')
+  await expect(getEditor(page)).toHaveText('A 当前正文')
 })
 
 test('历史逐行差异与恢复为副本保留原笔记', async ({page}) => {
@@ -295,7 +299,8 @@ test('历史逐行差异与恢复为副本保留原笔记', async ({page}) => {
     provider:'jianguoyun', remotePath:'/Swell/', serverUrl:'https://dav.jianguoyun.com/dav/', username:'e2e@example.com',
   })))
   await page.reload()
-  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('第一行当前正文')
+  await enterFirstNote(page)
+  await expect(getEditor(page)).toHaveText('第一行当前正文')
   await page.evaluate(async () => {
     const request = indexedDB.open('swell-note-history', 1)
     request.onupgradeneeded = () => {
@@ -316,10 +321,12 @@ test('历史逐行差异与恢复为副本保留原笔记', async ({page}) => {
   await expect(page.locator('.note-history-diff-row[data-kind="removed"]')).toContainText('当前正文')
   await expect(page.locator('.note-history-diff-row[data-kind="added"]')).toContainText('历史正文')
   await page.getByRole('button', {name:'恢复为副本', exact:true}).click()
-  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('第一行历史正文')
-  await expect(page.locator('.desktop-workspace:visible .note-list-row[data-active="true"]')).toContainText('历史副本')
-  await page.locator('.desktop-workspace:visible .note-list-row').getByText('第一篇', {exact:true}).click()
-  await expect(page.locator('.desktop-workspace:visible .cm-content')).toHaveText('第一行当前正文')
+  await expect(getEditor(page)).toHaveText('第一行历史正文')
+  if (await page.locator('.mobile-workspace:visible').count()) {
+    await expect(workspace(page).getByRole('textbox',{name:'笔记标题',exact:true})).toHaveValue(/历史副本/)
+  } else {await expect(page.locator('.desktop-workspace:visible .note-list-row[data-active="true"]')).toContainText('历史副本')}
+  await switchNote(page,'第一篇')
+  await expect(getEditor(page)).toHaveText('第一行当前正文')
   await expect.poll(() => page.evaluate(async () => {
     const request = indexedDB.open('swell-note-vault-cache', 3)
     const database = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
@@ -333,5 +340,6 @@ test('历史逐行差异与恢复为副本保留原笔记', async ({page}) => {
     return snapshot.notes.some((note) => note.title.includes('历史副本'))
   })).toBe(true)
   await page.reload()
-  await expect(page.locator('.desktop-workspace:visible .note-list-row').filter({hasText:'历史副本'})).toBeVisible()
+  await enterFirstNote(page)
+  await expect((await noteList(page)).filter({hasText:'历史副本'})).toBeVisible()
 })

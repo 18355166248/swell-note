@@ -1,3 +1,4 @@
+import { selectRadix } from "./select-actions"
 import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { expect, test, type Page } from "@playwright/test"
@@ -189,7 +190,7 @@ test("本地批量移动保留附件链接、标签与回收站恢复", async ({
   let dialog = page.getByRole("dialog", { name: "批量整理笔记" })
   await dialog.getByRole("checkbox", { name: /第一篇/ }).check()
   await dialog.getByRole("checkbox", { name: /第二篇/ }).check()
-  await dialog.getByLabel("批量移动目标目录").selectOption("归档")
+  await selectRadix(page, dialog.getByLabel("批量移动目标目录"), "归档")
   await dialog.getByRole("button", { name: "执行（2）" }).click()
   await expect(dialog).toContainText("已完成 2 / 2 篇")
   await dialog.getByRole("button", { name: "完成", exact: true }).click()
@@ -202,7 +203,7 @@ test("本地批量移动保留附件链接、标签与回收站恢复", async ({
   dialog = page.getByRole("dialog", { name: "批量整理笔记" })
   await dialog.getByRole("checkbox", { name: /第一篇/ }).check()
   await dialog.getByRole("checkbox", { name: /第二篇/ }).check()
-  await dialog.getByLabel("批量操作", { exact: true }).selectOption("delete")
+  await selectRadix(page, dialog.getByLabel("批量操作", { exact: true }), "移入回收站")
   await dialog.getByRole("button", { name: "执行（2）" }).click()
   await dialog.getByRole("button", { name: "确认移入回收站（2）" }).click()
   await expect(dialog).toContainText("已完成 2 / 2 篇")
