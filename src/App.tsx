@@ -2526,22 +2526,25 @@ function App() {
         return
       }
       const queueNotes = directoryResult.snapshot.notes
-      const attachmentResult = await pushPendingWebDavAttachments(vaultSession, scope.cacheId, queueNotes, scope, noteIds, run)
-      if (run.cancelled || attachmentResult.cancelled) {
-        if (scope.isCurrent()) setSyncLogs(appendSyncLog({ message: "同步已取消，未处理项目仍保留在本机队列", status: "error" }))
-        return
-      }
-      const eligibleNoteIds = attachmentResult.failedNoteIds.size > 0
-        ? new Set(queueNotes
-            .filter((note) => (!noteIds || noteIds.has(note.id)) && !attachmentResult.failedNoteIds.has(note.id))
-            .map((note) => note.id))
-        : noteIds
-      // 目录和附件阶段保持写保护；正文队列开始后开放编辑，上传仍使用本轮固定快照。
-      syncEditableCacheIdRef.current = scope.cacheId
-      flushSync(() => setSyncEditableCacheId(scope.cacheId))
+      if (!scope.isCurrent()) return
+      let attachmentResult: Awaited<ReturnType<typeof pushPendingWebDavAttachments>>
       let syncResult: Awaited<ReturnType<typeof pushPendingWebDavNotes>>
       let postQueueSnapshot: VaultCacheSnapshot | null = null
+      // 目录检查点已完成，附件只更新二进制状态，不回写正文；与正文上传共用编辑日志。
+      // 本轮上传仍用 queueNotes 固定快照，新输入留在工作副本供下轮同步，取消/失败也必须排空日志。
+      syncEditableCacheIdRef.current = scope.cacheId
+      flushSync(() => setSyncEditableCacheId(scope.cacheId))
       try {
+        attachmentResult = await pushPendingWebDavAttachments(vaultSession, scope.cacheId, queueNotes, scope, noteIds, run)
+        if (run.cancelled || attachmentResult.cancelled) {
+          if (scope.isCurrent()) setSyncLogs(appendSyncLog({ message: "同步已取消，未处理项目仍保留在本机队列", status: "error" }))
+          return
+        }
+        const eligibleNoteIds = attachmentResult.failedNoteIds.size > 0
+          ? new Set(queueNotes
+              .filter((note) => (!noteIds || noteIds.has(note.id)) && !attachmentResult.failedNoteIds.has(note.id))
+              .map((note) => note.id))
+          : noteIds
         syncResult = await pushPendingWebDavNotes(vaultSession, scope.cacheId, queueNotes, scope, eligibleNoteIds, run)
       } finally {
         // 先让编辑器同步转只读，再排空输入日志；刷新远端列表不得越过最后一次输入。
