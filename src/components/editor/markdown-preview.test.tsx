@@ -17,6 +17,25 @@ const baseProps = {
 }
 
 describe("Markdown preview integration", () => {
+  it.each([false, true])("names nested and empty task checkboxes in preview (interactive=%s)", (interactive) => {
+    const content = "- [ ] **买牛奶** [店铺](https://example.com) `清单` &amp; \\*字面\\*\n  - [x] 子任务 **[链接](https://example.com)**\n- [ ] &nbsp;\n- [ ] `<img onerror=alert(1)>`"
+    const html = renderToStaticMarkup(<MarkdownPreview {...baseProps} content={content} onResolveWikiNote={() => ({ status: "missing" })} onToggleTask={interactive ? vi.fn() : undefined} />)
+    const rendered = document.createElement("div")
+    rendered.innerHTML = html
+    const boxes = Array.from(rendered.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'))
+    expect(boxes.map((box) => box.getAttribute("aria-label"))).toEqual(["买牛奶 店铺 清单 & *字面*", "子任务 链接", "切换任务状态", "<img onerror=alert(1)>"])
+    expect(boxes.map((box) => box.checked)).toEqual([false, true, false, false])
+    expect(boxes.every((box) => box.disabled === !interactive)).toBe(true)
+    expect(rendered.querySelector("img[onerror]")).toBeNull()
+  })
+
+  it.each([["续写", "店铺续写"], [" 续写", "店铺 续写"]])("excludes link title whitespace while preserving visible spacing (%s)", (suffix, label) => {
+    const html = renderToStaticMarkup(<MarkdownPreview {...baseProps} content={`- [ ] [店铺](https://example.com "标题")${suffix}`} onResolveWikiNote={() => ({ status: "missing" })} onToggleTask={vi.fn()} />)
+    const rendered = document.createElement("div")
+    rendered.innerHTML = html
+    expect(rendered.querySelector('input[type="checkbox"]')?.getAttribute("aria-label")).toBe(label)
+  })
+
   it("keeps selected text and code intact when adding inline selection paint", () => {
     const html = renderToStaticMarkup(<MarkdownPreview {...baseProps} content={'正文 **加粗** 和 [链接](https://example.com)\n\n```js\nconst value = 1\n```'} onResolveWikiNote={() => ({ status: "missing" })} />)
     const rendered = document.createElement("div")

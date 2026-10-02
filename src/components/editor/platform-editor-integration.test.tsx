@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act, createRef } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import { undoDepth } from "@codemirror/commands"
+import { undo, undoDepth } from "@codemirror/commands"
+import { Compartment, EditorState, Prec, StateEffect } from "@codemirror/state"
 import * as language from "@codemirror/language"
 import { EditorView } from "@codemirror/view"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -404,6 +405,109 @@ describe("selection More Undo with real editor transactions", () => {
 })
 
 describe("production task widget activation", () => {
+  it("keeps the replacement checkbox focused across continuous native activations", async () => {
+    const doc = "前文\n\n- [ ] 第一项\n- [ ] 第二项\n\n末段"
+    const { view, changed } = await mountEditor(doc)
+    act(() => view.dispatch({ selection: { anchor: doc.length - 2, head: doc.length } }))
+    const selection = view.state.selection.toJSON()
+    const first = view.contentDOM.querySelector<HTMLInputElement>(".cm-md-task-checkbox")!
+    act(() => first.focus())
+    for (let count = 1; count <= 4; count++) {
+      act(() => (document.activeElement as HTMLInputElement).click())
+      const replacement = view.contentDOM.querySelector<HTMLInputElement>(".cm-md-task-checkbox")!
+      expect(document.activeElement).toBe(replacement)
+      expect(replacement.checked).toBe(count % 2 === 1)
+      expect(view.state.selection.toJSON()).toEqual(selection)
+      expect(changed).toHaveBeenCalledTimes(count)
+    }
+    expect(view.state.doc.toString()).toBe(doc)
+  })
+
+  it("names each task with its own readable Markdown body and refreshes edited names", async () => {
+    const doc = "前文\n\n- [ ] **买牛奶** [店铺](https://example.com) `清单` &amp; \\*字面\\*\n  - [x] 子任务 **[链接](https://example.com)**\n- [ ] \n- [ ] `<img onerror=alert(1)>`\n\n末段"
+    const { view } = await mountEditor(doc)
+    const names = () => Array.from(view.contentDOM.querySelectorAll(".cm-md-task-checkbox"), (box) => box.getAttribute("aria-label"))
+    expect(names()).toEqual(["买牛奶 店铺 清单 & *字面*", "子任务 链接", "切换任务状态", "<img onerror=alert(1)>"])
+    expect(view.contentDOM.querySelector("img[onerror]")).toBeNull()
+    const from = doc.indexOf("买牛奶")
+    act(() => view.dispatch({ changes: { from, to: from + 3, insert: "买面包" } }))
+    expect(names()[0]).toBe("买面包 店铺 清单 & *字面*")
+  })
+
+  it.each([["续写", "店铺续写"], [" 续写", "店铺 续写"]])("excludes link title whitespace while preserving visible spacing (%s)", async (suffix, label) => {
+    const doc = `前文\n\n- [ ] [店铺](https://example.com "标题")${suffix}\n\n末段`
+    const { view } = await mountEditor(doc)
+    expect(view.contentDOM.querySelector(".cm-md-task-checkbox")?.getAttribute("aria-label")).toBe(label)
+  })
+
+  it("does not take focus back from a control acquired during the task update", async () => {
+    const doc = "前文\n\n- [ ] 任务\n\n末段"
+    const { view, changed } = await mountEditor(doc)
+    const button = document.createElement("button")
+    container!.appendChild(button)
+    changed.mockImplementation(() => button.focus())
+    const box = view.contentDOM.querySelector<HTMLInputElement>(".cm-md-task-checkbox")!
+    act(() => { box.focus(); box.click() })
+    expect(document.activeElement).toBe(button)
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+    expect(document.activeElement).toBe(button)
+    expect(changed).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([false, true])("retires keyboard focus after a readonly boundary during dispatch (ABA=%s)", async (aba) => {
+    const doc = "前文\n\n- [ ] 任务\n\n末段"
+    const { view, changed } = await mountEditor(doc)
+    const mode = new Compartment()
+    act(() => view.dispatch({ effects: StateEffect.appendConfig.of(mode.of(Prec.highest(EditorState.readOnly.of(false)))) }))
+    changed.mockImplementation(() => {
+      view.dispatch({ effects: mode.reconfigure(Prec.highest(EditorState.readOnly.of(true))) })
+      if (aba) view.dispatch({ effects: mode.reconfigure(Prec.highest(EditorState.readOnly.of(false))) })
+    })
+    const box = view.contentDOM.querySelector<HTMLInputElement>(".cm-md-task-checkbox")!
+    act(() => { box.focus(); box.click() })
+    const replacement = view.contentDOM.querySelector<HTMLInputElement>(".cm-md-task-checkbox")!
+    expect(replacement.disabled).toBe(!aba)
+    expect(document.activeElement).not.toBe(replacement)
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+    expect(document.activeElement).not.toBe(replacement)
+    expect(changed).toHaveBeenCalledTimes(1)
+  })
+
+  it("ignores an old checkbox after switching notes and after unmount", async () => {
+    const doc = "前文\n\n- [ ] 旧任务\n\n末段"
+    const { changed, rerender } = await mountEditor(doc)
+    const old = container!.querySelector<HTMLInputElement>(".cm-md-task-checkbox")!
+    act(() => old.focus())
+    const nextDoc = "前文\n\n- [ ] 新任务\n\n末段"
+    await rerender(nextDoc, "replacement-task-note")
+    const next = container!.querySelector<HTMLInputElement>(".cm-md-task-checkbox")!
+    act(() => old.click())
+    expect(next.getAttribute("aria-label")).toBe("新任务")
+    expect(document.activeElement).not.toBe(next)
+    expect(EditorView.findFromDOM(next.closest<HTMLElement>(".cm-editor")!)?.state.doc.toString()).toBe(nextDoc)
+    expect(changed).not.toHaveBeenCalled()
+    act(() => { root!.unmount(); root = undefined; next.click() })
+    expect(changed).not.toHaveBeenCalled()
+  })
+
+  it("keeps mouse editor focus, selection, scroll and one-step undo", async () => {
+    const doc = "前文\n\n- [ ] 任务\n\n末段"
+    const { view, changed } = await mountEditor(doc)
+    act(() => { view.dispatch({ selection: { anchor: doc.length - 2, head: doc.length } }); view.focus() })
+    const selection = view.state.selection.toJSON()
+    view.scrollDOM.scrollTop = 180
+    const box = view.contentDOM.querySelector<HTMLInputElement>(".cm-md-task-checkbox")!
+    act(() => box.click())
+    expect(document.activeElement).toBe(view.contentDOM)
+    expect(view.state.selection.toJSON()).toEqual(selection)
+    expect(view.scrollDOM.scrollTop).toBe(180)
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(undoDepth(view.state)).toBe(1)
+    act(() => { expect(undo(view)).toBe(true) })
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(view.state.selection.toJSON()).toEqual(selection)
+  })
+
   function taskPointer(type: string, x: number) {
     const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: 20, button: 0 })
     Object.defineProperties(event, { pointerId: { value: 7 }, isPrimary: { value: true } })

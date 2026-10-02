@@ -54,7 +54,7 @@ const remarkPlugins = [remarkGfm, remarkObsidian]
 const rehypePlugins = [rehypeHighlight, rehypeSelectionText]
 
 // 任务勾选框由 remark-gfm 合成、自身没有源码位置，行号从所属任务列表项（li）经 Context 传入。
-const TaskItemLineContext = createContext<number | null>(null)
+const TaskItemLineContext = createContext<{ line?: number; label: string } | null>(null)
 
 // 阅读态表格的列宽对齐编辑态：同一份内容推导算法 + 同一份 localStorage 列宽偏好。
 // tableStartLines 是正文里各表格起始行（1 起），用来把 hast 里的第几张表换算成
@@ -293,15 +293,17 @@ function buildMarkdownComponents(
 ) {
   return {
     input({ checked, disabled }: { checked?: boolean; disabled?: boolean }) {
-      const previewLine = useContext(TaskItemLineContext)
+      const task = useContext(TaskItemLineContext)
+      const previewLine = task?.line
+      const label = task?.label ?? "切换任务状态"
       const toggleTask = handlersRef.current.onToggleTask
       if (!toggleTask || !disabled || !previewLine) {
-        return <input checked={checked} disabled={disabled} readOnly type="checkbox" />
+        return <input aria-label={label} checked={checked} disabled={disabled} readOnly type="checkbox" />
       }
       const sourceLine = previewLine + sourceLineOffset
       return (
         <input
-          aria-label="切换任务状态"
+          aria-label={label}
           checked={checked}
           className="task-checkbox"
           data-source-line={sourceLine}
@@ -310,12 +312,12 @@ function buildMarkdownComponents(
         />
       )
     },
-    li({ children, node, id }: { id?: string; children?: ReactNode; node?: { position?: { start: { line: number } }; properties?: { className?: unknown } } }) {
+    li({ children, node, id }: { id?: string; children?: ReactNode; node?: HastNode & { position?: { start: { line: number } } } }) {
       const classNames = node?.properties?.className
       const isTaskItem = Array.isArray(classNames) && classNames.includes("task-list-item")
       const previewLine = isTaskItem ? node?.position?.start.line : undefined
-      if (!handlersRef.current.onToggleTask || !previewLine) return <li id={id} data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}>{children}</li>
-      return <li id={id} data-source-line={previewLine + sourceLineOffset}><TaskItemLineContext.Provider value={previewLine}>{children}</TaskItemLineContext.Provider></li>
+      const task = isTaskItem && node ? { line: previewLine, label: taskItemText(node).replace(/\s+/g, " ").trim() || "切换任务状态" } : null
+      return <li id={id} data-source-line={node?.position?.start.line ? node.position.start.line + sourceLineOffset : undefined}><TaskItemLineContext.Provider value={task}>{children}</TaskItemLineContext.Provider></li>
     },
     a({ children, href, id, "aria-label": label }: { id?: string; "aria-label"?: string; children?: ReactNode; href?: string }) {
       const embedTarget = parseWikiEmbedHref(href)
@@ -559,7 +561,7 @@ function Heading({ children, level, sourceLine, id: explicitId }: { id?: string;
 // 只读取 hast 的结构信息（子节点、className），不引入 hast 类型依赖。
 type HastNode = {
   children?: HastNode[]
-  properties?: { className?: unknown }
+  properties?: { className?: unknown; alt?: unknown }
   tagName?: string
   type: string
   value?: string
@@ -568,6 +570,15 @@ type HastNode = {
 function hastElementText(node: HastNode): string {
   if (node.type === "text") return node.value ?? ""
   return node.children?.map(hastElementText).join("") ?? ""
+}
+
+function taskItemText(node: HastNode): string {
+  if (["ul", "ol", "input"].includes(node.tagName ?? "")) return ""
+  if (node.tagName === "img") return typeof node.properties?.alt === "string" ? node.properties.alt : ""
+  if (node.tagName === "br") return " "
+  if (node.type === "text") return node.value ?? ""
+  const text = node.children?.map(taskItemText).join("") ?? ""
+  return node.tagName === "p" ? `${text} ` : text
 }
 
 function codeBlockLanguage(node?: HastNode): string {

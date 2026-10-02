@@ -1128,6 +1128,129 @@ test.describe("移动待办触区与侧滑", () => {
   })
 })
 
+test.describe("待办键盘连续性与名称", () => {
+  test.beforeEach(async ({ context }) => {
+    await context.route("**/*", (route) => {
+      const url = new URL(route.request().url())
+      return ["127.0.0.1", "localhost"].includes(url.hostname) && !url.pathname.startsWith("/api/webdav") ? route.continue() : route.abort()
+    })
+  })
+  const doc = "前文\n\n- [ ] **买牛奶** [店铺](https://example.com) `清单`\n  - [x] 子任务\n- [ ] 下一项\n\n末段用于选择"
+  async function openFixture(page: Page, mobile: boolean, content = doc) {
+    await seedCachedVault(page, content)
+    const workspace = page.locator(mobile ? ".mobile-workspace:visible" : ".desktop-workspace:visible")
+    if (mobile) {
+      await workspace.getByText("测试", { exact: true }).first().click()
+      await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    }
+    const editor = workspace.locator(mobile ? ".mobile-edge-swipe-current .cm-content" : ".cm-content")
+    await expect(editor).toBeVisible()
+    await editor.evaluate(async (element) => {
+      const module = "/node_modules/.vite/deps/@codemirror_view.js"
+      const { EditorView } = await import(/* @vite-ignore */ module)
+      const view = EditorView.findFromDOM(element)
+      view.dispatch({ selection: { anchor: view.state.doc.length - 4, head: view.state.doc.length } })
+      Object.assign(window, { __keyboardTaskView: view })
+    })
+    return { workspace, editor, boxes: editor.locator(".cm-md-task-checkbox") }
+  }
+  const selection = (page: Page) => page.evaluate(() => (window as unknown as { __keyboardTaskView: { state: { selection: { toJSON: () => unknown } } } }).__keyboardTaskView.state.selection.toJSON())
+
+  test("真实Space连续勾选取消且Tab和ShiftTab保持同一任务顺序", async ({ page }, testInfo) => {
+    const { boxes } = await openFixture(page, testInfo.project.name === "mobile-chrome")
+    await page.screenshot({ path: testInfo.outputPath("task-before-keyboard.png") })
+    const before = await selection(page)
+    await boxes.first().focus()
+    for (let count = 1; count <= 4; count++) {
+      await page.keyboard.press("Space")
+      await expect(boxes.first()).toHaveJSProperty("checked", count % 2 === 1)
+      await expect(boxes.first()).toBeFocused()
+      expect(await selection(page)).toEqual(before)
+    }
+    await page.keyboard.press("Tab")
+    await expect(boxes.nth(1)).toBeFocused()
+    await page.keyboard.press("Shift+Tab")
+    await expect(boxes.first()).toBeFocused()
+    await page.keyboard.press("Tab")
+    await page.keyboard.press("Space")
+    await expect(boxes.nth(1)).not.toBeChecked()
+    await expect(boxes.nth(1)).toBeFocused()
+    await expect(boxes.first()).not.toBeChecked()
+  })
+
+  test("编辑与兼容阅读使用任务正文名称并保留原生状态", async ({ page }, testInfo) => {
+    const { boxes, workspace } = await openFixture(page, testInfo.project.name === "mobile-chrome")
+    await expect(boxes.first()).toHaveAccessibleName("买牛奶 店铺 清单")
+    await expect(boxes.nth(1)).toHaveAccessibleName("子任务")
+    await expect(boxes.nth(2)).toHaveAccessibleName("下一项")
+    await expect(boxes.nth(1)).toBeChecked()
+    await useCompatibilityPreview(page)
+    const preview = workspace.locator('.markdown-preview input[type="checkbox"]')
+    await expect(preview.first()).toHaveAccessibleName("买牛奶 店铺 清单")
+    await expect(preview.nth(1)).toHaveAccessibleName("子任务")
+    await expect(preview.nth(2)).toHaveAccessibleName("下一项")
+    await expect(preview.nth(1)).toBeChecked()
+    await preview.first().focus()
+    await page.keyboard.press("Space")
+    await expect(preview.first()).toBeChecked()
+  })
+
+  test("带标题链接的名称保留正文真实空格且两种模式一致", async ({ page }, testInfo) => {
+    const content = '前文\n\n- [ ] [店铺](https://example.com "标题")续写\n- [ ] [店铺](https://example.com "标题") 续写\n\n末段'
+    const { boxes, workspace } = await openFixture(page, testInfo.project.name === "mobile-chrome", content)
+    await expect(boxes.nth(0)).toHaveAccessibleName("店铺续写")
+    await expect(boxes.nth(1)).toHaveAccessibleName("店铺 续写")
+    await useCompatibilityPreview(page)
+    const preview = workspace.locator('.markdown-preview input[type="checkbox"]')
+    await expect(preview.nth(0)).toHaveAccessibleName("店铺续写")
+    await expect(preview.nth(1)).toHaveAccessibleName("店铺 续写")
+  })
+
+  test("键盘与指针切换保留实际滚动正文选区和撤销", async ({ page }, testInfo) => {
+    const mobile = testInfo.project.name === "mobile-chrome"
+    const content = Array.from({ length: 24 }, (_, i) => `前文段落 ${i}\n`).join("\n") + doc + "\n\n" + Array.from({ length: 24 }, (_, i) => `后文段落 ${i}\n`).join("\n")
+    const { editor, boxes } = await openFixture(page, mobile, content)
+    // CM 只装饰可见范围，先通过公开滚动 effect 展示任务，不改变正文选区。
+    await editor.evaluate(async (element) => {
+      const module = "/node_modules/.vite/deps/@codemirror_view.js"
+      const { EditorView } = await import(/* @vite-ignore */ module)
+      const view = EditorView.findFromDOM(element)
+      const source = view.state.doc.toString()
+      const from = source.indexOf("前文\n\n- [ ]")
+      view.dispatch({ selection: { anchor: from, head: from + 2 }, effects: EditorView.scrollIntoView(source.indexOf("买牛奶"), { y: "center" }) })
+    })
+    await boxes.first().scrollIntoViewIfNeeded()
+    const scroll = () => editor.evaluate((element) => {
+      const positions: number[] = []
+      for (let parent: HTMLElement | null = element as HTMLElement; parent; parent = parent.parentElement) positions.push(parent.scrollTop)
+      return positions
+    })
+    await boxes.first().focus()
+    const before = await selection(page)
+    const keyboardScroll = await scroll()
+    expect(Math.max(...keyboardScroll)).toBeGreaterThan(100)
+    await page.keyboard.press("Space")
+    await expect(boxes.first()).toBeChecked()
+    await expect(boxes.first()).toBeFocused()
+    expect(await scroll()).toEqual(keyboardScroll)
+    expect(await selection(page)).toEqual(before)
+    await page.keyboard.press("Space")
+    await expect(boxes.first()).not.toBeChecked()
+    expect(await scroll()).toEqual(keyboardScroll)
+    await page.evaluate(() => (window as unknown as { __keyboardTaskView: { focus: () => void } }).__keyboardTaskView.focus())
+    const pointerScroll = await scroll()
+    if (mobile) await boxes.first().tap()
+    else await boxes.first().click()
+    await expect(boxes.first()).toBeChecked()
+    await expect(editor).toBeFocused()
+    expect(await selection(page)).toEqual(before)
+    expect(await scroll()).toEqual(pointerScroll)
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+z" : "Control+z")
+    await expect(boxes.first()).not.toBeChecked()
+    expect(await selection(page)).toEqual(before)
+  })
+})
+
 test.describe("编辑会话连续性回归", () => {
   test.beforeEach(async ({ context }) => {
     await context.route("**/*", (route) => {

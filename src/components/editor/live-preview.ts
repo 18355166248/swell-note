@@ -57,32 +57,55 @@ function linkHint(state: EditorState, note = false) {
   return `${requiresLinkModifier(state.readOnly) ? "⌘ 点击" : "点击"}打开${note ? "笔记" : "链接"}`
 }
 
+// 使用已有 Markdown 语法树读取本任务正文；Task 不包含嵌套子列表。
+// 行内代码保持字面文本，链接只读标签，属性赋值不会把正文解释为 HTML。
+function taskBodyText(node: MdSyntaxNode, state: EditorState): string {
+  if (node.name.endsWith("Mark") || ["TaskMarker", "LinkTitle", "LinkLabel"].includes(node.name)) return ""
+  if (node.name === "URL" && node.parent?.name !== "Autolink") return ""
+  if (node.name === "Escape") return state.sliceDoc(node.from + 1, node.to)
+  if (node.name === "Entity") {
+    return new DOMParser().parseFromString(state.sliceDoc(node.from, node.to), "text/html").body.textContent ?? ""
+  }
+  let text = "", from = node.from
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    text += state.sliceDoc(from, child.from) + taskBodyText(child, state)
+    from = child.to
+    // Link 的可见正文在标签右括号结束；目的地、title 及其源码空白均不读入。
+    if (node.name === "Link" && child.name === "LinkMark" && state.sliceDoc(child.from, child.to) === "]") return text
+  }
+  return text + state.sliceDoc(from, node.to)
+}
+
 export class TaskCheckboxWidget extends WidgetType {
   readonly readOnly: boolean
+  readonly scope: string | undefined
 
   constructor(
     readonly checked: boolean,
     readonly from: number,
     readonly to: number,
     readonly view: EditorView,
+    readonly label = "切换任务状态",
   ) {
     super()
     this.readOnly = view.state.readOnly
+    this.scope = view.state.facet(livePreviewOptions).tableStorageKey
   }
 
   eq(other: TaskCheckboxWidget) {
-    return other.checked === this.checked && other.from === this.from && other.to === this.to && other.readOnly === this.readOnly
+    return other.checked === this.checked && other.from === this.from && other.to === this.to && other.readOnly === this.readOnly && other.label === this.label && other.scope === this.scope
   }
 
   toDOM() {
     // 外层只扩触区，input 继续提供原生 checkbox 的键盘和读屏语义。
     const control = document.createElement("span")
     control.className = "cm-md-task-control"
+    control.dataset.taskFrom = String(this.from)
     const box = document.createElement("input")
     box.type = "checkbox"
     box.checked = this.checked
     box.className = "cm-md-task-checkbox"
-    box.setAttribute("aria-label", "切换任务状态")
+    box.setAttribute("aria-label", this.label)
     control.appendChild(box)
     if (this.readOnly) {
       box.disabled = true
@@ -115,7 +138,16 @@ export class TaskCheckboxWidget extends WidgetType {
       // 真正拖动后即使回到原控件也不勾选；detail=0 的键盘/程序激活不受旧指针状态影响。
       if (dragged && event.detail > 0) return
       if (!control.isConnected || this.view.state.readOnly) return
-      this.view.dispatch({ changes: { from: this.from, to: this.to, insert: this.checked ? "[ ]" : "[x]" } })
+      const restoreFocus = this.view.root.activeElement === box
+      const transaction = this.view.state.update({ changes: { from: this.from, to: this.to, insert: this.checked ? "[ ]" : "[x]" } })
+      this.view.dispatch(transaction)
+      // DOM 在 dispatch 内同步更新。仅把原控件持有的焦点交还给同任务的新控件，
+      // 不安排延迟恢复；只读/会话更新或另一个控件取得焦点时直接放弃。
+      if (!restoreFocus || this.view.state !== transaction.state || !this.view.dom.isConnected || this.view.state.readOnly) return
+      const active = this.view.root.activeElement
+      if (active !== box && active !== this.view.dom.ownerDocument.body) return
+      const replacement = this.view.contentDOM.querySelector<HTMLInputElement>(`.cm-md-task-control[data-task-from="${this.from}"] > input`)
+      if (replacement && !replacement.disabled) replacement.focus({ preventScroll: true })
     })
     return control
   }
@@ -1051,7 +1083,7 @@ function buildLivePreviewDecorations(view: EditorView, forcedRanges?: readonly D
             // widget 的 from/to 仍指向 `[ ]` 本身，点击切换状态只改写这三个字符。
             decorations.push(
               Decoration.replace({
-                widget: new TaskCheckboxWidget(checked, node.from, node.to, view),
+                widget: new TaskCheckboxWidget(checked, node.from, node.to, view, taskBodyText(node.node.parent ?? node.node, view.state).replace(/\s+/g, " ").trim() || "切换任务状态"),
               }).range(node.from, markerEnd),
             )
             if (listMarker?.index !== undefined) {
