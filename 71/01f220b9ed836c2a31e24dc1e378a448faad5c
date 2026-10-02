@@ -1,0 +1,30 @@
+docs/editor-capability-review-2026-10-02/implementation.md
+  s_7aa9251711039a::t_23a125f1056a1a 14,67-72
+src/services/history/note-history.ts
+  s_7aa9251711039a::t_865c4ae3a9af67 1,14,20-32,34,39,54,157-193
+src/App.css
+  s_7aa9251711039a::t_42bb2fb3709228 1716
+  s_7aa9251711039a::t_60af04c6e33963 1712-1715,1717-1718
+  s_7aa9251711039a::t_1e941365d25d03 1709-1711
+src/components/workspace/workspace.tsx
+  s_7aa9251711039a::t_42bb2fb3709228 2711,3089
+src/components/workspace/note-version-history-dialog.tsx
+  s_7aa9251711039a::t_865c4ae3a9af67 1-3,9,12,14,27,32-38,40-51,53-61,114,116-121,160-162
+  s_7aa9251711039a::t_1e941365d25d03 29,39,52,97,101,103,105,158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "7101f220b9ed836c2a31e24dc1e378a448faad5c",
+  "prompts": {},
+  "sessions": {
+    "s_7aa9251711039a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd03-3670-77e2-8b5c-740397b0570b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
