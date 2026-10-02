@@ -1,0 +1,21 @@
+src/components/editor/table-history-continuity.test.tsx
+  s_57db2c01e7cdde::t_9ceb115758bbc3 1-247
+src/components/workspace/formatting-toolbar-context.test.tsx
+  s_57db2c01e7cdde::t_67cc9cd647500e 1-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "ccf342b9b0b7e8f5af53472a498970dd58de3bbf",
+  "prompts": {},
+  "sessions": {
+    "s_57db2c01e7cdde": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06f75-de58-76b0-97c7-d4f7220e4583",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
