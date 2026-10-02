@@ -308,6 +308,7 @@ abstract class UnifiedRichWidget extends WidgetType {
     const host = document.createElement(this.block ? "div" : "span")
     host.className = `cm-md-rich cm-md-rich-${this.kind}${this.block ? " cm-md-rich-block" : " cm-md-rich-inline"}`
     host.dataset.renderState = "loading"
+    host.dataset.blockFrom = String(this.from)
     if (this.kind === "math") renderMath(host, this.expression, this.source, this.block, this.view, this.from, this.to)
     else renderMermaid(host, this.expression, this.source, this.view, this.from, this.to)
     const session = readBlockEditDraft(this.view, this.sessionKey())

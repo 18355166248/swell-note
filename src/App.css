@@ -818,6 +818,11 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .cm-note-find-current { background: #ffbd5999; border-radius: 2px; }
 .cm-md-table-cell-display[data-note-find="match"] { background: #ffe9a380; }
 .cm-md-table-cell-display[data-note-find="current"] { background: #ffbd5999; }
+.cm-block-completion { position: absolute; z-index: 60; display: grid; width: 260px; max-width: 90vw; max-height: 40vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 4px; background: var(--panel); box-shadow: 0 8px 24px #0002; }
+.cm-block-completion[hidden] { display: none; }
+.cm-block-completion button { text-align: left; padding: 9px 12px; min-height: 44px; border-radius: 5px; }
+.cm-block-completion button[aria-selected="true"], .cm-block-completion button:hover { background: var(--muted); }
+.toolbar-more-menu { max-height: min(65vh, 480px); overflow-y: auto; }
 .toolbar-divider { width: 1px; height: 17px; margin: 0 4px; background: var(--border); }
 .attachment-file-input { display: none; }
 .attachment-error { margin: 0; border-bottom: 1px solid var(--border); background: color-mix(in oklab,var(--destructive) 9%,white); padding: 8px 16px; color: var(--destructive); font-size: 10.5px; line-height: 1.45; }
@@ -1674,3 +1679,13 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .editor-display-settings > label { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .editor-display-settings [data-slot="select-trigger"] { min-height: 44px; min-width: 140px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; background: var(--background); color: var(--foreground); font-size: 16px; }
 .editor-display-sample { border: 1px solid var(--border); border-radius: 10px; padding: 20px; background: var(--panel-soft); line-height: 1.8; overflow-wrap: anywhere; }
+
+/* 桌面插入菜单和手机更多菜单共享触摸尺寸；桌面工具栏允许换行，浮层不会被横向滚动容器裁掉。 */
+.formatting-toolbar[data-mobile="false"] { overflow: visible; flex-wrap: wrap; }
+.toolbar-more { position: relative; display: flex; }
+.toolbar-more-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; display: grid; min-width: 172px; border: 1px solid var(--border); border-radius: 12px; background: var(--popover); box-shadow: 0 12px 28px rgb(15 23 42 / .15); }
+.toolbar-more-menu button { display: flex; width: 100%; height: auto; min-height: 44px; gap: 10px; align-items: center; padding: 8px 14px; text-align: left; }
+.toolbar-more-menu button:hover { background: var(--muted); }
+.formatting-toolbar[data-mobile="true"] .toolbar-more-menu { top: auto; }
+
+.cm-block-completion[hidden] { display: none; }

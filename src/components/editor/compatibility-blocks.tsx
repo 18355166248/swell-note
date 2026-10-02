@@ -307,6 +307,7 @@ export class CompatibilityBlockWidget extends WidgetType {
     const host = document.createElement("section")
     host.className = `cm-md-compat cm-md-compat-${this.block.kind}`
     host.dataset.compatibilityKind = this.block.kind
+    host.dataset.blockFrom = String(this.block.from)
     const root = createRoot(host)
     widgetRoots.set(host, root)
     renderWidgetRoot(host, this)
@@ -315,6 +316,7 @@ export class CompatibilityBlockWidget extends WidgetType {
 
   updateDOM(dom: HTMLElement) {
     if (dom.dataset.compatibilityKind !== this.block.kind || !widgetRoots.has(dom)) return false
+    dom.dataset.blockFrom = String(this.block.from)
     // 同类型块只更新最新范围/只读态/渲染参数，React 组件实例不换，未保存草稿得以跨重配保留。
     renderWidgetRoot(dom, this)
     return true

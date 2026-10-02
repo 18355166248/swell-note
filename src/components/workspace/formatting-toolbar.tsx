@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react"
-import { Bold, Braces, CheckCircle2, Code, Code2, Heading3, Image, Italic, Link, List, ListOrdered, LoaderCircle, Minus, MoreHorizontal, Quote, Redo2, Strikethrough, Table, Undo2 } from "lucide-react"
+import { Bold, Braces, CheckCircle2, Code, Code2, Heading3, Image, Italic, Link, List, ListOrdered, LoaderCircle, Minus, MoreHorizontal, Quote, Redo2, Strikethrough, Table, Undo2, Sigma, Workflow, MessageSquare, BookOpen, NotebookPen } from "lucide-react"
 
 import { TABLE_INSERT_TEMPLATE, type MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { EditorFormatState } from "@/components/editor/markdown-input"
@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 import { SelectionButtons, useSelectionActions } from "./selection-action-bar"
+import { INSERTABLE_BLOCKS } from "@/components/editor/block-insertion"
 
 // 手机一行放不下全部按钮，这些低频格式收进“更多”；语法与桌面端共用，避免两处写法漂移。
 // 前 4 项的顺序被下方解构复用，新增项一律往后追加。
@@ -25,6 +26,7 @@ const SECONDARY_FORMATS: Array<{
   { icon: Minus, label: "分割线", syntax: "\n---\n" },
   { icon: Table, label: "表格", syntax: TABLE_INSERT_TEMPLATE },
   { icon: ListOrdered, label: "有序列表", stateKey: "orderedList", syntax: "\n1. " },
+  ...INSERTABLE_BLOCKS.map((block) => ({ icon: block.id === "math" ? Sigma : block.id === "mermaid" ? Workflow : block.id === "callout" ? MessageSquare : block.id === "footnote" ? BookOpen : NotebookPen, label: block.label, syntax: block.syntax })),
 ]
 
 export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable = false, attachmentBusy, canInsertAttachment, editorRef, isContextCurrent = () => true, formatState = null, hasSelection = false, mobile = false, onFormat: applyFormat, onInsertFiles, onToggleSourceMode: toggleSourceMode, sourceMode = false }: {
@@ -151,14 +153,14 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
           }} ref={fileInputRef} tabIndex={-1} type="file" />
         </>
       ) : null}
-      {mobile ? <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} isContextCurrent={isContextCurrent} formatState={formatState} onFormat={onFormat} onToggleSourceMode={onToggleSourceMode} sourceMode={sourceMode} /> : null}
+      <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} isContextCurrent={isContextCurrent} formatState={formatState} onFormat={onFormat} onToggleSourceMode={mobile ? onToggleSourceMode : undefined} sourceMode={sourceMode} blocksOnly={!mobile} />
     </div>
   )
 }
 
 // 用工具栏内部的浮层而不是通用下拉菜单：菜单一旦接管焦点，手机键盘会收起再弹出，
 // 工具栏也会跟着键盘上下跳一次；自绘浮层可以让焦点始终留在 CodeMirror 里。
-function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false, editorRef, isContextCurrent, formatState, onFormat, editingTable, onToggleSourceMode, sourceMode = false }: {
+function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false, editorRef, isContextCurrent, formatState, onFormat, editingTable, onToggleSourceMode, sourceMode = false, blocksOnly = false }: {
   canUndo?: boolean
   canRedo?: boolean
   showUndo?: boolean
@@ -169,6 +171,7 @@ function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false
   onFormat: (syntax: string) => void
   onToggleSourceMode?: () => void
   sourceMode?: boolean
+  blocksOnly?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
@@ -191,7 +194,7 @@ function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false
 
   return (
     <div className="toolbar-more" ref={containerRef}>
-      <FormatButton expanded={open} icon={MoreHorizontal} label="更多格式" onClick={() => setOpen((current) => !current)} />
+      <FormatButton expanded={open} icon={MoreHorizontal} label={blocksOnly ? "插入内容" : "更多格式"} onClick={() => setOpen((current) => !current)} />
       {open ? (
         <div className="toolbar-more-menu" role="menu">
           {showUndo ? (
@@ -206,7 +209,7 @@ function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false
               <span>撤销</span>
             </button>
           ) : null}
-          <button
+          {!blocksOnly ? <button
             disabled={!canRedo}
             onClick={() => {
               setOpen(false)
@@ -218,8 +221,8 @@ function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false
           >
             <Redo2 />
             <span>重做</span>
-          </button>
-          {SECONDARY_FORMATS.map(({ icon: Icon, label, stateKey, syntax }) => (
+          </button> : null}
+          {(blocksOnly ? SECONDARY_FORMATS.slice(9) : SECONDARY_FORMATS).map(({ icon: Icon, label, stateKey, syntax }) => (
             <button
               aria-pressed={stateKey ? Boolean(formatState?.[stateKey]) : undefined}
               data-active={stateKey && formatState?.[stateKey] ? "true" : undefined}

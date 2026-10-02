@@ -33,6 +33,8 @@ import { installTextareaDrawnCaret } from "./textarea-drawn-caret"
 import "./markdown-table.css"
 import { findTextMatches } from "@/services/markdown/text-search"
 import { beginEditorSearch, configureEditorSearch, editorMatches, editorSearchState, endEditorSearch, tableSearchHighlights, type EditorSearchConfig } from "./editor-search"
+import { INSERTABLE_BLOCKS, insertBlock, insertNoteTemplate } from "./block-insertion"
+import { slashCompletion } from "./slash-completion"
 
 // 链接面板在表格单元格编辑中打开时的现场快照：保存前校验单元格内容未变，
 // 取消时据此把焦点与选区还给单元格 textarea。
@@ -47,6 +49,8 @@ export type MarkdownEditorHandle = {
   beginFind: () => boolean
   configureFind: (config: EditorSearchConfig) => void
   endFind: () => void
+  insertTemplate: (body: string) => boolean
+  selectedText: () => string
   // 链接面板：target 为 null 表示新建（applyLink 用当前选区/光标），否则改写该链接；
   // cell 存在时写入单元格 textarea（面板期间单元格靠 contextMenuActive 标记保持挂载）。
   applyLink: (target: EditorLinkTarget | null, label: string, url: string, cell?: LinkCellSnapshot | null) => boolean
@@ -317,6 +321,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     const buildBehaviorExtensions = useCallback((control: EditorControl): Extension => [
       editorSearchState,
       tableSearchHighlights,
+      slashCompletion,
       // 列表 / 引用回车续写、结构行 Tab 缩进、选中文字敲 * ` ~ 即包裹。
       markdownInputEnhancements(),
       wikiLinkCompletion(() => handlers.current.getWikiLinkSuggestions?.() ?? []),
@@ -1169,10 +1174,30 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       inspectFind(query) {
         return inspectFindInView(controlRef.current?.getView(), query)
       },
+      selectedText() {
+        const view = controlRef.current?.getView()
+        if (!view) return ""
+        const range = view.state.selection.main
+        return view.state.sliceDoc(range.from, range.to)
+      },
+      insertTemplate(body) {
+        const view = controlRef.current?.getView()
+        if (!view || view.composing || view.state.readOnly || activeTableEdit(view)) return false
+        commitLocalDrafts(view)
+        return insertNoteTemplate(view, body)
+      },
       insertText(text) {
         const control = controlRef.current
         const view = control?.getView()
         if (!view || control!.getSettings().readOnly || !text) return
+
+        const block = INSERTABLE_BLOCKS.find((block) => block.syntax === text)
+        if (block) {
+          if (view.composing || activeTableEdit(view)) return
+          commitLocalDrafts(view)
+          insertBlock(view, block.id)
+          return
+        }
 
         const tableTarget = activeTableEdit(view)
         if (tableTarget) { tableTarget.format(text); return }
