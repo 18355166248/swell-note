@@ -31,6 +31,8 @@ import { TableHistoryController } from "./table-history"
 import { selectionRenderingExtensions } from "./selection-rendering"
 import { installTextareaDrawnCaret } from "./textarea-drawn-caret"
 import "./markdown-table.css"
+import { findTextMatches } from "@/services/markdown/text-search"
+import { beginEditorSearch, configureEditorSearch, editorMatches, editorSearchState, endEditorSearch, tableSearchHighlights, type EditorSearchConfig } from "./editor-search"
 
 // 链接面板在表格单元格编辑中打开时的现场快照：保存前校验单元格内容未变，
 // 取消时据此把焦点与选区还给单元格 textarea。
@@ -42,6 +44,9 @@ export type LinkCellSnapshot = {
 }
 
 export type MarkdownEditorHandle = {
+  beginFind: () => boolean
+  configureFind: (config: EditorSearchConfig) => void
+  endFind: () => void
   // 链接面板：target 为 null 表示新建（applyLink 用当前选区/光标），否则改写该链接；
   // cell 存在时写入单元格 textarea（面板期间单元格靠 contextMenuActive 标记保持挂载）。
   applyLink: (target: EditorLinkTarget | null, label: string, url: string, cell?: LinkCellSnapshot | null) => boolean
@@ -88,6 +93,8 @@ export type MarkdownEditorHandle = {
 export type MarkdownFindResult = {
   current: number
   total: number
+  replaced?: number
+  scopeInvalid?: boolean
 }
 
 // 工具栏「插入表格」按钮与 formatToolbarText 共用同一份模板字符串，
@@ -308,6 +315,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     // 行为扩展：输入增强、补全、剪贴板与滚动转发。
     // 这部分必须能访问 EditorControl 实例（事件外发、命令入口），因此由 control 反向注入。
     const buildBehaviorExtensions = useCallback((control: EditorControl): Extension => [
+      editorSearchState,
+      tableSearchHighlights,
       // 列表 / 引用回车续写、结构行 Tab 缩进、选中文字敲 * ` ~ 即包裹。
       markdownInputEnhancements(),
       wikiLinkCompletion(() => handlers.current.getWikiLinkSuggestions?.() ?? []),
@@ -1138,6 +1147,22 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       focus() {
         controlRef.current?.focus()
       },
+      beginFind() {
+        const view = controlRef.current?.getView()
+        if (!view || view.composing) return false
+        commitLocalDrafts(view)
+        const selection = view.state.selection.main
+        view.dispatch({ effects: beginEditorSearch.of(selection.empty ? null : { from: selection.from, to: selection.to }) })
+        return !selection.empty
+      },
+      configureFind(config) {
+        const view = controlRef.current?.getView()
+        view?.dispatch({ effects: configureEditorSearch.of(config) })
+      },
+      endFind() {
+        const view = controlRef.current?.getView()
+        view?.dispatch({ effects: endEditorSearch.of() })
+      },
       findText(query, direction = "next", fromStart = false) {
         return findTextInView(controlRef.current?.getView(), query, direction, fromStart)
       },
@@ -1309,7 +1334,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const control = controlRef.current
         const view = control?.getView()
         if (!view || control!.getSettings().readOnly || !query) return 0
-        const matches = findPlainTextMatches(view.state.doc.toString(), query)
+        if (view.composing) return 0
+        commitLocalDrafts(view)
+        const matches = editorMatches(view.state, query)
         if (matches.length === 0) return 0
         // CodeMirror 以同一个 transaction 应用全部变更，整次替换可被一次撤销恢复。
         view.dispatch({
@@ -1321,16 +1348,18 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const control = controlRef.current
         const view = control?.getView()
         if (!view || control!.getSettings().readOnly || !query) return { current: 0, total: 0 }
+        if (view.composing) return { ...inspectFindInView(view, query), replaced: 0 }
+        commitLocalDrafts(view)
         const selection = view.state.selection.main
-        const selected = view.state.sliceDoc(selection.from, selection.to)
-        if (selected.toLocaleLowerCase() !== query.toLocaleLowerCase()) {
-          return findTextInView(view, query, "next", false)
+        // 当前选区必须是有效命中，不能因大小写、全词或范围变化而误替换其他文字。
+        if (!editorMatches(view.state, query).some((match) => match.from === selection.from && match.to === selection.to)) {
+          return { ...findTextInView(view, query, "next", false), replaced: 0 }
         }
         view.dispatch({
           changes: { from: selection.from, insert: replacement, to: selection.to },
           selection: { anchor: selection.from + replacement.length },
         })
-        return findTextInView(view, query, "next", false)
+        return { ...findTextInView(view, query, "next", false), replaced: 1 }
       },
       revealLine(line) {
         const control = controlRef.current
@@ -1816,20 +1845,13 @@ export function paragraphSeparatorAtEnd(state: EditorState) {
 }
 
 
-export function findPlainTextMatches(text: string, query: string) {
-  if (!query) return []
-  const matches: Array<{ from: number; to: number }> = []
-  const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu")
-  for (const match of text.matchAll(pattern)) {
-    const from = match.index
-    matches.push({ from, to: from + match[0].length })
-  }
-  return matches
-}
+export const findPlainTextMatches = findTextMatches
 
 function inspectFindInView(view: EditorView | undefined, query: string): MarkdownFindResult {
   if (!view || !query) return { current: 0, total: 0 }
-  const matches = findPlainTextMatches(view.state.doc.toString(), query)
+  const search = view.state.field(editorSearchState, false)
+  if (search?.config.inSelection && !search.selectionRange) return { current: 0, total: 0, scopeInvalid: true }
+  const matches = editorMatches(view.state, query)
   if (!matches.length) return { current: 0, total: 0 }
   const selection = view.state.selection.main
   // 计数刷新只读取文档和选区，不分派事务；输入、撤销和重做不能因此移动光标或抢焦点。
@@ -1845,7 +1867,9 @@ function findTextInView(
   fromStart: boolean,
 ): MarkdownFindResult {
   if (!view || !query) return { current: 0, total: 0 }
-  const matches = findPlainTextMatches(view.state.doc.toString(), query)
+  const search = view.state.field(editorSearchState, false)
+  if (search?.config.inSelection && !search.selectionRange) return { current: 0, total: 0, scopeInvalid: true }
+  const matches = editorMatches(view.state, query)
   if (matches.length === 0) return { current: 0, total: 0 }
 
   const selection = view.state.selection.main

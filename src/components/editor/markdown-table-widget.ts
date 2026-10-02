@@ -20,6 +20,7 @@ import {
   insertTableRow,
   normalizeTableCellRange,
   parseMarkdownTable,
+  tableCellSourceRanges,
   parseTabularText,
   pasteTableCells,
   serializeMarkdownTable,
@@ -266,6 +267,7 @@ export class TableWidget extends WidgetType {
   private dragFrame = 0
   private floatingBar: HTMLElement | null = null
   private reportedFormatState = false
+  private sourceRanges: ReturnType<typeof tableCellSourceRanges> | null = null
 
   constructor(
     readonly source: string,
@@ -463,6 +465,12 @@ export class TableWidget extends WidgetType {
     contentStack.className = "cm-md-table-cell-stack"
     const display = document.createElement("div")
     display.className = "cm-md-table-cell-display"
+    this.sourceRanges ??= tableCellSourceRanges(this.source)
+    const sourceRange = this.sourceRanges[rowIndex < 0 ? 0 : rowIndex + 2]?.[columnIndex]
+    if (sourceRange) {
+      display.dataset.sourceFrom = String(this.from + sourceRange.from)
+      display.dataset.sourceTo = String(this.from + sourceRange.to)
+    }
     this.renderCell(display, value)
     contentStack.appendChild(display)
     cell.appendChild(contentStack)

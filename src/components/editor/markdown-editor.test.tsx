@@ -1023,7 +1023,7 @@ describe("MarkdownEditor", () => {
     mount(<MarkdownEditor onChange={onChange} ref={handle} value="第一处 TODO，第二处 todo" />)
 
     expect(handle.current!.findText("todo", "next", true)).toEqual({ current: 1, total: 2 })
-    expect(handle.current!.replaceCurrent("todo", "完成")).toEqual({ current: 1, total: 1 })
+    expect(handle.current!.replaceCurrent("todo", "完成")).toEqual({ current: 1, total: 1, replaced: 1 })
     expect(handle.current!.replaceAll("todo", "完成")).toBe(1)
     expect(onChange).toHaveBeenLastCalledWith("第一处 完成，第二处 完成", expect.anything())
   })

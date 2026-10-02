@@ -30,6 +30,11 @@ describe("reading-mode search", () => {
     const root = preview('<p>😀 a.b A.B aXb</p>')
     expect(collectPreviewMatches(root, "a.b").map((range) => range.toString())).toEqual(["a.b", "A.B"])
   })
+  it("大小写与全词规则跨行内节点一致，且不会匹配词内子串", () => {
+    const root = preview('<p><strong>c</strong>at Cat scatter cat_</p>')
+    expect(collectPreviewMatches(root, "cat", { caseSensitive: true, wholeWord: true }).map((range) => range.toString())).toEqual(["cat"])
+    expect(collectPreviewMatches(root, "cat", { wholeWord: true }).map((range) => range.toString())).toEqual(["cat", "Cat"])
+  })
   it("wraps both directions, resets on a new query, and clears only its own fallback selection", () => {
     const root = preview('<p>查找一</p><p>查找二</p>')
     const search = new PreviewSearch()

@@ -1,7 +1,8 @@
+import { findTextMatches, type TextSearchOptions } from "@/services/markdown/text-search"
 const BLOCKS = "p, li, h1, h2, h3, h4, h5, h6, pre, td, th, dt, dd"
 const SKIP = "button, input, textarea, script, style, [aria-hidden='true'], .markdown-code-block-header, .markdown-preview-pending"
 
-export function collectPreviewMatches(root: HTMLElement, query: string): Range[] {
+export function collectPreviewMatches(root: HTMLElement, query: string, options: TextSearchOptions = {}): Range[] {
   if (!query) return []
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
   const segments: { node: Text; start: number; end: number }[] = []
@@ -21,11 +22,8 @@ export function collectPreviewMatches(root: HTMLElement, query: string): Range[]
     text += node.data
     segments.push({ node, start, end: text.length })
   }
-  const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu")
   const ranges: Range[] = []
-  for (const match of text.matchAll(pattern)) {
-    const from = match.index
-    const to = from + match[0].length
+  for (const { from, to } of findTextMatches(text, query, options)) {
     const first = segments.find((item) => item.end > from)
     const last = segments.find((item) => item.end >= to && item.start < to)
     if (!first || !last) continue
@@ -56,8 +54,8 @@ export class PreviewSearch {
     this.highlights = this.currentHighlight = null
   }
 
-  find(root: HTMLElement | null, query: string, direction: "next" | "previous" = "next", fromStart = false, keepCurrent = false) {
-    const ranges = root ? collectPreviewMatches(root, query) : []
+  find(root: HTMLElement | null, query: string, direction: "next" | "previous" = "next", fromStart = false, keepCurrent = false, options: TextSearchOptions = {}) {
+    const ranges = root ? collectPreviewMatches(root, query, options) : []
     this.clear()
     if (!ranges.length) { this.query = query; this.index = -1; return { current: 0, total: 0 } }
     if (fromStart || query !== this.query || this.index < 0) this.index = direction === "next" ? 0 : ranges.length - 1

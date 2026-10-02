@@ -807,6 +807,17 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .note-editor[data-compact="true"] .editor-replace-input { grid-column: 1 / 3; grid-row: 2; width: 100%; order: 0; }
 .note-editor[data-compact="true"] .editor-replace-button { grid-column: 3; grid-row: 2; }
 .note-editor[data-compact="true"] .editor-replace-all-button { grid-column: 4; grid-row: 2; }
+.editor-find-bar { flex-wrap: wrap; }
+.editor-find-options { display: flex; flex-basis: 100%; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; color: var(--muted-foreground); }
+.editor-find-options button { border: 1px solid var(--border); border-radius: 5px; padding: 4px 7px; background: var(--background); }
+.editor-find-options button[aria-pressed="true"] { color: var(--primary); border-color: var(--primary); background: color-mix(in oklab,var(--primary) 10%,var(--background)); }
+.editor-find-options button:disabled { opacity: .4; }
+.note-editor[data-compact="true"] .editor-find-options { grid-column: 1 / -1; grid-row: 3; }
+.note-editor[data-compact="true"] .editor-find-options button { min-height: 44px; }
+.cm-note-find-match { background: #ffe9a380; border-radius: 2px; }
+.cm-note-find-current { background: #ffbd5999; border-radius: 2px; }
+.cm-md-table-cell-display[data-note-find="match"] { background: #ffe9a380; }
+.cm-md-table-cell-display[data-note-find="current"] { background: #ffbd5999; }
 .toolbar-divider { width: 1px; height: 17px; margin: 0 4px; background: var(--border); }
 .attachment-file-input { display: none; }
 .attachment-error { margin: 0; border-bottom: 1px solid var(--border); background: color-mix(in oklab,var(--destructive) 9%,white); padding: 8px 16px; color: var(--destructive); font-size: 10.5px; line-height: 1.45; }

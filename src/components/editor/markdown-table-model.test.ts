@@ -18,9 +18,18 @@ import {
   pasteTableCells,
   serializeMarkdownTable,
   tableCellAt,
+  tableCellSourceRange,
   tableCellRangeToTsv,
   toggleTableCellRangeMark,
 } from "./markdown-table-model"
+
+it("单元格源码范围保留转义管道，不把相邻列归为同一匹配格", () => {
+  const source = "  | A | B |\n| --- | --- |\n| a\\|b | **cat** |"
+  const first = tableCellSourceRange(source, 0, 0)!, second = tableCellSourceRange(source, 0, 1)!
+  expect(source.slice(first.from, first.to).trim()).toBe("a\\|b")
+  expect(source.slice(second.from, second.to).trim()).toBe("**cat**")
+  expect(tableCellSourceRange(source, -1, 1)).toEqual({ from: 7, to: 10 })
+})
 
 describe("markdown table model", () => {
   const source = ["| 名称 | 状态 |", "| --- | :---: |", "| 表格 | 正常 |"].join("\n")

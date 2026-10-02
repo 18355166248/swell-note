@@ -110,7 +110,7 @@ import { sortNotes, type NoteSort } from "@/services/search/note-sort"
 import { noteMatchesLibraryQuery } from "@/services/search/note-list-filter"
 import { getNoteViewModeAction, loadUiPreferences, saveUiPreferences, type MarkdownSourceMode, type NoteViewMode } from "@/services/preferences/ui-preferences"
 import { SYSTEM_ROOT_FOLDER_PATH } from "@/services/preferences/folder-order-preferences"
-import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import type { MarkdownEditorHandle, MarkdownFindResult } from "@/components/editor/markdown-editor"
 import type { EditorFormatState } from "@/components/editor/markdown-input"
 import { FormattingToolbar } from "@/components/workspace/formatting-toolbar"
 import { NoteVersionHistoryDialog } from "@/components/workspace/note-version-history-dialog"
@@ -2030,9 +2030,21 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   const [findOpen, setFindOpen] = useState(false)
   const [findQuery, setFindQuery] = useState("")
   const [findReplacement, setFindReplacement] = useState("")
-  const [findResult, setFindResult] = useState({ current: 0, total: 0 })
+  const [findResult, setFindResult] = useState<MarkdownFindResult>({ current: 0, total: 0 })
+  const [findOptions, setFindOptions] = useState({ caseSensitive: false, wholeWord: false })
+  const [findInSelection, setFindInSelection] = useState(false)
+  const [findHasSelection, setFindHasSelection] = useState(false)
+  const [findNotice, setFindNotice] = useState("")
   const findInputRef = useRef<HTMLInputElement>(null)
   const previewSearchRef = useRef(new PreviewSearch())
+  const openFind = useCallback(() => {
+    if (!findOpen) {
+      setFindHasSelection(!previewing && (editorRef.current?.beginFind() ?? false))
+      setFindInSelection(false)
+      setFindNotice("")
+    }
+    setFindOpen(true)
+  }, [findOpen, previewing])
   // 粘贴/插入时的即时错误（剪贴板读不到、代码块里不能插图等）。写入过程与结果不在这里，
   // 它们属于队列，由 AttachmentQueuePanel 常驻展示——编辑区卸载也不该让它们消失。
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
@@ -2362,9 +2374,33 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
 
   const runFind = useCallback((direction: "next" | "previous" = "next", fromStart = false) => {
     setFindResult(previewing
-      ? previewSearchRef.current.find(editorArticleRef.current?.querySelector(".markdown-preview") ?? null, findQuery, direction, fromStart)
+      ? previewSearchRef.current.find(editorArticleRef.current?.querySelector(".markdown-preview") ?? null, findQuery, direction, fromStart, false, findOptions)
       : editorRef.current?.findText(findQuery, direction, fromStart) ?? { current: 0, total: 0 })
-  }, [findQuery, previewing])
+  }, [findQuery, previewing, findOptions])
+
+  useLayoutEffect(() => {
+    if (!active || !findOpen || previewing) { editorRef.current?.endFind(); return }
+    editorRef.current?.configureFind({ query: findQuery, ...findOptions, inSelection: findInSelection })
+  }, [active, findOpen, findQuery, findOptions, findInSelection, previewing, note.contentLoaded])
+
+  useEffect(() => { setFindNotice("") }, [findQuery, findOptions, findInSelection, note.id])
+  useEffect(() => {
+    if (previewing) { setFindHasSelection(false); setFindInSelection(false) }
+  }, [previewing])
+
+  const replaceFind = (all = false) => {
+    const editor = editorRef.current
+    if (!editor || editorReadOnly || previewing) return
+    if (all) {
+      const count = editor.replaceAll(findQuery, findReplacement)
+      setFindResult(editor.inspectFind(findQuery))
+      setFindNotice(`已替换 ${count} 处`)
+    } else {
+      const result = editor.replaceCurrent(findQuery, findReplacement)
+      setFindResult(result)
+      setFindNotice(result.replaced ? "已替换 1 处" : "已定位匹配；再次替换可修改该处")
+    }
+  }
 
   useEffect(() => {
     const search = previewSearchRef.current
@@ -2374,7 +2410,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
     let frame = 0
     const refresh = () => {
       cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => setFindResult(search.find(article.querySelector(".markdown-preview"), findQuery, "next", false, true)))
+      frame = requestAnimationFrame(() => setFindResult(search.find(article.querySelector(".markdown-preview"), findQuery, "next", false, true, findOptions)))
     }
     // 长文和嵌入内容会分批渲染，查找数量跟着补齐，不能只搜首屏已挂载的段落。
     const observer = new MutationObserver(refresh)
@@ -2382,13 +2418,15 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
     if (content) observer.observe(content, { childList: true, subtree: true, characterData: true })
     refresh()
     return () => { observer.disconnect(); cancelAnimationFrame(frame); search.clear() }
-  }, [active, findOpen, findQuery, previewing, note.id])
+  }, [active, findOpen, findQuery, previewing, note.id, findOptions])
 
   useEffect(() => {
     setFindOpen(false)
     setFindQuery("")
     setFindReplacement("")
     setFindResult({ current: 0, total: 0 })
+    setFindHasSelection(false)
+    setFindInSelection(false)
   }, [note.id])
 
   useEffect(() => {
@@ -2396,10 +2434,10 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
     if (!active || !request || request.noteId !== note.id || note.contentLoaded === false) return
     if (!isSpecialPreview) {
       setFindQuery(request.query)
-      setFindOpen(true)
+      openFind()
     }
     searchNavigation.consume()
-  }, [active, searchNavigation, note.id, note.contentLoaded, isSpecialPreview])
+  }, [active, searchNavigation, note.id, note.contentLoaded, isSpecialPreview, openFind])
 
   useEffect(() => {
     if (!active || !findOpen || previewing || note.contentLoaded === false) return
@@ -2408,6 +2446,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => {
         if (!editorRef.current) return
+        editorRef.current.configureFind({ query: findQuery, ...findOptions, inSelection: findInSelection })
         setFindResult(editorRef.current.findText(findQuery, "next", true))
         observer.disconnect()
       })
@@ -2417,13 +2456,13 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
     if (editorArticleRef.current) observer.observe(editorArticleRef.current, { childList: true, subtree: true })
     refresh()
     return () => { observer.disconnect(); cancelAnimationFrame(frame) }
-  }, [active, findOpen, findQuery, previewing, note.id, note.contentLoaded])
+  }, [active, findOpen, findQuery, previewing, note.id, note.contentLoaded, findOptions, findInSelection])
 
   useEffect(() => {
     if (!active || !findOpen || previewing || note.contentLoaded === false) return
     // 正文事务（含撤销/重做）回传新内容后，只刷新计数，不重新定位匹配或触碰焦点。
     setFindResult(editorRef.current?.inspectFind(findQuery) ?? { current: 0, total: 0 })
-  }, [active, findOpen, findQuery, previewing, note.id, note.content, note.contentLoaded])
+  }, [active, findOpen, findQuery, previewing, note.id, note.content, note.contentLoaded, findOptions, findInSelection])
 
   useEffect(() => {
     if (!active || !findOpen) return
@@ -2450,12 +2489,12 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLocaleLowerCase() !== "f") return
       if (hasOpenModal()) return
       event.preventDefault()
-      setFindOpen(true)
+      openFind()
       window.requestAnimationFrame(() => { findInputRef.current?.focus(); findInputRef.current?.select() })
     }
     window.addEventListener("keydown", handleFindShortcut)
     return () => window.removeEventListener("keydown", handleFindShortcut)
-  }, [active, isSpecialPreview])
+  }, [active, isSpecialPreview, openFind])
 
   useEffect(() => {
     // 画布有自己的全选语义（选中所有图形），不接管。
@@ -2637,7 +2676,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
                     </DropdownMenuItem>
                   ) : null}
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onSelect={() => setFindOpen(true)}>
+                  <DropdownMenuItem onSelect={openFind}>
                     <Search /> 查找当前笔记
                   </DropdownMenuItem>
                 </>
@@ -2774,24 +2813,31 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" || event.nativeEvent.isComposing) return
                   event.preventDefault()
-                  setFindResult(editorRef.current?.replaceCurrent(findQuery, findReplacement) ?? { current: 0, total: 0 })
+                  replaceFind()
                 }}
                 placeholder="替换为"
                 value={findReplacement}
               />
-              <button className="editor-replace-button" disabled={!findResult.total} onClick={() => setFindResult(editorRef.current?.replaceCurrent(findQuery, findReplacement) ?? { current: 0, total: 0 })} type="button">替换</button>
+              <button className="editor-replace-button" disabled={!findResult.total} onClick={() => replaceFind()} type="button">替换</button>
               <button
                 className="editor-replace-all-button"
                 disabled={!findResult.total}
                 onClick={() => {
-                  editorRef.current?.replaceAll(findQuery, findReplacement)
-                  setFindResult(editorRef.current?.inspectFind(findQuery) ?? { current: 0, total: 0 })
+                  replaceFind(true)
                 }}
                 type="button"
               >全部</button>
             </>
           ) : null}
           <button aria-label="关闭查找" className="editor-find-close" onClick={() => setFindOpen(false)} type="button"><X /></button>
+          <div className="editor-find-options" aria-label="查找选项">
+            <button aria-pressed={findOptions.caseSensitive} onClick={() => setFindOptions((value) => ({ ...value, caseSensitive: !value.caseSensitive }))} type="button">区分大小写</button>
+            <button aria-pressed={findOptions.wholeWord} onClick={() => setFindOptions((value) => ({ ...value, wholeWord: !value.wholeWord }))} type="button">全词匹配</button>
+            {!previewing ? <button aria-pressed={findInSelection} disabled={!findHasSelection} onClick={() => setFindInSelection((value) => !value)} title={findHasSelection ? "限定打开查找前选中的正文" : "先选中正文，再打开查找"} type="button">仅原选区</button> : null}
+            <span>{previewing ? "范围：可见文字" : "范围：Markdown 正文（含链接地址）"}</span>
+            {findNotice ? <span aria-live="polite" role="status">{findNotice}</span> : null}
+            {findResult.scopeInvalid ? <span role="alert">原选区已失效，请关闭查找并重新选择</span> : null}
+          </div>
         </div>
       ) : null}
 
@@ -2845,7 +2891,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
           canRedo={historyState.redo}
           canHistory={Boolean(activeCacheId)}
           starred={Boolean(note.starred)}
-          onFind={() => setFindOpen(true)}
+          onFind={openFind}
           onViewModeChange={handleNoteViewModeChange}
           onToggleStar={() => onUpdateNote({ starred: !note.starred })}
           onExport={onExportNote}

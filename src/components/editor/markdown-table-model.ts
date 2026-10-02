@@ -8,6 +8,32 @@ export type MarkdownTable = {
 
 const tableCellSplitPattern = /(?<!\\)\|/
 
+// 单元格的原始范围只用于查找高亮，不用渲染后的文字反推源码位置（转义/链接会改变长度）。
+export function tableCellSourceRanges(source: string) {
+  const lines: { text: string; from: number }[] = []
+  let offset = 0
+  for (const text of source.split("\n")) {
+    if (text.trim()) lines.push({ text, from: offset })
+    offset += text.length + 1
+  }
+  return lines.map((line) => {
+    const separators: number[] = []
+    for (let at = 0; at < line.text.length; at++) {
+      if (line.text[at] !== "|") continue
+      let escapes = 0
+      for (let previous = at - 1; previous >= 0 && line.text[previous] === "\\"; previous--) escapes++
+      if (escapes % 2 === 0) separators.push(at)
+    }
+    if (separators[0] !== line.text.search(/\S/)) separators.unshift(-1)
+    if (separators[separators.length - 1] !== line.text.trimEnd().length - 1) separators.push(line.text.length)
+    return separators.slice(0, -1).map((from, column) => ({ from: line.from + from + 1, to: line.from + separators[column + 1] }))
+  })
+}
+
+export function tableCellSourceRange(source: string, row: number, column: number) {
+  return tableCellSourceRanges(source)[row < 0 ? 0 : row + 2]?.[column] ?? null
+}
+
 function splitTableRow(line: string) {
   // 拆分后还原转义管道，单元格里应显示 | 而不是 \|。
   return line
