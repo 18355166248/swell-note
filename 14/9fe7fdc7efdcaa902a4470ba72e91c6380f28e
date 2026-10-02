@@ -1,0 +1,40 @@
+src/components/editor/unified-attachment.test.tsx
+  s_7aa9251711039a::t_48faef6c3cbf7d 37
+  s_7aa9251711039a::t_39fa370b72ee6e 34-36
+  s_7aa9251711039a::t_f563fde27d036c 38-40
+src/components/editor/markdown-preview.tsx
+  s_4324a839e2dea6::t_6f1774a6efb14b 1
+src/App.css
+  s_4324a839e2dea6::t_4b4191e5368302 1692-1697
+src/components/editor/live-preview.ts
+  s_4324a839e2dea6::t_dd58a54b228f9d 1,862,877,907-908
+docs/editor-capability-review-2026-10-02/implementation.md
+  s_7aa9251711039a::t_48faef6c3cbf7d 11
+  s_7aa9251711039a::t_54ef6dd35dd5e1 49-54
+src/components/editor/unified-attachment.tsx
+  s_4324a839e2dea6::t_83ca187c6532c2 1-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "149fe7fdc7efdcaa902a4470ba72e91c6380f28e",
+  "prompts": {},
+  "sessions": {
+    "s_4324a839e2dea6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0e066-55ea-75e1-82e6-95196047cedb",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    },
+    "s_7aa9251711039a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd03-3670-77e2-8b5c-740397b0570b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": null
+    }
+  }
+}
