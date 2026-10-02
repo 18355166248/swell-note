@@ -7,6 +7,7 @@ import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type Vi
 import { isImageAssetPath, parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
 import { openExternalUrl } from "@/services/open-external-url"
 import { requiresLinkModifier } from "./editor-link-activation"
+import { buildImageReference, imageWidthComment, legacyImageWidth, readImageWidthComment, unescapeMarkdownImageText, type ImageWidth } from "@/services/markdown/image-presentation"
 
 import { collectCompatibilityBlocks, CompatibilityBlockWidget, type CompatibilityBlock, type CompatibilityBlockOptions } from "./compatibility-blocks"
 import { parseMarkdownTable } from "./markdown-table-model"
@@ -249,20 +250,21 @@ export class MarkdownImageWidget extends WidgetType {
     readonly to?: number,
     readonly title?: string,
     readonly readOnly = false,
+    readonly width?: ImageWidth,
   ) {
     super()
   }
 
   eq(other: MarkdownImageWidget) {
-    return other.source === this.source && other.alt === this.alt && other.block === this.block && other.from === this.from && other.to === this.to && other.title === this.title && other.readOnly === this.readOnly
+    return other.source === this.source && other.alt === this.alt && other.block === this.block && other.from === this.from && other.to === this.to && other.title === this.title && other.readOnly === this.readOnly && other.width === this.width
   }
 
   toDOM(view: EditorView) {
     const host = document.createElement("span")
     host.className = this.block ? "cm-md-image cm-md-image-block" : "cm-md-image"
-    host.title = this.alt || this.source
-    const size = this.title?.match(/^(\d+)(?:x(\d+))?$/)
-    if (size) { host.style.width = `${size[1]}px`; host.style.maxWidth = "100%" }
+    host.title = unescapeMarkdownImageText(this.title ?? this.alt) || this.source
+    const width = this.width === "auto" ? undefined : this.width ?? legacyImageWidth(this.title)
+    if (width) { host.style.width = `${width}px`; host.style.maxWidth = "100%" }
     let imageState: MarkdownImageLoadState = "loading"
     let viewButton: HTMLButtonElement | undefined
     let retryButton: HTMLButtonElement | undefined
@@ -345,9 +347,34 @@ export class MarkdownImageWidget extends WidgetType {
         for (const [value, label] of [["", "自适应"], ["240", "小 · 240"], ["480", "中 · 480"], ["720", "大 · 720"]]) {
           const option = document.createElement("option"); option.value = value; option.textContent = label; sizes.append(option)
         }
-        sizes.value = size?.[1] ?? ""
-        sizes.addEventListener("change", () => replace(`![${this.alt}](${this.source}${sizes.value ? ` "${sizes.value}"` : ""})`))
+        if (width && ![240, 480, 720].includes(width)) {
+          const custom = document.createElement("option"); custom.value = String(width); custom.textContent = `当前 · ${width}`; sizes.append(custom)
+        }
+        sizes.value = width ? String(width) : ""
+        sizes.addEventListener("change", () => {
+          // 改尺寸保留整条原始引用（含 title、转义和路径）；只替换独立的宽度注释。
+          const reference = this.width === undefined ? sourceText : sourceText.slice(0, -imageWidthComment(this.width).length)
+          replace(reference + imageWidthComment(sizes.value ? Number(sizes.value) : "auto"))
+        })
         imageTools.append(sizes)
+        const captionButton = button("说明", () => {
+          if (imageTools.querySelector("input")) { imageTools.querySelector("input")?.focus(); return }
+          const altInput = document.createElement("input"), titleInput = document.createElement("input")
+          altInput.value = unescapeMarkdownImageText(this.alt); altInput.setAttribute("aria-label", "图片替代文字")
+          titleInput.value = unescapeMarkdownImageText(this.title ?? ""); titleInput.setAttribute("aria-label", "图片说明")
+          altInput.placeholder = "替代文字"; titleInput.placeholder = "悬停说明"
+          const apply = document.createElement("button"), cancel = document.createElement("button")
+          apply.type = cancel.type = "button"; apply.textContent = "保存说明"; cancel.textContent = "取消说明"
+          const dismiss = () => { altInput.remove(); titleInput.remove(); apply.remove(); cancel.remove(); captionButton.focus() }
+          const save = () => replace(buildImageReference(altInput.value, this.source, titleInput.value, this.width ?? legacyImageWidth(this.title)))
+          apply.addEventListener("click", save); cancel.addEventListener("click", dismiss)
+          for (const input of [altInput, titleInput]) input.addEventListener("keydown", (event) => {
+            if (event.isComposing) return
+            if (event.key === "Enter") { event.preventDefault(); save() }
+            if (event.key === "Escape") { event.preventDefault(); dismiss() }
+          })
+          imageTools.append(altInput, titleInput, apply, cancel); altInput.focus(); altInput.select()
+        })
         const replaceButton = button("更换", () => {
           if (imageTools.querySelector("input")) { imageTools.querySelector("input")?.focus(); return }
           const input = document.createElement("input")
@@ -356,7 +383,7 @@ export class MarkdownImageWidget extends WidgetType {
           const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "取消"
           const dismiss = () => { input.remove(); apply.remove(); cancel.remove(); replaceButton.focus() }
           cancel.addEventListener("click", dismiss)
-          const save = () => { const path = input.value.trim(); if (!path || /[\n\r<>]/.test(path) || /^[a-z][a-z\d+.-]*:/i.test(path) && !/^https?:/i.test(path)) { input.setCustomValidity("请输入附件路径或 HTTP(S) 地址"); input.reportValidity(); return }; replace(`![${this.alt}](${path.replace(/[ ()]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)}${this.title ? ` "${this.title}"` : ""})`) }
+          const save = () => { const path = input.value.trim(); if (!path || /[\n\r<>]/.test(path) || /^[a-z][a-z\d+.-]*:/i.test(path) && !/^https?:/i.test(path)) { input.setCustomValidity("请输入附件路径或 HTTP(S) 地址"); input.reportValidity(); return }; replace(buildImageReference(unescapeMarkdownImageText(this.alt), path, unescapeMarkdownImageText(this.title ?? ""), this.width)) }
           apply.addEventListener("click", save)
           input.addEventListener("keydown", (event) => { if (event.isComposing) return; if (event.key === "Enter") { event.preventDefault(); save() }; if (event.key === "Escape") { dismiss() } })
           imageTools.append(input, apply, cancel); input.focus(); input.select()
@@ -1196,10 +1223,12 @@ function buildLivePreviewDecorations(view: EditorView, forcedRanges?: readonly D
             // alt 文本没有独立节点，取 ![ 与 ] 之间的原文。
             const alt = marks.length >= 2 ? view.state.sliceDoc(marks[0].to, marks[1].from) : ""
             const line = view.state.doc.lineAt(node.from)
-            const alone = line.text.trim() === view.state.sliceDoc(node.from, node.to).trim()
+            const presentation = readImageWidthComment(view.state.sliceDoc(node.to, Math.min(node.to + 80, view.state.doc.length)))
+            const imageTo = node.to + (presentation?.length ?? 0)
+            const alone = line.text.trim() === view.state.sliceDoc(node.from, imageTo).trim()
             decorations.push(Decoration.replace({
-              widget: new MarkdownImageWidget(alt, source, alone, view.state.facet(livePreviewOptions), node.from, node.to, (() => { const title = node.node.getChild("LinkTitle"); return title ? view.state.sliceDoc(title.from + 1, title.to - 1) : undefined })(), view.state.readOnly),
-            }).range(node.from, node.to))
+              widget: new MarkdownImageWidget(alt, source, alone, view.state.facet(livePreviewOptions), node.from, imageTo, (() => { const title = node.node.getChild("LinkTitle"); return title ? view.state.sliceDoc(title.from + 1, title.to - 1) : undefined })(), view.state.readOnly, presentation?.width),
+            }).range(node.from, imageTo))
             break
           }
           case "HorizontalRule": {

@@ -17,6 +17,17 @@ const baseProps = {
 }
 
 describe("Markdown preview integration", () => {
+  it.each([["480", "480px"], ["auto", ""]])("独立尺寸 %s 优先于旧尺寸，保留图片 title", async (width, expected) => {
+    const container = document.createElement("div"), root = createRoot(container)
+    try {
+      await act(async () => root.render(<MarkdownPreview {...baseProps} content={`![图](https://example.com/a.png "320")<!-- swell-image:width=${width} -->`} onResolveWikiNote={() => ({ status: "missing" })} />))
+      const image = container.querySelector<HTMLImageElement>("img")!
+      expect(image).not.toBeNull()
+      expect(image.title).toBe("320")
+      expect(image.style.width).toBe(expected)
+      expect(container.textContent).not.toContain("swell-image")
+    } finally { act(() => root.unmount()) }
+  })
   it.each([false, true])("names nested and empty task checkboxes in preview (interactive=%s)", (interactive) => {
     const content = "- [ ] **买牛奶** [店铺](https://example.com) `清单` &amp; \\*字面\\*\n  - [x] 子任务 **[链接](https://example.com)**\n- [ ] &nbsp;\n- [ ] `<img onerror=alert(1)>`"
     const html = renderToStaticMarkup(<MarkdownPreview {...baseProps} content={content} onResolveWikiNote={() => ({ status: "missing" })} onToggleTask={interactive ? vi.fn() : undefined} />)

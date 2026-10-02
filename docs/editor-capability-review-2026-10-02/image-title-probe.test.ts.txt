@@ -1,0 +1,34 @@
+// @vitest-environment jsdom
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
+import { history, undo } from "@codemirror/commands"
+import { EditorState } from "@codemirror/state"
+import { EditorView } from "@codemirror/view"
+import { expect, it } from "vitest"
+import { markdownLivePreview } from "./live-preview"
+
+// 临时审计探针：确认尺寸操作是否覆盖已有图片 title，执行后移出默认测试目录。
+it.each(["480", ""])("图片宽度 %s 会覆盖原始说明 title；撤销仍可恢复", async (width) => {
+  const original = '正文\n\n![架构图](a.png "原始图片说明")\n\n末尾'
+  const view = new EditorView({
+    parent: document.body,
+    state: EditorState.create({
+      doc: original,
+      extensions: [markdown({ base: markdownLanguage }), history(), markdownLivePreview({})],
+      selection: { anchor: 0 },
+    }),
+  })
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const select = view.dom.querySelector<HTMLSelectElement>(".cm-md-image-tools select")!
+    expect(select).not.toBeNull()
+    select.value = width
+    select.dispatchEvent(new Event("change"))
+    const expected = `正文\n\n![架构图](a.png${width ? ` "${width}"` : ""})\n\n末尾`
+    expect(view.state.doc.toString()).toBe(expected)
+    expect(view.state.doc.toString()).not.toContain("原始图片说明")
+    undo(view)
+    expect(view.state.doc.toString()).toBe(original)
+  } finally {
+    view.destroy()
+  }
+})

@@ -21,6 +21,7 @@ import {
 import { splitMarkdownIntoChunks, type MarkdownChunk } from "@/services/markdown/markdown-chunks"
 import { resolveOfficialNoteRenderer } from "@/plugins/official-note-renderers"
 import { remarkObsidian } from "@/services/markdown/remark-obsidian"
+import { remarkImagePresentation } from "@/services/markdown/image-presentation"
 import { openExternalUrl } from "@/services/open-external-url"
 import { extractFrontmatter } from "@/services/search/note-index"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
@@ -50,7 +51,7 @@ type MarkdownPreviewProps = {
 const MathMarkdown = lazy(() => import("./math-markdown"))
 const MermaidDiagram = lazy(() => import("./mermaid-diagram"))
 
-const remarkPlugins = [remarkGfm, remarkObsidian]
+const remarkPlugins = [remarkGfm, remarkObsidian, remarkImagePresentation]
 const rehypePlugins = [rehypeHighlight, rehypeSelectionText]
 
 // 任务勾选框由 remark-gfm 合成、自身没有源码位置，行号从所属任务列表项（li）经 Context 传入。
@@ -347,8 +348,8 @@ function buildMarkdownComponents(
         </a>
       )
     },
-    img({ alt, src, title }: { alt?: string; src?: string; title?: string }) {
-      return <VaultImage alt={alt} assetScope={assetScope} onResolveAsset={handlersRef.current.onResolveAsset} source={src} title={title} />
+    img({ alt, src, title, node }: { alt?: string; src?: string; title?: string; node?: { properties?: Record<string, unknown> } }) {
+      return <VaultImage alt={alt} assetScope={assetScope} onResolveAsset={handlersRef.current.onResolveAsset} source={src} title={title} width={node?.properties?.["dataImageWidth"] ?? node?.properties?.["data-image-width"]} />
     },
     pre({ children, node }: { children?: ReactNode; node?: Parameters<typeof CodeBlock>[0]["node"] }) {
       return <CodeBlock node={node}>{children}</CodeBlock>
@@ -696,16 +697,19 @@ type VaultImageProps = {
   onResolveAsset: (source: string) => Promise<VaultAsset | null>
   source?: string
   title?: string
+  width?: unknown
 }
 
 // 仅为旧 Vault 保留图片尺寸别名读取；新内容始终使用标准 Markdown 图片语法。
-function parseImagePresentation(alt?: string, title?: string) {
+function parseImagePresentation(alt?: string, title?: string, width?: unknown) {
   const titleSize = title?.match(/^(\d+)(?:x(\d+))?$/)
   const altSize = alt?.match(/^(.*)\|(\d+)(?:x(\d+))?$/)
   const match = titleSize ?? altSize?.slice(1)
   return {
     alt: altSize?.[1].trim() || alt || "笔记图片",
-    size: match ? { height: match[2] ? Number(match[2]) : undefined, width: Number(match[1]) } : null,
+    size: width === "auto" ? null : typeof width === "string" && /^[1-9]\d{0,4}$/.test(width)
+      ? { width: Number(width), height: undefined }
+      : match ? { height: match[2] ? Number(match[2]) : undefined, width: Number(match[1]) } : null,
   }
 }
 
@@ -744,7 +748,7 @@ function releaseVaultImage(cacheKey: string, entry: VaultImageCacheEntry) {
   }, 30_000)
 }
 
-function VaultImage({ alt, assetScope, onResolveAsset, source, title }: VaultImageProps) {
+function VaultImage({ alt, assetScope, onResolveAsset, source, title, width }: VaultImageProps) {
   const resolveAssetRef = useRef(onResolveAsset)
   resolveAssetRef.current = onResolveAsset
   const resolvedSource = parseVaultAssetHref(source) ?? source
@@ -807,7 +811,7 @@ function VaultImage({ alt, assetScope, onResolveAsset, source, title }: VaultIma
   }, [cacheKey, resolvedSource, attempt])
 
   if (state.status === "ready" && state.url) {
-    const presentation = parseImagePresentation(alt, title)
+    const presentation = parseImagePresentation(alt, title, width)
     const zoomedSrc = state.url
     return (
       <img
@@ -827,6 +831,7 @@ function VaultImage({ alt, assetScope, onResolveAsset, source, title }: VaultIma
         referrerPolicy="no-referrer"
         role="button"
         src={state.url}
+        title={title}
         style={presentation.size ? { height: presentation.size.height, width: presentation.size.width } : undefined}
         tabIndex={0}
       />

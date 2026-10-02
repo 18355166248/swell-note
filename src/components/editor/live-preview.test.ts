@@ -245,18 +245,51 @@ describe("markdown live preview", () => {
       view.destroy()
     })
 
-    it("调整尺寸写入宽度标题，一步撤销恢复", async () => {
+    it("调整尺寸写入独立宽度注释，一步撤销恢复", async () => {
       const view = await createImageView()
       const host = view.dom.querySelector(".cm-md-image")!
       const sizes = host.querySelector<HTMLSelectElement>(".cm-md-image-tools select")!
       sizes.value = "480"
       sizes.focus()
       sizes.dispatchEvent(new Event("change"))
-      expect(view.state.doc.toString()).toBe('正文\n\n![图](a.png "480")\n\n同图第二处 ![图](a.png) 结尾')
+      expect(view.state.doc.toString()).toBe('正文\n\n![图](a.png)<!-- swell-image:width=480 -->\n\n同图第二处 ![图](a.png) 结尾')
       expect(view.hasFocus).toBe(true)
       undo(view)
       expect(view.state.doc.toString()).toBe(imageRefDoc)
       view.destroy()
+    })
+
+    it.each(["480", ""])("改尺寸 %s 保留说明和转义，重绘后尺寸正确且可撤销", async (value) => {
+      const original = '正文\n\n![架构\\[图\\]](a.png "原始\\\"说明")\n\n末尾'
+      const view = await createImageView(original)
+      try {
+        const sizes = view.dom.querySelector<HTMLSelectElement>('.cm-md-image-tools select')!
+        sizes.value = value; sizes.dispatchEvent(new Event("change"))
+        expect(view.state.doc.toString()).toContain('![架构\\[图\\]](a.png "原始\\\"说明")')
+        await settle()
+        const image = view.dom.querySelector<HTMLElement>(".cm-md-image")!
+        expect(image.title).toBe('原始"说明')
+        expect(image.style.width).toBe(value ? `${value}px` : "")
+        expect(image.textContent).not.toContain("swell-image")
+        undo(view)
+        expect(view.state.doc.toString()).toBe(original)
+      } finally { view.destroy() }
+    })
+
+    it("旧数值尺寸切自适应后不回退，视觉编辑说明仍保持宽度和同图其他引用", async () => {
+      const view = await createImageView('正文\n\n![图](a.png "320")\n\n![其他](a.png)')
+      try {
+        const sizes = view.dom.querySelector<HTMLSelectElement>('.cm-md-image-tools select')!
+        expect(sizes.value).toBe("320")
+        sizes.value = ""; sizes.dispatchEvent(new Event("change")); await settle()
+        expect(view.dom.querySelector<HTMLElement>(".cm-md-image")!.style.width).toBe("")
+        toolButton(view, "说明").click()
+        view.dom.querySelector<HTMLInputElement>('[aria-label="图片替代文字"]')!.value = "新[图]"
+        view.dom.querySelector<HTMLInputElement>('[aria-label="图片说明"]')!.value = '说明"文字'
+        toolButton(view, "保存说明").click()
+        expect(view.state.doc.toString()).toContain('![新\\[图\\]](a.png "说明\\\"文字")<!-- swell-image:width=auto -->')
+        expect(view.state.doc.toString()).toContain('![其他](a.png)')
+      } finally { view.destroy() }
     })
 
     it("取消更换或按 Esc 后把焦点归还更换按钮", async () => {
