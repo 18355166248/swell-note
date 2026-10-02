@@ -7,7 +7,7 @@ import { DecorationSet, EditorView } from "@codemirror/view"
 import { describe, expect, it, vi } from "vitest"
 
 import type { LivePreviewOptions } from "./live-preview"
-import { ListBulletWidget, markdownLivePreview, markdownLivePreviewPlugin, MarkdownImageWidget, MarkdownTextWidget, mergeDecorationRanges, tableDecorationsField, TableWidget, TaskCheckboxWidget } from "./live-preview"
+import { buildLivePreviewDecorationsForRanges, ListBulletWidget, markdownLivePreview, markdownLivePreviewPlugin, MarkdownImageWidget, MarkdownTextWidget, mergeDecorationRanges, tableDecorationsField, TableWidget, TaskCheckboxWidget } from "./live-preview"
 
 const doc = [
   "# 标题",
@@ -1071,6 +1071,18 @@ describe("markdown live preview links", () => {
       "https://example.com/docs",
       "https://example.com/markdown",
     ])
+  })
+
+  it("keeps line breaks outside plugin replacements for multiline link metadata", () => {
+    const content = '前文\n\n[店铺](https://example.com\n  "标题")续写\n\n末段'
+    const view = new EditorView({ parent: document.body, state: EditorState.create({ doc: content, extensions: [markdown({ base: markdownLanguage })], selection: { anchor: content.length } }) })
+    try {
+      const decorations = buildLivePreviewDecorationsForRanges(view, [{ from: 0, to: content.length }])
+      const { hidden } = collect(decorations)
+      expect(hidden.length).toBeGreaterThan(1)
+      for (const range of hidden) expect(content.slice(range.from, range.to)).not.toContain("\n")
+      expect(view.state.doc.toString()).toBe(content)
+    } finally { view.destroy() }
   })
 
   it("hides markdown link urls and keeps the label", async () => {

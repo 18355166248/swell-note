@@ -440,6 +440,31 @@ describe("production task widget activation", () => {
     expect(view.contentDOM.querySelector(".cm-md-task-checkbox")?.getAttribute("aria-label")).toBe(label)
   })
 
+  it.each([["[A [B] C](https://example.com \"标题\")结束", "A [B] C结束"], ["[A [**B**] C](https://example.com \"标题\") 结束", "A [B] C 结束"]])("keeps literal brackets inside an existing nested task link label (%s)", async (body, label) => {
+    const { view } = await mountEditor(`前文\n\n- [ ] ${body}\n\n末段`)
+    expect(view.contentDOM.querySelector(".cm-md-task-checkbox")?.getAttribute("aria-label")).toBe(label)
+  })
+
+  it.each([false, true])("mounts multiline link titles without changing source (readonly=%s)", async (readOnly) => {
+    const doc = '前文\n\n[普通链接](https://example.com\n  "普通标题")\n\n- [ ] [店铺](https://example.com\n  "任务标题")续写\n\n末段'
+    const { view, changed } = await mountEditor(doc, { readOnly })
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(view.contentDOM.textContent).toContain("普通链接")
+    expect(view.contentDOM.textContent).not.toContain("https://example.com")
+    expect(view.contentDOM.textContent).not.toContain("任务标题")
+    const box = view.contentDOM.querySelector<HTMLInputElement>(".cm-md-task-checkbox")!
+    expect(box.getAttribute("aria-label")).toBe("店铺续写")
+    expect(box.disabled).toBe(readOnly)
+    expect(changed).not.toHaveBeenCalled()
+    if (!readOnly) {
+      act(() => { view.dispatch({ selection: { anchor: doc.length } }); box.focus(); box.click() })
+      expect(view.state.doc.toString()).toBe(doc.replace("[ ]", "[x]"))
+      expect(document.activeElement).toBe(view.contentDOM.querySelector(".cm-md-task-checkbox"))
+      act(() => { view.focus(); expect(undo(view)).toBe(true) })
+      expect(view.state.doc.toString()).toBe(doc)
+    }
+  })
+
   it("does not take focus back from a control acquired during the task update", async () => {
     const doc = "前文\n\n- [ ] 任务\n\n末段"
     const { view, changed } = await mountEditor(doc)

@@ -1206,6 +1206,37 @@ test.describe("待办键盘连续性与名称", () => {
     await expect(preview.nth(1)).toHaveAccessibleName("店铺 续写")
   })
 
+  test("跨行链接标题正常挂载并保留任务键盘与原文", async ({ page }, testInfo) => {
+    const content = '前文\n\n[普通链接](https://example.com\n  "普通标题")\n\n- [ ] [店铺](https://example.com\n  "任务标题")续写\n\n末段'
+    const errors: string[] = []
+    page.on("pageerror", (error) => errors.push(error.message))
+    const { editor, boxes } = await openFixture(page, testInfo.project.name === "mobile-chrome", content)
+    await expect(editor).toContainText("普通链接")
+    await expect(editor).not.toContainText("任务标题")
+    await expect(boxes.first()).toHaveAccessibleName("店铺续写")
+    const source = () => page.evaluate(() => (window as unknown as { __keyboardTaskView: { state: { doc: { toString: () => string } } } }).__keyboardTaskView.state.doc.toString())
+    expect(await source()).toBe(content)
+    await boxes.first().focus()
+    await page.keyboard.press("Space")
+    await expect(boxes.first()).toBeChecked()
+    await expect(boxes.first()).toBeFocused()
+    await page.keyboard.press("Space")
+    await expect(boxes.first()).not.toBeChecked()
+    expect(await source()).toBe(content)
+    expect(errors).toEqual([])
+  })
+
+  test("嵌套方括号标签名称与兼容阅读一致", async ({ page }, testInfo) => {
+    const content = '前文\n\n- [ ] [A [B] C](https://example.com "标题")结束\n- [ ] [A [**B**] C](https://example.com "标题") 结束\n\n末段'
+    const { boxes, workspace } = await openFixture(page, testInfo.project.name === "mobile-chrome", content)
+    await expect(boxes.nth(0)).toHaveAccessibleName("A [B] C结束")
+    await expect(boxes.nth(1)).toHaveAccessibleName("A [B] C 结束")
+    await useCompatibilityPreview(page)
+    const preview = workspace.locator('.markdown-preview input[type="checkbox"]')
+    await expect(preview.nth(0)).toHaveAccessibleName("A [B] C结束")
+    await expect(preview.nth(1)).toHaveAccessibleName("A [B] C 结束")
+  })
+
   test("键盘与指针切换保留实际滚动正文选区和撤销", async ({ page }, testInfo) => {
     const mobile = testInfo.project.name === "mobile-chrome"
     const content = Array.from({ length: 24 }, (_, i) => `前文段落 ${i}\n`).join("\n") + doc + "\n\n" + Array.from({ length: 24 }, (_, i) => `后文段落 ${i}\n`).join("\n")

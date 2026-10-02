@@ -59,21 +59,65 @@ function linkHint(state: EditorState, note = false) {
 
 // 使用已有 Markdown 语法树读取本任务正文；Task 不包含嵌套子列表。
 // 行内代码保持字面文本，链接只读标签，属性赋值不会把正文解释为 HTML。
-function taskBodyText(node: MdSyntaxNode, state: EditorState): string {
+type TaskLabelLink = { from: number; to: number; labelFrom: number; labelTo: number }
+
+// Lezer 会把带字面嵌套方括号的标签拆为裸 URL 与内部 Link。只在任务名称中，
+// 以已有 URL 节点为锚恢复其紧邻的标签边界；不修改语法树或编辑装饰。
+function nestedTaskLinkLabels(node: MdSyntaxNode, state: EditorState): TaskLabelLink[] {
+  if (node.name !== "Task") return []
+  const links: TaskLabelLink[] = []
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    if (child.name !== "URL") continue
+    const before = state.sliceDoc(node.from, child.from)
+    const close = /\]\(\s*$/.exec(before)
+    if (!close) continue
+    let depth = 1, open = close.index - 1
+    for (; open >= 0; open--) {
+      if (before[open] !== "[" && before[open] !== "]") continue
+      let escapes = 0
+      for (let at = open - 1; at >= 0 && before[at] === "\\"; at--) escapes++
+      if (escapes % 2) continue
+      depth += before[open] === "]" ? 1 : -1
+      if (depth === 0) break
+    }
+    if (open < 0 || before[open - 1] === "!" || !before.slice(open + 1, close.index).includes("[")) continue
+    const tail = /^(?:\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\)))?\s*\)/.exec(state.sliceDoc(child.to, node.to))
+    if (!tail) continue
+    const from = node.from + open, to = child.to + tail[0].length
+    if (links.length && links[links.length - 1].to > from) continue
+    links.push({ from, to, labelFrom: from + 1, labelTo: node.from + close.index })
+  }
+  return links
+}
+
+function taskLabelSlice(state: EditorState, from: number, to: number, links: readonly TaskLabelLink[]): string {
+  if (!links.length) return state.sliceDoc(from, to)
+  let text = "", cursor = from
+  for (const link of links) for (const [start, end] of [[link.from, link.labelFrom], [link.labelTo, link.to]]) {
+    if (end <= cursor || start >= to) continue
+    text += state.sliceDoc(cursor, Math.max(cursor, start))
+    cursor = Math.min(to, end)
+  }
+  return text + state.sliceDoc(cursor, to)
+}
+
+function taskBodyText(node: MdSyntaxNode, state: EditorState, links = nestedTaskLinkLabels(node, state)): string {
+  const inLabel = links.some((link) => node.from >= link.labelFrom && node.to <= link.labelTo)
+  if (inLabel && node.name === "LinkMark") return state.sliceDoc(node.from, node.to)
   if (node.name.endsWith("Mark") || ["TaskMarker", "LinkTitle", "LinkLabel"].includes(node.name)) return ""
-  if (node.name === "URL" && node.parent?.name !== "Autolink") return ""
+  if (node.name === "URL" && node.parent?.name !== "Autolink" && !inLabel) return ""
   if (node.name === "Escape") return state.sliceDoc(node.from + 1, node.to)
   if (node.name === "Entity") {
     return new DOMParser().parseFromString(state.sliceDoc(node.from, node.to), "text/html").body.textContent ?? ""
   }
   let text = "", from = node.from
   for (let child = node.firstChild; child; child = child.nextSibling) {
-    text += state.sliceDoc(from, child.from) + taskBodyText(child, state)
+    text += taskLabelSlice(state, from, child.from, links) + taskBodyText(child, state, links)
     from = child.to
     // Link 的可见正文在标签右括号结束；目的地、title 及其源码空白均不读入。
-    if (node.name === "Link" && child.name === "LinkMark" && state.sliceDoc(child.from, child.to) === "]") return text
+    if (!inLabel && node.name === "Link" && child.name === "LinkMark" && state.sliceDoc(child.from, child.to) === "]") return text
   }
-  return text + state.sliceDoc(from, node.to)
+  return text + taskLabelSlice(state, from, node.to, links)
 }
 
 export class TaskCheckboxWidget extends WidgetType {
@@ -886,6 +930,13 @@ function buildLivePreviewDecorations(view: EditorView, forcedRanges?: readonly D
   const hide = (node: MdSyntaxNode) => {
     decorations.push(Decoration.replace({}).range(node.from, node.to))
   }
+  const hideInlineRange = (from: number, to: number) => {
+    for (let line = doc.lineAt(from); line.from < to; line = doc.line(line.number + 1)) {
+      const start = Math.max(from, line.from), end = Math.min(to, line.to)
+      if (start < end) decorations.push(Decoration.replace({}).range(start, end))
+      if (line.to >= to || line.number === doc.lines) break
+    }
+  }
   const hideMarkChildren = (node: MdSyntaxNode, active: boolean, ...markNames: string[]) => {
     if (active) return
     for (let child = node.firstChild; child; child = child.nextSibling) {
@@ -1128,7 +1179,8 @@ function buildLivePreviewDecorations(view: EditorView, forcedRanges?: readonly D
             // 链接文本为空时隐藏会让整行看不见内容，保持原样。
             if (!open || !close || close.from <= open.to) break
             decorations.push(Decoration.replace({}).range(open.from, open.to))
-            decorations.push(Decoration.replace({}).range(close.from, node.to))
+            // ViewPlugin 替换不能吞换行；分别隐藏每行元数据，保留文档行结构。
+            hideInlineRange(close.from, node.to)
             break
           }
           case "Image": {

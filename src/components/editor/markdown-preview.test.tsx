@@ -36,6 +36,13 @@ describe("Markdown preview integration", () => {
     expect(rendered.querySelector('input[type="checkbox"]')?.getAttribute("aria-label")).toBe(label)
   })
 
+  it.each([["[A [B] C](https://example.com \"标题\")结束", "A [B] C结束"], ["[A [**B**] C](https://example.com \"标题\") 结束", "A [B] C 结束"]])("keeps literal brackets inside an existing nested task link label (%s)", (body, label) => {
+    const html = renderToStaticMarkup(<MarkdownPreview {...baseProps} content={`- [ ] ${body}`} onResolveWikiNote={() => ({ status: "missing" })} onToggleTask={vi.fn()} />)
+    const rendered = document.createElement("div")
+    rendered.innerHTML = html
+    expect(rendered.querySelector('input[type="checkbox"]')?.getAttribute("aria-label")).toBe(label)
+  })
+
   it("keeps selected text and code intact when adding inline selection paint", () => {
     const html = renderToStaticMarkup(<MarkdownPreview {...baseProps} content={'正文 **加粗** 和 [链接](https://example.com)\n\n```js\nconst value = 1\n```'} onResolveWikiNote={() => ({ status: "missing" })} />)
     const rendered = document.createElement("div")
