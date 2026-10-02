@@ -1716,3 +1716,5 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
   .note-history-dialog .note-history-layout { grid-template-rows: 100px minmax(120px,1fr); }
   .note-history-dialog [data-slot="dialog-footer"] { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
+.note-delivery-dialog { width: min(960px,calc(100vw - 24px)); max-width: 960px; max-height: calc(100dvh - var(--keyboard-inset,0px) - 40px); overflow: auto; }
+.note-delivery-dialog iframe { width: 100%; min-height: min(52dvh,560px); border: 1px solid var(--border); border-radius: 8px; background: white; }
