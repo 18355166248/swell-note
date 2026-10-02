@@ -1,0 +1,65 @@
+src/components/editor/editor-search.test.ts
+  s_7aa9251711039a::t_8056bc183165bb 4-12
+  s_7aa9251711039a::t_37bfb2b34a7fe3 1-3,13-38
+src/services/markdown/text-search.test.ts
+  s_7aa9251711039a::t_37bfb2b34a7fe3 1-20
+src/components/editor/markdown-editor.tsx
+  s_7aa9251711039a::t_38a95d3f10b127 34,47-49,96,318,1150-1165,1337-1339,1351-1352,1354-1356,1362
+  s_7aa9251711039a::t_f7c0812e9649a4 35,319
+  s_7aa9251711039a::t_34f75671ee609b 1870-1871
+  s_7aa9251711039a::t_8056bc183165bb 97,1848,1852-1854,1872
+src/components/workspace/preview-search.ts
+  s_7aa9251711039a::t_330248c5a9085a 1,5,26,57-58
+src/components/editor/editor-search.ts
+  s_7aa9251711039a::t_82f0b28feb7714 1,3,5-13,15-25,30-51
+  s_7aa9251711039a::t_f7c0812e9649a4 2,52-72,74-75,81-85
+  s_7aa9251711039a::t_8056bc183165bb 4,26-29
+  s_7aa9251711039a::t_69a260cafb640e 14
+  s_7aa9251711039a::t_2e81ad9a8f621e 73,76-80
+docs/editor-capability-review-2026-10-02/implementation.md
+  s_7aa9251711039a::t_43b8ccb9e8b6de 8,27-36
+src/components/editor/markdown-table-model.ts
+  s_7aa9251711039a::t_5af6387df6dcd0 12,19-34
+  s_7aa9251711039a::t_f7c0812e9649a4 11,13-18,35-36
+src/App.css
+  s_7aa9251711039a::t_f7c0812e9649a4 819-820
+  s_7aa9251711039a::t_671357ebc09a48 810-818
+e2e/editor-advanced-find.spec.ts
+  s_7aa9251711039a::t_d9463159192f4a 47-64,66-68
+  s_7aa9251711039a::t_15e74ad24b31e4 1-46
+  s_7aa9251711039a::t_a9a3d5f8600b91 65
+src/components/workspace/preview-search.test.ts
+  s_7aa9251711039a::t_0da20f2e5d77a6 33-37
+src/components/editor/markdown-table-widget.ts
+  s_7aa9251711039a::t_f7c0812e9649a4 470-473
+  s_7aa9251711039a::t_5af6387df6dcd0 23
+  s_7aa9251711039a::t_2e81ad9a8f621e 270,468-469
+src/services/markdown/text-search.ts
+  s_7aa9251711039a::t_82f0b28feb7714 1-19
+src/components/workspace/workspace.tsx
+  s_7aa9251711039a::t_e7b947fc79d5dc 2034-2037,2040-2047,2377,2379-2386,2390-2403,2413,2421,2428-2429,2437,2440,2449,2459,2465,2492,2497
+  s_7aa9251711039a::t_294ceec2d8ee64 2679,2816,2821,2826,2833-2838,2840,2894
+  s_7aa9251711039a::t_0da20f2e5d77a6 2387-2389
+  s_7aa9251711039a::t_8056bc183165bb 113,2033,2839
+src/components/editor/markdown-editor.test.tsx
+  s_7aa9251711039a::t_37bfb2b34a7fe3 1026
+src/components/editor/markdown-table-model.test.ts
+  s_7aa9251711039a::t_345a8d4918496e 21,26-32
+  s_7aa9251711039a::t_ca7287e1944826 33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "958d1c3b3873cf3ce1ea2304ba514f85fe9fa50c",
+  "prompts": {},
+  "sessions": {
+    "s_7aa9251711039a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd03-3670-77e2-8b5c-740397b0570b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
