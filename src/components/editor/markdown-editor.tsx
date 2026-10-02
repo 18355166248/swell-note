@@ -27,6 +27,7 @@ import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-complet
 import { ImageZoomOverlay } from "./image-zoom"
 import { commitOpenRichEditors } from "./unified-rich-block"
 import { activeTableEdit, type TableEditTarget } from "./table-edit-target"
+import { TableHistoryController } from "./table-history"
 import { selectionRenderingExtensions } from "./selection-rendering"
 import { installTextareaDrawnCaret } from "./textarea-drawn-caret"
 import "./markdown-table.css"
@@ -162,6 +163,11 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   function MarkdownEditor({ sessionKey, revision, onHistoryChange, onEditingTargetChange, onFormatStateChange, onLinkMenu, onPasteError, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onLoadWikiNote, onOpenWikiLink, onResolveAsset, onResolveWikiNote, onSelectionChange, readOnly = false, sourceMode = false, storageKey, value }, ref) {
     const hostRef = useRef<HTMLDivElement | null>(null)
     const controlRef = useRef<EditorControl | null>(null)
+    const historyOwner = useMemo(() => ({}), [sessionKey, storageKey, readOnly, compact])
+    const historyOwnerRef = useRef(historyOwner)
+    historyOwnerRef.current = historyOwner
+    const tableHistory = useMemo(() => new TableHistoryController(() => controlRef.current, () => historyOwnerRef.current), [])
+    useLayoutEffect(() => () => tableHistory.cancel(), [historyOwner, tableHistory])
     const sessionKeyRef = useRef(sessionKey)
     sessionKeyRef.current = sessionKey
     // 上一次渲染看到的 sessionKey。判定「用户确实切走了」必须跟它比：
@@ -695,6 +701,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       handlers.current.onHistoryChange?.(undoDepth(control.getState()) > 0, redoDepth(control.getState()) > 0)
       return () => {
         for (const dispose of disposers) dispose()
+        tableHistory.cancel()
         controlRef.current = null
         control.destroy()
       }
@@ -1274,7 +1281,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         }
       },
       redo() {
-        runHistory(controlRef.current, true)
+        tableHistory.run(true)
       },
       removeLink(target, cell) {
         const control = controlRef.current
@@ -1347,9 +1354,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         control.dispatchCommand({ type: "selection.all" })
       },
       undo() {
-        runHistory(controlRef.current, false)
+        tableHistory.run(false)
       },
-    }), [])
+    }), [tableHistory])
 
     return (
       <>
@@ -1891,12 +1898,5 @@ export function formatToolbarText(template: string, selected: string) {
   return { text: template }
 }
 
-function runHistory(control: EditorControl | null | undefined, forward: boolean) {
-  if (!control || control.getSettings().readOnly) return
-  // 未提交的单元格先形成同一份文档历史，再执行撤销；不能只撤销正文而留下悬空的 textarea。
-  activeTableEdit(control.getView())?.commit()
-  if (forward) control.redo()
-  else control.undo()
-}
 
 export default MarkdownEditor

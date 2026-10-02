@@ -1992,6 +1992,18 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   // locked 只切换同一个 CodeMirror 的可写能力，不更换正文组件，滚动、选区与撤销历史因此都能保留。
   const viewLocked = noteViewMode === "locked"
   const editorReadOnly = resolveEditorReadOnly(fileReadOnly, note.source, noteViewMode, saveState.status, allowSyncEditing)
+  const formatContextRef = useRef({ scope: assetScope, editable: active && !editorReadOnly, generation: 0 })
+  if (formatContextRef.current.scope !== assetScope || formatContextRef.current.editable !== (active && !editorReadOnly)) {
+    formatContextRef.current = { scope: assetScope, editable: active && !editorReadOnly, generation: formatContextRef.current.generation + 1 }
+  }
+  const formatContext = formatContextRef.current
+  const formatMountedRef = useRef(true)
+  useLayoutEffect(() => {
+    formatMountedRef.current = true
+    return () => { formatMountedRef.current = false }
+  }, [])
+  const isCurrentFormatContext = useCallback(() => formatMountedRef.current
+    && formatContextRef.current === formatContext && formatContext.editable, [formatContext])
   // 特殊画布始终使用专属预览；preview 仅承接旧偏好和低频兼容阅读入口。
   const previewing = isSpecialPreview || noteViewMode === "preview"
   const viewAction = getNoteViewModeAction(noteViewMode)
@@ -2255,7 +2267,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   }
 
   const handleFormat = useCallback((syntax: string) => {
-    if (!syntax) return
+    if (!syntax || !isCurrentFormatContext()) return
     // 手机上手动拼 [文字](地址) 成本太高：工具栏「链接」改为打开面板，分别填文字与地址；
     // 有选区自动带入文字，光标落在已有链接上则预填并按编辑保存。
     if (compact && syntax === "[链接](https://)") {
@@ -2277,7 +2289,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
       return
     }
     onFormat(syntax)
-  }, [compact, onFormat])
+  }, [compact, isCurrentFormatContext, onFormat])
 
   // 面板自身不写正文：保存/移除都交给编辑器 handle 完成（内部会校验原文、映射选区并恢复焦点），
   // 这里只负责关掉面板。焦点归还不能在点击事件里同步做（modal 面板的 inert 还没解除，
@@ -2698,6 +2710,8 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
         </div>
       ) : (
         <FormattingToolbar
+          key={formatContext.generation}
+          isContextCurrent={isCurrentFormatContext}
           attachmentBusy={attachmentBusy}
           canInsertAttachment={canInsertAttachment}
           editorRef={editorRef}
@@ -2992,6 +3006,8 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
       ) : null}
       {compact && !previewing && !editorReadOnly ? (
         <FormattingToolbar
+          key={formatContext.generation}
+          isContextCurrent={isCurrentFormatContext}
           attachmentBusy={attachmentBusy}
           canInsertAttachment={canInsertAttachment}
           editorRef={editorRef}

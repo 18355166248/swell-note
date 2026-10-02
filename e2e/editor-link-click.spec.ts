@@ -1127,3 +1127,202 @@ test.describe("移动待办触区与侧滑", () => {
     await expect(preview).toBeChecked()
   })
 })
+
+test.describe("编辑会话连续性回归", () => {
+  test.beforeEach(async ({ context }) => {
+    await context.route("**/*", (route) => {
+      const host = new URL(route.request().url()).hostname
+      return ["127.0.0.1", "localhost"].includes(host) ? route.continue() : route.abort()
+    })
+  })
+  const noteA = "第一篇正文"
+  const noteB = "第二篇正文"
+  const workspaceFor = (page: Page, mobile: boolean) => page.locator(mobile ? ".mobile-workspace:visible" : ".desktop-workspace:visible")
+  const editorFor = (page: Page, mobile: boolean) => workspaceFor(page, mobile).locator(mobile ? ".mobile-edge-swipe-current .cm-content" : ".cm-content")
+
+  async function openFixture(page: Page, mobile: boolean, content = noteA) {
+    await seedCachedVault(page, content, false, noteB)
+    if (mobile) {
+      const workspace = workspaceFor(page, mobile)
+      await workspace.getByText("测试", { exact: true }).first().click()
+      await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
+    }
+    await expect(editorFor(page, mobile)).toBeVisible()
+  }
+  async function selectNote(page: Page, mobile: boolean, title: string) {
+    if (mobile) {
+      // 刷新详情页后返回上下文为全部笔记；两个入口都必须真正返回列表再点笔记。
+      const back = page.getByRole("button", { name: /^返回(?:测试|全部笔记)$/ })
+      if (await back.isVisible()) await back.click()
+      await page.locator(".mobile-edge-swipe-current").getByText(title, { exact: true }).first().click()
+    } else await page.locator(".note-list-panel").getByText(title, { exact: true }).first().click()
+  }
+  async function savedNote(page: Page, title = "第一篇") {
+    return page.evaluate(async (title) => {
+      const request = indexedDB.open("swell-note-vault-cache", 3)
+      const db = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+      const read = db.transaction("documents", "readonly").objectStore("documents").get(`e2e-vault\u0000webdav:/Swell/测试/${title}.md`)
+      const entry = await new Promise<{ content?: string } | undefined>((resolve, reject) => { read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error) })
+      db.close(); return entry?.content
+    }, title)
+  }
+
+  test("表格格式撤销重做后真实输入仍保存到原单元格", async ({ page }, testInfo) => {
+    const mobile = testInfo.project.name === "mobile-chrome"
+    const doc = "| 名称 | 备注 |\n| --- | --- |\n| 原文 | 说明 |\n\n后续正文"
+    await openFixture(page, mobile, doc)
+    const workspace = workspaceFor(page, mobile)
+    const input = workspace.locator(".cm-md-table-cell-input:visible")
+    await workspace.locator(".cm-md-table tbody td").first().click()
+    await expect(input).toBeFocused()
+    await input.evaluate(element => element.setSelectionRange(0, 2))
+    await workspace.getByRole("button", { name: "加粗（⌘/Ctrl+B）", exact: true }).click()
+    await expect.poll(() => savedNote(page)).toBe(doc.replace("| 原文 |", "| **原文** |"))
+    await workspace.getByRole("button", { name: "撤销（⌘/Ctrl+Z）", exact: true }).click()
+    await expect(input).toBeFocused()
+    await expect(input).toHaveValue("原文")
+    await expect.poll(() => savedNote(page)).toBe(doc)
+    if (mobile) {
+      await workspace.getByRole("button", { name: "更多格式", exact: true }).click()
+      await workspace.getByRole("menuitem", { name: "重做", exact: true }).click()
+    } else await workspace.getByRole("button", { name: "重做（⌘/Ctrl+Shift+Z）", exact: true }).click()
+    await expect(input).toBeFocused()
+    await expect(input).toHaveValue("**原文**")
+    await workspace.getByRole("button", { name: "撤销（⌘/Ctrl+Z）", exact: true }).click()
+    await expect(input).toBeFocused()
+    expect(await input.evaluate(element => [element.selectionStart, element.selectionEnd])).toEqual([0, 2])
+    await page.keyboard.type("x")
+    await expect(input).toHaveValue("x")
+    await page.keyboard.press("Tab")
+    await expect(input).toBeFocused()
+    await expect(input).toHaveValue("说明")
+    await expect.poll(() => savedNote(page)).toBe(doc.replace("| 原文 |", "| x |"))
+    await page.screenshot({ path: testInfo.outputPath("table-history-continued-input.png") })
+  })
+
+  test("缓存笔记真实返回与前进关闭旧标题菜单且新菜单正常格式化", async ({ page }, testInfo) => {
+    const mobile = testInfo.project.name === "mobile-chrome"
+    await openFixture(page, mobile)
+    await selectNote(page, mobile, "第二篇")
+    await expect(editorFor(page, mobile)).toHaveText(noteB)
+    await selectNote(page, mobile, "第一篇")
+    const heading = workspaceFor(page, mobile).getByRole("combobox", { name: "标题级别", exact: true })
+    await heading.click()
+    await expect(page.getByRole("option", { name: "二级标题", exact: true })).toBeVisible()
+    await page.goBack()
+    await expect(page.getByRole("option", { name: "二级标题", exact: true })).toHaveCount(0)
+    if (!mobile) await expect(editorFor(page, mobile)).toHaveText(noteB)
+    await page.goForward()
+    await expect(editorFor(page, mobile)).toHaveText(noteA)
+    await heading.click()
+    await page.getByRole("option", { name: "二级标题", exact: true }).click()
+    await expect(editorFor(page, mobile)).toBeFocused()
+    await expect.poll(() => savedNote(page)).toBe(`## ${noteA}`)
+    expect(await savedNote(page, "第二篇")).toBe(noteB)
+    await page.screenshot({ path: testInfo.outputPath("heading-history-owner.png") })
+  })
+
+  test("未缓存正文的历史目标关闭旧标题菜单且不改写任何正文", async ({ page }, testInfo) => {
+    const mobile = testInfo.project.name === "mobile-chrome"
+    await openFixture(page, mobile)
+    await page.evaluate(async () => {
+      const request = indexedDB.open("swell-note-vault-cache", 3)
+      const db = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+      const tx = db.transaction(["documents", "vaults"], "readwrite")
+      tx.objectStore("documents").delete("e2e-vault\u0000webdav:/Swell/测试/第二篇.md")
+      const read = tx.objectStore("vaults").get("e2e-vault")
+      read.onsuccess = () => {
+        const vault = read.result
+        vault.notes = vault.notes.map((note: { title: string; contentCached: boolean }) => note.title === "第二篇" ? { ...note, contentCached: false } : note)
+        tx.objectStore("vaults").put(vault)
+      }
+      await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error) })
+      db.close()
+    })
+    await page.reload()
+    await expect(editorFor(page, mobile)).toHaveText(noteA)
+    await selectNote(page, mobile, "第二篇")
+    await expect(workspaceFor(page, mobile).getByText("正文没有加载成功", { exact: true })).toBeVisible()
+    await selectNote(page, mobile, "第一篇")
+    await expect(editorFor(page, mobile)).toHaveText(noteA)
+    await workspaceFor(page, mobile).getByRole("combobox", { name: "标题级别", exact: true }).click()
+    await page.goBack()
+    await expect(page.getByRole("option", { name: "二级标题", exact: true })).toHaveCount(0)
+    if (mobile) await selectNote(page, mobile, "第二篇")
+    await expect(workspaceFor(page, mobile).getByText("正文没有加载成功", { exact: true })).toBeVisible()
+    expect(await savedNote(page)).toBe(noteA)
+    expect(await savedNote(page, "第二篇")).toBeUndefined()
+  })
+
+  test("锁定只读关闭标题菜单且解锁后新菜单可用", async ({ page }, testInfo) => {
+    const mobile = testInfo.project.name === "mobile-chrome"
+    await openFixture(page, mobile)
+    const workspace = workspaceFor(page, mobile)
+    const heading = workspace.getByRole("combobox", { name: "标题级别", exact: true })
+    await heading.click()
+    await page.keyboard.press("Escape")
+    await expect(heading).toBeFocused()
+    await workspace.getByRole("button", { name: "更多操作", exact: true }).click()
+    await page.getByRole("menuitem", { name: "锁定为只读阅读", exact: true }).click()
+    await expect(heading).toHaveCount(0)
+    await expect(editorFor(page, mobile)).toHaveAttribute("contenteditable", "false")
+    expect(await savedNote(page)).toBe(noteA)
+    await workspace.getByRole("button", { name: "更多操作", exact: true }).click()
+    await page.getByRole("menuitem", { name: "解除锁定，继续编辑", exact: true }).click()
+    await heading.click()
+    await page.getByRole("option", { name: "二级标题", exact: true }).click()
+    await expect.poll(() => savedNote(page)).toBe(`## ${noteA}`)
+  })
+
+  for (const target of ["cell", "control"] as const) {
+    test(`格式重绘后新${target === "cell" ? "单元格" : "表格控件"}焦点不会被旧恢复抢回`, async ({ page }, testInfo) => {
+      const mobile = testInfo.project.name === "mobile-chrome"
+      const doc = "前文\n\n| H | J |\n| --- | --- |\n| abcdef | 说明 |\n| 第二项 | 其他 |\n\n后文"
+      await openFixture(page, mobile, doc)
+      const workspace = workspaceFor(page, mobile)
+      const editor = editorFor(page, mobile)
+      const input = workspace.locator(".cm-md-table-cell-input:visible")
+      await workspace.locator(".cm-md-table tbody td").first().click()
+      await input.evaluate(element => element.setSelectionRange(0, 6))
+      // 精确放在新表格已绘制、旧 setTimeout 恢复尚未执行的窗口。
+      await editor.evaluate((element, target) => {
+        const probe: { acquired: boolean; observer?: MutationObserver } = { acquired: false }
+        Object.assign(window, { __pendingTableFocusProbe: probe })
+        probe.observer = new MutationObserver(() => {
+          if (probe.acquired || !element.querySelector(".cm-md-table tbody tr")?.children[0].querySelector("strong")) return
+          const cell = element.querySelectorAll(".cm-md-table tbody tr")[1]?.children[1]
+          const control = element.querySelector<HTMLButtonElement>(".cm-md-table-width-toggle")
+          if (target === "cell" && cell instanceof HTMLElement) {
+            cell.click()
+            probe.acquired = cell.contains(document.activeElement)
+          } else if (target === "control" && control) {
+            // 触屏工具条默认收起，先使用现有 grip 点击入口展开，确保实际取得焦点。
+            element.querySelector<HTMLElement>(".cm-md-table-toolbar")?.click()
+            control.focus()
+            probe.acquired = document.activeElement === control
+          }
+        })
+        probe.observer.observe(element, { subtree: true, childList: true })
+      }, target)
+      await workspace.getByRole("button", { name: "加粗（⌘/Ctrl+B）", exact: true }).click()
+      await expect.poll(() => page.evaluate(() => (window as unknown as { __pendingTableFocusProbe: { acquired: boolean } }).__pendingTableFocusProbe.acquired)).toBe(true)
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+      await page.evaluate(() => (window as unknown as { __pendingTableFocusProbe: { observer: MutationObserver } }).__pendingTableFocusProbe.observer.disconnect())
+      if (target === "cell") {
+        await expect(input).toBeFocused()
+        await expect(input).toHaveValue("其他")
+        await page.keyboard.type("Z")
+        await page.keyboard.press("Tab")
+        // 最后一格 Tab 的既有行为是新增空行；正文只在新目标格增加 Z。
+        const expected = doc.replace("abcdef", "**abcdef**").replace("| 第二项 | 其他 |", "| 第二项 | 其他Z |\n|  |  |")
+        await expect.poll(() => savedNote(page)).toBe(expected)
+      } else {
+        await expect(workspace.locator(".cm-md-table-width-toggle")).toBeFocused()
+        await expect(input).toHaveCount(0)
+        await page.keyboard.type("Z")
+        await expect.poll(() => savedNote(page)).toBe(doc.replace("abcdef", "**abcdef**"))
+      }
+      await page.screenshot({ path: testInfo.outputPath(`new-${target}-focus-owner.png`) })
+    })
+  }
+})

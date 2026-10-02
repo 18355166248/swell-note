@@ -27,13 +27,14 @@ const SECONDARY_FORMATS: Array<{
   { icon: ListOrdered, label: "有序列表", stateKey: "orderedList", syntax: "\n1. " },
 ]
 
-export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable = false, attachmentBusy, canInsertAttachment, editorRef, formatState = null, hasSelection = false, mobile = false, onFormat, onInsertFiles, onToggleSourceMode, sourceMode = false }: {
+export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable = false, attachmentBusy, canInsertAttachment, editorRef, isContextCurrent = () => true, formatState = null, hasSelection = false, mobile = false, onFormat: applyFormat, onInsertFiles, onToggleSourceMode: toggleSourceMode, sourceMode = false }: {
   canUndo?: boolean
   canRedo?: boolean
   editingTable?: boolean
   attachmentBusy: boolean
   canInsertAttachment: boolean
   editorRef: RefObject<MarkdownEditorHandle | null>
+  isContextCurrent?: () => boolean
   // 光标 / 选区当前的格式，用于按钮高亮；null 表示不在编辑态，不高亮任何按钮。
   formatState?: EditorFormatState | null
   // 移动端选区非空时工具栏进入选区模式：复制/剪切/粘贴替换低频入口，与格式按钮共享同一行，
@@ -47,6 +48,10 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
   // 正文当前是不是纯 Markdown 源码。按钮据此切换图标语义与高亮。
   sourceMode?: boolean
 }) {
+  // 关闭动画或迟到的 click 仍可能调用旧菜单；宿主守卫使用会话代次，A→B→A
+  // 也不能让第一轮 A 的回调重新生效。
+  const onFormat = (syntax: string) => { if (isContextCurrent()) applyFormat(syntax) }
+  const onToggleSourceMode = toggleSourceMode ? () => { if (isContextCurrent()) toggleSourceMode() } : undefined
   const fileInputRef = useRef<HTMLInputElement>(null)
   const restoreHeadingEditorFocus = useRef(false)
   const [, quote, code, link, strike, inlineCode, rule, table] = SECONDARY_FORMATS
@@ -62,7 +67,7 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
         <SelectionButtons run={run} />
         <FormatButton active={Boolean(formatState?.strong)} icon={Bold} label="加粗（⌘/Ctrl+B）" onClick={() => onFormat("**加粗文字**")} />
         <FormatButton active={Boolean(formatState?.emphasis)} icon={Italic} label="斜体（⌘/Ctrl+I）" onClick={() => onFormat("*斜体文字*")} />
-        <SecondaryFormatsMenu canUndo={canUndo} canRedo={canRedo} showUndo editingTable={editingTable} editorRef={editorRef} formatState={formatState} onFormat={onFormat} onToggleSourceMode={onToggleSourceMode} sourceMode={sourceMode} />
+        <SecondaryFormatsMenu canUndo={canUndo} canRedo={canRedo} showUndo editingTable={editingTable} editorRef={editorRef} isContextCurrent={isContextCurrent} formatState={formatState} onFormat={onFormat} onToggleSourceMode={onToggleSourceMode} sourceMode={sourceMode} />
       </div>
     )
   }
@@ -74,6 +79,7 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
       {mobile ? null : <FormatButton disabled={!canRedo} icon={Redo2} label="重做（⌘/Ctrl+Shift+Z）" onClick={() => editorRef.current?.redo()} />}
       <span className="toolbar-divider" />
       <Select value={headingValue} onValueChange={(prefix) => {
+        if (!isContextCurrent()) return
         restoreHeadingEditorFocus.current = true
         if (prefix !== "body") { onFormat(`\n${prefix} `); return }
         // 恢复正文：受控选择器里重选当前级别不会触发值变化，
@@ -84,6 +90,11 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
         <SelectContent onCloseAutoFocus={(event) => {
           // 格式命令已还给正文焦点，菜单关闭后的默认恢复会再次抢回触发器。
           // 只有实际选了新格式才恢复正文；Esc 或点外面取消仍沿用默认焦点行为。
+          if (!isContextCurrent()) {
+            restoreHeadingEditorFocus.current = false
+            event.preventDefault()
+            return
+          }
           if (!restoreHeadingEditorFocus.current) return
           restoreHeadingEditorFocus.current = false
           event.preventDefault()
@@ -140,18 +151,19 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
           }} ref={fileInputRef} tabIndex={-1} type="file" />
         </>
       ) : null}
-      {mobile ? <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} formatState={formatState} onFormat={onFormat} onToggleSourceMode={onToggleSourceMode} sourceMode={sourceMode} /> : null}
+      {mobile ? <SecondaryFormatsMenu canRedo={canRedo} editingTable={editingTable} editorRef={editorRef} isContextCurrent={isContextCurrent} formatState={formatState} onFormat={onFormat} onToggleSourceMode={onToggleSourceMode} sourceMode={sourceMode} /> : null}
     </div>
   )
 }
 
 // 用工具栏内部的浮层而不是通用下拉菜单：菜单一旦接管焦点，手机键盘会收起再弹出，
 // 工具栏也会跟着键盘上下跳一次；自绘浮层可以让焦点始终留在 CodeMirror 里。
-function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false, editorRef, formatState, onFormat, editingTable, onToggleSourceMode, sourceMode = false }: {
+function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false, editorRef, isContextCurrent, formatState, onFormat, editingTable, onToggleSourceMode, sourceMode = false }: {
   canUndo?: boolean
   canRedo?: boolean
   showUndo?: boolean
   editorRef: RefObject<MarkdownEditorHandle | null>
+  isContextCurrent: () => boolean
   editingTable: boolean
   formatState: EditorFormatState | null
   onFormat: (syntax: string) => void
@@ -185,7 +197,7 @@ function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false
           {showUndo ? (
             <button
               disabled={!canUndo && !editingTable}
-              onClick={() => { setOpen(false); editorRef.current?.undo() }}
+              onClick={() => { setOpen(false); if (isContextCurrent()) editorRef.current?.undo() }}
               onPointerDown={(event) => event.preventDefault()}
               role="menuitem"
               type="button"
@@ -198,7 +210,7 @@ function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false
             disabled={!canRedo}
             onClick={() => {
               setOpen(false)
-              editorRef.current?.redo()
+              if (isContextCurrent()) editorRef.current?.redo()
             }}
             onPointerDown={(event) => event.preventDefault()}
             role="menuitem"

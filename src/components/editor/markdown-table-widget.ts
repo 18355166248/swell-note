@@ -42,12 +42,12 @@ import {
   type TableWidthMode,
 } from "./markdown-table-width"
 
-import { activeTableEdit, detectCellInlineMarks, inlineTableFormat, registerTableEdit } from "./table-edit-target"
+import { activeTableEdit, detectCellInlineMarks, inlineTableFormat, registerTableEdit, type TableHistoryContext } from "./table-edit-target"
 import { registerTableWidgetApi, type TableWidgetApi, type TableWidgetMenuState } from "./table-widget-registry"
 
 type TableVerticalMode = "bottom" | "middle" | "top"
 // 聚焦目标：row 是 DOM tr 下标（0 = 表头）。
-type CellTarget = { column: number; row: number }
+type CellTarget = { column: number; row: number; selection?: { from: number; to: number; direction: "forward" | "backward" | "none" } }
 // 选区坐标：row 与 data-row-index 一致（-1 = 表头，0 起为正文行）。
 type CellPosition = { column: number; row: number }
 
@@ -967,12 +967,43 @@ export class TableWidget extends WidgetType {
     return true
   }
 
+  restoreHistoryContext(context: TableHistoryContext) {
+    if (this.from !== context.from || this.to !== context.to || this.source !== context.source
+      || this.options.tableStorageKey !== context.scope || this.view.state.readOnly) return false
+    const wrapper = this.currentDom()?.wrapper
+    const cell = wrapper?.querySelectorAll("tr")[context.row + 1]?.children[context.column]
+    if (!(cell instanceof HTMLElement)) return false
+    cell.click()
+    const input = activeTableEdit(this.view)?.input
+    if (!input || !cell.contains(input) || input.value !== context.value) return false
+    input.setSelectionRange(context.selectionStart, context.selectionEnd, context.selectionDirection)
+    input.dispatchEvent(new Event("select", { bubbles: true }))
+    return true
+  }
+
   private focusCellAfterUpdate(target: CellTarget) {
+    const doc = this.view.state.doc
+    const selection = this.view.state.selection
     window.setTimeout(() => {
-      const wrapper = Array.from(this.view.contentDOM.querySelectorAll<HTMLElement>(".cm-md-table-wrap"))
-        .find((candidate) => Number(candidate.dataset.tableFrom) === this.from)
+      if (!this.view.dom.isConnected || this.view.state.readOnly || this.view.state.doc !== doc
+        || !this.view.state.selection.eq(selection)) return
+      // 重绘期间用户可能已选了另一格，或把焦点交给表格按钮等内部控件。
+      // 旧恢复只接管暂时无焦点或仍在正文的状态，不能再点击旧目标格。
+      if (activeTableEdit(this.view)) return
+      const focused = document.activeElement
+      if (focused && focused !== document.body && focused !== this.view.contentDOM) return
+      const widget = this.liveWidget()
+      if (widget.options.tableStorageKey !== this.options.tableStorageKey
+        || this.view.state.sliceDoc(widget.from, widget.to) !== widget.source) return
+      const wrapper = widget.currentDom()?.wrapper
       const cell = wrapper?.querySelectorAll("tr")?.[target.row]?.children[target.column]
-      if (cell instanceof HTMLElement) cell.click()
+      if (!(cell instanceof HTMLElement)) return
+      cell.click()
+      const input = activeTableEdit(this.view)?.input
+      if (target.selection && input && cell.contains(input)) {
+        input.setSelectionRange(target.selection.from, target.selection.to, target.selection.direction)
+        input.dispatchEvent(new Event("select", { bubbles: true }))
+      }
     }, 0)
   }
 
@@ -1112,7 +1143,9 @@ export class TableWidget extends WidgetType {
       draft ? draft.selectionEnd : caret,
     )
 
+    let finished = false
     const syncDraft = () => {
+      if (finished || !input.isConnected) return
       session.cellDraft = {
         column: columnIndex,
         originalValue,
@@ -1137,6 +1170,7 @@ export class TableWidget extends WidgetType {
 
     // 工具栏格式高亮：进入编辑与选区变化时汇报当前单元格的行内格式。
     const reportFormat = () => {
+      if (finished || !input.isConnected) return
       this.reportedFormatState = true
       this.options.onTableFormatState?.(detectCellInlineMarks(input.value, input.selectionStart, input.selectionEnd))
     }
@@ -1145,7 +1179,6 @@ export class TableWidget extends WidgetType {
       input.addEventListener(type, reportFormat)
     }
 
-    let finished = false
     let unregister = () => {}
     let detachKeyboardFollow = () => {}
     const restoreCell = () => {
@@ -1190,13 +1223,20 @@ export class TableWidget extends WidgetType {
     }
     unregister = registerTableEdit(this.view, {
       input,
+      captureHistoryContext: () => ({
+        from: this.from, to: this.to, source: this.source, scope: this.options.tableStorageKey,
+        row: rowIndex, column: columnIndex, value: input.value,
+        selectionStart: input.selectionStart, selectionEnd: input.selectionEnd, selectionDirection: input.selectionDirection,
+      }),
       commit: () => commit(),
       cancel: () => { finished = true; clearDraft(); restoreCell() },
       format: (template) => {
         const change = inlineTableFormat(template, input.value, input.selectionStart, input.selectionEnd)
         if (!change) return
         input.setRangeText(change.text, change.from, change.to, "select")
-        commit({ row: rowIndex + 1, column: columnIndex })
+        commit({ row: rowIndex + 1, column: columnIndex, selection: {
+          from: input.selectionStart, to: input.selectionEnd, direction: input.selectionDirection,
+        } })
       },
       replace: (from, to, text) => {
         input.setRangeText(text, from, to, "select")
@@ -2071,4 +2111,8 @@ export class TableWidget extends WidgetType {
     // 单元格输入完全由 Widget 接管，避免 CodeMirror 把点击重新映射到被替换的源码范围。
     return true
   }
+}
+
+export function restoreTableHistoryContext(view: EditorView, context: TableHistoryContext) {
+  return liveTableWidgets.get(view)?.get(context.from)?.restoreHistoryContext(context) ?? false
 }

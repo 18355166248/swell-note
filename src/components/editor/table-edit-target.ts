@@ -2,8 +2,22 @@ import type { EditorView } from "@codemirror/view"
 
 import { detectInlineMarksInText, inlineMarkEditInText, type InlineMarkKind } from "./markdown-input"
 
+export type TableHistoryContext = {
+  from: number
+  to: number
+  source: string
+  scope?: string
+  row: number
+  column: number
+  value: string
+  selectionStart: number
+  selectionEnd: number
+  selectionDirection: "forward" | "backward" | "none"
+}
+
 export type TableEditTarget = {
   input: HTMLTextAreaElement
+  captureHistoryContext?: () => TableHistoryContext
   commit: () => void
   cancel: () => void
   format: (template: string) => void
