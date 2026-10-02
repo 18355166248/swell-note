@@ -72,3 +72,19 @@ export async function exportZipArchive(data: Uint8Array, filename: string, title
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
   return true
 }
+
+export async function exportTextDocument(content: string, filename: string, extension: string, title: string, mimeType = "text/plain") {
+  if (isTauri()) {
+    const [{ save }, { writeTextFile }] = await Promise.all([import("@tauri-apps/plugin-dialog"), import("@tauri-apps/plugin-fs")])
+    const path = await save({ defaultPath: filename, filters: [{ extensions: [extension], name: extension.toUpperCase() }], title })
+    if (!path) return false
+    await writeTextFile(path, content)
+    return true
+  }
+  const url = URL.createObjectURL(new Blob([content], { type: `${mimeType};charset=utf-8` }))
+  const anchor = document.createElement("a")
+  anchor.download = filename; anchor.href = url; anchor.hidden = true
+  document.body.append(anchor); anchor.click(); anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  return true
+}

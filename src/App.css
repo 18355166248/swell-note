@@ -1706,3 +1706,13 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-editor-shell .cm-scroller, .note-editor[data-compact="true"] .markdown-editor-shell .cm-scroller,
 .markdown-preview { line-height: var(--editor-line-height,1.8); }
 .markdown-editor-shell .cm-foldPlaceholder { cursor: pointer; color: var(--primary); border-color: var(--border); }
+.history-policy-controls { display: flex; flex-wrap: wrap; gap: 10px 20px; }
+.history-policy-controls select { min-height: 44px; border: 1px solid var(--border); padding: 4px 8px; border-radius: 6px; background: var(--background); }
+.history-policy-controls small { flex-basis: 100%; color: var(--muted-foreground); }
+.note-history-dialog { max-height: calc(100dvh - var(--keyboard-inset,0px) - 40px); overflow-y: auto; }
+.note-history-dialog [data-slot="dialog-footer"] { flex-wrap: wrap; }
+@media (max-width: 767px) {
+  .note-history-dialog .note-history-layout { min-height: 240px; max-height: 45dvh; }
+  .note-history-dialog .note-history-layout { grid-template-rows: 100px minmax(120px,1fr); }
+  .note-history-dialog [data-slot="dialog-footer"] { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); }
+}

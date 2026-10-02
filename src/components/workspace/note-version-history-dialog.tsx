@@ -1,14 +1,17 @@
-import { useEffect, useMemo, useState } from "react"
+import { loadHistoryPolicy, saveHistoryPolicy, type HistoryPolicy } from "@/services/history/history-policy"
+import { exportTextDocument, markdownExportFilename } from "@/services/export/markdown-export"
+import { useEffect, useMemo, useState, useRef } from "react"
 import { History, LoaderCircle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { listNoteVersions, type NoteVersion } from "@/services/history/note-history"
+import { listNoteVersions, saveNoteVersion, exportHistoryArchive, importHistoryArchive, type NoteVersion } from "@/services/history/note-history"
 import { buildNoteLineDiff } from "@/services/history/note-line-diff"
 
-export function NoteVersionHistoryDialog({ cacheId, currentContent, noteId, onOpenChange, onRestore, onRestoreCopy, open }: {
+export function NoteVersionHistoryDialog({ cacheId, currentContent, title = "未命名笔记", noteId, onOpenChange, onRestore, onRestoreCopy, open }: {
   cacheId: string | null
+  title?: string
   currentContent: string
   noteId: string
   onOpenChange: (open: boolean) => void
@@ -21,9 +24,40 @@ export function NoteVersionHistoryDialog({ cacheId, currentContent, noteId, onOp
   const [loading, setLoading] = useState(false)
   const [loadedKey, setLoadedKey] = useState("")
   const [historyError, setHistoryError] = useState<string | null>(null)
-  const [action, setAction] = useState<"restore" | "copy" | null>(null)
+  const [action, setAction] = useState<"restore" | "copy" | "snapshot" | "export" | "import" | null>(null)
   const [restoreError, setRestoreError] = useState<string | null>(null)
+  const [notice, setNotice] = useState("")
   const noteKey = `${cacheId ?? ""}\u0000${noteId}`
+
+  const importRef = useRef<HTMLInputElement>(null)
+  const [policy, setPolicy] = useState(loadHistoryPolicy)
+  const contextRef = useRef({ key: noteKey, open })
+  if (contextRef.current.key !== noteKey || contextRef.current.open !== open) contextRef.current = { key: noteKey, open }
+  const historyAction = async (mode: "snapshot" | "export" | "import", file?: File) => {
+    if (!cacheId || action) return
+    const context = contextRef.current
+    setAction(mode); setRestoreError(null); setNotice("")
+    try {
+      if (mode === "snapshot") await saveNoteVersion({ cacheId, noteId, title, content: currentContent, reason: "手动快照" })
+      else if (mode === "export") await exportTextDocument(exportHistoryArchive(currentVersions, title), markdownExportFilename(title).replace(/\.md$/i, ".history.json"), "json", "导出本地历史", "application/json")
+      else if (file) {
+        if (file.size > 20 * 1024 * 1024) throw new Error("历史归档不能超过 20MB")
+        const raw = await file.text()
+        if (contextRef.current !== context) return
+        await importHistoryArchive(cacheId, noteId, raw)
+      }
+      const items = await listNoteVersions(cacheId, noteId)
+      if (contextRef.current !== context) return
+      setVersions(items); setSelectedId(items[0]?.id ?? ""); setLoadedKey(noteKey)
+      if (mode !== "export") setNotice(mode === "snapshot" ? "当前正文快照已保存（相同内容会复用已有版本）" : "归档已导入本地历史，当前正文保持不变")
+    } catch (error) { if (contextRef.current === context) setRestoreError(error instanceof Error ? error.message : "历史操作失败") }
+    finally { if (contextRef.current === context) setAction(null) }
+  }
+  const changePolicy = (next: HistoryPolicy) => {
+    try { saveHistoryPolicy(next); setPolicy(next); setRestoreError(null) }
+    catch { setRestoreError("历史设置保存失败，请重试") }
+  }
+  useEffect(() => { setAction(null) }, [noteKey, open])
 
   useEffect(() => {
     if (!open || !cacheId) {
@@ -60,14 +94,15 @@ export function NoteVersionHistoryDialog({ cacheId, currentContent, noteId, onOp
     if (!selected || action || (mode === "restore" && !window.confirm("恢复后，当前正文会先保存为一个历史版本。确认继续？"))) return
     setAction(mode)
     setRestoreError(null)
+    const context = contextRef.current
     try {
       if (mode === "copy") await onRestoreCopy(selected.content, selected.createdAt)
       else await onRestore(selected.content)
-      onOpenChange(false)
+      if (contextRef.current === context) onOpenChange(false)
     } catch (error) {
-      setRestoreError(error instanceof Error ? error.message : "操作失败，原笔记未修改；请重试")
+      if (contextRef.current === context) setRestoreError(error instanceof Error ? error.message : "操作失败，原笔记未修改；请重试")
     } finally {
-      setAction(null)
+      if (contextRef.current === context) setAction(null)
     }
   }
 
@@ -76,8 +111,14 @@ export function NoteVersionHistoryDialog({ cacheId, currentContent, noteId, onOp
       <DialogContent className="note-history-dialog">
         <DialogHeader>
           <DialogTitle>本地版本历史</DialogTitle>
-          <DialogDescription>版本仅保存在当前设备，最多保留 30 个。下方显示从当前正文变为所选版本的逐行差异；也可在同目录恢复为独立副本。</DialogDescription>
+          <DialogDescription>版本仅保存在当前设备，可导出归档并在其他设备导入当前笔记历史。下方显示从当前正文变为所选版本的逐行差异；也可在同目录恢复为独立副本。</DialogDescription>
         </DialogHeader>
+        <div className="history-policy-controls">
+          <label>保留数量 <select aria-label="历史保留数量" value={policy.limit} onChange={(event) => changePolicy({ ...policy, limit: Number(event.target.value) })}>{[30, 100, 300].map((limit) => <option key={limit} value={limit}>{limit} 个</option>)}</select></label>
+          <label>自动快照间隔 <select aria-label="自动快照间隔" value={policy.intervalMinutes} onChange={(event) => changePolicy({ ...policy, intervalMinutes: Number(event.target.value) })}>{[1, 5, 15].map((minutes) => <option key={minutes} value={minutes}>{minutes} 分钟</option>)}</select></label>
+          <small>本机设置。数量上限在下次保存/导入时生效，最旧版本会被清理；导入不改当前正文。</small>
+        </div>
+        <input hidden accept=".json,application/json" ref={importRef} type="file" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void historyAction("import", file) }} />
         {loading || (open && cacheId && loadedKey !== noteKey && !historyError) ? (
           <div className="note-history-empty"><LoaderCircle className="animate-spin" /> 正在读取历史版本…</div>
         ) : historyError ? (
@@ -114,7 +155,11 @@ export function NoteVersionHistoryDialog({ cacheId, currentContent, noteId, onOp
           </div>
         )}
         {restoreError ? <p role="alert">{restoreError}</p> : null}
+        {notice ? <p role="status">{notice}</p> : null}
         <DialogFooter>
+          <Button disabled={Boolean(action) || loading || !cacheId || loadedKey !== noteKey} onClick={() => void historyAction("snapshot")} variant="outline">保存当前快照</Button>
+          <Button disabled={Boolean(action) || loading || !currentVersions.length} onClick={() => void historyAction("export")} variant="outline">导出历史</Button>
+          <Button disabled={Boolean(action) || loading || !cacheId} onClick={() => importRef.current?.click()} variant="outline">导入历史</Button>
           <Button onClick={() => onOpenChange(false)} variant="outline">关闭</Button>
           <Button disabled={Boolean(action) || !selected} onClick={() => void restore("copy")} variant="outline">
             {action === "copy" ? "正在创建副本…" : "恢复为副本"}

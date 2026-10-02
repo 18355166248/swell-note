@@ -50,6 +50,7 @@ export type MarkdownEditorHandle = {
   beginFind: () => boolean
   configureFind: (config: EditorSearchConfig) => void
   endFind: () => void
+  commitDrafts: () => boolean
   foldChapter: () => boolean
   unfoldChapters: () => void
   insertTemplate: (body: string) => boolean
@@ -1178,6 +1179,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       },
       inspectFind(query) {
         return inspectFindInView(controlRef.current?.getView(), query)
+      },
+      commitDrafts() {
+        const view = controlRef.current?.getView()
+        if (!view || view.composing) return false
+        commitLocalDrafts(view)
+        return true
       },
       foldChapter() {
         const view = controlRef.current?.getView()

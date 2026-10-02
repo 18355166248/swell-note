@@ -2708,7 +2708,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
               ) : null}
               <DropdownMenuItem onClick={onExportNote}>导出笔记与附件包</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setFocusMode((value) => !value)}>{focusMode ? "退出专注" : "专注写作"}</DropdownMenuItem>
-              <DropdownMenuItem disabled={!activeCacheId} onClick={() => setHistoryDialogOpen(true)}>
+              <DropdownMenuItem disabled={!activeCacheId} onClick={() => { if (previewing || editorRef.current?.commitDrafts()) setHistoryDialogOpen(true) }}>
                 <History /> 本地版本历史
               </DropdownMenuItem>
               {canManageNote ? (
@@ -3086,6 +3086,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
       <NoteVersionHistoryDialog
         cacheId={activeCacheId}
         currentContent={note.content}
+        title={note.title}
         noteId={note.id}
         onOpenChange={setHistoryDialogOpen}
         onRestore={onRestoreNoteVersion}
