@@ -343,7 +343,13 @@ export function AppearanceSettingsPage({
             <SelectContent><SelectItem value="narrow">紧凑</SelectItem><SelectItem value="standard">标准</SelectItem><SelectItem value="wide">宽阔</SelectItem></SelectContent>
           </Select>
         </label>
-        <div className="editor-display-sample" style={{ fontSize: editorDisplay.editorFontSize }}>
+        <label>正文行距
+          <Select value={String(editorDisplay.editorLineHeight ?? 1.8)} onValueChange={(value) => onEditorDisplayChange({ ...editorDisplay, editorLineHeight: Number(value) })}>
+            <SelectTrigger aria-label="正文行距"><SelectValue /></SelectTrigger>
+            <SelectContent><SelectItem value="1.5">紧凑（1.5）</SelectItem><SelectItem value="1.8">标准（1.8）</SelectItem><SelectItem value="2.1">宽松（2.1）</SelectItem></SelectContent>
+          </Select>
+        </label>
+        <div className="editor-display-sample" style={{ fontSize: editorDisplay.editorFontSize, lineHeight: editorDisplay.editorLineHeight ?? 1.8 }}>
           让长文更舒适，也让每一次记录更轻松。<br />Reading and writing, at your own pace.
         </div>
       </section>

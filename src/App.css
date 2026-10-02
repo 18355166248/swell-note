@@ -1695,3 +1695,14 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-attachment-open { display: block; }
 .markdown-attachment-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-block: 6px; }
 .markdown-attachment-actions > * { min-height: 44px; display: inline-flex; align-items: center; }
+
+/* 只改变布局：隐藏旁栏而不卸载笔记编辑器，专注往返保留输入和撤销历史。 */
+.desktop-workspace:has(.note-editor[data-focus-mode="true"]) { grid-template-columns: minmax(0,1fr); }
+.desktop-workspace:has(.note-editor[data-focus-mode="true"]) > .navigation-rail,
+.desktop-workspace:has(.note-editor[data-focus-mode="true"]) > .library-panel,
+.desktop-workspace:has(.note-editor[data-focus-mode="true"]) > .note-list-panel,
+.desktop-workspace:has(.note-editor[data-focus-mode="true"]) > .desktop-pane-resizer { display: none; }
+.note-editor[data-focus-mode="true"] .document-meta { display: none; }
+.markdown-editor-shell .cm-scroller, .note-editor[data-compact="true"] .markdown-editor-shell .cm-scroller,
+.markdown-preview { line-height: var(--editor-line-height,1.8); }
+.markdown-editor-shell .cm-foldPlaceholder { cursor: pointer; color: var(--primary); border-color: var(--border); }

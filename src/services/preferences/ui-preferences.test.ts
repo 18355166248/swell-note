@@ -18,8 +18,18 @@ describe("UI preferences", () => {
     document.documentElement.style.removeProperty("--editor-page-width")
   })
 
+  it("行距偏好有合法范围且只改变排版", () => {
+    saveUiPreferences({ editorLineHeight: 2.1 })
+    expect(loadUiPreferences().editorLineHeight).toBe(2.1)
+    applyEditorDisplay({ editorFontSize: 16, editorLineWidth: "standard", editorLineHeight: 2.1 })
+    expect(document.documentElement.style.getPropertyValue("--editor-line-height")).toBe("2.1")
+    window.localStorage.setItem("swell-note:ui-preferences:v1", JSON.stringify({ editorLineHeight: -1 }))
+    expect(loadUiPreferences().editorLineHeight).toBe(1.8)
+  })
+
   it("defaults to the unified canvas and restores an explicit compatibility preview", () => {
     expect(loadUiPreferences()).toEqual({
+      editorLineHeight: 1.8,
       editorFontSize: 16,
       editorLineWidth: "standard",
       colorMode: "system",

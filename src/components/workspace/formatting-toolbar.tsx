@@ -240,6 +240,8 @@ function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false
               <span>{label}</span>
             </button>
           ))}
+          <button disabled={editingTable} onPointerDown={(event) => event.preventDefault()} role="menuitem" type="button" onClick={() => { setOpen(false); if (isContextCurrent()) editorRef.current?.foldChapter() }}>折叠当前章节</button>
+          <button onPointerDown={(event) => event.preventDefault()} role="menuitem" type="button" onClick={() => { setOpen(false); if (isContextCurrent()) editorRef.current?.unfoldChapters() }}>展开全部章节</button>
           {/* 正文呈现方式：与上面的格式项分开一段，语义上不属于「更多格式」，
               而是和它们并列的一种全局开关。 */}
           {onToggleSourceMode ? (

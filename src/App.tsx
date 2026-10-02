@@ -373,8 +373,8 @@ function App() {
   const [markdownSourceMode, setMarkdownSourceMode] = useState<MarkdownSourceMode>(() => loadUiPreferences().markdownSourceMode)
   const [colorMode, setColorMode] = useState<ColorMode>(() => loadUiPreferences().colorMode)
   const [editorDisplay, setEditorDisplay] = useState<EditorDisplay>(() => {
-    const { editorFontSize, editorLineWidth } = loadUiPreferences()
-    return { editorFontSize, editorLineWidth }
+    const { editorFontSize, editorLineWidth, editorLineHeight } = loadUiPreferences()
+    return { editorFontSize, editorLineWidth, editorLineHeight }
   })
   const changeEditorDisplay = useCallback((display: EditorDisplay) => {
     setEditorDisplay(display)

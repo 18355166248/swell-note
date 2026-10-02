@@ -1,10 +1,11 @@
+import { chapterFolding, chapterRange, markdownHeadings, foldEffect } from "./chapter-folding"
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
-import { syntaxTree } from "@codemirror/language"
+import { syntaxTree, foldGutter, unfoldAll, codeFolding } from "@codemirror/language"
 import { languages } from "@codemirror/language-data"
 import { undoDepth, redoDepth } from "@codemirror/commands"
 import { EditorSelection, type EditorState, type Extension, type SelectionRange } from "@codemirror/state"
-import { Direction, EditorView, type DecorationSet, type ViewUpdate } from "@codemirror/view"
+import { Direction, EditorView, type DecorationSet, type ViewUpdate, lineNumbers } from "@codemirror/view"
 
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
 import { collectClipboardFiles, readClipboardContent, readClipboardEvent, validateClipboardFiles } from "@/services/clipboard/clipboard-content"
@@ -49,6 +50,8 @@ export type MarkdownEditorHandle = {
   beginFind: () => boolean
   configureFind: (config: EditorSearchConfig) => void
   endFind: () => void
+  foldChapter: () => boolean
+  unfoldChapters: () => void
   insertTemplate: (body: string) => boolean
   selectedText: () => string
   // 链接面板：target 为 null 表示新建（applyLink 用当前选区/光标），否则改写该链接；
@@ -310,7 +313,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     // 原样保留。因此切换只是一次 reconfigure，不重建 EditorView、不动文档、不清撤销栈。
     const buildLivePreviewExtensions = useCallback(({ settings }: EditorExtensionContext): Extension => settings.livePreview
       ? markdownLivePreviewBase(livePreviewOptionsFor(settings, handlers, settings.platform))
-      : [], [])
+      : [lineNumbers(), foldGutter()], [])
 
     const buildTableEditingExtensions = useCallback(({ settings }: EditorExtensionContext): Extension => settings.tableEditing
       ? markdownTableEditing()
@@ -319,6 +322,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     // 行为扩展：输入增强、补全、剪贴板与滚动转发。
     // 这部分必须能访问 EditorControl 实例（事件外发、命令入口），因此由 control 反向注入。
     const buildBehaviorExtensions = useCallback((control: EditorControl): Extension => [
+      codeFolding(),
+      chapterFolding,
       editorSearchState,
       tableSearchHighlights,
       slashCompletion,
@@ -1173,6 +1178,21 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       },
       inspectFind(query) {
         return inspectFindInView(controlRef.current?.getView(), query)
+      },
+      foldChapter() {
+        const view = controlRef.current?.getView()
+        if (!view || view.composing) return false
+        commitLocalDrafts(view)
+        const heading = markdownHeadings(view.state).filter((item) => item.from <= view.state.selection.main.head).pop()
+        const range = heading ? chapterRange(view.state, heading.from) : null
+        if (!range || !heading) return false
+        view.dispatch({ selection: { anchor: heading.to }, effects: foldEffect.of(range), scrollIntoView: true })
+        view.focus()
+        return true
+      },
+      unfoldChapters() {
+        const view = controlRef.current?.getView()
+        if (view && !view.composing) unfoldAll(view)
       },
       selectedText() {
         const view = controlRef.current?.getView()

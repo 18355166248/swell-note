@@ -2007,6 +2007,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   // 特殊画布始终使用专属预览；preview 仅承接旧偏好和低频兼容阅读入口。
   const previewing = isSpecialPreview || noteViewMode === "preview"
   const viewAction = getNoteViewModeAction(noteViewMode)
+  const [focusMode, setFocusMode] = useState(false)
   const sourceMode = markdownSourceMode === "source"
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
@@ -2568,6 +2569,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
     <article
       className="note-editor"
       data-compact={compact}
+      data-focus-mode={active && focusMode}
       data-excalidraw={isExcalidraw}
       data-view-mode={previewing ? "preview" : noteViewMode}
       onPointerDownCapture={compact ? (event) => {
@@ -2608,6 +2610,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
         )}
         {onBack ? <span className="mobile-back-label">{backLabel}</span> : null}
         <div className="editor-actions">
+          {focusMode ? <Button onClick={() => setFocusMode(false)} size="sm" variant="outline">退出专注</Button> : null}
           <SaveStateIndicator cloudConnected={cloudConnected} note={note} state={saveState} />
           {note.source === "webdav" ? (
             <Tooltip>
@@ -2704,6 +2707,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
                 <DropdownMenuItem onClick={onOpenSourceFile}>打开 / 下载 Excalidraw 原始文件</DropdownMenuItem>
               ) : null}
               <DropdownMenuItem onClick={onExportNote}>导出笔记与附件包</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setFocusMode((value) => !value)}>{focusMode ? "退出专注" : "专注写作"}</DropdownMenuItem>
               <DropdownMenuItem disabled={!activeCacheId} onClick={() => setHistoryDialogOpen(true)}>
                 <History /> 本地版本历史
               </DropdownMenuItem>
