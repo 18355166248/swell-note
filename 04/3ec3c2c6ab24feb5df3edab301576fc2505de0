@@ -1,0 +1,35 @@
+src/components/workspace/formatting-toolbar.tsx
+  s_7aa9251711039a::t_a21c504e2b643c 2,10,29,156,163,174,197,212,224-225
+src/components/editor/block-insertion.ts
+  s_7aa9251711039a::t_09321ae2d39da0 1-21,23-89
+  s_7aa9251711039a::t_82cd2a95dcf0e6 22
+src/components/editor/unified-rich-block.ts
+  s_7aa9251711039a::t_82cd2a95dcf0e6 311
+src/components/editor/compatibility-blocks.tsx
+  s_7aa9251711039a::t_82cd2a95dcf0e6 310,319
+src/components/editor/slash-completion.ts
+  s_7aa9251711039a::t_84dcac257a93a1 28,39,81
+  s_7aa9251711039a::t_74f3399c99dca6 1-27,29-38,40-80,82
+  s_7aa9251711039a::t_a7a27336cec4d6 83-85
+src/components/editor/markdown-editor.tsx
+  s_7aa9251711039a::t_84dcac257a93a1 36-37,52-53,324,1177-1188,1194-1200
+  s_7aa9251711039a::t_62db38d2480687 1201
+src/App.css
+  s_7aa9251711039a::t_aaeeddabc6ab6e 821-825
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "043ec3c2c6ab24feb5df3edab301576fc2505de0",
+  "prompts": {},
+  "sessions": {
+    "s_7aa9251711039a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd03-3670-77e2-8b5c-740397b0570b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
