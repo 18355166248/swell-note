@@ -1,0 +1,52 @@
+src/services/markdown/image-presentation.ts
+  s_7aa9251711039a::t_9139096d478a9f 1-27,29-58
+  s_7aa9251711039a::t_23a0e64b6dc5ce 28
+docs/editor-capability-review-2026-10-02/implementation.md
+  s_7aa9251711039a::t_c2ecf46a7acea7 1-26
+src/components/editor/live-preview.ts
+  s_7aa9251711039a::t_2a1ef06f31ae38 10,253,259,265-267,350-355,357-358,360-364,366-377,386,1226-1228,1230-1231
+  s_7aa9251711039a::t_23a0e64b6dc5ce 356
+  s_7aa9251711039a::t_c2ecf46a7acea7 365
+e2e/editor-capability-seed.ts
+  s_7aa9251711039a::t_be61604d44ee1e 1-47
+src/components/editor/markdown-preview.tsx
+  s_7aa9251711039a::t_0f0cae8fa62c19 24,54,351-352,700,704,710-712,751,814
+  s_7aa9251711039a::t_603276cf751e36 834
+src/components/editor/markdown-preview.test.tsx
+  s_7aa9251711039a::t_d7b1c1f6cc23b6 20-30
+e2e/editor-image-presentation.spec.ts
+  s_7aa9251711039a::t_be61604d44ee1e 1-5,7-12,14-44
+  s_7aa9251711039a::t_cd529d661c06bc 6,13
+src/components/editor/live-preview.test.ts
+  s_7aa9251711039a::t_f735cce83f70a9 248,255,262-293
+  s_4324a839e2dea6::t_ec7b1e31422552 294
+docs/editor-capability-review-2026-10-02/README.md
+  s_7aa9251711039a::t_cbafbb8fa2807f 1-85,89-90
+  s_7aa9251711039a::t_c8926cab3db771 86-88
+docs/editor-capability-review-2026-10-02/image-title-probe.test.ts.txt
+  s_7aa9251711039a::t_78ead16dbe2ff2 1-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "a0df5f3356625721cd4438f6baf0d8d73c49f5f9",
+  "prompts": {},
+  "sessions": {
+    "s_4324a839e2dea6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0e066-55ea-75e1-82e6-95196047cedb",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    },
+    "s_7aa9251711039a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd03-3670-77e2-8b5c-740397b0570b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
