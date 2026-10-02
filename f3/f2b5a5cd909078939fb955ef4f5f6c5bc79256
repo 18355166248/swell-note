@@ -1,0 +1,29 @@
+src/components/routes/app-pages.tsx
+  s_7aa9251711039a::t_17004cb3b21d0f 346-352
+src/components/workspace/workspace.tsx
+  s_7aa9251711039a::t_17004cb3b21d0f 2010,2572,2613,2710
+src/components/workspace/formatting-toolbar.tsx
+  s_7aa9251711039a::t_17004cb3b21d0f 243-244
+src/App.css
+  s_7aa9251711039a::t_7379c3ba56dc9f 1698-1708
+docs/editor-capability-review-2026-10-02/implementation.md
+  s_7aa9251711039a::t_343f041cded100 12,55-60
+src/services/preferences/ui-preferences.test.ts
+  s_7aa9251711039a::t_a357edab576338 21-29,32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "f3f2b5a5cd909078939fb955ef4f5f6c5bc79256",
+  "prompts": {},
+  "sessions": {
+    "s_7aa9251711039a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd03-3670-77e2-8b5c-740397b0570b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
