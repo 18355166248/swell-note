@@ -10,10 +10,11 @@ export function NoteDeliveryDialog({ open, onOpenChange, content, title, documen
   const [busy, setBusy] = useState(false)
   const [previewReady, setPreviewReady] = useState(false)
   const [attempt, setAttempt] = useState(0)
-  const frame = useRef<HTMLIFrameElement>(null), reader = useRef(readAsset)
+  const frame = useRef<HTMLIFrameElement>(null), reader = useRef(readAsset), generation = useRef(0)
   reader.current = readAsset
   useEffect(() => {
-    setResult(null); setError(""); setPreviewReady(false)
+    const scope = ++generation.current
+    setResult(null); setError(""); setPreviewReady(false); setBusy(false)
     if (!open) return
     let disposed = false
     const read = reader.current
@@ -21,14 +22,27 @@ export function NoteDeliveryDialog({ open, onOpenChange, content, title, documen
       if (disposed) throw new Error("导出会话已结束")
       return read(source)
     } })).then((next) => { if (!disposed) setResult(next) }).catch((reason) => { if (!disposed) setError(reason instanceof Error ? reason.message : "生成导出预览失败") })
-    return () => { disposed = true }
+    return () => { disposed = true; if (generation.current === scope) generation.current++ }
   }, [open, content, title, documentKey, attempt])
   const download = async () => {
     if (!result || busy) return
+    const scope = generation.current
     setBusy(true); setError("")
     try { await exportTextDocument(result.html, markdownExportFilename(title).replace(/\.md$/i, ".html"), "html", "导出 HTML 笔记", "text/html") }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "导出失败") }
-    finally { setBusy(false) }
+    // 原生保存窗口可能跨过笔记切换；迟到结果只属于发起导出的会话。
+    catch (reason) { if (generation.current === scope) setError(reason instanceof Error ? reason.message : "导出失败") }
+    finally { if (generation.current === scope) setBusy(false) }
+  }
+  const preparePrint = async (element: HTMLIFrameElement) => {
+    const scope = generation.current, document = element.contentDocument
+    if (!document) return
+    setPreviewReady(false)
+    // iframe 加载不保证图片已经解码；等字体和内嵌图片就绪，避免打印缺图或使用临时字形。
+    await Promise.all([
+      document.fonts?.ready,
+      ...Array.from(document.images).map((image) => image.decode?.().catch(() => undefined)),
+    ])
+    if (generation.current === scope && element === frame.current && element.contentDocument === document) setPreviewReady(true)
   }
   const print = () => {
     if (!previewReady || !frame.current?.contentWindow) return
@@ -39,7 +53,7 @@ export function NoteDeliveryDialog({ open, onOpenChange, content, title, documen
     <DialogContent className="note-delivery-dialog">
       <DialogHeader><DialogTitle>导出与打印</DialogTitle><DialogDescription>导出当前正文快照。HTML 包含可读取的本地附件；打印窗口可选择另存为 PDF。外部图片仍需联网。</DialogDescription></DialogHeader>
       {error ? <p role="alert">{error}<Button variant="outline" onClick={() => setAttempt((value) => value + 1)}>重新生成</Button></p> : null}
-      {result ? <><p role="status">{result.warnings.length ? `有 ${result.warnings.length} 项导出说明，请检查预览。` : "预览已生成"}</p><iframe ref={frame} title="导出预览" srcDoc={result.html} sandbox="allow-same-origin allow-modals" onLoad={() => setPreviewReady(true)} /></> : !error ? <p role="status">正在生成导出预览…</p> : null}
+      {result ? <><p role="status">{result.warnings.length ? `有 ${result.warnings.length} 项导出说明，请检查预览。` : "预览已生成"}</p><iframe ref={frame} title="导出预览" srcDoc={result.html} sandbox="allow-same-origin allow-modals" onLoad={(event) => void preparePrint(event.currentTarget)} /></> : !error ? <p role="status">正在生成导出预览…</p> : null}
       <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>关闭</Button><Button disabled={!result || busy} onClick={() => void download()}>下载 HTML</Button><Button disabled={!result || !previewReady} onClick={print} variant="outline">打印 / 保存 PDF</Button></DialogFooter>
     </DialogContent>
   </Dialog>

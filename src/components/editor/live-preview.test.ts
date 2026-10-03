@@ -810,7 +810,7 @@ describe("markdown live preview table cells", () => {
 
     const buttons = [...view.contentDOM.querySelectorAll<HTMLButtonElement>(".cm-md-table-toolbar button")]
     expect([...view.contentDOM.querySelectorAll(".cm-md-table-menu > summary")].map((summary) => summary.textContent))
-      .toEqual(["行列", "水平", "垂直"])
+      .toEqual(["行列", "整理", "水平", "垂直"])
     expect(view.contentDOM.querySelector(".cm-md-table-selection-status")?.textContent).toBe("未选择单元格")
     expect(buttons.map((button) => button.textContent)).toEqual([
       "宽度：适应",
@@ -822,6 +822,14 @@ describe("markdown live preview table cells", () => {
       "添加列",
       "删除行",
       "删除列",
+      "当前行上移",
+      "当前行下移",
+      "复制当前行",
+      "当前列左移",
+      "当前列右移",
+      "复制当前列",
+      "按当前列升序",
+      "按当前列降序",
       "左对齐",
       "居中",
       "右对齐",

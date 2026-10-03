@@ -153,7 +153,8 @@ describe("production editor link activation", () => {
     const depth = undoDepth(view.state)
     changed.mockClear()
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 90)) })
-    expect(parse).toHaveBeenCalledTimes(1)
+    // 源码折叠边栏会独立请求 30ms 解析；取消验证只看链接的首次 50ms 与后续 10ms 分片。
+    expect(parse.mock.calls.map((call) => call[2]).filter((budget) => budget === 50 || budget === 10)).toEqual([50])
     expect(opened).not.toHaveBeenCalled()
     expect(view.state.doc.toString()).toBe(after)
     expect(changed).not.toHaveBeenCalled()

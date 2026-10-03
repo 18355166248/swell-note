@@ -15,6 +15,8 @@ export type VaultDocument = {
 export type VaultAsset = {
   data: Uint8Array
   mimeType?: string
+  // 宿主确定实际读取来源后补充；旧适配器未提供时不推测缓存或远端状态。
+  origin?: "cache" | "local" | "remote"
 }
 
 export type VaultWriteResult = {

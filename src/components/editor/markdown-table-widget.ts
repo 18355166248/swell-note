@@ -1809,6 +1809,8 @@ export class TableWidget extends WidgetType {
 
   opOrganize(action: TableOrganizeAction) {
     if (this.view.state.readOnly || this.view.composing) return
+    // 菜单可能在远端回写后才被点击；先校验源码，再迁移宽度偏好，避免旧 Widget 改到新表格。
+    if (this.to > this.view.state.doc.length || this.view.state.sliceDoc(this.from, this.to) !== this.source) return
     const dom = this.currentDom()
     if (!dom) return
     const target = this.session().range?.focus ?? this.targetCell(dom.wrapper)

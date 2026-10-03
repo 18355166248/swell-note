@@ -31,3 +31,21 @@ test("HTML 导出保留中文、公式、图表、表格和失效附件说明，
   }
   await expect.poll(() => capabilityContent(page)).toBe(original)
 })
+
+test("只读源笔记保持禁写，仍可访问本地历史和导出", async ({ page }) => {
+  const original = "只读正文"
+  await seedCapabilityNote(page, original, true)
+  const workspace = page.locator(".note-editor:visible")
+  await expect(workspace.locator(".cm-content")).toHaveAttribute("contenteditable", "false")
+  await workspace.getByRole("button", { name: "更多操作", exact: true }).click()
+  await page.getByRole("menuitem", { name: "本地版本历史" }).click()
+  const history = page.getByRole("dialog", { name: "本地版本历史" })
+  await expect(history).toBeVisible()
+  await history.getByRole("button", { name: "关闭", exact: true }).click()
+  await workspace.getByRole("button", { name: "更多操作", exact: true }).click()
+  await page.getByRole("menuitem", { name: "导出 HTML / 打印", exact: true }).click()
+  const delivery = page.getByRole("dialog", { name: "导出与打印" })
+  await expect(delivery.frameLocator("iframe").locator("body")).toContainText(original)
+  await expect(delivery.getByRole("button", { name: "下载 HTML" })).toBeEnabled()
+  await expect.poll(() => capabilityContent(page, true)).toBe(original)
+})

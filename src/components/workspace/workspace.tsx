@@ -2709,9 +2709,9 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
                 <DropdownMenuItem onClick={onOpenSourceFile}>打开 / 下载 Excalidraw 原始文件</DropdownMenuItem>
               ) : null}
               <DropdownMenuItem onClick={onExportNote}>导出笔记与附件包</DropdownMenuItem>
-              {!isSpecialPreview ? <DropdownMenuItem onClick={() => { if (previewing || editorRef.current?.commitDrafts()) setDeliveryOpen(true) }}>导出 HTML / 打印</DropdownMenuItem> : null}
+              {!isSpecialPreview ? <DropdownMenuItem onClick={() => { if (previewing || fileReadOnly || editorRef.current?.commitDrafts()) setDeliveryOpen(true) }}>导出 HTML / 打印</DropdownMenuItem> : null}
               <DropdownMenuItem onClick={() => setFocusMode((value) => !value)}>{focusMode ? "退出专注" : "专注写作"}</DropdownMenuItem>
-              <DropdownMenuItem disabled={!activeCacheId} onClick={() => { if (previewing || editorRef.current?.commitDrafts()) setHistoryDialogOpen(true) }}>
+              <DropdownMenuItem disabled={!activeCacheId} onClick={() => { if (previewing || fileReadOnly || editorRef.current?.commitDrafts()) setHistoryDialogOpen(true) }}>
                 <History /> 本地版本历史
               </DropdownMenuItem>
               {canManageNote ? (
@@ -2902,7 +2902,10 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
           onViewModeChange={handleNoteViewModeChange}
           onToggleStar={() => onUpdateNote({ starred: !note.starred })}
           onExport={onExportNote}
-          onHistory={() => setHistoryDialogOpen(true)}
+          onHistory={() => {
+            // 源文件只读时不提交写入草稿；历史和交付仍应可访问。
+            if (previewing || fileReadOnly || editorRef.current?.commitDrafts()) setHistoryDialogOpen(true)
+          }}
         >
         <div className="document-canvas">
           {previewing || fileReadOnly ? (

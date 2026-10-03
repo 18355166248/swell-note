@@ -18,11 +18,14 @@ export type NoteVersion = {
 type SaveNoteVersionInput = Pick<NoteVersion, "cacheId" | "content" | "noteId" | "reason" | "title">
 
 const historyWrites = new Map<string, Promise<unknown>>()
-// 手动快照与自动编辑起点共用串行链，避免并发读旧列表后重复存档或超出保留上限。
-function queueHistoryWrite<T>(key: string, action: () => Promise<T>): Promise<T> {
-  const operation = (historyWrites.get(key) ?? Promise.resolve()).catch(() => undefined).then(action)
-  historyWrites.set(key, operation)
-  const clear = () => { if (historyWrites.get(key) === operation) historyWrites.delete(key) }
+// 快照、清理和迁移共用串行链；迁移同步占住新旧身份，避免漏迁尚未落盘的版本。
+// 一次登记所有身份，再等待前序操作，不嵌套加锁，双向迁移也不会互相等待。
+function queueHistoryWrite<T>(key: string | string[], action: () => Promise<T>): Promise<T> {
+  const keys = [...new Set(typeof key === "string" ? [key] : key)]
+  const pending = keys.map((item) => (historyWrites.get(item) ?? Promise.resolve()).catch(() => undefined))
+  const operation = Promise.all(pending).then(action)
+  keys.forEach((item) => historyWrites.set(item, operation))
+  const clear = () => { keys.forEach((item) => { if (historyWrites.get(item) === operation) historyWrites.delete(item) }) }
   void operation.then(clear, clear)
   return operation
 }
@@ -72,36 +75,44 @@ export async function listNoteVersions(cacheId: string, noteId: string) {
   }
 }
 
-export async function deleteNoteVersions(cacheId: string, noteId: string) {
+export function deleteNoteVersions(cacheId: string, noteId: string) {
+  return queueHistoryWrite(buildNoteKey(cacheId, noteId), () => deleteNoteVersionsNow(cacheId, noteId))
+}
+async function deleteNoteVersionsNow(cacheId: string, noteId: string) {
   const versions = await listNoteVersions(cacheId, noteId)
   if (versions.length === 0) return
   const database = await openDatabase()
-  const transaction = database.transaction(VERSION_STORE, "readwrite")
-  const store = transaction.objectStore(VERSION_STORE)
-  for (const version of versions) store.delete(version.key)
-  await transactionDone(transaction)
-  database.close()
+  try {
+    const transaction = database.transaction(VERSION_STORE, "readwrite")
+    const store = transaction.objectStore(VERSION_STORE)
+    for (const version of versions) store.delete(version.key)
+    await transactionDone(transaction)
+  } finally { database.close() }
 }
 
-export async function remapNoteVersions(cacheId: string, previousNoteId: string, nextNoteId: string) {
-  if (previousNoteId === nextNoteId) return
+export function remapNoteVersions(cacheId: string, previousNoteId: string, nextNoteId: string) {
+  if (previousNoteId === nextNoteId) return Promise.resolve()
+  return queueHistoryWrite([buildNoteKey(cacheId, previousNoteId), buildNoteKey(cacheId, nextNoteId)], () => remapNoteVersionsNow(cacheId, previousNoteId, nextNoteId))
+}
+async function remapNoteVersionsNow(cacheId: string, previousNoteId: string, nextNoteId: string) {
   const versions = await listNoteVersions(cacheId, previousNoteId)
   if (versions.length === 0) return
   const database = await openDatabase()
-  const transaction = database.transaction(VERSION_STORE, "readwrite")
-  const store = transaction.objectStore(VERSION_STORE)
-  const nextNoteKey = buildNoteKey(cacheId, nextNoteId)
-  for (const version of versions) {
-    store.delete(version.key)
-    store.put({
-      ...version,
-      key: `${nextNoteKey}\u0000${String(version.createdAt).padStart(16, "0")}\u0000${version.id}`,
-      noteId: nextNoteId,
-      noteKey: nextNoteKey,
-    })
-  }
-  await transactionDone(transaction)
-  database.close()
+  try {
+    const transaction = database.transaction(VERSION_STORE, "readwrite")
+    const store = transaction.objectStore(VERSION_STORE)
+    const nextNoteKey = buildNoteKey(cacheId, nextNoteId)
+    for (const version of versions) {
+      store.delete(version.key)
+      store.put({
+        ...version,
+        key: `${nextNoteKey}\u0000${String(version.createdAt).padStart(16, "0")}\u0000${version.id}`,
+        noteId: nextNoteId,
+        noteKey: nextNoteKey,
+      })
+    }
+    await transactionDone(transaction)
+  } finally { database.close() }
 }
 
 export function summarizeLineChanges(previous: string, current: string) {

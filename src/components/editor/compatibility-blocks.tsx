@@ -301,6 +301,8 @@ export class CompatibilityBlockWidget extends WidgetType {
       && other.block.to === this.block.to
       && other.block.source === this.block.source
       && other.readOnly === this.readOnly
+      // 同文嵌入的资源来源随库身份改变，必须让 React 根收到新解析器。
+      && other.options.assetScope === this.options.assetScope
   }
 
   toDOM() {

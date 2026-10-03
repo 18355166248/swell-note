@@ -14,6 +14,7 @@ export function VaultAttachment({ children, onResolveAsset, source }: VaultAttac
   resolveAssetRef.current = onResolveAsset
   const [state, setState] = useState<{
     mimeType?: string
+    origin?: VaultAsset["origin"]
     status: "idle" | "loading" | "ready" | "error"
     url?: string
   }>({ status: "idle" })
@@ -36,7 +37,7 @@ export function VaultAttachment({ children, onResolveAsset, source }: VaultAttac
         const mimeType = asset.mimeType && asset.mimeType !== "application/octet-stream" ? asset.mimeType : inferAttachmentMimeType(source)
         const data = new Uint8Array(asset.data).buffer
         objectUrl = URL.createObjectURL(new Blob([data], { type: mimeType }))
-        setState({ mimeType, status: "ready", url: objectUrl })
+        setState({ mimeType, origin: asset.origin, status: "ready", url: objectUrl })
       })
       .catch(() => {
         if (!disposed) setState({ status: "error" })
@@ -55,6 +56,7 @@ export function VaultAttachment({ children, onResolveAsset, source }: VaultAttac
       <span className="markdown-attachment-actions">
         <a download={name} href={state.url}>下载：{label}</a>
         <button type="button" onClick={() => setAttempt(0)}>关闭预览</button>
+        <span role="status">{state.origin === "cache" ? "本机缓存" : state.origin === "remote" ? "远端文件" : state.origin === "local" ? "本地文件" : "附件已就绪"}</span>
       </span>
       {previewError ? <span role="alert">此设备暂时无法预览，可下载后打开。<button type="button" onClick={() => setAttempt((value) => value + 1)}>重试预览</button></span> : null}
       {state.mimeType === "application/pdf" ? <iframe className="markdown-attachment-frame" src={state.url} title={label} />

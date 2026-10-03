@@ -257,7 +257,8 @@ export class MarkdownImageWidget extends WidgetType {
   }
 
   eq(other: MarkdownImageWidget) {
-    return other.source === this.source && other.alt === this.alt && other.block === this.block && other.from === this.from && other.to === this.to && other.title === this.title && other.readOnly === this.readOnly && other.width === this.width
+    // 同文笔记换库时源码位置相同，仍须换掉持有旧库解析器的图片 DOM。
+    return other.source === this.source && other.alt === this.alt && other.block === this.block && other.from === this.from && other.to === this.to && other.title === this.title && other.readOnly === this.readOnly && other.width === this.width && (other.options.assetScope ?? other.options.tableStorageKey) === (this.options.assetScope ?? this.options.tableStorageKey)
   }
 
   toDOM(view: EditorView) {
@@ -333,7 +334,7 @@ export class MarkdownImageWidget extends WidgetType {
         host.querySelectorAll(":scope > img, :scope > .cm-md-table-asset-state, :scope > .cm-md-image-retry").forEach((element) => element.remove())
         imageHost.className = "cm-md-image-retry"
         host.prepend(imageHost)
-        appendMarkdownImage(imageHost, this.alt, this.source, this.options, undefined, `${this.options.tableStorageKey ?? "editor"}:retry:${Date.now()}`, updateImageState)
+        appendMarkdownImage(imageHost, this.alt, this.source, this.options, undefined, `${this.options.assetScope ?? this.options.tableStorageKey ?? "editor"}:retry:${Date.now()}`, updateImageState)
         // 键盘激活后按钮会在加载期隐藏；立刻把焦点交回原编辑器，避免落到 document.body。
         view.focus()
       })
@@ -393,8 +394,8 @@ export class MarkdownImageWidget extends WidgetType {
       }
       syncImageTools()
     }
-    // tableStorageKey 是当前笔记的标识，拿它当缓存作用域，不同笔记里的同名相对路径不会串。
-    appendMarkdownImage(host, this.alt, this.source, this.options, undefined, this.options.tableStorageKey ?? "editor", updateImageState)
+    // 资源身份优先作为缓存作用域；旧调用方仍可沿用 tableStorageKey，不同库的同名路径不会串。
+    appendMarkdownImage(host, this.alt, this.source, this.options, undefined, this.options.assetScope ?? this.options.tableStorageKey ?? "editor", updateImageState)
     const immediateImage = host.querySelector("img")
     if (immediateImage) {
       immediateImage.tabIndex = 0
@@ -813,8 +814,9 @@ function collectTableBlocks(state: EditorState): TableBlock[] {
 
 // RangeSet 没有值相等接口，用位置加原文构成轻量 key；只比长度会漏掉同步合并、
 // 撤销等带来的等长改写，导致表格继续渲染旧内容。
-function tableBlocksKey(blocks: TableBlock[], readOnly: boolean) {
-  return `${readOnly ? "locked" : "editable"}|${blocks.map((block) => `${block.from}:${block.to}:${block.source.length}:${block.source}`).join("|")}`
+function tableBlocksKey(blocks: TableBlock[], readOnly: boolean, tableStorageKey?: string) {
+  // 同文表格换笔记时资源与宽度偏好身份仍会改变，不能只靠源码判断是否刷新。
+  return `${JSON.stringify(tableStorageKey)}|${readOnly ? "locked" : "editable"}|${blocks.map((block) => `${block.from}:${block.to}:${block.source.length}:${block.source}`).join("|")}`
 }
 
 // 块级替换会把紧贴它两端的插入并进自己的范围：在表格末尾换行或补空行后，
@@ -885,8 +887,9 @@ function collectUnifiedBlocks(state: EditorState): UnifiedBlockDescriptor[] {
   return blocks
 }
 
-function richBlocksKey(blocks: readonly UnifiedBlockDescriptor[], readOnly: boolean) {
-  return `${readOnly ? "locked" : "editable"}|${blocks.map(({ block, family }) => `${family}:${block.kind}:${block.from}:${block.to}:${block.source}`).join("|")}`
+function richBlocksKey(blocks: readonly UnifiedBlockDescriptor[], readOnly: boolean, assetScope?: string) {
+  // 同文笔记可能属于不同库；资源身份改变也必须重建附件与兼容块，释放旧库预览。
+  return `${JSON.stringify(assetScope)}|${readOnly ? "locked" : "editable"}|${blocks.map(({ block, family }) => `${family}:${block.kind}:${block.from}:${block.to}:${block.source}`).join("|")}`
 }
 
 function richBlockDecorationsDrifted(state: EditorState, blocks: readonly UnifiedBlockDescriptor[]) {
@@ -1288,10 +1291,11 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
       // 不把它算进来的话，那一屏就会一直停在没有渲染的 Markdown 源码上。
       const parsed = syntaxTree(update.startState) !== syntaxTree(update.state)
       const readOnlyChanged = update.startState.readOnly !== update.state.readOnly
-      if (!update.docChanged && !update.viewportChanged && !update.selectionSet && !parsed && !readOnlyChanged) return
+      const optionsChanged = update.startState.facet(livePreviewOptions) !== update.state.facet(livePreviewOptions)
+      if (!update.docChanged && !update.viewportChanged && !update.selectionSet && !parsed && !readOnlyChanged && !optionsChanged) return
       // 文档没变、视口也没动时先比对光标位置签名：装饰只依赖光标落点（块级看行、行内看相交），
       // 位置没变结果就不会变，直接沿用上一次的结果。
-      if (!update.docChanged && !update.viewportChanged && !parsed && !readOnlyChanged) {
+      if (!update.docChanged && !update.viewportChanged && !parsed && !readOnlyChanged && !optionsChanged) {
         const nextCursorKey = cursorPositionsKey(update.state)
         if (nextCursorKey === this.cursorKey) return
         this.cursorKey = nextCursorKey
@@ -1300,8 +1304,8 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
       }
       this.decorations = buildLivePreviewDecorations(update.view)
       // 表格块只在文档变化或语法树推进时才可能增减；滚动不会改变它们，没必要跟着重扫一遍语法树。
-      if (update.docChanged || parsed || readOnlyChanged) this.syncTableDecorations(update.view)
-      if (update.docChanged || parsed || readOnlyChanged) this.syncRichBlockDecorations(update.view)
+      if (update.docChanged || parsed || readOnlyChanged || optionsChanged) this.syncTableDecorations(update.view)
+      if (update.docChanged || parsed || readOnlyChanged || optionsChanged) this.syncRichBlockDecorations(update.view)
     }
 
     destroy() {
@@ -1314,13 +1318,13 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
       // 表格编辑关闭时不注册该字段，装饰也无处安放——直接不产出。
       if (view.state.field(tableDecorationsField, false) === undefined) return
       const current = collectTableBlocks(view.state)
-      if (tableBlocksKey(current, view.state.readOnly) === this.tableBlocksKey && !tableDecorationsDrifted(view.state, current)) return
+      if (tableBlocksKey(current, view.state.readOnly, view.state.facet(livePreviewOptions).tableStorageKey) === this.tableBlocksKey && !tableDecorationsDrifted(view.state, current)) return
       window.setTimeout(() => {
         if (this.destroyed) return
         // 等待期间文档可能已被同步合并或撤销改写，必须按当前状态重算，
         // 否则会把基于旧文档的位置派发到新文档上。
         const blocks = collectTableBlocks(view.state)
-        this.tableBlocksKey = tableBlocksKey(blocks, view.state.readOnly)
+        this.tableBlocksKey = tableBlocksKey(blocks, view.state.readOnly, view.state.facet(livePreviewOptions).tableStorageKey)
         view.dispatch({ effects: setTableDecorations.of(tableBlocksDecorations(blocks, view)) })
       }, 0)
     }
@@ -1329,11 +1333,11 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
     // 避免旧笔记异步任务把过期位置派发到已经切换的新源码。
     syncRichBlockDecorations(view: EditorView) {
       const current = collectUnifiedBlocks(view.state)
-      if (richBlocksKey(current, view.state.readOnly) === this.richBlocksKey && !richBlockDecorationsDrifted(view.state, current)) return
+      if (richBlocksKey(current, view.state.readOnly, view.state.facet(livePreviewOptions).assetScope) === this.richBlocksKey && !richBlockDecorationsDrifted(view.state, current)) return
       window.setTimeout(() => {
         if (this.destroyed || !view.dom.isConnected) return
         const blocks = collectUnifiedBlocks(view.state)
-        this.richBlocksKey = richBlocksKey(blocks, view.state.readOnly)
+        this.richBlocksKey = richBlocksKey(blocks, view.state.readOnly, view.state.facet(livePreviewOptions).assetScope)
         view.dispatch({ effects: setRichBlockDecorations.of(richBlocksDecorations(blocks, view)) })
       }, 0)
     }

@@ -39,4 +39,23 @@ describe("note history", () => {
   it("summarizes the changed middle lines", () => {
     expect(summarizeLineChanges("a\nb\nc", "a\nx\ny\nc")).toEqual({ added: 2, removed: 1 })
   })
+
+  it("迁移等待已发起的快照，目标的新快照在迁移后保留", async () => {
+    const old = saveNoteVersion({ cacheId: "vault", content: "旧路径最后快照", noteId: "old", reason: "手动快照", title: "标题" }, 1000)
+    const move = remapNoteVersions("vault", "old", "new")
+    const next = saveNoteVersion({ cacheId: "vault", content: "新路径快照", noteId: "new", reason: "手动快照", title: "标题" }, 2000)
+    await Promise.all([old, move, next])
+    expect(await listNoteVersions("vault", "old")).toEqual([])
+    expect((await listNoteVersions("vault", "new")).map((value) => value.content)).toEqual(["新路径快照", "旧路径最后快照"])
+  })
+
+  it("清理等待待写快照，双向迁移不互相锁死", async () => {
+    const save = saveNoteVersion({ cacheId: "vault", content: "待清理", noteId: "old", reason: "手动快照", title: "标题" }, 1000)
+    await Promise.all([save, deleteNoteVersions("vault", "old")])
+    expect(await listNoteVersions("vault", "old")).toEqual([])
+    await saveNoteVersion({ cacheId: "vault", content: "迁回", noteId: "old", reason: "手动快照", title: "标题" }, 1000)
+    await Promise.all([remapNoteVersions("vault", "old", "new"), remapNoteVersions("vault", "new", "old")])
+    expect((await listNoteVersions("vault", "old"))[0].content).toBe("迁回")
+    expect(await listNoteVersions("vault", "new")).toEqual([])
+  })
 })

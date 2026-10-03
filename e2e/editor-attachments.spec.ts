@@ -16,6 +16,7 @@ test("编辑画布按需预览缓存附件，下载和关闭后仍可续写及�
   await expect(workspace.locator("audio")).toHaveCount(0)
   await workspace.getByRole("button", { name: "打开附件：录音", exact: true }).click()
   await expect(workspace.locator("audio")).toBeVisible()
+  await expect(workspace.getByText("本机缓存", { exact: true })).toBeVisible()
   const download = page.waitForEvent("download")
   await workspace.getByRole("link", { name: "下载：录音" }).click()
   expect((await download).suggestedFilename()).toBe("a.mp3")

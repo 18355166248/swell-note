@@ -1023,7 +1023,7 @@ function App() {
     if (!assetPath) return null
     if (activeCacheMeta?.sourceKind === "webdav") {
       const cachedAttachment = await loadVaultAttachment(activeCacheMeta.id, assetPath)
-      if (cachedAttachment) return { data: new Uint8Array(cachedAttachment.data), mimeType: cachedAttachment.mimeType }
+      if (cachedAttachment) return { data: new Uint8Array(cachedAttachment.data), mimeType: cachedAttachment.mimeType, origin: "cache" as const }
     }
     let assetReader = vaultSession
     if (!assetReader?.readBinaryFile && activeCacheMeta?.sourceKind === "webdav" && isOnline) {
@@ -1057,7 +1057,7 @@ function App() {
         path: assetPath,
       })
     }
-    return asset
+    return { ...asset, origin: assetReader.kind === "webdav" ? "remote" as const : "local" as const }
   }, [])
   const resolveActiveAsset = useCallback(
     (source: string) => resolveNoteAsset(activeNoteId, source),

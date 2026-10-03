@@ -46,6 +46,8 @@ export default defineConfig(async () => ({
           if (id.includes("@codemirror/") || id.includes("@lezer/")) return "editor-features";
           if (id.includes("react-markdown") || id.includes("remark-") || id.includes("micromark") || id.includes("mdast-") || id.includes("hast-")) return "markdown-vendor";
           if (id.includes("radix-ui") || id.includes("lucide-react")) return "ui-vendor";
+          // 静态 HTML 交付才需要 React 服务端渲染，不能随首屏 react-vendor 预加载。
+          if (/react-dom\/(?:server|cjs\/react-dom-server)/.test(id)) return "react-server";
           if (id.includes("react") || id.includes("scheduler")) return "react-vendor";
           return undefined;
         },

@@ -21,3 +21,18 @@ it("缺失附件和未展开笔记嵌入显示说明，正文保留且不请求�
   expect(result.html).toContain("笔记嵌入：另篇")
   expect(result.html).toContain("继续正文")
 })
+
+it.each([
+  ["旧 title 尺寸", '![图](a.png "480")', "480px"],
+  ["新宽度优先", '![图](a.png "480")<!-- swell-image:width=640 -->', "640px"],
+  ["新自适应覆盖旧宽度", '![图](a.png "480")<!-- swell-image:width=auto -->', ""],
+])("导出图片保留 %s 并保留 title", async (_scenario, content, expectedWidth) => {
+  const { html } = await createHtmlDocument({
+    title: "尺寸兼容",
+    content,
+    readAsset: async () => ({ data: new Uint8Array([1, 2, 3]), mimeType: "image/png" }),
+  })
+  const image = new DOMParser().parseFromString(html, "text/html").querySelector("img")
+  expect(image?.style.width).toBe(expectedWidth)
+  expect(image?.getAttribute("title")).toBe("480")
+})
