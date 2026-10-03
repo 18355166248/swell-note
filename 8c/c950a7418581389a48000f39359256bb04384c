@@ -1,0 +1,79 @@
+vite.config.ts
+  s_7aa9251711039a::t_d54c3477cca238 49-50
+src/services/history/note-history.test.ts
+  s_7aa9251711039a::t_ee54a4936d6dc6 42-60
+src/services/export/html-export.test.tsx
+  s_7aa9251711039a::t_76c99aa799cb1e 24-38
+src/components/workspace/note-delivery-dialog.tsx
+  s_7aa9251711039a::t_2a6fa81f745b1a 13,16-17,25,29,32-45,56
+src/components/editor/unified-attachment.test.tsx
+  s_7aa9251711039a::t_ee54a4936d6dc6 2-3,10,77,93-98,100-108
+  s_7aa9251711039a::t_2605ed127d6016 78-92
+  s_7aa9251711039a::t_b476273ab7c8df 11,114,116-120,132,136,141
+  s_7aa9251711039a::t_fbf5d83470e119 44,99,109-113,115,121-126,129-131,134-135,138-140,142
+  s_7aa9251711039a::t_e8e0618b27f841 127-128,133,137
+  s_7aa9251711039a::t_f2ba8a047e0d6d 4,17-43
+src/components/editor/markdown-table-widget.ts
+  s_7aa9251711039a::t_57322f0461abec 1812-1813
+src/components/workspace/workspace.tsx
+  s_7aa9251711039a::t_3fd07b3cd1a5e5 2712,2714
+  s_7aa9251711039a::t_263262ab0dd725 2905,2907-2908
+  s_7aa9251711039a::t_6908b05f5ef0ea 2906
+e2e/editor-delivery.spec.ts
+  s_7aa9251711039a::t_263262ab0dd725 34,36-38,40-49,51
+  s_7aa9251711039a::t_6908b05f5ef0ea 35,39
+  s_7aa9251711039a::t_85985638838854 50
+src/components/editor/platform-editor-integration.test.tsx
+  s_7aa9251711039a::t_26e08486f06464 156-157
+src/App.tsx
+  s_7aa9251711039a::t_c269d0332bfe3b 1026,1060
+docs/editor-capability-review-2026-10-02/implementation.md
+  s_7aa9251711039a::t_6908b05f5ef0ea 54,85-109
+  s_7aa9251711039a::t_dadb46eba21059 110-112
+src/components/editor/vault-attachment.tsx
+  s_7aa9251711039a::t_c269d0332bfe3b 17,40,59
+docs/editor-capability-review-2026-10-02/README.md
+  s_7aa9251711039a::t_d0c892df20d7c3 5-6
+src/components/editor/live-preview.test.ts
+  s_7aa9251711039a::t_29d82e2663c6cb 813,825-832
+src/components/editor/live-preview.ts
+  s_7aa9251711039a::t_ad64b21352b93c 261,817-819,1307,1321,1327
+  s_7aa9251711039a::t_57322f0461abec 890-892,1336,1340
+  s_7aa9251711039a::t_74e63a27af83f0 260
+  s_7aa9251711039a::t_f6c4512da82fe3 337,397-398
+  s_7aa9251711039a::t_ee54a4936d6dc6 1294-1295,1298,1308
+src/components/editor/compatibility-blocks.tsx
+  s_7aa9251711039a::t_fc4f060d93fd81 305
+  s_7aa9251711039a::t_eecbdc046202de 304
+src/services/export/html-export.tsx
+  s_7aa9251711039a::t_ddcb6d4ffea1b2 7,69-70
+e2e/editor-capability-seed.ts
+  s_7aa9251711039a::t_3fd07b3cd1a5e5 4,6,28
+  s_7aa9251711039a::t_6908b05f5ef0ea 36
+  s_7aa9251711039a::t_85985638838854 7,20-22,39-40,44,48
+src/services/history/note-history.ts
+  s_7aa9251711039a::t_57322f0461abec 21-28,78-81,85-90,93-97,101-115
+src/services/vault/vault-adapter.ts
+  s_7aa9251711039a::t_c269d0332bfe3b 18-19
+e2e/editor-attachments.spec.ts
+  s_7aa9251711039a::t_d0c892df20d7c3 19
+src/components/workspace/note-delivery-dialog.test.tsx
+  s_7aa9251711039a::t_789b8bbc6142ed 24
+  s_7aa9251711039a::t_ee61aa91968160 1-23,25-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "8cc950a7418581389a48000f39359256bb04384c",
+  "prompts": {},
+  "sessions": {
+    "s_7aa9251711039a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd03-3670-77e2-8b5c-740397b0570b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
