@@ -13,6 +13,7 @@ import {
   loadCachedNoteDocument,
   listVaultCaches,
   loadLastVaultCache,
+  rememberVaultCache,
   loadVaultCache,
   queueVaultAttachment,
   renameCachedWebDavTag,
@@ -51,6 +52,17 @@ beforeEach(async () => {
 })
 
 describe("vault cache", () => {
+  it("立即记住连接成功的库，过期连接不能改写指针或正文", async () => {
+    const snapshot = { activeNoteId: "", id: "a", label: "A", notes: [], savedAt: 1, sourceKind: "webdav" as const }
+    await saveVaultCache(snapshot, { updateLastCache: false })
+    expect(await loadLastVaultCache()).toBeNull()
+    await rememberVaultCache("a", () => true)
+    expect((await loadLastVaultCache())?.id).toBe("a")
+    await saveVaultCache({ ...snapshot, id: "b" }, { updateLastCache: false })
+    await rememberVaultCache("b", () => false)
+    expect((await loadLastVaultCache())?.id).toBe("a")
+    expect((await loadVaultCache("a"))?.savedAt).toBe(1)
+  })
   it("原子重命名 WebDAV 缓存标签，并跳过冲突及未缓存正文", async () => {
     const content = "---\ntags: [旧标签]\n---\n\n# 正文"
     const base = { content, contentLoaded: true, preview: "正文", starred: false, syncStatus: "synced" as const, tags: ["旧标签"], updatedAt: "刚刚" }

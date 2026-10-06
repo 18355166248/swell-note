@@ -1,4 +1,4 @@
-// 编辑器 / 预览 / Canvas 画布都是懒加载 chunk（体积大，正常情况下延迟到真正渲染时才加载，
+// 编辑器 / 预览都是懒加载 chunk（体积大，正常情况下延迟到真正渲染时才加载，
 // 避免拖慢首屏资料库与列表）。但应用启动时几乎总有一篇笔记已经处于激活状态：
 // cacheReady 一变 true，Workspace 和这几个 chunk 就在同一帧里被同时需要，
 // 根本等不到「组件挂载后 idle」——那时候用户已经在盯着加载占位了。
@@ -13,5 +13,5 @@ export function preloadNoteRenderers() {
   preloaded = true
   void import("@/components/editor/markdown-editor")
   void import("@/components/editor/markdown-preview")
-  void import("@/components/editor/canvas-preview")
+  // Canvas 由实际打开的笔记按需加载，普通 Markdown 启动无需预热另一套画布。
 }

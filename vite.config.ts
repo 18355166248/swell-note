@@ -34,6 +34,8 @@ export default defineConfig(async () => ({
       output: {
         // 编辑器、Markdown 渲染与 UI 组件按能力拆包，移动端首次进入目录页无需下载全部编辑依赖。
         manualChunks(id) {
+          // Vite 的共享预加载函数不能跟随可选画图包，否则入口会反向静态加载整块画图代码。
+          if (id.includes("vite/preload-helper")) return "app-runtime";
           if (!id.includes("node_modules")) return undefined;
           if (id.includes("@uiw/react-codemirror")) return "editor-react";
           // Excalidraw 是可选官方能力，保持独立 chunk，普通笔记与应用首屏不会下载它。

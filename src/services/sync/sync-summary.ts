@@ -14,6 +14,14 @@ export type SyncQueueMetrics = {
   work: number
 }
 
+export function syncCompletionMessage(notes: Note[], attachmentCount: number, directoryCount: number) {
+  const summary = summarizeWebDavSync(notes)
+  const remaining = summarizeSyncQueue(notes, attachmentCount, 0).work + directoryCount
+  if (summary.conflicts) return `本轮同步完成，仍有 ${summary.conflicts} 篇冲突待处理${remaining ? `、${remaining} 项待同步` : ""}`
+  // 本轮上传快照之外的新输入仍留在工作副本，不能宣称两端已一致。
+  return remaining ? `本轮同步完成，仍有 ${remaining} 项修改待同步` : "同步检查完成，云端与本机一致"
+}
+
 export function summarizeWebDavSync(notes: Note[]): SyncSummary {
   return notes.reduce<SyncSummary>((summary, note) => {
     if (note.source !== "webdav") return summary

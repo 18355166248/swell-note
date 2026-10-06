@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { Note } from "@/types/note"
-import { summarizeSyncQueue, summarizeWebDavSync } from "./sync-summary"
+import { syncCompletionMessage, summarizeSyncQueue, summarizeWebDavSync } from "./sync-summary"
 
 const baseNote: Note = {
   content: "",
@@ -11,6 +11,12 @@ const baseNote: Note = {
   title: "笔记",
   updatedAt: "刚刚",
 }
+
+it("结束文案按最新工作副本显示续写、失败附件和冲突", () => {
+  expect(syncCompletionMessage([{ ...baseNote, source: "webdav", syncStatus: "modified" }], 1, 1)).toContain("3 项修改待同步")
+  expect(syncCompletionMessage([{ ...baseNote, source: "webdav", syncStatus: "conflict" }], 0, 0)).toContain("冲突待处理")
+  expect(syncCompletionMessage([], 0, 0)).toContain("云端与本机一致")
+})
 
 describe("summarizeWebDavSync", () => {
   it("仅置顶或取消置顶也计入待同步，多个条目合为一个配置项目", () => {

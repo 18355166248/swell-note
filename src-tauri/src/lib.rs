@@ -3,9 +3,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
+#[derive(Default)]
+struct ExitSaveState(AtomicBool);
+
+#[tauri::command]
+fn complete_saved_exit(app: tauri::AppHandle, state: tauri::State<'_, ExitSaveState>) {
+    // 只有前端保存闭环成功后才放行系统退出，防止 Cmd+Q 越过窗口关闭保护。
+    state.0.store(true, Ordering::SeqCst);
+    app.exit(0);
+}
 
 #[cfg(target_os = "macos")]
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -582,6 +593,7 @@ pub fn run() {
             Ok(())
         })
         .manage(credential_store_state)
+        .manage(ExitSaveState::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
@@ -598,9 +610,25 @@ pub fn run() {
             search_note_index,
             get_search_index_status,
             rebuild_note_search_index,
+            complete_saved_exit,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(desktop)]
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                // 最后一个窗口已关闭时，前端关闭保护已完成；保留窗口的系统退出则先请求落盘。
+                if app.get_webview_window("main").is_some()
+                    && code != Some(tauri::RESTART_EXIT_CODE)
+                    && !app.state::<ExitSaveState>().0.load(Ordering::SeqCst)
+                {
+                    api.prevent_exit();
+                    let _ = app.emit("swell:request-saved-exit", ());
+                }
+            }
+            #[cfg(mobile)]
+            let _ = (app, event);
+        });
 }
 
 #[cfg(test)]

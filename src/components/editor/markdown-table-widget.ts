@@ -1,5 +1,6 @@
 import { isolateHistory, redo, undo } from "@codemirror/commands"
 import { EditorView, WidgetType } from "@codemirror/view"
+import { blockEditSessionKey, clearBlockEditDraft, readBlockEditDraft, writeBlockEditDraft } from "./block-edit-session"
 
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
 
@@ -302,9 +303,23 @@ export class TableWidget extends WidgetType {
     let session = sessions.get(this.tableIndex)
     if (!session) {
       session = {}
+      const saved = readBlockEditDraft(this.view, this.draftKey())
+      if (saved) {
+        try {
+          const draft = JSON.parse(saved.draft) as CellEditDraft
+          if (typeof draft.value === "string" && typeof draft.tableSource === "string"
+            && typeof draft.originalValue === "string" && Number.isInteger(draft.row) && draft.row >= -1
+            && Number.isInteger(draft.column) && draft.column >= 0
+            && Number.isInteger(draft.selectionStart) && Number.isInteger(draft.selectionEnd)) session.cellDraft = draft
+        } catch { /* 损坏的恢复记录不能阻止正文打开。 */ }
+      }
       sessions.set(this.tableIndex, session)
     }
     return session
+  }
+
+  private draftKey() {
+    return blockEditSessionKey(this.options.tableStorageKey, "table", this.tableIndex)
   }
 
   // 外部入口（右键菜单）可能持有重建前的旧实例；操作一律转发给当前存活的实例。
@@ -1181,10 +1196,15 @@ export class TableWidget extends WidgetType {
         tableSource: this.source,
         value: input.value,
       }
+      // 活动单元格也保存独立恢复记录；只在原表/原单元格仍匹配时恢复，不覆盖远端新表。
+      writeBlockEditDraft(this.view, this.draftKey(), { draft: JSON.stringify(session.cellDraft), originalSource: this.source, open: true, dirty: input.value !== originalValue })
     }
     const clearDraft = () => {
       const current = session.cellDraft
-      if (current?.row === rowIndex && current.column === columnIndex && current.tableSource === this.source) session.cellDraft = null
+      if (current?.row === rowIndex && current.column === columnIndex && current.tableSource === this.source) {
+        session.cellDraft = null
+        clearBlockEditDraft(this.view, this.draftKey())
+      }
     }
     syncDraft()
     input.addEventListener("input", () => {

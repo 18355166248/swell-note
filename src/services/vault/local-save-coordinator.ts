@@ -59,6 +59,11 @@ export class LocalSaveCoordinator {
     return this.latestRequestByNote.has(noteId)
   }
 
+  async drain(): Promise<void> {
+    // 等待期间仍可能有新输入入队，直到所有物理写入结束才允许正常关闭。
+    while (this.queuesByPath.size) await Promise.all([...this.queuesByPath.values()])
+  }
+
   cancelNote(noteId: string): void {
     this.latestRequestByNote.delete(noteId)
     this.noteEpochById.set(noteId, (this.noteEpochById.get(noteId) ?? 0) + 1)

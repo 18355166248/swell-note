@@ -19,6 +19,8 @@ test("手动快照、保留设置、导出导入历史均不改当前正文", as
   const archive = JSON.parse(await readFile(path!, "utf8"))
   expect(archive.versions[0].content).toBe(original)
   archive.versions.unshift({ content: "另一设备归档", createdAt: Date.now() + 1, reason: "手动快照", title: "原标题", cacheId: "other" })
+  // 下载开始时导出操作还可能在刷新历史列表；按真实用户可操作的入口等待完成。
+  await expect(dialog.getByRole("button", { name: "导入历史", exact: true })).toBeEnabled()
   await dialog.locator('input[type="file"]').setInputFiles({ name: "note.history.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(archive)) })
   await expect(dialog.getByRole("status")).toContainText("归档已导入")
   await expect(dialog.locator(".note-history-item")).toHaveCount(2)

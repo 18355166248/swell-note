@@ -13,6 +13,20 @@ function deferred<T>() {
 }
 
 describe("LocalSaveCoordinator", () => {
+  it("退出等待包含排空期间追加的路径任务", async () => {
+    const coordinator = new LocalSaveCoordinator()
+    const first = deferred<void>(), second = deferred<void>()
+    void coordinator.enqueue("a.md", () => first.promise)
+    let done = false
+    const draining = coordinator.drain().then(() => { done = true })
+    void coordinator.enqueue("b.md", () => second.promise)
+    first.resolve()
+    await Promise.resolve(); await Promise.resolve()
+    expect(done).toBe(false)
+    second.resolve()
+    await draining
+    expect(done).toBe(true)
+  })
   it("串行写入并让旧完成保留最新请求的保存中状态", async () => {
     const coordinator = new LocalSaveCoordinator()
     const firstWrite = deferred<string>()

@@ -1,3 +1,6 @@
+import { flushSync } from "react-dom"
+import { registerSavePreparation } from "@/services/vault/save-lifecycle"
+import { hasUnpersistedBlockDraft } from "./block-edit-session"
 import { chapterFolding, chapterRange, markdownHeadings, foldEffect } from "./chapter-folding"
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
@@ -178,6 +181,31 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   function MarkdownEditor({ sessionKey, revision, onHistoryChange, onEditingTargetChange, onFormatStateChange, onLinkMenu, onPasteError, compact = false, getWikiLinkSuggestions, onChange, onCursorChange, onInsertFiles, onLoadWikiNote, onOpenWikiLink, onResolveAsset, onResolveWikiNote, onSelectionChange, readOnly = false, sourceMode = false, storageKey, value }, ref) {
     const hostRef = useRef<HTMLDivElement | null>(null)
     const controlRef = useRef<EditorControl | null>(null)
+    useEffect(() => {
+      const host = hostRef.current
+      const composing = new Set<EventTarget>()
+      const start = (event: Event) => { if (event.target) composing.add(event.target) }
+      const end = (event: Event) => { if (event.target) composing.delete(event.target) }
+      host?.addEventListener("compositionstart", start, true)
+      host?.addEventListener("compositionend", end, true)
+      const unregister = registerSavePreparation((reason) => {
+        const view = controlRef.current?.getView()
+        if (!view || view.state.readOnly) return
+        for (const target of composing) if (target instanceof Node && !target.isConnected) composing.delete(target)
+        if (view.composing || composing.size) {
+          if (reason === "close") throw new Error("请先确认输入法候选词，再关闭窗口")
+          return
+        }
+        if (reason === "close" && hasUnpersistedBlockDraft(view)) throw new Error("局部草稿尚未成功保存在本机，请先保存或复制草稿再关闭")
+        // 复杂块保留独立草稿和取消语义；表格单元格的已确认输入应在退后台前写回正文。
+        flushSync(() => activeTableEdit(view)?.commit())
+      })
+      return () => {
+        unregister()
+        host?.removeEventListener("compositionstart", start, true)
+        host?.removeEventListener("compositionend", end, true)
+      }
+    }, [])
     const historyOwner = useMemo(() => ({}), [sessionKey, storageKey, readOnly, compact])
     const historyOwnerRef = useRef(historyOwner)
     historyOwnerRef.current = historyOwner
@@ -658,7 +686,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     // 若把 value 放进依赖，React 会在正文变化的每次渲染上重建编辑器，正是要消除的行为。
     const initialRef = useRef({ sessionKey, revision, value, readOnly, compact, storageKey, settings: null as EditorSettings | null })
     initialRef.current.settings = {
-      assetScope: storageKey,
+      assetScope: sessionKey ?? storageKey,
       livePreview: !sourceMode,
       placeholder: "开始记录你的想法…",
       platform: compact ? "mobile" : "desktop",
@@ -754,7 +782,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         // 才是 echo，其余均为 external（远端合并 / 版本恢复 / 重新加载）。
         origin: switching ? "switch" : echo ? "echo" : "external",
         settings: {
-          assetScope: storageKey,
+          assetScope: sessionKey ?? storageKey,
           platform: compact ? "mobile" : "desktop",
           readOnly,
         },

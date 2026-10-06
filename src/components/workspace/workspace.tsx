@@ -1,4 +1,5 @@
 import { NoteDeliveryDialog } from "./note-delivery-dialog"
+import { NoteOfflineDialog } from "./note-offline-dialog"
 import { useLocation, useNavigate, useNavigationType } from "react-router-dom"
 import { createContext, useContext, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react"
 import {
@@ -2009,6 +2010,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   const previewing = isSpecialPreview || noteViewMode === "preview"
   const viewAction = getNoteViewModeAction(noteViewMode)
   const [deliveryOpen, setDeliveryOpen] = useState(false)
+  const [offlineOpen, setOfflineOpen] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
   const sourceMode = markdownSourceMode === "source"
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -2709,6 +2711,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
                 <DropdownMenuItem onClick={onOpenSourceFile}>打开 / 下载 Excalidraw 原始文件</DropdownMenuItem>
               ) : null}
               <DropdownMenuItem onClick={onExportNote}>导出笔记与附件包</DropdownMenuItem>
+              {note.source === "webdav" && !isSpecialPreview ? <DropdownMenuItem onClick={() => { if (previewing || fileReadOnly || editorRef.current?.commitDrafts()) setOfflineOpen(true) }}>准备当前笔记离线附件</DropdownMenuItem> : null}
               {!isSpecialPreview ? <DropdownMenuItem onClick={() => { if (previewing || fileReadOnly || editorRef.current?.commitDrafts()) setDeliveryOpen(true) }}>导出 HTML / 打印</DropdownMenuItem> : null}
               <DropdownMenuItem onClick={() => setFocusMode((value) => !value)}>{focusMode ? "退出专注" : "专注写作"}</DropdownMenuItem>
               <DropdownMenuItem disabled={!activeCacheId} onClick={() => { if (previewing || fileReadOnly || editorRef.current?.commitDrafts()) setHistoryDialogOpen(true) }}>
@@ -3090,6 +3093,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
         </footer>
       ) : null}
       <NoteDeliveryDialog open={deliveryOpen} onOpenChange={setDeliveryOpen} content={note.content} title={note.title} documentKey={assetScope} readAsset={onResolveAsset} />
+      <NoteOfflineDialog open={offlineOpen} onOpenChange={setOfflineOpen} content={note.content} documentKey={assetScope} readAsset={onResolveAsset} />
       <NoteVersionHistoryDialog
         cacheId={activeCacheId}
         currentContent={note.content}

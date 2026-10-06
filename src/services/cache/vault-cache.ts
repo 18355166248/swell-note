@@ -657,6 +657,17 @@ export async function loadVaultCache(id: string, options: LoadVaultCacheOptions 
   }
 }
 
+export async function rememberVaultCache(cacheId: string, isCurrent: () => boolean) {
+  const database = await openDatabase()
+  try {
+    // 建库等待期间可能已经切换目标；只更新身份指针，不用旧整库快照覆盖最新正文。
+    if (!isCurrent()) return
+    const transaction = database.transaction(SETTINGS_STORE, "readwrite")
+    transaction.objectStore(SETTINGS_STORE).put({ key: LAST_CACHE_KEY, value: cacheId })
+    await transactionDone(transaction)
+  } finally { database.close() }
+}
+
 export async function loadLastVaultCache(options: LoadVaultCacheOptions = {}) {
   const database = await openDatabase()
   const setting = await requestResult<{ key: string; value: string } | undefined>(

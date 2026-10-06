@@ -376,6 +376,11 @@ abstract class UnifiedRichWidget extends WidgetType {
       error.textContent = "这段源码已发生变化，草稿仍保留；请取消后重新编辑。"
     }
     editor.append(input, error, actions)
+    if (saved && saved.draft !== saved.originalSource) {
+      error.textContent = this.view.state.sliceDoc(this.from, this.to) === saved.originalSource
+        ? "已恢复未保存草稿，可继续编辑、保存或取消。"
+        : "这段源码已发生变化，已恢复旧草稿；请复制需要的内容后取消，重新编辑。"
+    }
     host.append(editor)
     // 先占位、再在 commit 定义之后登记：dismiss 里要注销，而 commit 又会经 dismiss 收尾。
     let unregisterEditor = () => {}
@@ -417,7 +422,7 @@ abstract class UnifiedRichWidget extends WidgetType {
     input.addEventListener("input", () => {
       session.draft = input.value
       writeBlockEditDraft(this.view, key, session)
-      error.textContent = this.view.state.sliceDoc(this.from, this.to) === session.originalSource
+      error.textContent = session.persistenceFailed ? "草稿未能保存到本机，请先保存正文或复制内容；退出后可能丢失。" : this.view.state.sliceDoc(this.from, this.to) === session.originalSource
         ? ""
         : "这段源码已发生变化，草稿仍保留；请取消后重新编辑。"
     })
@@ -433,7 +438,8 @@ abstract class UnifiedRichWidget extends WidgetType {
       }
     })
     input.focus({ preventScroll: true })
-    input.select()
+    if (saved && saved.draft !== saved.originalSource) input.setSelectionRange(input.value.length, input.value.length)
+    else input.select()
   }
 
   ignoreEvent() {

@@ -1,3 +1,7 @@
+import { syncCompletionMessage } from "@/services/sync/sync-summary"
+import { clearPersistedBlockDrafts } from "@/components/editor/block-edit-session"
+import { isTauri } from "@tauri-apps/api/core"
+import { flushLifecycleSave, registerLifecycleSave } from "@/services/vault/save-lifecycle"
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { flushSync } from "react-dom"
 import { Navigate, Route, Routes, useLocation, useMatch, useNavigate } from "react-router-dom"
@@ -76,6 +80,7 @@ import {
   renameCachedWebDavTag,
   remapVaultAttachmentNoteId,
   saveVaultCache,
+  rememberVaultCache,
   saveVaultNoteQueueCheckpoint,
   saveVaultWorkingCopyEdit,
   searchCachedNoteDocuments,
@@ -436,6 +441,8 @@ function App() {
   }, [])
   const [nativeSearchResult, setNativeSearchResult] = useState<{ paths: Set<string>; query: string } | null>(null)
   const saveTimersRef = useRef(new Map<string, number>())
+  const pendingLocalSavesRef = useRef(new Map<string, () => void>())
+  const localSaveErrorsRef = useRef(new Map<string, string>())
   const localSaveCoordinatorRef = useRef(new LocalSaveCoordinator())
   const loadingNoteIdsRef = useRef(new Set<string>())
   const revisionByPathRef = useRef(new Map<string, string | undefined>())
@@ -471,6 +478,8 @@ function App() {
   const invalidateLocalSaveContext = useCallback(() => {
     for (const timer of saveTimersRef.current.values()) window.clearTimeout(timer)
     saveTimersRef.current.clear()
+    pendingLocalSavesRef.current.clear()
+    localSaveErrorsRef.current.clear()
     // 已进入原生文件 API 的 Promise 无法取消；递增代际后，它们只能完成旧写入，不能回填当前 Vault 状态。
     localSaveCoordinatorRef.current.invalidate()
   }, [])
@@ -653,16 +662,77 @@ function App() {
     return () => { cancelled = true }
   }, [activeCacheMeta])
 
-  useEffect(() => {
-    const flushCacheWhenHidden = () => {
-      if (document.visibilityState !== "hidden" || !latestCacheSnapshotRef.current) return
-      if (activeSyncRunRef.current && activeCacheIdRef.current === latestCacheSnapshotRef.current.id) return
-      // 页面进入后台时立即启动 IndexedDB 事务，缩小 450ms 防抖窗口造成的退出丢稿风险。
-      void saveVaultCache({ ...latestCacheSnapshotRef.current, savedAt: Date.now() })
-        .catch(() => undefined)
+  useEffect(() => registerLifecycleSave(async () => {
+    // 定时器里的内容就是最近一笔待保存正文；先转为实际任务，再等待路径队列排空。
+    do {
+      for (const save of [...pendingLocalSavesRef.current.values()]) save()
+      await localSaveCoordinatorRef.current.drain()
+    } while (pendingLocalSavesRef.current.size)
+    await liveEditWritesRef.current
+    if (liveEditWriteErrorRef.current) throw liveEditWriteErrorRef.current
+    await cacheSnapshotWritesRef.current
+    const snapshot = latestCacheSnapshotRef.current
+    if (snapshot && !activeSyncRunRef.current) {
+      await saveVaultCache({ ...snapshot, notes: prepareNotesForCache(notesRef.current, cachePrivacyMode), savedAt: Date.now() })
     }
-    document.addEventListener("visibilitychange", flushCacheWhenHidden)
-    return () => document.removeEventListener("visibilitychange", flushCacheWhenHidden)
+    if (localSaveErrorsRef.current.size) throw new Error([...localSaveErrorsRef.current.values()][0])
+  }), [cachePrivacyMode])
+
+  useEffect(() => {
+    const saveWhenHidden = () => {
+      if (document.visibilityState === "hidden") void flushLifecycleSave("background").catch((error) => {
+        setVaultError(error instanceof Error ? error.message : "后台保存失败，修改仍需重新保存")
+      })
+    }
+    const saveOnPageHide = () => { void flushLifecycleSave("background").catch(() => undefined) }
+    document.addEventListener("visibilitychange", saveWhenHidden)
+    window.addEventListener("pagehide", saveOnPageHide)
+    return () => {
+      document.removeEventListener("visibilitychange", saveWhenHidden)
+      window.removeEventListener("pagehide", saveOnPageHide)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isTauri() || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) return
+    let disposed = false, allowClose = false, closing = false
+    let unlisten: (() => void) | undefined
+    let unlistenExit: (() => void) | undefined
+    void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
+      const appWindow = getCurrentWindow()
+      const stop = await appWindow.onCloseRequested((event) => {
+        if (allowClose) return
+        event.preventDefault()
+        if (closing) return
+        closing = true
+        // 正常关闭可等待落盘；错误时留在原窗口，避免把保存失败变成不可恢复的退出。
+        void flushLifecycleSave("close").then(async () => {
+          if (disposed) return
+          if (activeSyncRunRef.current) throw new Error("同步仍在进行，请先安全停止同步再关闭")
+          allowClose = true
+          try { await appWindow.close() } catch (error) { allowClose = false; throw error }
+        }).catch((error) => setVaultError(error instanceof Error ? error.message : "保存失败，暂未关闭窗口"))
+          .finally(() => { closing = false })
+      })
+      if (disposed) stop()
+      else unlisten = stop
+      const { listen } = await import("@tauri-apps/api/event")
+      const stopExit = await listen("swell:request-saved-exit", () => {
+        if (closing) return
+        closing = true
+        // Cmd+Q 由 Rust 暂停退出，使用与普通关闭一致的落盘流程；失败保留原窗口。
+        void flushLifecycleSave("close").then(async () => {
+          if (disposed) return
+          if (activeSyncRunRef.current) throw new Error("同步仍在进行，请先安全停止同步再退出")
+          const { invoke } = await import("@tauri-apps/api/core")
+          await invoke("complete_saved_exit")
+        }).catch((error) => setVaultError(error instanceof Error ? error.message : "保存失败，暂未退出应用"))
+          .finally(() => { closing = false })
+      })
+      if (disposed) stopExit()
+      else unlistenExit = stopExit
+    }).catch((error) => setVaultError(error instanceof Error ? error.message : "无法启用退出保存保护"))
+    return () => { disposed = true; unlisten?.(); unlistenExit?.() }
   }, [])
 
   // 应用从后台回到前台：按库节流（≥30 秒）只读拉取排序配置，不写云端；离线或无凭据时保持本地显示。
@@ -1234,8 +1304,12 @@ function App() {
     setSaveStates((current) => ({ ...current, [note.id]: { status: "saving" } }))
 
     // 同一文件的保存任务串行执行，并在真正写入前读取最新 revision，避免快速输入造成自冲突。
-    const timer = window.setTimeout(() => {
-      if (saveTimersRef.current.get(note.id) === timer) saveTimersRef.current.delete(note.id)
+    localSaveErrorsRef.current.delete(note.id)
+    const persist = () => {
+      const timer = saveTimersRef.current.get(note.id)
+      if (timer) window.clearTimeout(timer)
+      saveTimersRef.current.delete(note.id)
+      pendingLocalSavesRef.current.delete(note.id)
       void coordinator.enqueue(path, async () => {
         // 切库前已排队但尚未进入文件 API 的任务直接作废；在途任务只能等待原生调用自行结束。
         if (!coordinator.isContextCurrent(token)) return
@@ -1263,10 +1337,13 @@ function App() {
             ? "conflict"
             : "error"
           setSaveStates((current) => ({ ...current, [note.id]: { message, status } }))
+          localSaveErrorsRef.current.set(note.id, message)
           setVaultError(message)
         }
       })
-    }, 650)
+    }
+    pendingLocalSavesRef.current.set(note.id, persist)
+    const timer = window.setTimeout(persist, 650)
     saveTimersRef.current.set(note.id, timer)
   }
 
@@ -2222,6 +2299,9 @@ function App() {
 
     const cacheSummaries = await listVaultCaches()
     if (options.scope && !options.scope.isCurrent()) return mergedNotes
+    // 首次连接显示成功前记住当前库，不能等待 450ms 防抖，否则快速重载会恢复空列表。
+    await rememberVaultCache(cacheId, () => !options.scope || options.scope.isCurrent())
+    if (options.scope && !options.scope.isCurrent()) return mergedNotes
     // 适配器只保存在运行时；浏览器目录句柄和 WebDAV 密码都不会写入本地存储。
     if (activeCacheMeta?.id !== cacheId) invalidateLocalSaveContext()
     revisionByPathRef.current.clear()
@@ -2593,10 +2673,10 @@ function App() {
       } else if (folderOrderConflicts) {
         setSyncLogs(appendSyncLog({ message: "笔记同步完成；文件夹排序存在冲突，待在提示中选择保留哪一份", status: "error" }))
       } else {
-        const pendingCount = notes.filter((note) => note.source === "webdav"
-          && (note.pendingOperation || note.syncStatus === "modified")).length
+        const remainingAttachments = scope.cacheId ? (await listPendingVaultAttachments(scope.cacheId)).length : 0
+        if (!scope.isCurrent()) return
         setSyncLogs(appendSyncLog({
-          message: pendingCount > 0 ? `同步完成，已处理 ${pendingCount} 篇本地修改` : "同步检查完成，云端与本机一致",
+          message: syncCompletionMessage(notesRef.current, remainingAttachments, directoryResult.remainingCount),
           status: "success",
         }))
       }
@@ -2647,6 +2727,26 @@ function App() {
   }
 
   refreshVaultRef.current = refreshVault
+
+  useEffect(() => {
+    if (autoSyncMode === "manual" || !isOnline || vaultSession?.kind !== "webdav" || !activeCacheMeta) return
+    const cacheId = activeCacheMeta.id
+    let disposed = false
+    const checkRemote = () => {
+      if (document.visibilityState === "hidden" || activeSyncRunRef.current || batchOrganizeRef.current) return
+      const now = Date.now()
+      const key = `notes:${cacheId}`
+      if (now - (folderOrderForegroundPullAtRef.current.get(key) ?? 0) < 30_000) return
+      folderOrderForegroundPullAtRef.current.set(key, now)
+      // 无本机待上传项目也要检查另一台设备的修改；沿用完整同步的合并与会话隔离保护。
+      void flushLifecycleSave("background").then(() => {
+        if (!disposed && activeCacheIdRef.current === cacheId) return refreshVaultRef.current(undefined, { automatic: true })
+      }).catch((error) => setVaultError(error instanceof Error ? error.message : "检查远端更新失败"))
+    }
+    const timer = window.setTimeout(checkRemote, 600)
+    document.addEventListener("visibilitychange", checkRemote)
+    return () => { disposed = true; window.clearTimeout(timer); document.removeEventListener("visibilitychange", checkRemote) }
+  }, [activeCacheMeta?.id, autoSyncMode, isOnline, vaultSession])
 
   useEffect(() => {
     const justReconnected = !previousOnlineRef.current && isOnline
@@ -2746,6 +2846,7 @@ function App() {
       return
     }
     try {
+      clearPersistedBlockDrafts(cacheId)
       await deleteVaultCache(cacheId)
       setVaultCaches(await listVaultCaches())
     } catch (error) {
@@ -2790,6 +2891,7 @@ function App() {
     setVaultError(null)
 
     try {
+      clearPersistedBlockDrafts(target.id)
       await deleteVaultCache(target.id)
       await clearNativeSearchIndex(target.id).catch(() => undefined)
       setVaultCaches(await listVaultCaches())
@@ -2966,6 +3068,7 @@ function App() {
     if (pendingTimer) {
       window.clearTimeout(pendingTimer)
       saveTimersRef.current.delete(activeNote.id)
+      pendingLocalSavesRef.current.delete(activeNote.id)
     }
     setSaveStates((current) => ({ ...current, [activeNote.id]: { status: "saving" } }))
 
@@ -3971,6 +4074,7 @@ function App() {
     if (pendingTimer) {
       window.clearTimeout(pendingTimer)
       saveTimersRef.current.delete(note.id)
+      pendingLocalSavesRef.current.delete(note.id)
       coordinator.cancelNote(note.id)
     } else if (coordinator.hasPending(note.id)) {
       // 已进入文件 API 的写入不能撤销；先保留草稿，避免删除后旧写入又把文件创建回来。
