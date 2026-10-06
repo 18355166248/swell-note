@@ -1,6 +1,6 @@
 import { copyLineDown, copyLineUp, indentLess, indentMore, moveLineDown, moveLineUp } from "@codemirror/commands"
 import { deleteMarkupBackward, insertNewlineContinueMarkup, markdownLanguage } from "@codemirror/lang-markdown"
-import { syntaxTree } from "@codemirror/language"
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language"
 import { type ChangeSpec, EditorSelection, type EditorState, Prec, type Transaction } from "@codemirror/state"
 import { EditorView, keymap } from "@codemirror/view"
 
@@ -47,8 +47,11 @@ type MdSyntaxNode = {
   to: number
 }
 
-function findOrderedList(state: EditorState, position: number): MdSyntaxNode | null {
-  let node: MdSyntaxNode | null = syntaxTree(state).resolveInner(position, 1)
+function findOrderedList(state: EditorState, position: number): MdSyntaxNode | null | undefined {
+  // 结构移动要看完整的兄弟项；初始解析尚未完成时，不能凭局部树移动完却漏掉重新编号。
+  const tree = ensureSyntaxTree(state, state.doc.length, 50)
+  if (!tree) return undefined
+  let node: MdSyntaxNode | null = tree.resolveInner(position, 1)
   while (node && node.name !== "OrderedList") node = node.parent
   return node
 }
@@ -66,8 +69,9 @@ function firstListItemNumber(list: MdSyntaxNode, state: EditorState): number | n
 // 但它们只是逐行搬文本：有序列表项挪了位置或被复制一份，编号仍留在原处，读起来像「1. 2. 1.」错位。
 // 命令跑完之后，从移动前记下的起始号开始，把同一个有序列表重新连续编号——
 // 不能以移动后排在最前的那一项的号码为准，它未必是原来的首项。
-function renumberChangesInOrderedList(state: EditorState, position: number, start: number): ChangeSpec[] {
+function renumberChangesInOrderedList(state: EditorState, position: number, start: number): ChangeSpec[] | null {
   const node = findOrderedList(state, position)
+  if (node === undefined) return null
   if (!node) return []
 
   const changes: ChangeSpec[] = []
@@ -91,6 +95,8 @@ function withOrderedListRenumber(
 ) {
   return (view: EditorView) => {
     const list = findOrderedList(view.state, view.state.selection.main.head)
+    // 有界解析仍未完成时消费本次结构命令，保留原文，避免后续裸移动命令生成错乱编号。
+    if (list === undefined) return true
     const start = list && firstListItemNumber(list, view.state)
 
     let moved: Transaction | null = null
@@ -98,6 +104,7 @@ function withOrderedListRenumber(
     if (!moved) return false
     const applied: Transaction = moved
     const fix = start === null ? [] : renumberChangesInOrderedList(applied.state, applied.state.selection.main.head, start)
+    if (fix === null) return true
     const moveSpec = { changes: applied.changes, scrollIntoView: true, selection: applied.state.selection, userEvent: "move.line" }
     // sequential: true 让第二个 spec 的 changes 按第一个 spec 生效后的文档坐标解释，否则会按原文档校验，位置全错。
     view.dispatch(view.state.update(...(fix.length ? [moveSpec, { changes: fix, sequential: true }] : [moveSpec])))

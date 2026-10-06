@@ -132,3 +132,35 @@ describe("rawOffsetForDisplayOffset（展示层偏移 → 原文偏移）", () =
     expect(rawOffsetForDisplayOffset("[https://example.com](https://a.com)", 11)).toBe(12)
   })
 })
+
+it("表格代码片段按 CommonMark 去除成对边缘空格，点击映射仍落在原文", () => {
+  const element = renderInline("`` a`b ``")
+  expect(element.querySelector("code")?.textContent).toBe("a`b")
+  expect(rawOffsetForDisplayOffset("`` a`b ``", 0)).toBe(3)
+  expect(rawOffsetForDisplayOffset("`` a`b ``", 3)).toBe(6)
+  expect(renderInline("`   `").querySelector("code")?.textContent).toBe("   ")
+})
+
+it("表格代码围栏只由同长度反引号关闭，不把内部格式当正文渲染", () => {
+  const element = renderInline("`a``**b**`")
+  expect(element.querySelectorAll("code")).toHaveLength(1)
+  expect(element.querySelector("code")?.textContent).toBe("a``**b**")
+  expect(element.querySelector("strong")).toBeNull()
+  expect(element.textContent).toBe("a``**b**")
+})
+
+it("表格引用式链接和图片解析全文定义，代码和未定义引用仍原样显示", async () => {
+  const { collectMarkdownDefinitions } = await import("@/services/markdown/markdown-reference-links")
+  const referenceDefinitions = collectMarkdownDefinitions('[文档]: https://example.com/guide\n[图片]: https://example.com/a.png')
+  const options = { referenceDefinitions }
+  const element = document.createElement("div")
+  renderTableInlineMarkdown(element, "**[文档]** [说明][文档] ![参考图][图片] `[文档]` [未定义]", options)
+  expect([...element.querySelectorAll("a")].map(link => [link.textContent, link.dataset.mdHref])).toEqual([
+    ["文档", "https://example.com/guide"], ["说明", "https://example.com/guide"],
+  ])
+  expect(element.querySelector("strong a")).not.toBeNull()
+  expect(element.querySelector("img")?.getAttribute("src")).toBe("https://example.com/a.png")
+  expect(element.querySelector("code")?.textContent).toBe("[文档]")
+  expect(element.textContent).toContain("[未定义]")
+  expect(rawOffsetForDisplayOffset("[说明][文档]", 1, options)).toBe(2)
+})

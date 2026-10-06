@@ -15,7 +15,7 @@ export type EditorSessionFields = Record<string, StateField<unknown>>
  * 旧快照里的撤销栈对应的是一份并不存在的历史，此时必须整份丢弃。
  *
  * 快照刻意不含滚动位置：滚动容器归工作区所有，阅读位置的记录与恢复由
- * noteEditorScrollMemory 按「缓存库:笔记ID」完成。这里再存一份只会有第二个
+ * noteReadingPositions 按「缓存库 + 笔记 ID」完成。这里再存一份只会有第二个
  * 事实来源，且没有任何路径写它。
  */
 export type EditorSessionSnapshot = {

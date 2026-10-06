@@ -270,6 +270,7 @@ export class TableWidget extends WidgetType {
   private dragFrame = 0
   private floatingBar: HTMLElement | null = null
   private reportedFormatState = false
+  private readonly referenceKey: string
   private sourceRanges: ReturnType<typeof tableCellSourceRanges> | null = null
 
   constructor(
@@ -282,6 +283,7 @@ export class TableWidget extends WidgetType {
   ) {
     super()
     this.readOnly = view.state.readOnly
+    this.referenceKey = JSON.stringify([...options.referenceDefinitions ?? []])
   }
 
   eq(other: TableWidget) {
@@ -291,6 +293,7 @@ export class TableWidget extends WidgetType {
       && other.tableIndex === this.tableIndex
       && other.options.tableStorageKey === this.options.tableStorageKey
       && other.readOnly === this.readOnly
+      && other.referenceKey === this.referenceKey
   }
 
   // 交互状态按表格序号存续，Widget 重建（提交、撤销、同步合并）后新实例从这里恢复。
@@ -1025,19 +1028,20 @@ export class TableWidget extends WidgetType {
     const doc = this.view.state.doc
     const selection = this.view.state.selection
     window.setTimeout(() => {
-      if (!this.view.dom.isConnected || this.view.state.readOnly || this.view.state.doc !== doc
-        || !this.view.state.selection.eq(selection)) return
+      if (!this.view.dom.isConnected || this.view.state.readOnly || this.view.state.doc !== doc) return
       // 重绘期间用户可能已选了另一格，或把焦点交给表格按钮等内部控件。
       // 旧恢复只接管暂时无焦点或仍在正文的状态，不能再点击旧目标格。
       if (activeTableEdit(this.view)) return
       const focused = document.activeElement
-      if (focused && focused !== document.body && focused !== this.view.contentDOM) return
       const widget = this.liveWidget()
       if (widget.options.tableStorageKey !== this.options.tableStorageKey
         || this.view.state.sliceDoc(widget.from, widget.to) !== widget.source) return
       const wrapper = widget.currentDom()?.wrapper
       const cell = wrapper?.querySelectorAll("tr")?.[target.row]?.children[target.column]
       if (!(cell instanceof HTMLElement)) return
+      // 点击另一格时浏览器会先聚焦 td；这正是本次导航目标，不能当成「用户已移走焦点」而拒绝打开输入框。
+      if (focused && focused !== document.body && focused !== this.view.contentDOM && focused !== cell) return
+      if (focused !== cell && !this.view.state.selection.eq(selection)) return
       cell.click()
       const input = activeTableEdit(this.view)?.input
       if (target.selection && input && cell.contains(input)) {
@@ -1122,7 +1126,7 @@ export class TableWidget extends WidgetType {
       if (!container || !display.contains(container)) return value.length
       const shown = textOffsetWithin(display, container, offset)
       if (shown === null) return value.length
-      return rawOffsetForDisplayOffset(value, shown)
+      return rawOffsetForDisplayOffset(value, shown, this.options)
     } catch {
       // jsdom 等无布局环境没有 caret API，退回原行为（光标置于末尾）。
       return value.length

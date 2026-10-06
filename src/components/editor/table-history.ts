@@ -39,7 +39,8 @@ export class TableHistoryController {
 
   run(forward: boolean) {
     const control = this.currentControl()
-    if (!control || control.getSettings().readOnly) return
+    // 工具栏也可能在中文候选词尚未确认时触发，不能把组合中的半个单元格先提交再撤销。
+    if (!control || control.getSettings().readOnly || control.isComposing()) return
     const view = control.getView()
     const target = activeTableEdit(view)
     const context = target?.captureHistoryContext?.()

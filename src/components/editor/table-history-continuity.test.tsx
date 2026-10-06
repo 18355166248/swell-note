@@ -16,10 +16,10 @@ let host: HTMLDivElement | undefined
 afterEach(() => { act(() => root?.unmount()); host?.remove(); root = undefined; host = undefined })
 const doc = "前文\n\n| 名称 | 备注 |\n| --- | --- |\n| abcdef | 说明 |\n| 第二项 | 其他 |\n\n后文"
 const tick = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 60)) }) }
-async function mount(initialDoc = doc) {
+async function mount(initialDoc = doc, initialSessionKey = "history-a") {
   const ref = createRef<MarkdownEditorHandle>()
   host = document.createElement("div"); document.body.append(host); root = createRoot(host)
-  const render = async (content = initialDoc, sessionKey = "history-a", readOnly = false) => {
+  const render = async (content = initialDoc, sessionKey = initialSessionKey, readOnly = false) => {
     await act(async () => root!.render(<MarkdownEditor ref={ref} onChange={() => {}} value={content} sessionKey={sessionKey} storageKey={sessionKey} readOnly={readOnly} />))
   }
   await render(); await tick()
@@ -244,4 +244,93 @@ describe("table history editing continuity", () => {
     expect(input()?.value).toBe("其他")
     expect(view.state.doc.toString()).toBe(doc)
   })
+})
+
+describe("单元格系统历史入口", () => {
+  it("快捷键提交并撤销当前草稿，重做后仍留在该格", async () => {
+    const { view, input, open } = await mount()
+    const draft = open(); draft.value = "abcdef追加"; draft.setSelectionRange(8, 8)
+    act(() => draft.dispatchEvent(new Event("input", { bubbles: true })))
+    const undo = new KeyboardEvent("keydown", { key: "z", metaKey: true, bubbles: true, cancelable: true })
+    act(() => draft.dispatchEvent(undo)); await tick()
+    expect(undo.defaultPrevented).toBe(true)
+    expect(view.state.doc.toString()).toBe(doc)
+    expect(input()?.value).toBe("abcdef")
+    const redo = new KeyboardEvent("keydown", { key: "z", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true })
+    act(() => input()!.dispatchEvent(redo)); await tick()
+    expect(view.state.doc.toString()).toContain("abcdef追加")
+    expect(document.activeElement).toBe(input())
+  })
+
+  it("iOS beforeinput 的撤销重做沿用正文历史，候选词确认阶段不接管", async () => {
+    const { view, input, open } = await mount()
+    const draft = open(); draft.value = "abcdef追加"
+    act(() => draft.dispatchEvent(new Event("input", { bubbles: true })))
+    const composing = new InputEvent("beforeinput", { inputType: "historyUndo", isComposing: true, bubbles: true, cancelable: true })
+    act(() => draft.dispatchEvent(composing))
+    expect(composing.defaultPrevented).toBe(false)
+    expect(draft.value).toBe("abcdef追加")
+    const undo = new InputEvent("beforeinput", { inputType: "historyUndo", bubbles: true, cancelable: true })
+    act(() => draft.dispatchEvent(undo)); await tick()
+    expect(undo.defaultPrevented).toBe(true)
+    expect(view.state.doc.toString()).toBe(doc)
+    const redo = new InputEvent("beforeinput", { inputType: "historyRedo", bubbles: true, cancelable: true })
+    act(() => input()!.dispatchEvent(redo)); await tick()
+    expect(view.state.doc.toString()).toContain("abcdef追加")
+    expect(document.activeElement).toBe(input())
+  })
+})
+
+it("候选词未确认时工具栏撤销不提交半成品单元格", async () => {
+  const { ref, view, open, input } = await mount()
+  const draft = open(); draft.value = "abcdef中文候选"
+  act(() => draft.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })))
+  act(() => ref.current!.undo()); await tick()
+  expect(view.state.doc.toString()).toBe(doc)
+  expect(input()?.value).toBe("abcdef中文候选")
+  act(() => draft.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true })))
+})
+
+it("局部公式草稿撤销不退回前一次正文编辑", async () => {
+  const original = "前文\n\n$$\nx^2\n$$\n\n后文"
+  const { ref, view } = await mount(original)
+  act(() => view.dispatch({ changes: { from: 0, insert: "新增" }, userEvent: "input" }))
+  await tick()
+  act(() => host!.querySelector<HTMLButtonElement>('[aria-label="编辑公式源码"]')!.click())
+  const rich = host!.querySelector<HTMLTextAreaElement>('.cm-md-rich-editor textarea')!
+  rich.value = "$$\ny^2\n$$"
+  act(() => rich.dispatchEvent(new Event("input", { bubbles: true })))
+  act(() => ref.current!.undo()); await tick()
+  expect(view.state.doc.toString()).toBe("新增" + original)
+  act(() => ref.current!.redo()); await tick()
+  expect(view.state.doc.toString()).toBe("新增" + original.replace("x^2", "y^2"))
+})
+
+it("公式原文被改写时撤销拒绝旧草稿提交，也不撤销无关的新正文", async () => {
+  const original = "前文\n\n$$\nx^2\n$$\n\n后文"
+  const { ref, view } = await mount(original)
+  act(() => host!.querySelector<HTMLButtonElement>('[aria-label="编辑公式源码"]')!.click())
+  const rich = host!.querySelector<HTMLTextAreaElement>('.cm-md-rich-editor textarea')!
+  rich.value = "$$\ny^2\n$$"
+  act(() => rich.dispatchEvent(new Event("input", { bubbles: true })))
+  const from = view.state.doc.toString().indexOf("x^2")
+  act(() => {
+    view.dispatch({ changes: { from, to: from + 3, insert: "z^2" } })
+    ref.current!.undo()
+  })
+  expect(view.state.doc.toString()).toBe(original.replace("x^2", "z^2"))
+  expect(rich.value).toContain("y^2")
+  expect(host!.textContent).toContain("这段源码已发生变化")
+  // 本用例主动清理保留的独立草稿，避免与其他会话 fixture 共用缓存。
+  act(() => host!.querySelectorAll<HTMLButtonElement>('.cm-md-rich-editor-actions button')[1].click())
+})
+
+it("未修改表头后点击正文格，目标 td 的原生焦点不会阻断进入编辑", async () => {
+  const { view, input, open } = await mount(doc, "cell-switch-focus")
+  open(0, 0, 0)
+  const target = host!.querySelector<HTMLTableCellElement>('.cm-md-table tbody td')!
+  act(() => { target.click(); target.focus() }); await tick()
+  expect(input()?.value).toBe("abcdef")
+  expect(document.activeElement).toBe(input())
+  expect(view.state.doc.toString()).toBe(doc)
 })

@@ -238,10 +238,11 @@ test.describe("编辑器三批修复收尾验收", () => {
     // 4) 填写单元格（Tab 提交，避免末行 Enter 自动补行干扰快照）
     const newTable = page.locator(".cm-md-table-wrap", { hasText: "列 1" })
     await newTable.locator("td", { hasText: "内容" }).first().click()
+    await expect(newTable.locator(".cm-md-table-cell-input")).toBeFocused()
     await page.keyboard.press("ControlOrMeta+a")
     await page.keyboard.type("单元值")
     await page.keyboard.press("Tab")
-    await capture((content) => content.includes("单元值"))
+    await capture((content) => content.includes("| 单元值 | 内容 |") && content.includes("***新增一句***"))
 
     // 5) 插入图片（单元格编辑中：先提交单元格，图片落在表格之后）
     await insertImages(page, ["流程一.png"])

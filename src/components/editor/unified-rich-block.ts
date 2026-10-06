@@ -255,15 +255,16 @@ function editLabel(kind: "math" | "mermaid") {
  * 在切换正文模式这类会回收 Widget 的时刻必须先把它提交回正文，否则没保存的内容会被静默丢掉。
  * 直接遍历 DOM 找按钮再模拟点击太脆（样式类一改就失效），这里给 Widget 自己登记一个提交入口。
  */
-const openRichEditors = new WeakMap<EditorView, Set<{ commit: () => void; host: HTMLElement }>>()
+export const RICH_DRAFT_CHANGE_EVENT = "swell-rich-draft-change"
+const openRichEditors = new WeakMap<EditorView, Set<{ commit: () => boolean; host: HTMLElement; changed: () => boolean }>>()
 
-function registerRichEditor(view: EditorView, host: HTMLElement, commit: () => void) {
+function registerRichEditor(view: EditorView, host: HTMLElement, commit: () => boolean, changed: () => boolean) {
   let open = openRichEditors.get(view)
   if (!open) {
     open = new Set()
     openRichEditors.set(view, open)
   }
-  const entry = { commit, host }
+  const entry = { commit, host, changed }
   open.add(entry)
   return () => {
     open.delete(entry)
@@ -271,16 +272,22 @@ function registerRichEditor(view: EditorView, host: HTMLElement, commit: () => v
   }
 }
 
+export function hasOpenRichDraft(view: EditorView) {
+  return Array.from(openRichEditors.get(view) ?? []).some(entry => entry.host.isConnected && entry.changed())
+}
+
 /**
  * 提交当前所有打开着的块编辑器草稿。切正文模式前调用：草稿进入正文，
  * 而不是随 Widget 一起被回收。
  */
 export function commitOpenRichEditors(view: EditorView | undefined) {
-  if (!view) return
+  if (!view) return false
   for (const entry of Array.from(openRichEditors.get(view) ?? [])) {
     // 已从 DOM 摘下的条目不再提交：它的宿主已消失，提交也无处可落。
-    if (entry.host.isConnected) entry.commit()
+    // 源码冲突或只读时入口仍存在，不能让「撤销草稿」误退回正文的上一步。
+    if (entry.host.isConnected && !entry.commit()) return false
   }
+  return true
 }
 
 abstract class UnifiedRichWidget extends WidgetType {
@@ -384,37 +391,43 @@ abstract class UnifiedRichWidget extends WidgetType {
     host.append(editor)
     // 先占位、再在 commit 定义之后登记：dismiss 里要注销，而 commit 又会经 dismiss 收尾。
     let unregisterEditor = () => {}
+    const notifyDraft = () => host.dispatchEvent(new Event(RICH_DRAFT_CHANGE_EVENT, { bubbles: true }))
     const dismiss = (clear: boolean) => {
       unregisterEditor()
       if (clear) clearBlockEditDraft(this.view, key)
       editor.remove()
       host.classList.remove("cm-md-rich-editing")
+      notifyDraft()
     }
     const commit = () => {
       session.draft = input.value
       writeBlockEditDraft(this.view, key, session)
       if (this.view.state.readOnly) {
         error.textContent = "当前笔记已切换为只读，草稿已保留。"
-        return
+        return false
       }
       if (this.view.state.sliceDoc(this.from, this.to) !== session.originalSource) {
         error.textContent = "这段源码已发生变化，草稿仍保留；请取消后重新编辑。"
-        return
+        return false
       }
       if (input.value === session.originalSource) {
         dismiss(true)
-        return
+        return true
       }
-      clearBlockEditDraft(this.view, key)
+      const inserted = input.value
+      // 成功提交立即注销草稿入口；不能等异步 Widget 重建才让工具栏接着撤销这一笔。
+      dismiss(true)
       this.view.dispatch({
         annotations: isolateHistory.of("full"),
-        changes: { from: this.from, to: this.to, insert: input.value },
+        changes: { from: this.from, to: this.to, insert: inserted },
         userEvent: "input.rich-block",
       })
+      return true
     }
     // 登记提交入口：切换正文模式会回收整个 Widget，宿主必须先经这里把草稿写回正文，
     // 否则没点「保存」的内容会静默消失。
-    unregisterEditor = registerRichEditor(this.view, host, commit)
+    unregisterEditor = registerRichEditor(this.view, host, commit, () => input.value !== session.originalSource)
+    notifyDraft()
     save.addEventListener("mousedown", (event) => event.preventDefault())
     cancel.addEventListener("mousedown", (event) => event.preventDefault())
     save.addEventListener("click", commit)
@@ -422,6 +435,7 @@ abstract class UnifiedRichWidget extends WidgetType {
     input.addEventListener("input", () => {
       session.draft = input.value
       writeBlockEditDraft(this.view, key, session)
+      notifyDraft()
       error.textContent = session.persistenceFailed ? "草稿未能保存到本机，请先保存正文或复制内容；退出后可能丢失。" : this.view.state.sliceDoc(this.from, this.to) === session.originalSource
         ? ""
         : "这段源码已发生变化，草稿仍保留；请取消后重新编辑。"

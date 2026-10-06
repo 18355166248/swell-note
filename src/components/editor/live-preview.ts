@@ -1,3 +1,4 @@
+import { documentReferenceDefinitions } from "@/services/markdown/markdown-reference-links"
 import { markdownDestination, resolveDocumentReference } from "@/services/markdown/markdown-reference-links"
 import { AttachmentBlockWidget, collectAttachmentBlocks, type AttachmentBlock } from "./unified-attachment"
 import { isolateHistory } from "@codemirror/commands"
@@ -790,7 +791,7 @@ const markdownLinkKeymap = Prec.high(keymap.of([
 ]))
 
 // 表格整块替换属于块级装饰，CodeMirror 要求块级装饰由 StateField 提供，插件只能携带行内装饰。
-type TableBlock = { from: number; source: string; to: number }
+type TableBlock = { from: number; source: string; to: number; referenceDefinitions?: ReturnType<typeof documentReferenceDefinitions> }
 
 function collectTableBlocks(state: EditorState): TableBlock[] {
   const blocks: TableBlock[] = []
@@ -803,7 +804,7 @@ function collectTableBlocks(state: EditorState): TableBlock[] {
       const lastLine = state.doc.lineAt(node.to)
       const source = state.sliceDoc(firstLine.from, lastLine.to)
       if (!parseMarkdownTable(source)) return
-      blocks.push({ from: firstLine.from, source, to: lastLine.to })
+      blocks.push({ from: firstLine.from, source, to: lastLine.to, referenceDefinitions: source.includes("[") ? documentReferenceDefinitions(state.doc) : undefined })
       return false
     },
   })
@@ -815,7 +816,7 @@ function collectTableBlocks(state: EditorState): TableBlock[] {
 // 撤销等带来的等长改写，导致表格继续渲染旧内容。
 function tableBlocksKey(blocks: TableBlock[], readOnly: boolean, tableStorageKey?: string) {
   // 同文表格换笔记时资源与宽度偏好身份仍会改变，不能只靠源码判断是否刷新。
-  return `${JSON.stringify(tableStorageKey)}|${readOnly ? "locked" : "editable"}|${blocks.map((block) => `${block.from}:${block.to}:${block.source.length}:${block.source}`).join("|")}`
+  return `${JSON.stringify(tableStorageKey)}|${readOnly ? "locked" : "editable"}|${blocks.map((block) => `${block.from}:${block.to}:${block.source.length}:${block.source}:${JSON.stringify([...block.referenceDefinitions ?? []])}`).join("|")}`
 }
 
 // 块级替换会把紧贴它两端的插入并进自己的范围：在表格末尾换行或补空行后，
@@ -839,7 +840,7 @@ function tableBlocksDecorations(blocks: TableBlock[], view: EditorView): Decorat
       Decoration.replace({
         block: true,
         // 块级替换节点在不同浏览器中通过 posAtDOM 可能映射到范围末端，直接传递解析得到的源码起点。
-        widget: new TableWidget(block.source, view, block.from, block.to, view.state.facet(livePreviewOptions), tableIndex),
+        widget: new TableWidget(block.source, view, block.from, block.to, { ...view.state.facet(livePreviewOptions), referenceDefinitions: block.referenceDefinitions }, tableIndex),
       }).range(block.from, block.to),
     ),
     true,

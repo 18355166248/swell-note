@@ -166,3 +166,22 @@ describe("矩形选区操作", () => {
     expect(tableCellRangeToTsv(tricky, { columnFrom: 0, columnTo: 1, rowFrom: -1, rowTo: 0 })).toBe("A\tB\na<br>b\tc")
   })
 })
+
+describe("GFM 转义与非等长行", () => {
+  it("偶数反斜杠后的管道仍分列，奇数反斜杠后的管道留在单元格", () => {
+    const source = String.raw`| A | B |
+| --- | --- |
+| path\\| next |
+| literal\\\|pipe | end |`
+    const table = parseMarkdownTable(source)!
+    expect(table.rows).toEqual([[String.raw`path\\`, "next"], [String.raw`literal\\|pipe`, "end"]])
+    expect(parseMarkdownTable(serializeMarkdownTable(table))).toEqual(table)
+  })
+  it("补齐缺列后追加新列，不让新列文字落到旧列", () => {
+    const source = "| A | B | C |\n| --- | --- | --- |\n| only |"
+    const table = parseMarkdownTable(source)!
+    const next = appendTableColumn(table, "D")
+    expect(next.rows[0]).toEqual(["only", "", "", ""])
+    expect(parseMarkdownTable(serializeMarkdownTable(next))?.header).toEqual(["A", "B", "C", "D"])
+  })
+})

@@ -136,6 +136,8 @@ it.each([
       await vi.dynamicImportSettled()
     })
     await vi.waitFor(() => expect(host.querySelector(selector)).not.toBeNull())
+    // Widget 外壳先挂载，React 懒加载可能在前一个 act 收尾后才启动；先完成导入与 effect，再验证资源解析。
+    await act(async () => { await vi.dynamicImportSettled() })
     await vi.waitFor(() => expect(previous).toHaveBeenCalledOnce())
     await vi.waitFor(() => expect(host.querySelector(`${selector} img`)?.getAttribute("src")).toBe("blob:previous"))
     const original = host.querySelector(`${selector} img`)

@@ -6,7 +6,19 @@ export type MarkdownTable = {
   rows: string[][]
 }
 
-const tableCellSplitPattern = /(?<!\\)\|/
+function tableRowSourceRanges(text: string) {
+  const separators: number[] = []
+  for (let at = 0; at < text.length; at++) {
+    if (text[at] !== "|") continue
+    let escapes = 0
+    for (let previous = at - 1; previous >= 0 && text[previous] === "\\"; previous--) escapes++
+    // GFM 只把奇数个反斜杠后的管道当作格内文字；展示、查找和编辑必须按同一边界拆列。
+    if (escapes % 2 === 0) separators.push(at)
+  }
+  if (separators[0] !== text.search(/\S/)) separators.unshift(-1)
+  if (separators[separators.length - 1] !== text.trimEnd().length - 1) separators.push(text.length)
+  return separators.slice(0, -1).map((from, column) => ({ from: from + 1, to: separators[column + 1] }))
+}
 
 // 单元格的原始范围只用于查找高亮，不用渲染后的文字反推源码位置（转义/链接会改变长度）。
 export function tableCellSourceRanges(source: string) {
@@ -16,18 +28,7 @@ export function tableCellSourceRanges(source: string) {
     if (text.trim()) lines.push({ text, from: offset })
     offset += text.length + 1
   }
-  return lines.map((line) => {
-    const separators: number[] = []
-    for (let at = 0; at < line.text.length; at++) {
-      if (line.text[at] !== "|") continue
-      let escapes = 0
-      for (let previous = at - 1; previous >= 0 && line.text[previous] === "\\"; previous--) escapes++
-      if (escapes % 2 === 0) separators.push(at)
-    }
-    if (separators[0] !== line.text.search(/\S/)) separators.unshift(-1)
-    if (separators[separators.length - 1] !== line.text.trimEnd().length - 1) separators.push(line.text.length)
-    return separators.slice(0, -1).map((from, column) => ({ from: line.from + from + 1, to: line.from + separators[column + 1] }))
-  })
+  return lines.map((line) => tableRowSourceRanges(line.text).map((range) => ({ from: line.from + range.from, to: line.from + range.to })))
 }
 
 export function tableCellSourceRange(source: string, row: number, column: number) {
@@ -36,11 +37,7 @@ export function tableCellSourceRange(source: string, row: number, column: number
 
 function splitTableRow(line: string) {
   // 拆分后还原转义管道，单元格里应显示 | 而不是 \|。
-  return line
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split(tableCellSplitPattern)
-    .map((cell) => cell.trim().replace(/\\\|/g, "|"))
+  return tableRowSourceRanges(line).map(({ from, to }) => line.slice(from, to).trim().replace(/\\\|/g, "|"))
 }
 
 // 纯模型层不依赖 DOM 或 CodeMirror，预览、编辑器和后续导入工具都可以复用。
@@ -49,7 +46,7 @@ export function parseMarkdownTable(source: string): MarkdownTable | null {
   if (lines.length < 2) return null
   const header = splitTableRow(lines[0])
   const delimiter = splitTableRow(lines[1])
-  if (!delimiter.length || !delimiter.every((cell) => /^:?-{1,}:?$/.test(cell))) return null
+  if (delimiter.length !== header.length || !delimiter.every((cell) => /^:?-{1,}:?$/.test(cell))) return null
   const aligns = delimiter.map((cell): TableAlignment => {
     const start = cell.startsWith(":")
     const end = cell.endsWith(":")
@@ -57,12 +54,18 @@ export function parseMarkdownTable(source: string): MarkdownTable | null {
     if (end) return "right"
     return "left"
   })
-  return { aligns, header, rows: lines.slice(2).map(splitTableRow) }
+  const rows = lines.slice(2).map((line) => {
+    const row = splitTableRow(line)
+    // 缺格是合法 GFM；先补齐逻辑列，追加、复制、删除列才不会把内容放到旧列上。
+    while (row.length < header.length) row.push("")
+    return row
+  })
+  return { aligns, header, rows }
 }
 
 function serializeTableCell(value: string) {
   // Markdown 表格不能包含物理换行，统一转成兼容 CommonMark/GFM 的 HTML 换行标签。
-  return value.trim().replace(/\r?\n/g, "<br>").replace(/(?<!\\)\|/g, "\\|")
+  return value.trim().replace(/\r?\n/g, "<br>").replace(/(\\*)\|/g, (_pipe, escapes: string) => `${escapes}${escapes.length % 2 === 0 ? "\\" : ""}|`)
 }
 
 export function serializeMarkdownTable(table: MarkdownTable) {

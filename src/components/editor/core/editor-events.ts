@@ -48,7 +48,7 @@ export type EditorSessionChangeEvent = {
  * 对外事件表。这里只列确有订阅方的事件。
  *
  * 滚动刻意不在其中：滚动容器由工作区持有（外层 ScrollArea），阅读位置的记录与
- * 恢复也由工作区的 noteEditorScrollMemory 按「缓存库:笔记ID」完成。core 再发一份
+ * 恢复也由工作区的 noteReadingPositions 按「缓存库 + 笔记 ID」完成。core 再发一份
  * 自己的 scrollChange 不会有订阅方，只会让人以为滚动位置由编辑器负责保存。
  *
  * 格式状态同样不在此列：它由宿主注入的检测器在 updateListener 里就地产出并上报，

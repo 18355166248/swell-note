@@ -29,7 +29,7 @@ import { buildLivePreviewDecorationsForRanges, markdownLivePreviewBase, markdown
 import type { EmbeddedWikiNoteResult } from "./markdown-preview"
 import { wikiLinkCompletion, type WikiLinkSuggestion } from "./wiki-link-completion"
 import { ImageZoomOverlay } from "./image-zoom"
-import { commitOpenRichEditors } from "./unified-rich-block"
+import { commitOpenRichEditors, hasOpenRichDraft, RICH_DRAFT_CHANGE_EVENT } from "./unified-rich-block"
 import { activeTableEdit, type TableEditTarget } from "./table-edit-target"
 import { TableHistoryController } from "./table-history"
 import { selectionRenderingExtensions } from "./selection-rendering"
@@ -214,6 +214,35 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     historyOwnerRef.current = historyOwner
     const tableHistory = useMemo(() => new TableHistoryController(() => controlRef.current, () => historyOwnerRef.current), [])
     useLayoutEffect(() => () => tableHistory.cancel(), [historyOwner, tableHistory])
+    useLayoutEffect(() => {
+      const host = hostRef.current
+      if (!host) return
+      const runCellHistory = (event: Event, forward: boolean) => {
+        if (!(event.target instanceof HTMLElement) || !event.target.closest(".cm-md-table-cell-input")) return
+        const view = controlRef.current?.getView()
+        if (!view || view.state.readOnly || controlRef.current?.isComposing()) return
+        // 单元格 textarea 的原生历史在 Tab 提交后就断了；系统撤销与快捷键必须和工具栏走同一份正文历史。
+        event.preventDefault()
+        event.stopPropagation()
+        tableHistory.run(forward)
+      }
+      const keydown = (event: KeyboardEvent) => {
+        if (event.isComposing || event.keyCode === 229 || event.altKey || !(event.metaKey || event.ctrlKey)) return
+        const key = event.key.toLowerCase()
+        if (key === "z" || key === "y") runCellHistory(event, key === "y" || event.shiftKey)
+      }
+      const beforeinput = (event: InputEvent) => {
+        // iOS 系统撤销可能只发 beforeinput、不发键盘事件；中文候选词期间仍交给输入法。
+        if (event.isComposing) return
+        if (event.inputType === "historyUndo" || event.inputType === "historyRedo") runCellHistory(event, event.inputType === "historyRedo")
+      }
+      host.addEventListener("keydown", keydown, true)
+      host.addEventListener("beforeinput", beforeinput, true)
+      return () => {
+        host.removeEventListener("keydown", keydown, true)
+        host.removeEventListener("beforeinput", beforeinput, true)
+      }
+    }, [tableHistory])
     const sessionKeyRef = useRef(sessionKey)
     sessionKeyRef.current = sessionKey
     // 上一次渲染看到的 sessionKey。判定「用户确实切走了」必须跟它比：
@@ -723,6 +752,12 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         tableEditingExtensions: buildTableEditingExtensions,
       })
       controlRef.current = control
+      const reportRichDraft = () => {
+        const view = control.getView()
+        const draft = hasOpenRichDraft(view)
+        handlers.current.onHistoryChange?.(undoDepth(view.state) > 0 || draft, !draft && redoDepth(view.state) > 0)
+      }
+      host.addEventListener(RICH_DRAFT_CHANGE_EVENT, reportRichDraft)
       // 选区、历史与光标位置统一由事件驱动：宿主不再需要在每次渲染里比对编辑器状态。
       const disposers = [
         control.on("selectionChange", (event) => {
@@ -759,6 +794,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       // 初次挂载也要把历史按钮状态摆正，此时还没有任何事务可监听。
       handlers.current.onHistoryChange?.(undoDepth(control.getState()) > 0, redoDepth(control.getState()) > 0)
       return () => {
+        host.removeEventListener(RICH_DRAFT_CHANGE_EVENT, reportRichDraft)
         for (const dispose of disposers) dispose()
         tableHistory.cancel()
         controlRef.current = null
@@ -1421,6 +1457,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         }
       },
       redo() {
+        const control = controlRef.current
+        if (!control || control.getSettings().readOnly || control.isComposing() || !commitOpenRichEditors(control.getView())) return
         tableHistory.run(true)
       },
       removeLink(target, cell) {
@@ -1498,6 +1536,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         control.dispatchCommand({ type: "selection.all" })
       },
       undo() {
+        const control = controlRef.current
+        // 局部公式/图表先进入正文历史，再撤销这一笔；提交失败时保留草稿，不回退无关正文。
+        if (!control || control.getSettings().readOnly || control.isComposing() || !commitOpenRichEditors(control.getView())) return
         tableHistory.run(false)
       },
     }), [tableHistory])

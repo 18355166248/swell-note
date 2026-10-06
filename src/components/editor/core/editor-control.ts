@@ -90,7 +90,7 @@ export type EditorControlOptions = {
  * - 一个挂载中的编辑区域只有一个 EditorView。切换笔记走 updateDocument，
  *   不重建视图，因此焦点、输入法状态、DOM 与滚动容器都得以保留。
  * - 每个笔记的撤销历史与选区按 sessionKey 隔离，互不串联（滚动由工作区的
- *   noteEditorScrollMemory 负责，不在此列）。
+ *   noteReadingPositions 负责，不在此列）。
  * - EditorView 只在 destroy() 里销毁；只读、主题、平台、预览与表格开关走 reconfigure。
  */
 export class EditorControl {

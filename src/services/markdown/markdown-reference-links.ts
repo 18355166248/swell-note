@@ -50,10 +50,15 @@ export function resolveDocumentReference(node: Node, doc: Text) {
   // Wiki 双链及其内层节点由现有装饰器接管，不能再次当成引用式链接解析。
   if (/^!?\[\[/.test(doc.sliceString(node.from, node.to)) || doc.sliceString(Math.max(0, node.from - 1), node.from + 1) === "[[") return undefined
   // 只在遇到引用式链接时扫描全文，并按不可变正文缓存；普通笔记与滚动重绘不承担这项成本。
+  const definitions = documentReferenceDefinitions(doc)
+  return resolveMarkdownReference(node, (from, to) => doc.sliceString(from, to), definitions)
+}
+
+export function documentReferenceDefinitions(doc: Text) {
   let definitions = cachedDefinitions.get(doc)
   if (!definitions) {
     definitions = collectMarkdownDefinitions(doc.toString())
     cachedDefinitions.set(doc, definitions)
   }
-  return resolveMarkdownReference(node, (from, to) => doc.sliceString(from, to), definitions)
+  return definitions
 }
