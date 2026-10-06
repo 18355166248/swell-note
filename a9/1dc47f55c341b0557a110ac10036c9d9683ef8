@@ -1,0 +1,40 @@
+src/components/editor/core/editor-control.test.ts
+  s_7aa9251711039a::t_0921660b604bed 400,404-406,408-409
+src/components/editor/core/editor-control.ts
+  s_7aa9251711039a::t_97b805e264a561 475
+  s_7aa9251711039a::t_ee208de4b47b43 476-478
+docs/note-reading-position-2026-10-06.md
+  s_7aa9251711039a::t_7a52611f90be4e 1-2,4-27
+  s_7aa9251711039a::t_36075fc645d07b 3
+src/components/workspace/workspace.tsx
+  s_7aa9251711039a::t_a03c444340cdb8 144-145,2082-2093
+src/components/workspace/use-note-reading-position.ts
+  s_7aa9251711039a::t_e626b938ec30de 37-38
+  s_7aa9251711039a::t_8f74cd5ddd689e 20-21,47-48,62-63
+  s_7aa9251711039a::t_a18e0382a4d059 4,106-107,116
+  s_7aa9251711039a::t_00b0ce0be09702 1-3,5-19,22-36,39-46,49-61,64-105,108-115,117-119
+e2e/editor-reading-position.spec.ts
+  s_7aa9251711039a::t_4f16533e4478fa 1-16,18-66,84-86
+  s_7aa9251711039a::t_89e22affc0cf02 17,67-83
+src/components/editor/markdown-editor.tsx
+  s_7aa9251711039a::t_954064c43a8033 42,89-90,1311-1334
+src/components/workspace/use-note-reading-position.test.tsx
+  s_7aa9251711039a::t_57de8929661f23 1-102,104-112,114-119,121-122
+  s_7aa9251711039a::t_d0786422043d6d 103,113,120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "a91dc47f55c341b0557a110ac10036c9d9683ef8",
+  "prompts": {},
+  "sessions": {
+    "s_7aa9251711039a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd03-3670-77e2-8b5c-740397b0570b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
