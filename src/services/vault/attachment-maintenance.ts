@@ -1,9 +1,9 @@
+import { markdownLanguage } from "@codemirror/lang-markdown"
+import { collectMarkdownDefinitions, markdownDestination, resolveMarkdownReference } from "@/services/markdown/markdown-reference-links"
 import type { VaultAttachmentCacheEntry } from "@/services/cache/vault-cache"
 import { resolveVaultAssetPath } from "@/services/vault/vault-path"
 import type { Note } from "@/types/note"
 
-const MARKDOWN_LINK_PATTERN = /!?(?:\[[^\]]*\])\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g
-const HYBRID_IMAGE_PATTERN = /!\[\[[^\]]+\]\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g
 const OBSIDIAN_EMBED_PATTERN = /!\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\](?!\()/g
 
 export type AttachmentMaintenanceReport = {
@@ -51,14 +51,23 @@ export function extractAttachmentSources(content: string) {
 
 export function extractAttachmentReferences(content: string) {
   const references: Array<{ source: string; obsidianEmbed: boolean; embedded: boolean }> = []
-  for (const pattern of [HYBRID_IMAGE_PATTERN, MARKDOWN_LINK_PATTERN, OBSIDIAN_EMBED_PATTERN]) {
-    pattern.lastIndex = 0
-    let match: RegExpExecArray | null
-    while ((match = pattern.exec(content))) references.push({
-      source: match[1],
-      obsidianEmbed: pattern === OBSIDIAN_EMBED_PATTERN,
-      embedded: match[0].startsWith("!"),
-    })
+  const tree = markdownLanguage.parser.parse(content)
+  const definitions = collectMarkdownDefinitions(content, tree)
+  // 以语法树识别标准链接，代码示例、未使用定义不会误触发下载或保住无关附件。
+  tree.iterate({ enter(node) {
+    if (node.name !== "Link" && node.name !== "Image") return
+    const url = node.node.getChild("URL")
+    const reference = !url ? resolveMarkdownReference(node.node, (from, to) => content.slice(from, to), definitions) : undefined
+    const source = url ? markdownDestination(content.slice(url.from, url.to)) : reference?.source
+    if (source) references.push({ source, obsidianEmbed: false, embedded: node.name === "Image" })
+  } })
+  for (const match of content.matchAll(OBSIDIAN_EMBED_PATTERN)) {
+    const position = match.index ?? 0
+    let inCode = false
+    for (let node = tree.resolveInner(position, 1); node; node = node.parent!) {
+      if (["InlineCode", "FencedCode", "CodeBlock", "HTMLBlock"].includes(node.name)) { inCode = true; break }
+    }
+    if (!inCode) references.push({ source: match[1], obsidianEmbed: true, embedded: true })
   }
   return references
 }

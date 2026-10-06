@@ -17,7 +17,7 @@ const baseProps = {
 }
 
 describe("Markdown preview integration", () => {
-  it.each([["480", "480px"], ["auto", ""]])("独立尺寸 %s 优先于旧尺寸，保留图片 title", async (width, expected) => {
+  it.each([["480", "480px"], ["auto", ""]])("独立尺寸 %s 保留图片 title", async (width, expected) => {
     const container = document.createElement("div"), root = createRoot(container)
     try {
       await act(async () => root.render(<MarkdownPreview {...baseProps} content={`![图](https://example.com/a.png "320")<!-- swell-image:width=${width} -->`} onResolveWikiNote={() => ({ status: "missing" })} />))
@@ -311,7 +311,7 @@ describe("Markdown preview integration", () => {
     expect(output).toContain("切换到编辑模式开始记录")
   })
 
-  it("renders remote images and legacy alt-based dimensions", () => {
+  it("keeps numeric image labels unchanged without guessing dimensions", () => {
     const output = renderToStaticMarkup(
       <MarkdownPreview
         {...baseProps}
@@ -320,26 +320,11 @@ describe("Markdown preview integration", () => {
       />,
     )
 
-    expect(output).toContain('alt="架构图"')
+    expect(output).toContain('alt="架构图|320x180"')
     expect(output).toContain('src="https://example.com/diagram.png"')
-    expect(output).toContain('width:320px')
-    expect(output).toContain('height:180px')
+    expect(output).not.toContain('width:320px')
+    expect(output).not.toContain('height:180px')
     expect(output).toContain('referrerPolicy="no-referrer"')
-  })
-
-  it("treats hybrid Obsidian image labels as images instead of links", () => {
-    const output = renderToStaticMarkup(
-      <MarkdownPreview
-        {...baseProps}
-        content={'![[截图.png|300]](../attachments/IMG.png)'}
-        onResolveWikiNote={() => ({ status: "missing" })}
-      />,
-    )
-
-    // 本地附件会在 effect 中异步读取，SSR 首帧应是图片加载态，而不是可点击的蓝色链接。
-    expect(output).toContain("正在读取图片")
-    expect(output).not.toContain("<a ")
-    expect(output).not.toContain("截图.png|300]]")
   })
 
   it("renders only the referenced block for anchored embeds", () => {

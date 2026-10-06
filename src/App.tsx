@@ -395,7 +395,7 @@ function App() {
     setMarkdownSourceMode(mode)
     saveUiPreferences({ markdownSourceMode: mode })
   }, [])
-  // 新建笔记必须落在统一画布：空白笔记在兼容阅读视图下无从输入。
+  // 新建笔记必须落在统一画布：空白笔记在锁定态下无从输入。
   // 这里只切当前视图，不写入偏好，用户显式选择的只读偏好在下次启动时依然生效。
   const openNoteViewForEditing = useCallback(() => setNoteViewMode("unified"), [])
   const changeColorMode = useCallback((mode: ColorMode) => {
@@ -5028,14 +5028,6 @@ function App() {
             onRestoreNoteVersionAsCopy={restoreActiveNoteVersionAsCopy}
             onToggleNoteStar={toggleNoteStar}
             onToggleNotePin={toggleNotePin}
-            onToggleNoteTask={(noteId, line, checked) => toggleTask({
-              checked,
-              id: `${noteId}:${line}`,
-              line,
-              noteId,
-              noteTitle: "",
-              text: "",
-            }, checked)}
             onSelectFolder={(folder) => {
               setQuery("")
               setLibraryView("all")

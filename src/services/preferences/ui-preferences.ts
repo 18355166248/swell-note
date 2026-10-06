@@ -1,4 +1,4 @@
-export type NoteViewMode = "locked" | "preview" | "unified"
+export type NoteViewMode = "locked" | "unified"
 export type ColorMode = "dark" | "light" | "system"
 export type EditorLineWidth = "narrow" | "standard" | "wide"
 export type EditorDisplay = { editorFontSize: number; editorLineWidth: EditorLineWidth; editorLineHeight?: number }
@@ -6,7 +6,7 @@ export type EditorDisplay = { editorFontSize: number; editorLineWidth: EditorLin
  * 正文的编辑呈现方式：即时预览（富文本外观）或 Markdown 源码。
  *
  * 这是**本机编辑偏好**，只影响怎么看着写，不改变笔记内容、也不随笔记同步到远端，
- * 因此和 noteViewMode（阅读态：锁定/阅读/一体化）是两个正交维度，界面上不应并成一组按钮。
+ * 因此和 noteViewMode（阅读态：锁定/一体化）是两个正交维度，界面上不应并成一组按钮。
  */
 export type MarkdownSourceMode = "live" | "source"
 
@@ -40,7 +40,6 @@ const PANE_WIDTH_LIMITS = {
 
 const NOTE_VIEW_MODE_ACTIONS = {
   locked: { label: "解除锁定，继续编辑", nextMode: "unified" },
-  preview: { label: "进入一体化编辑", nextMode: "unified" },
   unified: { label: "锁定为只读阅读", nextMode: "locked" },
 } satisfies Record<NoteViewMode, { label: string; nextMode: NoteViewMode }>
 
@@ -76,12 +75,9 @@ export function loadUiPreferences(): UiPreferences {
     colorMode: stored.colorMode === "dark" || stored.colorMode === "light" ? stored.colorMode : "system",
     libraryPaneWidth: paneWidth(stored.libraryPaneWidth, "libraryPaneWidth"),
     noteListPaneWidth: paneWidth(stored.noteListPaneWidth, "noteListPaneWidth"),
-    // 默认即时预览；只有明确存过 source 才进源码模式，旧偏好对象缺少该字段时行为不变。
+    // 只有明确选择 source 才显示源码，其他输入统一使用即时预览。
     markdownSourceMode: stored.markdownSourceMode === "source" ? "source" : DEFAULT_UI_PREFERENCES.markdownSourceMode,
-    // 旧版 edit 与新的统一画布语义一致；历史 preview 只可能由用户主动切换写入，必须继续保留。
-    noteViewMode: stored.noteViewMode === "preview" || stored.noteViewMode === "locked" || stored.noteViewMode === "unified"
-      ? stored.noteViewMode
-      : DEFAULT_UI_PREFERENCES.noteViewMode,
+    noteViewMode: stored.noteViewMode === "locked" ? "locked" : "unified",
   }
 }
 

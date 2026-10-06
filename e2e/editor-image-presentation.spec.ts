@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test"
 import { capabilityContent, seedCapabilityNote } from "./editor-capability-seed"
-import { useCompatibilityPreview, useUnifiedCanvas } from "./note-view-mode"
+import { lockUnifiedCanvas, useUnifiedCanvas } from "./note-view-mode"
 
 test("调整图片尺寸、视觉编辑说明和换图均保留 title，阅读往返与撤销正确", async ({ page }) => {
   await page.route("https://example.com/*.png", (route) => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=", "base64") }))
@@ -21,8 +21,8 @@ test("调整图片尺寸、视觉编辑说明和换图均保留 title，阅读�
   await image.getByLabel("图片地址或附件路径").fill("https://example.com/b.png")
   await image.getByRole("button", { name: "应用", exact: true }).click()
   await expect.poll(() => capabilityContent(page)).toContain('(https://example.com/b.png "新\\\"说明")<!-- swell-image:width=480 -->')
-  await useCompatibilityPreview(page)
-  const previewImage = page.locator(".note-editor:visible .markdown-preview img")
+  await lockUnifiedCanvas(page)
+  const previewImage = page.locator(".note-editor:visible .cm-md-image")
   await expect(previewImage).toHaveAttribute("title", '新"说明')
   // 手机宽度受页面约束；声明宽度必须保持，实际盒宽可缩小。
   await expect(previewImage).toHaveAttribute("style", /width: 480px/)

@@ -759,7 +759,6 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .formatting-toolbar { display: flex; min-height: 40px; align-items: center; gap: 1px; overflow-x: auto; border-bottom: 1px solid var(--border); padding: 4px 16px; }
 .formatting-toolbar-locked { gap: 8px; color: var(--muted-foreground); font-size: 11px; }
 .formatting-toolbar-locked > svg { width: 14px; height: 14px; }
-.compatibility-preview-banner { display: flex; min-height: 42px; align-items: center; justify-content: center; gap: 12px; border-bottom: 1px solid var(--border); background: var(--panel-soft); padding: 5px 16px; color: var(--muted-foreground); font-size: 11px; }
 .formatting-toolbar button { display: grid; min-width: 30px; height: 30px; place-items: center; border-radius: 6px; color: #596271; font-size: 11px; font-weight: 650; transition: background-color 120ms ease, color 120ms ease; -webkit-tap-highlight-color: transparent; }
 .formatting-toolbar button:active { background: color-mix(in oklab,var(--muted) 78%,var(--foreground) 8%); transition-duration: 50ms; }
 .formatting-toolbar button:hover { background: var(--muted); color: var(--foreground); }
@@ -972,8 +971,6 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .markdown-preview h2 { padding-bottom: .28em; border-bottom: 1px solid var(--border); font-size: 1.4em; }
 .markdown-preview h3 { font-size: 1.16em; }
 .markdown-preview p { margin: .85em 0; }
-.markdown-preview ::highlight(swell-find) { background: #ffe9a3; color: #332600; }
-.markdown-preview ::highlight(swell-find-current) { background: #ffbd59; color: #241800; }
 /* 只绘制文字选区，避免 WebKit 在跨段落全选时把正文两侧留白染蓝。 */
 .markdown-preview::selection, .markdown-preview *::selection { background: transparent; color: inherit; }
 .markdown-preview .markdown-selection-text::selection,

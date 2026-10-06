@@ -17,15 +17,3 @@ export function useStableCallback<Args extends unknown[], Result>(
   })
   return useCallback((...args: Args) => callbackRef.current(...args), [])
 }
-
-/** 与 useStableCallback 相同，但允许上游回调缺省，并在缺省时返回 undefined 以便下游关闭相关交互。 */
-export function useOptionalStableCallback<Args extends unknown[], Result>(
-  callback: ((...args: Args) => Result) | undefined,
-) {
-  const callbackRef = useRef(callback)
-  useLayoutEffect(() => {
-    callbackRef.current = callback
-  })
-  const stable = useCallback((...args: Args) => callbackRef.current?.(...args), [])
-  return callback ? stable : undefined
-}

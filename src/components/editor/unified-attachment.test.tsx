@@ -15,6 +15,14 @@ it("只接管独立附件行，代码、图片、笔记和句内链接保持原�
   expect(collectAttachmentBlocks(state).map((block) => block.href)).toEqual(["attachments/方案.pdf"])
 })
 
+it("独立引用式附件使用最新定义，未定义的链接保持原样", () => {
+  const content = '[方案][PDF]\n\n[未定义][missing]\n\n[PDF]: <attachments/a b.pdf>'
+  const state = EditorState.create({ doc: content, extensions: [markdown()] })
+  expect(collectAttachmentBlocks(state).map((block) => block.href)).toEqual(["attachments/a b.pdf"])
+  const updated = state.update({ changes: { from: content.indexOf("a b.pdf"), to: content.length - 1, insert: "next.pdf" } }).state
+  expect(collectAttachmentBlocks(updated).map((block) => block.href)).toEqual(["attachments/next.pdf"])
+})
+
 it("同文表格改变资源身份后，单元格图片读取新库而不改正文或选区", async () => {
   const scope = new Compartment()
   const previous = vi.fn(async () => ({ data: new Uint8Array([1]), mimeType: "image/png" }))

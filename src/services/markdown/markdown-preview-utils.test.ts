@@ -28,6 +28,13 @@ describe("Markdown preview wiki links", () => {
     expect(rewriteWikiLinks(content)).toContain("```md\n[[代码示例]]\n```")
   })
 
+  it("行内、缩进和长围栏代码的 Wiki 示例保持原样，后续正文仍转换", () => {
+    const code = '`[[行内]]`\n\n    ![[缩进.png]]\n\n````md\n```\n[[围栏里]]\n````'
+    const output = rewriteWikiLinks(code + "\n\n[[正文]]")
+    expect(output).toContain(code)
+    expect(output).toContain("[正文](swell-note://wiki/%E6%AD%A3%E6%96%87)")
+  })
+
   it("parses only valid internal wiki hrefs", () => {
     expect(parseWikiHref("swell-note://wiki/%E4%BA%A7%E5%93%81%E7%81%B5%E6%84%9F")).toBe("产品灵感")
     expect(parseWikiHref("https://example.com")).toBeNull()
@@ -54,25 +61,13 @@ describe("Markdown preview wiki links", () => {
     expect(parseWikiEmbedHref("swell-note://embed/%E4%BA%A7%E5%93%81%E7%81%B5%E6%84%9F")).toBe("产品灵感")
   })
 
-  it("turns image size aliases into markdown titles", () => {
+  it("turns wiki image size aliases into explicit metadata", () => {
     const output = rewriteWikiLinks("![[截图.png|300]]\n![[assets/封面.jpg|640x480]]\n![[示意图.png|产品截图]]")
 
-    expect(output).toContain('![截图.png](swell-note://asset/%E6%88%AA%E5%9B%BE.png "300")')
-    expect(output).toContain('![封面.jpg](swell-note://asset/assets%2F%E5%B0%81%E9%9D%A2.jpg "640x480")')
+    expect(output).toContain('![截图.png](swell-note://asset/%E6%88%AA%E5%9B%BE.png)<!-- swell-image:width=300 -->')
+    expect(output).toContain('![封面.jpg](swell-note://asset/assets%2F%E5%B0%81%E9%9D%A2.jpg)<!-- swell-image:width=640 -->')
     // 非尺寸别名仍作为替代文本使用。
     expect(output).toContain("![产品截图](swell-note://asset/%E7%A4%BA%E6%84%8F%E5%9B%BE.png)")
-  })
-
-  it("normalizes hybrid Obsidian labels with Markdown image paths", () => {
-    const output = rewriteWikiLinks([
-      "![[截图.png]](../attachments/IMG.png)",
-      "![[截图.png|300]](../attachments/IMG.png)",
-      "![[截图.png|640x360]](../attachments/IMG.png)",
-    ].join("\n"))
-
-    expect(output).toContain("![截图.png](../attachments/IMG.png)")
-    expect(output).toContain("![截图.png|300](../attachments/IMG.png)")
-    expect(output).toContain("![截图.png|640x360](../attachments/IMG.png)")
   })
 
   it("creates stable heading and block anchors", () => {

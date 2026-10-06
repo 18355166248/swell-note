@@ -178,6 +178,23 @@ describe("markdown live preview", () => {
   // 图片工具条（查看/重试/编辑引用/尺寸/更换/删除）直接改写当前引用的源码，
   // 以下用例锁定「只动目标引用、操作可撤销」的约定。jsdom 不加载真实图片，
   // 工具条不依赖图片加载成功即可出现。
+  it("引用式图片及链接使用定义，修改定义后刷新且不改正文", async () => {
+    const original = '正文\n\n![图][PIC]\n\n[文档][docs]\n\n[PIC]: <a b.png> "数字2026"\n[docs]: https://example.com/docs'
+    const view = createView({ anchor: 0 }, original)
+    try {
+      await settle()
+      const { images } = collect(view.plugin(markdownLivePreviewPlugin)!.decorations)
+      expect(images.map((image) => image.source)).toEqual(["a b.png"])
+      expect(view.dom.querySelector(".cm-md-image")?.getAttribute("title")).toBe("数字2026")
+      expect(view.dom.querySelector('[data-md-href]')?.getAttribute("data-md-href")).toBe("https://example.com/docs")
+      expect(view.state.doc.toString()).toBe(original)
+      const from = original.indexOf("a b.png")
+      view.dispatch({ changes: { from, to: from + 7, insert: "new.png" } })
+      await settle()
+      expect(collect(view.plugin(markdownLivePreviewPlugin)!.decorations).images[0].source).toBe("new.png")
+    } finally { view.destroy() }
+  })
+
   describe("图片工具条操作", () => {
     const imageRefDoc = "正文\n\n![图](a.png)\n\n同图第二处 ![图](a.png) 结尾"
 
@@ -276,11 +293,11 @@ describe("markdown live preview", () => {
       } finally { view.destroy() }
     })
 
-    it("旧数值尺寸切自适应后不回退，视觉编辑说明仍保持宽度和同图其他引用", async () => {
+    it("数字说明不作为尺寸，视觉编辑说明仍保持宽度和同图其他引用", async () => {
       const view = await createImageView('正文\n\n![图](a.png "320")\n\n![其他](a.png)')
       try {
         const sizes = view.dom.querySelector<HTMLSelectElement>('.cm-md-image-tools select')!
-        expect(sizes.value).toBe("320")
+        expect(sizes.value).toBe("")
         sizes.value = ""; sizes.dispatchEvent(new Event("change")); await settle()
         expect(view.dom.querySelector<HTMLElement>(".cm-md-image")!.style.width).toBe("")
         toolButton(view, "说明").click()

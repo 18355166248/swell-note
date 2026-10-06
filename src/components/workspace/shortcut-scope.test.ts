@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { registerDesktopShortcuts, hasOpenModal, isTextEntryElement, selectElementContents } from "./shortcut-scope"
+import { registerDesktopShortcuts, hasOpenModal, isTextEntryElement } from "./shortcut-scope"
 
 afterEach(() => {
   document.body.innerHTML = ""
@@ -63,29 +63,6 @@ describe("hasOpenModal", () => {
     expect(hasOpenModal()).toBe(false)
   })
 })
-
-describe("selectElementContents", () => {
-  it("只选中给定元素的内容，侧边栏不会被带进去", () => {
-    document.body.innerHTML = `<aside>笔记库 全部笔记</aside><article class="markdown-preview">正文内容</article>`
-    const preview = document.querySelector(".markdown-preview")
-
-    expect(selectElementContents(preview)).toBe(true)
-    expect(window.getSelection()?.toString()).toBe("正文内容")
-  })
-
-  it("替换掉上一次的选区，不会累加", () => {
-    document.body.innerHTML = `<p id="first">第一段</p><p id="second">第二段</p>`
-    selectElementContents(document.getElementById("first"))
-    selectElementContents(document.getElementById("second"))
-
-    expect(window.getSelection()?.toString()).toBe("第二段")
-  })
-
-  it("目标不存在时不动选区", () => {
-    expect(selectElementContents(null)).toBe(false)
-  })
-})
-
 
 describe("desktop shortcut ownership", () => {
   it("keeps editor link handling separate and captures global search before editor deletion", () => {

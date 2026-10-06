@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode, type RefObject } from "react"
+import { useState, type ReactNode, type RefObject } from "react"
 import { Bold, ClipboardPaste, Copy, Download, ExternalLink, History, Italic, Link, LockKeyhole, Redo2, Search, TextSelect, Undo2, Scissors, PencilLine, Star } from "lucide-react"
 import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu"
@@ -11,7 +11,6 @@ type Props = {
   editorRef: RefObject<MarkdownEditorHandle | null>
   // 手机工作区：正文不用自定义右键菜单，见下方 mobile 分支说明。
   mobile?: boolean
-  previewing: boolean
   readOnly: boolean
   viewMode: NoteViewMode
   hasSelection: boolean
@@ -27,30 +26,17 @@ type Props = {
 }
 
 export function DocumentContextMenu(props: Props) {
-  const { children, editorRef, previewing, readOnly } = props
+  const { children, editorRef, readOnly } = props
   const viewAction = getNoteViewModeAction(props.viewMode)
   const [selected, setSelected] = useState(false)
   const [hint, setHint] = useState("")
   const [link, setLink] = useState<{ element: HTMLElement; address: string } | null>(null)
-  const range = useRef<Range | null>(null)
-  const root = useRef<HTMLElement | null>(null)
-  // 阅读态取文本必须走 Selection.toString()，不能用保存的 Range 克隆：
-  // Range.toString() 只是把范围内的文本节点原样拼起来，会把 App.css 里 user-select:none
-  // 排除掉的界面文字（代码块语言名与「复制」按钮、表格「左右滑动」提示）当成正文带出去，
-  // 表格单元格之间的制表符也会丢；Selection.toString() 给的是渲染后的可见文字，与 ⌘C 一致。
-  const previewSelectionText = () => window.getSelection()?.toString() ?? ""
-  const restore = () => {
-    if (!previewing) { editorRef.current?.focus(); return }
-    if (!range.current?.startContainer.isConnected) return
-    const selection = window.getSelection()
-    selection?.removeAllRanges()
-    selection?.addRange(range.current)
-  }
+  const restore = () => { editorRef.current?.focus() }
   const run = async (action: "copy" | "cut" | "paste") => {
-    restore()
+    // 复制只读取已有选区；只读正文重新聚焦时浏览器可能折叠原生选区。
+    if (action !== "copy") restore()
     const editor = editorRef.current
-    const done = previewing ? await writeClipboardText(previewSelectionText())
-      : action === "copy" ? await editor?.copySelection()
+    const done = action === "copy" ? await editor?.copySelection()
       : action === "cut" ? await editor?.cutSelection() : await editor?.pasteAtSelection()
     if (!done) setHint(action === "paste" ? "无法读取剪贴板，请使用 ⌘V / Ctrl+V 粘贴" : "操作失败，请使用键盘快捷键")
   }
@@ -88,11 +74,7 @@ export function DocumentContextMenu(props: Props) {
           return
         }
         if (element.closest("input, textarea, button, a, [role='button'], .cm-md-table-wrap")) { event.preventDefault(); return }
-        root.current = event.currentTarget
-        const selection = window.getSelection()
-        range.current = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null
-        // 阅读态的可复制内容同样只看可见文字：整段只框住了被排除的界面文字时不该点亮「复制」。
-        setSelected(previewing ? Boolean(range.current && previewSelectionText()) : props.hasSelection)
+        setSelected(props.hasSelection)
         setHint("")
       }}>
         {children}
@@ -105,20 +87,14 @@ export function DocumentContextMenu(props: Props) {
           }}><Copy />复制链接地址</ContextMenuItem>
         </> : <>
         <ContextMenuItem disabled={!selected} onSelect={() => void run("copy")}><Copy />复制</ContextMenuItem>
-        {!previewing && <>
+        <>
           <ContextMenuItem disabled={readOnly || !selected} onSelect={() => void run("cut")}><Scissors />剪切</ContextMenuItem>
           <ContextMenuItem disabled={readOnly} onSelect={() => void run("paste")}><ClipboardPaste />粘贴</ContextMenuItem>
-        </>}
+        </>
         <ContextMenuItem onSelect={() => {
-          if (!previewing) { editorRef.current?.selectAll(); return }
-          const content = root.current?.querySelector(".markdown-preview")
-          if (!content) return
-          const all = document.createRange()
-          all.selectNodeContents(content)
-          window.getSelection()?.removeAllRanges()
-          window.getSelection()?.addRange(all)
+          editorRef.current?.selectAll()
         }}><TextSelect />全选正文</ContextMenuItem>
-        {!previewing && <>
+        <>
           <ContextMenuSeparator />
           <ContextMenuItem disabled={readOnly || !props.canUndo} onSelect={() => editorRef.current?.undo()}><Undo2 />撤销</ContextMenuItem>
           <ContextMenuItem disabled={readOnly || !props.canRedo} onSelect={() => editorRef.current?.redo()}><Redo2 />重做</ContextMenuItem>
@@ -126,7 +102,7 @@ export function DocumentContextMenu(props: Props) {
           <ContextMenuItem disabled={readOnly} onSelect={() => editorRef.current?.insertText("**加粗文字**")}><Bold />加粗</ContextMenuItem>
           <ContextMenuItem disabled={readOnly} onSelect={() => editorRef.current?.insertText("*斜体文字*")}><Italic />斜体</ContextMenuItem>
           <ContextMenuItem disabled={readOnly} onSelect={() => editorRef.current?.insertText("[链接](https://)")}><Link />插入链接</ContextMenuItem>
-        </>}
+        </>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={props.onFind}><Search />查找正文</ContextMenuItem>
         <ContextMenuItem onSelect={() => props.onViewModeChange(viewAction.nextMode)}>

@@ -4,7 +4,7 @@ import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
 import { remarkObsidian } from "@/services/markdown/remark-obsidian"
-import { legacyImageWidth, remarkImagePresentation } from "@/services/markdown/image-presentation"
+import { remarkImagePresentation } from "@/services/markdown/image-presentation"
 import { isRelativeAttachmentHref, parseVaultAssetHref, parseWikiEmbedHref, parseWikiHref, parseMarkdownNoteHref, rewriteWikiLinks } from "@/services/markdown/markdown-preview-utils"
 import type { VaultAsset } from "@/services/vault/vault-adapter"
 
@@ -66,8 +66,8 @@ export async function createHtmlDocument({ content, title, readAsset }: { conten
     {warnings.length ? <aside className="delivery-warning"><strong>导出说明</strong><ul>{warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></aside> : null}
     <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath, remarkObsidian, remarkImagePresentation]} rehypePlugins={[[rehypeKatex, { output: "mathml", strict: "ignore", trust: false }]]} remarkRehypeOptions={{ footnoteLabel: "脚注", footnoteBackLabel: "返回正文" }} urlTransform={(url) => assets.get(url) ?? (urls.has(url) || parseWikiHref(url) || parseWikiEmbedHref(url) || parseMarkdownNoteHref(url) ? "" : defaultUrlTransform(url))} components={{
       img: ({ node, src, alt, title }) => {
-        // 导出沿用阅读视图的旧尺寸；新元数据（包括 auto）优先，避免旧笔记导出后图片放大。
-        const width = node?.properties?.dataImageWidth ?? node?.properties?.["data-image-width"] ?? legacyImageWidth(title)
+        // 导出和编辑器只认同一份显式尺寸元数据，数字说明不会被误当成宽度。
+        const width = node?.properties?.dataImageWidth ?? node?.properties?.["data-image-width"]
         if (!src) return <span>未包含图片：{alt}</span>
         return <img src={src} alt={alt} title={title} style={width && width !== "auto" ? { width: Number(width), maxWidth: "100%" } : undefined} />
       },

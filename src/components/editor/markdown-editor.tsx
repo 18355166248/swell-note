@@ -448,6 +448,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         // 但紧邻表格的那一行会被 Markdown 并进表格，先补出空行再落光标。
         // 其余情况交给 CodeMirror 自己定位，拖选等原生行为保持不变。
         mousedown(event, view) {
+          if (event.button === 2 && !isEditableFormControl(event.target)) {
+            const position = view.posAtCoords({ x: event.clientX, y: event.clientY })
+            if (position !== null && view.state.selection.ranges.some((range) => !range.empty && position >= range.from && position <= range.to)) {
+              // 只读正文的 DOM 未必保留原生选区；右键命中已有正文选区时不能让浏览器先折叠它。
+              event.preventDefault()
+              return true
+            }
+          }
           if (event.button !== 0 || event.shiftKey || event.target !== view.contentDOM) return false
           if (view.state.readOnly) return false
           const lastBlock = view.lineBlockAt(view.state.doc.length)

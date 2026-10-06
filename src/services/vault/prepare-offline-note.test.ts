@@ -1,5 +1,11 @@
 import { expect, it } from "vitest"
 import { prepareOfflineNote, type OfflineAssetResult } from "./prepare-offline-note"
+it("准备引用式和含空格附件，忽略代码示例、未使用定义、网页与笔记", async () => {
+  const requested: string[] = []
+  const content = '![图][PIC]\n[资料][]\n[shortcut]\n![直接](<folder/a b.png>)\n\n[PIC]: <folder/a b.png> "说明"\n[pic]: wrong.png\n[资料]: docs/a.pdf\n[shortcut]: movie.mp4\n[unused]: unused.pdf\n\n`![假图](fake.png)`\n```md\n![[fake.pdf]]\n```'
+  await prepareOfflineNote(content, async (source) => { requested.push(source); return { data: new Uint8Array([1]) } }, () => {}, () => true)
+  expect(requested).toEqual(["folder/a b.png", "docs/a.pdf", "movie.mp4"])
+})
 it("去重并跳过网址/笔记，失败不阻止后续附件；停止后不发起新请求", async () => {
   const results: OfflineAssetResult[] = [], requested: string[] = []
   const content = "![a](a.png)\n[a](a.png)\n[pdf](b.pdf)\n![c](c.png)\n[note](n.md)\n[web](https://x.test/a.png)"

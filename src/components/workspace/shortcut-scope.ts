@@ -17,16 +17,6 @@ export function hasOpenModal() {
   return document.querySelector("[data-slot=\"dialog-content\"]") != null
 }
 
-export function selectElementContents(element: Element | null) {
-  const selection = window.getSelection()
-  if (!element || !selection) return false
-  const range = document.createRange()
-  range.selectNodeContents(element)
-  selection.removeAllRanges()
-  selection.addRange(range)
-  return true
-}
-
 // 捕获阶段只保留搜索专用组合，其余快捷键遵循编辑器已经处理的结果。
 export function registerDesktopShortcuts(options: {
   canCreateNote: boolean

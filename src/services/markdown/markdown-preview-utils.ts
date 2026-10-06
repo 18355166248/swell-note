@@ -1,20 +1,17 @@
+import { imageWidthComment } from "./image-presentation"
+import { markdownLanguage } from "@codemirror/lang-markdown"
+
 const WIKI_SCHEME = "swell-note://wiki/"
 const ASSET_SCHEME = "swell-note://asset/"
 const EMBED_SCHEME = "swell-note://embed/"
 const imageExtensionPattern = /\.(avif|gif|jpe?g|png|svg|webp)$/i
 const fileExtensionPattern = /\.[a-z\d]{1,8}(?:#.*)?$/i
-// 旧 Vault 图片尺寸别名：|300 只限宽，|300x200 同时限高；仅用于读取历史内容。
+// Wiki 图片尺寸在解析时转成同一套显式宽度元数据，title 始终保留说明语义。
 const imageSizePattern = /^(\d+)(?:x(\d+))?$/
-const hybridMarkdownImagePattern = /!\[\[([^\[\]\n]+)\]\]\(/g
 
 // 判断一个 Vault 内的相对路径是不是图片；编辑态决定 ![[...]] 要不要渲染成图片时共用同一份判断。
 export function isImageAssetPath(path: string) {
   return imageExtensionPattern.test(path)
-}
-
-function rewriteHybridMarkdownImagesInLine(line: string) {
-  // 兼容历史内容里的 ![[说明|300]](path) 混合写法，统一转换为标准 Markdown 图片后再解析。
-  return line.replace(hybridMarkdownImagePattern, "![$1](")
 }
 
 function rewriteEmbeddedAssetsInLine(line: string) {
@@ -31,8 +28,7 @@ function rewriteEmbeddedAssetsInLine(line: string) {
     if (imageExtensionPattern.test(target)) {
       const size = alias.match(imageSizePattern)
       if (size) {
-        const dimensions = size[2] ? `${size[1]}x${size[2]}` : size[1]
-        return `![${target.split("/").pop() || "图片"}](${href} "${dimensions}")`
+        return `![${target.split("/").pop() || "图片"}](${href})${imageWidthComment(Number(size[1]))}`
       }
       return `![${label}](${href})`
     }
@@ -52,21 +48,21 @@ function rewriteWikiLinksInLine(line: string) {
 }
 
 export function rewriteWikiLinks(content: string) {
-  let fencedCode = false
-
-  // Wiki 链接只在正文中转换；围栏代码块必须保持原文，避免预览改变代码语义。
-  return content
-    .split("\n")
-    .map((line) => {
-      if (/^\s*(```|~~~)/.test(line)) {
-        fencedCode = !fencedCode
-        return line
-      }
-      if (fencedCode) return line
-      const normalized = rewriteHybridMarkdownImagesInLine(line)
-      return rewriteWikiLinksInLine(rewriteEmbeddedAssetsInLine(normalized))
-    })
-    .join("\n")
+  if (!content.includes("[[")) return content
+  const protectedRanges: Array<{ from: number; to: number }> = []
+  // 使用解析器识别完整代码范围，行内代码、缩进代码及不同长度围栏都保持原样。
+  markdownLanguage.parser.parse(content).iterate({ enter(node) {
+    if (!["InlineCode", "FencedCode", "CodeBlock", "HTMLBlock"].includes(node.name)) return
+    protectedRanges.push({ from: node.from, to: node.to })
+    return false
+  } })
+  let cursor = 0, result = ""
+  const rewrite = (text: string) => rewriteWikiLinksInLine(rewriteEmbeddedAssetsInLine(text))
+  for (const range of protectedRanges) {
+    result += rewrite(content.slice(cursor, range.from)) + content.slice(range.from, range.to)
+    cursor = range.to
+  }
+  return result + rewrite(content.slice(cursor))
 }
 
 export function parseWikiHref(href?: string) {

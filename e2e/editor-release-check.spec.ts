@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test"
 
-import { useCompatibilityPreview, useUnifiedCanvas } from "./note-view-mode"
+import { lockUnifiedCanvas, useUnifiedCanvas } from "./note-view-mode"
 
 // 编辑器三批修复（行内格式 / 表格 / 图片附件）的收尾验收：组合流程与异步边界。
 // 种子是独立的离线 vault（IndexedDB），附件只写入本机附件队列，不触碰真实笔记与云同步。
@@ -395,7 +395,7 @@ test.describe("编辑器三批修复收尾验收", () => {
     expect(countImageRefs(await readStored(page, NOTE_A_ID))).toBe(1)
   })
 
-  test("流程5：附件写入中切兼容阅读视图，回退追加后两种画面内容一致", async ({ page }) => {
+  test("流程5：附件写入中切锁定阅读视图，回退追加后两种画面内容一致", async ({ page }) => {
     test.setTimeout(60_000)
     await seedReleaseVault(page)
 
@@ -404,9 +404,9 @@ test.describe("编辑器三批修复收尾验收", () => {
     await page.keyboard.press("End")
     await insertImages(page, ["流程五.png"])
 
-    // 兼容阅读会卸载编辑器；锁定仍保留同一实例，不能拿锁定冒充这条回退路径。
-    await useCompatibilityPreview(page)
-    await expect(page.locator(".markdown-preview")).toBeVisible()
+    // 锁定后插入点不可写，队列按原笔记执行回退，不能绕过只读保护。
+    await lockUnifiedCanvas(page)
+    await expect(page.locator(".cm-content")).toBeVisible()
     await setAttachmentDelay(page, 0)
 
     await expect(page.locator("p.vault-error")).toContainText("末尾", { timeout: 15_000 })
@@ -416,9 +416,9 @@ test.describe("编辑器三批修复收尾验收", () => {
 
     // 阅读态渲染与编辑态内容一致：引用在末尾，图片可从本机附件队列解析显示。
     // img 是替换元素，alt 不进入 textContent，顺序断言以存储内容为准、渲染以 img 元素为准。
-    const preview = page.locator(".markdown-preview")
-    await expect(preview.locator("img").last()).toBeVisible()
-    await expect(preview.locator("img").last()).toHaveAttribute("alt", "流程五.png")
+    const preview = page.locator(".cm-content")
+    await expect(preview.locator(".cm-md-image img").last()).toBeVisible()
+    await expect(preview.locator(".cm-md-image img").last()).toHaveAttribute("alt", "流程五.png")
 
     // 切回编辑：内容不变，编辑/阅读两态一致。
     await useUnifiedCanvas(page)
@@ -550,13 +550,13 @@ test.describe("编辑器三批修复收尾验收", () => {
     const saved = await readStored(page, NOTE_A_ID)
 
     await page.reload()
-    // 刷新后仍是统一画布；显式进入会卸载编辑器的兼容阅读，再核对渲染内容。
-    await useCompatibilityPreview(page)
-    const preview = page.locator(".markdown-preview")
+    // 刷新后锁定同一编辑器，核对渲染正文与已保存内容。
+    await lockUnifiedCanvas(page)
+    const preview = page.locator(".cm-content")
     await expect(preview).toBeVisible({ timeout: 15_000 })
     await expect(preview).toContainText("结尾段落。刷新前修改")
     await expect(preview.locator(".cm-md-table, table")).toContainText("香蕉甜")
-    await expect(preview.locator("img").last()).toBeVisible()
+    await expect(preview.locator(".cm-md-image img").last()).toBeVisible()
     expect(await readStored(page, NOTE_A_ID)).toBe(saved)
 
     // 回到一体化编辑：内容与保存时逐字符一致。

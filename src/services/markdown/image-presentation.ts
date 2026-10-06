@@ -1,7 +1,7 @@
 export type ImageWidth = number | "auto"
 
 // 尺寸独立放在紧邻图片的 HTML 注释里，普通 Markdown 阅读器会忽略它，title 仍是说明。
-// auto 必须显式保存：旧图片的数值 title 仍要兼容，不能一删元数据就又恢复旧宽度。
+// 尺寸只认显式元数据；数字说明、替代文字也属于用户内容，不再猜测成旧版尺寸。
 const WIDTH_COMMENT = /^<!-- swell-image:width=(auto|[1-9]\d{0,4}) -->/
 
 export function readImageWidthComment(text: string): { length: number; width: ImageWidth } | null {
@@ -12,11 +12,6 @@ export function readImageWidthComment(text: string): { length: number; width: Im
 
 export function imageWidthComment(width: ImageWidth) {
   return `<!-- swell-image:width=${width} -->`
-}
-
-export function legacyImageWidth(title?: string) {
-  const match = title?.match(/^(\d+)(?:x(\d+))?$/)
-  return match ? Number(match[1]) : undefined
 }
 
 export function unescapeMarkdownImageText(text: string) {

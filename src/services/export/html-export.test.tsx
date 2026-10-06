@@ -23,12 +23,12 @@ it("缺失附件和未展开笔记嵌入显示说明，正文保留且不请求�
 })
 
 it.each([
-  ["旧 title 尺寸", '![图](a.png "480")', "480px"],
-  ["新宽度优先", '![图](a.png "480")<!-- swell-image:width=640 -->', "640px"],
-  ["新自适应覆盖旧宽度", '![图](a.png "480")<!-- swell-image:width=auto -->', ""],
+  ["数字说明不作为尺寸", '![图](a.png "480")', ""],
+  ["显式宽度", '![图](a.png "480")<!-- swell-image:width=640 -->', "640px"],
+  ["显式自适应", '![图](a.png "480")<!-- swell-image:width=auto -->', ""],
 ])("导出图片保留 %s 并保留 title", async (_scenario, content, expectedWidth) => {
   const { html } = await createHtmlDocument({
-    title: "尺寸兼容",
+    title: "图片说明",
     content,
     readAsset: async () => ({ data: new Uint8Array([1, 2, 3]), mimeType: "image/png" }),
   })

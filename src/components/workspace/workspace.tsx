@@ -57,7 +57,7 @@ import swellNoteLogo from "@/assets/brand/swell-note-logo-ribbon-s.svg"
 import { Button } from "@/components/ui/button"
 import { RouteActivityProvider } from "@/components/ui/route-activity"
 import { lazyWithRetry } from "@/lib/lazy-with-retry"
-import { useOptionalStableCallback, useStableCallback } from "@/lib/use-stable-callback"
+import { useStableCallback } from "@/lib/use-stable-callback"
 import type { AttachmentQueue, AttachmentQueueSlotInput } from "@/services/vault/attachment-queue"
 import { attachmentEditorKey } from "@/services/vault/attachment-target"
 import { AttachmentQueuePanel, useAttachmentQueue } from "@/components/workspace/attachment-queue-panel"
@@ -126,9 +126,8 @@ import { MobileFolderActionSheet, MobileNoteActionSheet } from "@/components/wor
 import { MobileLinkSheet, type LinkSheetState } from "@/components/workspace/mobile-link-sheet"
 import { SelectionActionBar } from "@/components/workspace/selection-action-bar"
 import { DocumentContextMenu } from "@/components/workspace/document-context-menu"
-import { PreviewSearch } from "@/components/workspace/preview-search"
 import { isSelectionDismissTap, keepsSelectionAlive, type PointerOrigin } from "@/components/workspace/selection-dismiss"
-import { registerDesktopShortcuts, hasOpenModal, isTextEntryElement, selectElementContents } from "@/components/workspace/shortcut-scope"
+import { registerDesktopShortcuts, hasOpenModal, isTextEntryElement } from "@/components/workspace/shortcut-scope"
 import {
   ContextMenuRequestDialog,
   NoteListContextMenu,
@@ -153,6 +152,7 @@ import { SyncFailureToast } from "./sync-failure-toast"
 // 实际预取时机在应用启动阶段（见 preload-note-renderers.ts）：等 Workspace 挂载再预取
 // 已经太晚——cacheReady 一变 true，笔记多半已经激活，编辑器和 Workspace 在同一帧里就都要用到。
 const MarkdownEditor = lazyWithRetry(() => import("@/components/editor/markdown-editor"))
+// 绘图和正文嵌入仍按需使用渲染器；普通笔记不再有独立阅读分支。
 const MarkdownPreview = lazyWithRetry(() => import("@/components/editor/markdown-preview"))
 const CanvasPreview = lazyWithRetry(() => import("@/components/editor/canvas-preview"))
 
@@ -259,7 +259,6 @@ type WorkspaceProps = {
   onRestoreNoteVersionAsCopy: (content: string, createdAt: number, noteId: string, cacheId: string) => Promise<void>
   onToggleNoteStar: (noteId: string) => void
   onToggleNotePin: (noteId: string) => void
-  onToggleNoteTask?: (noteId: string, line: number, checked: boolean) => void
   onSelectFolder: (folder: string | null) => void
   onSelectLibraryView: (view: LibraryView) => void
   onSelectNote: (note: Note) => void
@@ -500,9 +499,7 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
   const restoreNoteVersion = useStableCallback(props.onRestoreNoteVersion)
   const restoreNoteVersionAsCopy = useStableCallback(props.onRestoreNoteVersionAsCopy)
   const refreshVault = useStableCallback(props.onRefreshVault)
-  const activeNoteId = props.activeNoteId
   // 上游传的是内联箭头，不先稳定住，下面按笔记绑定的那层每次渲染都会换新函数，memo 就白加了。
-  const toggleNoteTask = useOptionalStableCallback(props.onToggleNoteTask)
   // 侧栏与搜索、正文同样无关；这些回调固定后 memo 才能把它挡在重渲染之外。
   const createNote = useStableCallback(props.onCreateNote)
   const createFolder = useStableCallback(props.onCreateFolder)
@@ -512,12 +509,6 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
   const toggleFolder = useStableCallback(props.onToggleFolder)
   const selectLibraryView = useStableCallback(props.onSelectLibraryView)
   const selectVaultCache = useStableCallback(props.onSelectVaultCache)
-  const toggleActiveNoteTask = useMemo(
-    () => toggleNoteTask
-      ? (line: number, checked: boolean) => toggleNoteTask(activeNoteId, line, checked)
-      : undefined,
-    [activeNoteId, toggleNoteTask],
-  )
   const noteContextActions = useMemo<NoteContextActions>(() => ({
     disabled: contextActionsDisabled,
     folders: props.folders,
@@ -681,7 +672,6 @@ function DesktopWorkspace(props: WorkspaceProps & FolderTreeProps) {
           onRestoreNoteVersion={restoreNoteVersion}
           onRestoreNoteVersionAsCopy={restoreNoteVersionAsCopy}
           onSync={refreshVault}
-          onToggleTask={toggleActiveNoteTask}
           saveState={props.saveState}
           syncing={props.isRefreshingVault}
           allowSyncEditing={props.syncEditableCacheId === props.activeCacheId}
@@ -1929,7 +1919,6 @@ type NoteEditorProps = {
   onRestoreNoteVersionAsCopy: (content: string, createdAt: number, noteId: string, cacheId: string) => Promise<void>
   onSelectNote: (note: Note) => void
   onSync: () => void
-  onToggleTask?: (line: number, checked: boolean) => void
   onUpdateNote: (patch: Partial<Note>) => void
   saveState: NoteSaveState
   syncing: boolean
@@ -1956,27 +1945,8 @@ function useSettledContent(noteId: string, content: string) {
   return current
 }
 
-// 阅读态里把源码行对应的块顶到可视区顶端。预览元素按文档顺序排列，行号随之递增，
-// 因此取最后一个不超过目标行的块即可，遇到更大的行号就可以收手。
-function alignPreviewToSourceLine(viewport: HTMLElement, article: HTMLElement | null, line: number) {
-  const elements = article?.querySelectorAll<HTMLElement>(".markdown-preview [data-source-line]")
-  if (!elements?.length) return false
-  let anchor: HTMLElement | null = null
-  for (const element of elements) {
-    const value = Number(element.dataset.sourceLine)
-    if (!Number.isFinite(value)) continue
-    if (value > line) break
-    anchor = element
-  }
-  if (!anchor) return false
-  const delta = anchor.getBoundingClientRect().top - viewport.getBoundingClientRect().top
-  if (Math.abs(delta) >= 1) viewport.scrollTop += delta
-  return true
-}
-
-// 搜索、切目录、展开侧栏统统与正文无关，但它们每一次都把编辑器整棵子树重画一遍
-// （实测搜索敲 6 个字，编辑器白渲染 11 次）。上面已经把入参固定住，这里收口。
-const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allowSyncEditing, attachmentQueue, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, markdownSourceMode, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onLoadWikiNote, onMarkdownSourceModeChange, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onRestoreNoteVersionAsCopy, onSelectNote, onSync, onToggleTask, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
+// 搜索和侧栏操作与正文无关，保持编辑器子树稳定，避免无效重绘。
+const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allowSyncEditing, attachmentQueue, backLabel = "全部笔记", backlinks, canInsertAttachment, canManageNote, cloudConnected, compact = false, isManagingNote, markdownSourceMode, moveTargets, note, noteViewMode, onBack, onSelectFolder, onDeleteNote, onExportNote, onFormat, onLoadWikiNote, onMarkdownSourceModeChange, onMoveNote, onNoteViewModeChange, onOpenSourceFile, onOpenWikiLink, onReloadNote, onRenameNote, onResolveAsset, onResolveConflict, onResolveWikiNote, onRestoreNoteVersion, onRestoreNoteVersionAsCopy, onSelectNote, onSync, onUpdateNote, saveState, syncing, wikiLinkNotes }: NoteEditorProps) {
   const noteRenderIdentity = note.editorSessionKey ?? stableNoteRenderIdentity(note.id, note.remotePath)
   const assetScope = `${activeCacheId ?? "session"}:${noteRenderIdentity}`
   // 同步上传使用固定快照；期间的新输入由 App 记录到来源库工作副本。
@@ -2006,13 +1976,12 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   }, [])
   const isCurrentFormatContext = useCallback(() => formatMountedRef.current
     && formatContextRef.current === formatContext && formatContext.editable, [formatContext])
-  // 特殊画布始终使用专属预览；preview 仅承接旧偏好和低频兼容阅读入口。
-  const previewing = isSpecialPreview || noteViewMode === "preview"
   const viewAction = getNoteViewModeAction(noteViewMode)
   const [deliveryOpen, setDeliveryOpen] = useState(false)
   const [offlineOpen, setOfflineOpen] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
-  const sourceMode = markdownSourceMode === "source"
+  // 锁定用于阅读，暂时呈现渲染正文；解锁仍恢复用户原来的源码编辑偏好。
+  const sourceMode = !viewLocked && markdownSourceMode === "source"
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [tagDialogOpen, setTagDialogOpen] = useState(false)
@@ -2041,15 +2010,14 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   const [findHasSelection, setFindHasSelection] = useState(false)
   const [findNotice, setFindNotice] = useState("")
   const findInputRef = useRef<HTMLInputElement>(null)
-  const previewSearchRef = useRef(new PreviewSearch())
   const openFind = useCallback(() => {
     if (!findOpen) {
-      setFindHasSelection(!previewing && (editorRef.current?.beginFind() ?? false))
+      setFindHasSelection(!isSpecialPreview && (editorRef.current?.beginFind() ?? false))
       setFindInSelection(false)
       setFindNotice("")
     }
     setFindOpen(true)
-  }, [findOpen, previewing])
+  }, [findOpen, isSpecialPreview])
   // 粘贴/插入时的即时错误（剪贴板读不到、代码块里不能插图等）。写入过程与结果不在这里，
   // 它们属于队列，由 AttachmentQueuePanel 常驻展示——编辑区卸载也不该让它们消失。
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
@@ -2058,18 +2026,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   // 队列可能正忙在别的笔记上，那时这个工具栏不该被锁住。
   const attachmentBusy = batches.some((batch) => (batch.status === "queued" || batch.status === "writing")
     && batch.target.editorSessionKey === (note.editorSessionKey ?? note.id))
-  const currentNoteIdRef = useRef(note.id)
-  currentNoteIdRef.current = note.id
-  const [viewSwitchError, setViewSwitchError] = useState<string | null>(null)
-  const previewRequestRef = useRef(0)
-  // 换笔记后上次失败的提示不再适用；同时作废进行中的预览加载——
-  // 否则 A→B→A 往返时，A 的旧请求会因笔记 ID 再次匹配而越过守卫生效。
-  useEffect(() => {
-    previewRequestRef.current += 1
-    setViewSwitchError(null)
-    setTagDialogOpen(false)
-    setTagError(null)
-  }, [note.id])
+  useEffect(() => { setTagDialogOpen(false); setTagError(null) }, [note.id])
   const saveTags = () => {
     if (writeProtected || viewLocked || !note.contentLoaded || isSpecialPreview) return
     try {
@@ -2081,34 +2038,11 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
       setTagError(error instanceof Error ? error.message : "标签格式无效")
     }
   }
-  // 预览是懒加载 chunk：切换瞬间如果还没取到，原正文会整块换成加载占位。
-  // 先等同一个模块缓存就绪再翻状态（启动预取已覆盖时只是一个微任务），
-  // 没取到时编辑器多停一拍，也比正文整块消失更容易接受。路径必须与上方 lazyWithRetry 一致。
   // 正文模式切换：只翻本机编辑偏好，不动笔记内容、不写远端元数据。
   // 草稿的落定在编辑器内部完成（切换前会先提交表格单元格与公式块草稿），这里不重复处理。
   const toggleMarkdownSourceMode = useCallback(() => {
     onMarkdownSourceModeChange(markdownSourceMode === "source" ? "live" : "source")
   }, [markdownSourceMode, onMarkdownSourceModeChange])
-  const handleNoteViewModeChange = useCallback((mode: NoteViewMode) => {
-    // 每次切换意图都递增序号：加载期间用户改回编辑态或换了笔记，旧请求完成后不得再翻状态。
-    const requestId = ++previewRequestRef.current
-    setViewSwitchError(null)
-    if (mode !== "preview") {
-      onNoteViewModeChange(mode)
-      return
-    }
-    const noteId = currentNoteIdRef.current
-    void import("@/components/editor/markdown-preview")
-      .then(() => {
-        if (requestId !== previewRequestRef.current || currentNoteIdRef.current !== noteId) return
-        onNoteViewModeChange(mode)
-      })
-      .catch(() => {
-        // chunk 取不到（弱网等）时保持编辑态并给出反馈，而不是点了没反应。
-        if (requestId !== previewRequestRef.current || currentNoteIdRef.current !== noteId) return
-        setViewSwitchError("阅读模式加载失败，请检查网络后重试")
-      })
-  }, [onNoteViewModeChange])
   // 根目录笔记没有可跳转的目录段；标题单独作为末段，让沉浸画布也能看到当前打开的是哪张图。
   const folderSegments = note.folder ? getNoteBreadcrumbSegments(note.folder) : []
   // Canvas 正文是绘图 JSON，按字符计数没有意义，改用节点数量描述文档规模。
@@ -2136,21 +2070,11 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   // 切换阅读/编辑时用来对位：滚动过程中随手记下可视区顶端落在哪一源码行。
   // 用命中测试而不是遍历整篇，长笔记里滚动才不会为此多花时间。
   const anchorLineRef = useRef<number | null>(null)
-  const previewingRef = useRef(previewing)
-  previewingRef.current = previewing
   const readTopSourceLine = useCallback(() => {
     const viewport = editorViewportRef.current
-    if (!viewport || viewport.clientHeight <= 0) return null
-    const bounds = viewport.getBoundingClientRect()
-    if (!previewingRef.current) return editorRef.current?.lineAtViewportTop(bounds.top) ?? null
-    const x = bounds.left + bounds.width / 2
-    // 顶端可能正落在两个块之间的空白上，往下多探两次再放弃。
-    for (const offset of [2, 16, 36]) {
-      const element = document.elementFromPoint(x, bounds.top + offset)
-      const line = Number(element?.closest<HTMLElement>("[data-source-line]")?.dataset.sourceLine)
-      if (Number.isFinite(line)) return line
-    }
-    return null
+    return viewport && viewport.clientHeight > 0
+      ? editorRef.current?.lineAtViewportTop(viewport.getBoundingClientRect().top) ?? null
+      : null
   }, [])
   // 换了笔记就丢掉上一篇的锚点，否则下一次切视图会按别的文档的行号对位。
   useEffect(() => { anchorLineRef.current = null }, [note.id])
@@ -2222,13 +2146,8 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
     const align = () => {
       frame = 0
       attempts += 1
-      const article = editorArticleRef.current
-      // 阅读态是分帧铺开的、编辑器是懒加载的，目标位置要一直跟到内容就位为止。
-      const ready = previewing ? !article?.querySelector(".markdown-preview-pending") : Boolean(editorRef.current)
-      const applied = previewing
-        ? alignPreviewToSourceLine(viewport, article, line)
-        : editorRef.current?.scrollLineToTop(line) === true
-      if ((ready && applied) || attempts >= ANCHOR_ALIGN_FRAMES) return stop()
+      const applied = editorRef.current?.scrollLineToTop(line) === true
+      if (applied || attempts >= ANCHOR_ALIGN_FRAMES) return stop()
       frame = window.requestAnimationFrame(align)
     }
     // 读者自己动手了就别再抢滚动条。
@@ -2236,7 +2155,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
     viewport.addEventListener("touchstart", stop, { passive: true })
     frame = window.requestAnimationFrame(align)
     return stop
-  }, [isSpecialPreview, previewing])
+  }, [isSpecialPreview, sourceMode])
 
   // Vault 笔记的标题对应文件名：编辑时先落草稿，失焦或回车再走统一的重命名链路，避免每次按键触发文件操作。
   const isVaultNote = note.source === "local" || note.source === "webdav"
@@ -2265,7 +2184,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
     })
     observer.observe(field)
     return () => observer.disconnect()
-  }, [titleDraft, note.title, previewing, fileReadOnly])
+  }, [titleDraft, note.title, isSpecialPreview, fileReadOnly])
 
   const cancelTitleCommitRef = useRef(false)
   const commitTitle = () => {
@@ -2378,24 +2297,22 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
     }), [note.remotePath, wikiLinkNotes])
 
   const runFind = useCallback((direction: "next" | "previous" = "next", fromStart = false) => {
-    setFindResult(previewing
-      ? previewSearchRef.current.find(editorArticleRef.current?.querySelector(".markdown-preview") ?? null, findQuery, direction, fromStart, false, findOptions)
-      : editorRef.current?.findText(findQuery, direction, fromStart) ?? { current: 0, total: 0 })
-  }, [findQuery, previewing, findOptions])
+    setFindResult(editorRef.current?.findText(findQuery, direction, fromStart) ?? { current: 0, total: 0 })
+  }, [findQuery])
 
   useLayoutEffect(() => {
-    if (!active || !findOpen || previewing) { editorRef.current?.endFind(); return }
+    if (!active || !findOpen || isSpecialPreview) { editorRef.current?.endFind(); return }
     editorRef.current?.configureFind({ query: findQuery, ...findOptions, inSelection: findInSelection })
-  }, [active, findOpen, findQuery, findOptions, findInSelection, previewing, note.contentLoaded])
+  }, [active, findOpen, findQuery, findOptions, findInSelection, isSpecialPreview, note.contentLoaded])
 
   useEffect(() => { setFindNotice("") }, [findQuery, findOptions, findInSelection, note.id])
   useEffect(() => {
-    if (previewing) { setFindHasSelection(false); setFindInSelection(false) }
-  }, [previewing])
+    if (isSpecialPreview) { setFindHasSelection(false); setFindInSelection(false) }
+  }, [isSpecialPreview])
 
   const replaceFind = (all = false) => {
     const editor = editorRef.current
-    if (!editor || editorReadOnly || previewing) return
+    if (!editor || editorReadOnly || isSpecialPreview) return
     if (all) {
       const count = editor.replaceAll(findQuery, findReplacement)
       setFindResult(editor.inspectFind(findQuery))
@@ -2406,24 +2323,6 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
       setFindNotice(result.replaced ? "已替换 1 处" : "已定位匹配；再次替换可修改该处")
     }
   }
-
-  useEffect(() => {
-    const search = previewSearchRef.current
-    if (!active || !findOpen || !previewing) { search.clear(); return }
-    const article = editorArticleRef.current
-    if (!article) return
-    let frame = 0
-    const refresh = () => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => setFindResult(search.find(article.querySelector(".markdown-preview"), findQuery, "next", false, true, findOptions)))
-    }
-    // 长文和嵌入内容会分批渲染，查找数量跟着补齐，不能只搜首屏已挂载的段落。
-    const observer = new MutationObserver(refresh)
-    const content = article.querySelector(".document-canvas")
-    if (content) observer.observe(content, { childList: true, subtree: true, characterData: true })
-    refresh()
-    return () => { observer.disconnect(); cancelAnimationFrame(frame); search.clear() }
-  }, [active, findOpen, findQuery, previewing, note.id, findOptions])
 
   useEffect(() => {
     setFindOpen(false)
@@ -2445,7 +2344,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   }, [active, searchNavigation, note.id, note.contentLoaded, isSpecialPreview, openFind])
 
   useEffect(() => {
-    if (!active || !findOpen || previewing || note.contentLoaded === false) return
+    if (!active || !findOpen || isSpecialPreview || note.contentLoaded === false) return
     let frame = 0
     const refresh = () => {
       cancelAnimationFrame(frame)
@@ -2461,19 +2360,19 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
     if (editorArticleRef.current) observer.observe(editorArticleRef.current, { childList: true, subtree: true })
     refresh()
     return () => { observer.disconnect(); cancelAnimationFrame(frame) }
-  }, [active, findOpen, findQuery, previewing, note.id, note.contentLoaded, findOptions, findInSelection])
+  }, [active, findOpen, findQuery, isSpecialPreview, note.id, note.contentLoaded, findOptions, findInSelection])
 
   useEffect(() => {
-    if (!active || !findOpen || previewing || note.contentLoaded === false) return
+    if (!active || !findOpen || isSpecialPreview || note.contentLoaded === false) return
     // 正文事务（含撤销/重做）回传新内容后，只刷新计数，不重新定位匹配或触碰焦点。
     setFindResult(editorRef.current?.inspectFind(findQuery) ?? { current: 0, total: 0 })
-  }, [active, findOpen, findQuery, previewing, note.id, note.content, note.contentLoaded, findOptions, findInSelection])
+  }, [active, findOpen, findQuery, isSpecialPreview, note.id, note.content, note.contentLoaded, findOptions, findInSelection])
 
   useEffect(() => {
     if (!active || !findOpen) return
     const frame = window.requestAnimationFrame(() => findInputRef.current?.focus())
     return () => window.cancelAnimationFrame(frame)
-  }, [active, findOpen, previewing])
+  }, [active, findOpen, isSpecialPreview])
 
   useEffect(() => {
     if (!active || !findOpen) return
@@ -2511,15 +2410,11 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
       // 弹窗开着时更不能接管：焦点可能停在按钮上，此时去全选背后的笔记正文没有意义。
       if (isTextEntryElement(document.activeElement) || hasOpenModal()) return
       event.preventDefault()
-      if (previewing) {
-        selectElementContents(editorArticleRef.current?.querySelector(".markdown-preview") ?? null)
-        return
-      }
       editorRef.current?.selectAll()
     }
     document.addEventListener("keydown", handleSelectAll)
     return () => document.removeEventListener("keydown", handleSelectAll)
-  }, [active, isSpecialPreview, previewing])
+  }, [active, isSpecialPreview])
 
   useEffect(() => {
     if (!active || !outlinePinned || compact || isSpecialPreview) return
@@ -2531,42 +2426,21 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
       frame = requestAnimationFrame(() => {
         const line = readTopSourceLine() ?? 1
         let active = -1
-        if (previewing) {
-          const top = viewport.getBoundingClientRect().top
-          const headings = viewport.querySelectorAll<HTMLElement>(".markdown-preview :is(h1,h2,h3,h4,h5,h6)[data-source-line]")
-          // 锚点跳转会保留 scroll-margin；高亮判定也留出相同距离，避免跳到第四章却选中第三章。
-          for (const heading of headings) {
-            if (heading.closest(".markdown-preview-embedded")) continue
-            const margin = Number.parseFloat(getComputedStyle(heading).scrollMarginTop) || 0
-            if (heading.getBoundingClientRect().top <= top + margin + 2) {
-              const index = noteOutline.findIndex((item) => item.line === Number(heading.dataset.sourceLine))
-              if (index >= 0) active = index
-            }
-          }
-        } else {
-          noteOutline.forEach((heading, index) => { if (heading.line <= line) active = index })
-        }
+        noteOutline.forEach((heading, index) => { if (heading.line <= line) active = index })
         setActiveOutlineIndex(active)
       })
     }
-    // 只在固定大纲时追踪可视区，并合并为每帧一次；复用源码行锚点兼容阅读和编辑排版。
+    // 只在固定大纲时追踪可视区，并合并为每帧一次；复用源码行锚点对应当前正文排版。
     viewport.addEventListener("scroll", refresh, { passive: true })
     const observer = new MutationObserver(refresh)
     observer.observe(viewport, { childList: true, subtree: true })
     refresh()
     return () => { viewport.removeEventListener("scroll", refresh); observer.disconnect(); cancelAnimationFrame(frame) }
-  }, [active, outlinePinned, compact, isSpecialPreview, noteOutline, previewing, readTopSourceLine])
+  }, [active, outlinePinned, compact, isSpecialPreview, noteOutline, isSpecialPreview, readTopSourceLine])
 
-  const revealOutlineHeading = (heading: (typeof noteOutline)[number], index: number) => {
+  const revealOutlineHeading = (heading: (typeof noteOutline)[number]) => {
     setOutlineDialogOpen(false)
-    if (!previewing) {
-      editorRef.current?.revealLine(heading.line)
-      return
-    }
-    const sameAnchorIndex = noteOutline.slice(0, index).filter((item) => item.anchor === heading.anchor).length
-    const target = Array.from(editorArticleRef.current?.querySelectorAll<HTMLElement>(".markdown-preview [id]") ?? [])
-      .filter((element) => element.id === heading.anchor)[sameAnchorIndex]
-    target?.scrollIntoView({ behavior: "smooth", block: "start" })
+    editorRef.current?.revealLine(heading.line)
   }
 
   return (
@@ -2575,7 +2449,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
       data-compact={compact}
       data-focus-mode={active && focusMode}
       data-excalidraw={isExcalidraw}
-      data-view-mode={previewing ? "preview" : noteViewMode}
+      data-view-mode={isSpecialPreview ? "preview" : noteViewMode}
       onPointerDownCapture={compact ? (event) => {
         dismissSelectionOriginRef.current = { at: event.timeStamp, x: event.clientX, y: event.clientY }
       } : undefined}
@@ -2646,7 +2520,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
                   <DropdownMenuItem
                     className="note-outline-item"
                     key={`${heading.line}-${index}`}
-                    onClick={() => revealOutlineHeading(heading, index)}
+                    onClick={() => revealOutlineHeading(heading)}
                     style={{ paddingLeft: `${8 + Math.max(0, heading.level - 1) * 12}px` }}
                   >
                     <span>{heading.text}</span>
@@ -2673,15 +2547,10 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
             <DropdownMenuContent align="end">
               {!isSpecialPreview ? (
                 <>
-                  <DropdownMenuItem onClick={() => handleNoteViewModeChange(viewAction.nextMode)}>
+                  <DropdownMenuItem onClick={() => onNoteViewModeChange(viewAction.nextMode)}>
                     {viewAction.nextMode === "unified" ? <PencilLine /> : <LockKeyhole />}
                     {viewAction.label}
                   </DropdownMenuItem>
-                  {noteViewMode !== "preview" ? (
-                    <DropdownMenuItem onClick={() => handleNoteViewModeChange("preview")}>
-                      兼容阅读视图
-                    </DropdownMenuItem>
-                  ) : null}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onSelect={openFind}>
                     <Search /> 查找当前笔记
@@ -2711,10 +2580,10 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
                 <DropdownMenuItem onClick={onOpenSourceFile}>打开 / 下载 Excalidraw 原始文件</DropdownMenuItem>
               ) : null}
               <DropdownMenuItem onClick={onExportNote}>导出笔记与附件包</DropdownMenuItem>
-              {note.source === "webdav" && !isSpecialPreview ? <DropdownMenuItem onClick={() => { if (previewing || fileReadOnly || editorRef.current?.commitDrafts()) setOfflineOpen(true) }}>准备当前笔记离线附件</DropdownMenuItem> : null}
-              {!isSpecialPreview ? <DropdownMenuItem onClick={() => { if (previewing || fileReadOnly || editorRef.current?.commitDrafts()) setDeliveryOpen(true) }}>导出 HTML / 打印</DropdownMenuItem> : null}
+              {note.source === "webdav" && !isSpecialPreview ? <DropdownMenuItem onClick={() => { if (isSpecialPreview || fileReadOnly || editorRef.current?.commitDrafts()) setOfflineOpen(true) }}>准备当前笔记离线附件</DropdownMenuItem> : null}
+              {!isSpecialPreview ? <DropdownMenuItem onClick={() => { if (isSpecialPreview || fileReadOnly || editorRef.current?.commitDrafts()) setDeliveryOpen(true) }}>导出 HTML / 打印</DropdownMenuItem> : null}
               <DropdownMenuItem onClick={() => setFocusMode((value) => !value)}>{focusMode ? "退出专注" : "专注写作"}</DropdownMenuItem>
-              <DropdownMenuItem disabled={!activeCacheId} onClick={() => { if (previewing || fileReadOnly || editorRef.current?.commitDrafts()) setHistoryDialogOpen(true) }}>
+              <DropdownMenuItem disabled={!activeCacheId} onClick={() => { if (isSpecialPreview || fileReadOnly || editorRef.current?.commitDrafts()) setHistoryDialogOpen(true) }}>
                 <History /> 本地版本历史
               </DropdownMenuItem>
               {canManageNote ? (
@@ -2752,7 +2621,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
         </div>
       ) : null}
 
-      {!compact && !previewing ? editorReadOnly ? (
+      {!compact && !isSpecialPreview ? editorReadOnly ? (
         <div className="formatting-toolbar formatting-toolbar-locked" role="status">
           <LockKeyhole />
           <span>{fileReadOnly ? "源文件只读" : viewLocked ? "只读阅读已锁定" : "正在同步，暂不可编辑"}</span>
@@ -2773,13 +2642,6 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
           onToggleSourceMode={toggleMarkdownSourceMode}
           sourceMode={sourceMode}
         />
-      ) : null}
-
-      {noteViewMode === "preview" && !isSpecialPreview ? (
-        <div className="compatibility-preview-banner" role="status">
-          <span>当前使用兼容阅读视图</span>
-          <Button onClick={() => handleNoteViewModeChange("unified")} size="sm" variant="outline">进入一体化编辑</Button>
-        </div>
       ) : null}
 
       {findOpen && !isSpecialPreview ? (
@@ -2811,7 +2673,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
           </div>
           <button aria-label="上一个匹配项" disabled={!findResult.total} onClick={() => runFind("previous")} type="button"><ChevronUp /></button>
           <button aria-label="下一个匹配项" disabled={!findResult.total} onClick={() => runFind("next")} type="button"><ChevronDown /></button>
-          {!editorReadOnly && !previewing ? (
+          {!editorReadOnly && !isSpecialPreview ? (
             <>
               <input
                 aria-label="替换为"
@@ -2843,8 +2705,8 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
           <div className="editor-find-options" aria-label="查找选项">
             <button aria-pressed={findOptions.caseSensitive} onClick={() => setFindOptions((value) => ({ ...value, caseSensitive: !value.caseSensitive }))} type="button">区分大小写</button>
             <button aria-pressed={findOptions.wholeWord} onClick={() => setFindOptions((value) => ({ ...value, wholeWord: !value.wholeWord }))} type="button">全词匹配</button>
-            {!previewing ? <button aria-pressed={findInSelection} disabled={!findHasSelection} onClick={() => setFindInSelection((value) => !value)} title={findHasSelection ? "限定打开查找前选中的正文" : "先选中正文，再打开查找"} type="button">仅原选区</button> : null}
-            <span>{previewing ? "范围：可见文字" : "范围：Markdown 正文（含链接地址）"}</span>
+            {!isSpecialPreview ? <button aria-pressed={findInSelection} disabled={!findHasSelection} onClick={() => setFindInSelection((value) => !value)} title={findHasSelection ? "限定打开查找前选中的正文" : "先选中正文，再打开查找"} type="button">仅原选区</button> : null}
+            <span>范围：Markdown 正文（含链接地址）</span>
             {findNotice ? <span aria-live="polite" role="status">{findNotice}</span> : null}
             {findResult.scopeInvalid ? <span role="alert">原选区已失效，请关闭查找并重新选择</span> : null}
           </div>
@@ -2864,10 +2726,6 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
         onRetry={(batchId) => attachmentQueue.retry(batchId)}
         references={(batchId) => attachmentQueue.references(batchId)}
       />
-      {viewSwitchError ? (
-        <p className="attachment-error" role="alert">{viewSwitchError}</p>
-      ) : null}
-
       {isExcalidraw ? (
         <div className="excalidraw-workspace">
           <Suspense fallback={<EditorLoadingState label="Excalidraw 画布" />}>
@@ -2893,7 +2751,6 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
           disabled={isCanvas}
           mobile={compact}
           editorRef={editorRef}
-          previewing={previewing}
           readOnly={editorReadOnly}
           viewMode={noteViewMode}
           hasSelection={hasSelection}
@@ -2902,16 +2759,16 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
           canHistory={Boolean(activeCacheId)}
           starred={Boolean(note.starred)}
           onFind={openFind}
-          onViewModeChange={handleNoteViewModeChange}
+          onViewModeChange={onNoteViewModeChange}
           onToggleStar={() => onUpdateNote({ starred: !note.starred })}
           onExport={onExportNote}
           onHistory={() => {
             // 源文件只读时不提交写入草稿；历史和交付仍应可访问。
-            if (previewing || fileReadOnly || editorRef.current?.commitDrafts()) setHistoryDialogOpen(true)
+            if (isSpecialPreview || fileReadOnly || editorRef.current?.commitDrafts()) setHistoryDialogOpen(true)
           }}
         >
         <div className="document-canvas">
-          {previewing || fileReadOnly ? (
+          {isSpecialPreview || fileReadOnly ? (
             <h1 className="document-title document-title-readonly">{note.title || "未命名笔记"}</h1>
           ) : (
             <textarea
@@ -2975,21 +2832,6 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
             <Suspense fallback={<EditorLoadingState label="Canvas 画布" />}>
               <CanvasPreview key={note.id} content={note.content} onResolveAsset={onResolveAsset} onWikiLink={onOpenWikiLink} />
             </Suspense>
-          ) : previewing ? (
-            <Suspense fallback={<EditorLoadingState label="Markdown 预览" />}>
-              <MarkdownPreview
-                assetScope={assetScope}
-                content={note.content}
-                editable={!writeProtected}
-                key={noteRenderIdentity}
-                noteId={note.id}
-                onLoadWikiNote={onLoadWikiNote}
-                onResolveAsset={onResolveAsset}
-                onResolveWikiNote={onResolveWikiNote}
-                onToggleTask={writeProtected ? undefined : onToggleTask}
-                onWikiLink={onOpenWikiLink}
-              />
-            </Suspense>
           ) : (
             <div className="markdown-editor-shell">
               <Suspense fallback={<EditorLoadingState label="Markdown 编辑器" />}>
@@ -3028,7 +2870,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
                   onSelectionChange={setHasSelection}
                   readOnly={editorReadOnly}
                   ref={editorRef}
-                  sourceMode={markdownSourceMode === "source"}
+                  sourceMode={sourceMode}
                   storageKey={note.id}
                   value={note.content}
                 />
@@ -3046,7 +2888,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
             key={`${heading.line}-${index}`}
             type="button"
             aria-current={index === activeOutlineIndex ? "location" : undefined}
-            onClick={() => revealOutlineHeading(heading, index)}
+            onClick={() => revealOutlineHeading(heading)}
             style={{ paddingLeft: `${10 + Math.max(0, heading.level - 1) * 12}px` }}
           >{heading.text}</button>) : <p>当前笔记没有标题</p>}
         </nav>
@@ -3055,7 +2897,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
 
       {/* 只读笔记没有格式工具栏，选区操作仍需要独立一条（复制/全选可用）；
           可编辑时选区操作并入格式栏同一行，不再额外堆叠 46px。 */}
-      {compact && !previewing && editorReadOnly ? hasSelection ? (
+      {compact && !isSpecialPreview && editorReadOnly ? hasSelection ? (
         <SelectionActionBar editorRef={editorRef} readOnly />
       ) : (
         <div className="formatting-toolbar formatting-toolbar-locked" data-mobile="true" role="status">
@@ -3063,7 +2905,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
           <span>{fileReadOnly ? "源文件只读" : viewLocked ? "只读阅读已锁定" : "正在同步"}</span>
         </div>
       ) : null}
-      {compact && !previewing && !editorReadOnly ? (
+      {compact && !isSpecialPreview && !editorReadOnly ? (
         <FormattingToolbar
           key={formatContext.generation}
           isContextCurrent={isCurrentFormatContext}
@@ -3087,7 +2929,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
           {readingHint ? <span>{readingHint}</span> : null}
           <span>{isCanvas ? "Canvas" : "Markdown"}</span>
           {/* 预览与 Canvas 都没有可编辑光标，此时展示行列位置只会误导。 */}
-          {!isCanvas && !previewing ? (
+          {!isCanvas && !isSpecialPreview ? (
             <span className="ml-auto">行 {cursorPosition.line}，列 {cursorPosition.column}</span>
           ) : null}
         </footer>
@@ -3136,7 +2978,7 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
             {noteOutline.length > 0 ? noteOutline.map((heading, index) => (
               <button
                 key={`${heading.line}-${index}`}
-                onClick={() => revealOutlineHeading(heading, index)}
+                onClick={() => revealOutlineHeading(heading)}
                 style={{ paddingLeft: `${14 + Math.max(0, heading.level - 1) * 14}px` }}
                 type="button"
               >
@@ -3604,9 +3446,6 @@ function MobileRouteEntryPage({ active, backLabel, canGoBack, entry, navigationO
       onSelectFolder={routeProps.onSelectFolder}
       onSelectNote={routeProps.onSelectNote}
       onSync={routeProps.onRefreshVault}
-      onToggleTask={routeProps.onToggleNoteTask
-        ? (line, checked) => routeProps.onToggleNoteTask?.(routeNote.id, line, checked)
-        : undefined}
       onUpdateNote={routeProps.onUpdateNote}
       saveState={routeProps.saveState}
       syncing={routeProps.isRefreshingVault}

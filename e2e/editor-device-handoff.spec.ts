@@ -23,9 +23,11 @@ test("自动模式无本机修改时，回前台仍拉取另一设备正文", as
   expect(server.readFile("/Swell/note.md")).toBe("Mac 已上传的新正文")
 })
 
-test("准备附件后断网重载仍可重新读取缓存，缺失项单独反馈", async ({ page }) => {
+for (const referenceStyle of [false, true]) test(`准备${referenceStyle ? "引用式" : "普通"}附件后断网重载仍可重新读取缓存，缺失项单独反馈`, async ({ page }) => {
   const server = new MockWebDavServer()
-  server.addFile("/Swell/note.md", "[资料](attachments/a.pdf)\n\n[缺失](attachments/missing.pdf)")
+  server.addFile("/Swell/note.md", referenceStyle
+    ? "[资料][pdf]\n\n[缺失][missing]\n\n[pdf]: attachments/a.pdf\n[missing]: attachments/missing.pdf"
+    : "[资料](attachments/a.pdf)\n\n[缺失](attachments/missing.pdf)")
   server.addFile("/Swell/attachments/a.pdf", "offline-test-bytes")
   await page.route(`${SERVER_URL}**`, (route) => server.handler(route))
   await connectMockWebDav(page)

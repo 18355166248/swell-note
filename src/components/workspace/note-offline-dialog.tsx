@@ -19,7 +19,7 @@ export function NoteOfflineDialog({ open, onOpenChange, content, documentKey, re
   }, [open, documentKey, content, attempt])
   const failures = results.filter((result) => result.error).length
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent>
-    <DialogHeader><DialogTitle>准备当前笔记离线附件</DialogTitle><DialogDescription>读取当前正文中的普通附件链接和嵌入附件。坚果云附件会保存到本机缓存；外部网址和引用式链接不在本次范围，其他笔记需分别准备。</DialogDescription></DialogHeader>
+    <DialogHeader><DialogTitle>准备当前笔记离线附件</DialogTitle><DialogDescription>读取当前正文中的普通、引用式附件链接和嵌入附件。坚果云附件会保存到本机缓存；外部网址不在本次范围，其他笔记需分别准备。</DialogDescription></DialogHeader>
     <p role="status">{busy ? "正在准备…" : "本轮检查完成"} · {results.length - failures} 个成功 · {failures} 个失败 · {(results.reduce((sum, result) => sum + result.bytes, 0) / 1024 / 1024).toFixed(1)} MB</p>
     <ul className="max-h-64 overflow-y-auto">{results.map((result) => <li key={result.source} className="break-all py-2">{result.source}：{result.error ?? "已读取"}</li>)}</ul>
     {!busy && !results.length ? <p>当前正文没有本次可准备的附件。</p> : null}

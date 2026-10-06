@@ -701,16 +701,12 @@ type VaultImageProps = {
   width?: unknown
 }
 
-// 仅为旧 Vault 保留图片尺寸别名读取；新内容始终使用标准 Markdown 图片语法。
-function parseImagePresentation(alt?: string, title?: string, width?: unknown) {
-  const titleSize = title?.match(/^(\d+)(?:x(\d+))?$/)
-  const altSize = alt?.match(/^(.*)\|(\d+)(?:x(\d+))?$/)
-  const match = titleSize ?? altSize?.slice(1)
+// 图片说明与替代文字保持原样，尺寸只从独立元数据读取。
+function parseImagePresentation(alt?: string, width?: unknown) {
   return {
-    alt: altSize?.[1].trim() || alt || "笔记图片",
-    size: width === "auto" ? null : typeof width === "string" && /^[1-9]\d{0,4}$/.test(width)
-      ? { width: Number(width), height: undefined }
-      : match ? { height: match[2] ? Number(match[2]) : undefined, width: Number(match[1]) } : null,
+    alt: alt || "笔记图片",
+    size: typeof width === "string" && /^[1-9]\d{0,4}$/.test(width)
+      ? { width: Number(width), height: undefined } : null,
   }
 }
 
@@ -812,7 +808,7 @@ function VaultImage({ alt, assetScope, onResolveAsset, source, title, width }: V
   }, [cacheKey, resolvedSource, attempt])
 
   if (state.status === "ready" && state.url) {
-    const presentation = parseImagePresentation(alt, title, width)
+    const presentation = parseImagePresentation(alt, width)
     const zoomedSrc = state.url
     return (
       <img

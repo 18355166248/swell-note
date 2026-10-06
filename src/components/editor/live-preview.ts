@@ -1,3 +1,4 @@
+import { markdownDestination, resolveDocumentReference } from "@/services/markdown/markdown-reference-links"
 import { AttachmentBlockWidget, collectAttachmentBlocks, type AttachmentBlock } from "./unified-attachment"
 import { isolateHistory } from "@codemirror/commands"
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language"
@@ -8,7 +9,7 @@ import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type Vi
 import { isImageAssetPath, parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
 import { openExternalUrl } from "@/services/open-external-url"
 import { requiresLinkModifier } from "./editor-link-activation"
-import { buildImageReference, imageWidthComment, legacyImageWidth, readImageWidthComment, unescapeMarkdownImageText, type ImageWidth } from "@/services/markdown/image-presentation"
+import { buildImageReference, imageWidthComment, readImageWidthComment, unescapeMarkdownImageText, type ImageWidth } from "@/services/markdown/image-presentation"
 
 import { collectCompatibilityBlocks, CompatibilityBlockWidget, type CompatibilityBlock, type CompatibilityBlockOptions } from "./compatibility-blocks"
 import { parseMarkdownTable } from "./markdown-table-model"
@@ -265,7 +266,7 @@ export class MarkdownImageWidget extends WidgetType {
     const host = document.createElement("span")
     host.className = this.block ? "cm-md-image cm-md-image-block" : "cm-md-image"
     host.title = unescapeMarkdownImageText(this.title ?? this.alt) || this.source
-    const width = this.width === "auto" ? undefined : this.width ?? legacyImageWidth(this.title)
+    const width = this.width === "auto" ? undefined : this.width
     if (width) { host.style.width = `${width}px`; host.style.maxWidth = "100%" }
     let imageState: MarkdownImageLoadState = "loading"
     let viewButton: HTMLButtonElement | undefined
@@ -368,7 +369,7 @@ export class MarkdownImageWidget extends WidgetType {
           const apply = document.createElement("button"), cancel = document.createElement("button")
           apply.type = cancel.type = "button"; apply.textContent = "保存说明"; cancel.textContent = "取消说明"
           const dismiss = () => { altInput.remove(); titleInput.remove(); apply.remove(); cancel.remove(); captionButton.focus() }
-          const save = () => replace(buildImageReference(altInput.value, this.source, titleInput.value, this.width ?? legacyImageWidth(this.title)))
+          const save = () => replace(buildImageReference(altInput.value, this.source, titleInput.value, this.width))
           apply.addEventListener("click", save); cancel.addEventListener("click", dismiss)
           for (const input of [altInput, titleInput]) input.addEventListener("keydown", (event) => {
             if (event.isComposing) return
@@ -747,14 +748,12 @@ function openParsedLinkAtCursor(state: EditorState, tree: NonNullable<ReturnType
     for (let node: MdSyntaxNode | null = tree.resolveInner(position, side); node; node = node.parent) {
       // 标签自身可以含行内代码；只有包住链接的代码区域或图片才禁止打开。
       if (node.name === "Image" || (link && node.name.includes("Code"))) { blocked = true; break }
-      if (!link && (node.name === "Link" || node.name === "Autolink") && node.getChild("URL")) link = node
+      if (!link && (node.name === "Link" || node.name === "Autolink")) link = node
     }
     if (blocked || !link) continue
-    const url = link.getChild("URL")!
-    // CommonMark 的尖括号目的地址与 ASCII 标点转义只影响源码，不属于实际跳转地址。
-    const rawHref = state.sliceDoc(url.from, url.to)
-    const href = (rawHref.startsWith("<") && rawHref.endsWith(">") ? rawHref.slice(1, -1) : rawHref)
-      .replace(/\\([\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e])/g, "$1")
+    const url = link.getChild("URL")
+    const href = url ? markdownDestination(state.sliceDoc(url.from, url.to)) : resolveDocumentReference(link, state.doc)?.source
+    if (!href) continue
     const noteTarget = parseMarkdownNoteHref(href)
     if (noteTarget) candidates.push({ from: link.from, to: link.to, noteTarget })
     else if (externalHrefPattern.test(href)) candidates.push({ from: link.from, to: link.to, href })
@@ -889,7 +888,7 @@ function collectUnifiedBlocks(state: EditorState): UnifiedBlockDescriptor[] {
 
 function richBlocksKey(blocks: readonly UnifiedBlockDescriptor[], readOnly: boolean, assetScope?: string) {
   // 同文笔记可能属于不同库；资源身份改变也必须重建附件与兼容块，释放旧库预览。
-  return `${JSON.stringify(assetScope)}|${readOnly ? "locked" : "editable"}|${blocks.map(({ block, family }) => `${family}:${block.kind}:${block.from}:${block.to}:${block.source}`).join("|")}`
+  return `${JSON.stringify(assetScope)}|${readOnly ? "locked" : "editable"}|${blocks.map(({ block, family }) => `${family}:${block.kind}:${block.from}:${block.to}:${block.source}:${family === "attachment" ? (block as AttachmentBlock).href : ""}`).join("|")}`
 }
 
 function richBlockDecorationsDrifted(state: EditorState, blocks: readonly UnifiedBlockDescriptor[]) {
@@ -1178,10 +1177,10 @@ function buildLivePreviewDecorations(view: EditorView, forcedRanges?: readonly D
           }
           case "Link":
           case "Autolink": {
-            // 引用式链接与 [[wiki]] 内层节点都没有 URL 子节点，跳过后由各自逻辑处理。
             const url = node.node.getChild("URL")
-            if (!url) break
-            const href = view.state.sliceDoc(url.from, url.to)
+            const reference = !url ? resolveDocumentReference(node.node, view.state.doc) : undefined
+            if (!url && !reference) break
+            const href = url ? markdownDestination(view.state.sliceDoc(url.from, url.to)) : reference!.source
             const noteTarget = parseMarkdownNoteHref(href)
             const linkAttributes: Record<string, string> | undefined = noteTarget
               ? { "data-md-note-target": noteTarget, title: linkHint(view.state, true) }
@@ -1197,8 +1196,8 @@ function buildLivePreviewDecorations(view: EditorView, forcedRanges?: readonly D
             decorations.push(
               Decoration.mark({ class: "cm-md-link" }).range(node.from, node.to),
             )
-            const actionFrom = node.name === "Autolink" ? url.from : open?.to
-            const actionTo = node.name === "Autolink" ? url.to : close?.from
+            const actionFrom = node.name === "Autolink" ? url?.from : open?.to
+            const actionTo = node.name === "Autolink" ? url?.to : close?.from
             if (linkAttributes && actionFrom !== undefined && actionTo !== undefined && actionFrom < actionTo) {
               decorations.push(Decoration.mark({
                 attributes: linkAttributes,
@@ -1220,8 +1219,9 @@ function buildLivePreviewDecorations(view: EditorView, forcedRanges?: readonly D
           case "Image": {
             const url = node.node.getChild("URL")
             // 锁定后旧光标只是一段会话位置，不代表用户仍在编辑；图片应始终保持渲染态。
-            if (!url || (active && !view.state.readOnly)) break
-            const source = view.state.sliceDoc(url.from, url.to)
+            if (active && !view.state.readOnly) break
+            const reference = !url ? resolveDocumentReference(node.node, view.state.doc) : undefined
+            const source = url ? markdownDestination(view.state.sliceDoc(url.from, url.to)) : reference?.source
             if (!source) break
             const marks: MdSyntaxNode[] = []
             for (let child = node.node.firstChild; child; child = child.nextSibling) {
@@ -1234,7 +1234,7 @@ function buildLivePreviewDecorations(view: EditorView, forcedRanges?: readonly D
             const imageTo = node.to + (presentation?.length ?? 0)
             const alone = line.text.trim() === view.state.sliceDoc(node.from, imageTo).trim()
             decorations.push(Decoration.replace({
-              widget: new MarkdownImageWidget(alt, source, alone, view.state.facet(livePreviewOptions), node.from, imageTo, (() => { const title = node.node.getChild("LinkTitle"); return title ? view.state.sliceDoc(title.from + 1, title.to - 1) : undefined })(), view.state.readOnly, presentation?.width),
+              widget: new MarkdownImageWidget(alt, source, alone, view.state.facet(livePreviewOptions), node.from, imageTo, (() => { const title = node.node.getChild("LinkTitle"); return title ? view.state.sliceDoc(title.from + 1, title.to - 1) : reference?.title })(), view.state.readOnly, presentation?.width),
             }).range(node.from, imageTo))
             break
           }

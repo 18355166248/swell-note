@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test"
 import { readFile } from "node:fs/promises"
 import { strFromU8, unzipSync } from "fflate"
 
-import { useCompatibilityPreview } from "./note-view-mode"
+import { lockUnifiedCanvas, useUnifiedCanvas } from "./note-view-mode"
 
 // 右键 → 点某一项，两步之间必须等上一轮菜单从 DOM 里消失。
 // 关闭的浮层在退场动画（约 100ms）期间仍挂在 body 上，此时右键的 pointerup 会被
@@ -517,26 +517,7 @@ test.describe("编辑态链接点击跳转", () => {
     await expect(restoredA.locator(".cm-content")).not.toContainText("只属于 B")
   })
 
-  test("移动端 Wiki 锚点只滚动当前路由层的同名标题", async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name !== "mobile-chrome")
-    await seedCachedVault(page, "# 同名标题\n\n[[第二篇#同名标题]]", false, "# 同名标题\n\n正文 B")
-    await page.evaluate(() => {
-      const calls: boolean[] = []
-      Object.defineProperty(window, "__anchorScrollCalls", { configurable: true, value: calls })
-      Element.prototype.scrollIntoView = function scrollIntoView() {
-        calls.push(Boolean(this.closest("[inert]")))
-      }
-    })
-    const workspace = page.locator(".mobile-workspace:visible")
-    await workspace.getByText("测试", { exact: true }).first().click()
-    await workspace.locator(".mobile-edge-swipe-current").getByText("第一篇", { exact: true }).first().click()
-    await useCompatibilityPreview(page)
-    await workspace.locator(".mobile-edge-swipe-current .markdown-preview").getByRole("button", { name: "第二篇", exact: true }).tap()
-    await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
 
-    await expect.poll(() => page.evaluate(() => (window as unknown as { __anchorScrollCalls: boolean[] }).__anchorScrollCalls)).toContain(false)
-    expect(await page.evaluate(() => (window as unknown as { __anchorScrollCalls: boolean[] }).__anchorScrollCalls)).not.toContain(true)
-  })
 
   async function openMobileEditor(page: Page, noteContent?: string) {
     await seedCachedVault(page, noteContent)
@@ -779,15 +760,13 @@ test.describe("编辑细节", () => {
   test("右键列表空白与阅读正文显示各自操作", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page, "用于阅读的正文")
-    // 默认视图是一体化编辑画布，`.markdown-preview` 只在兼容阅读视图里存在，
-    // 不先切过去就永远等不到那个元素。
-    await useCompatibilityPreview(page)
+    await lockUnifiedCanvas(page)
     const viewport = page.locator(".note-list-scroll")
     const bounds = await viewport.boundingBox()
     await viewport.click({ button: "right", position: { x: 20, y: bounds!.height - 20 } })
     await expect(page.getByRole("menuitem", { name: "新建笔记", exact: true })).toBeVisible()
     await page.keyboard.press("Escape")
-    await page.locator(".markdown-preview").click({ button: "right" })
+    await page.locator(".cm-content").click({ button: "right" })
     await expect(page.getByRole("menuitem", { name: "导出笔记与附件包", exact: true })).toBeVisible()
     await page.getByRole("menuitem", { name: "全选正文", exact: true }).click()
     expect(await page.evaluate(() => window.getSelection()?.toString())).toContain("用于阅读的正文")
@@ -1110,7 +1089,7 @@ test.describe("移动待办触区与侧滑", () => {
     await expect(page.locator(".note-editor:visible .cm-md-task-checkbox").first()).toBeChecked()
   })
 
-  test("锁定阅读保持禁用且兼容阅读仍可勾选", async ({ page }, testInfo) => {
+  test("锁定阅读禁用勾选，解锁后仍可操作", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "mobile-chrome")
     const { workspace } = await openTaskFixture(page)
     await workspace.getByRole("button", { name: "更多操作" }).click()
@@ -1121,8 +1100,8 @@ test.describe("移动待办触区与侧滑", () => {
     await page.touchscreen.tap(rect.x + 7.5, rect.y + 7.5)
     await expect(locked).not.toBeChecked()
     expect((await inspectTasks(page)).doc).toBe(taskDoc)
-    await useCompatibilityPreview(page)
-    const preview = workspace.locator(".markdown-preview .task-checkbox").first()
+    await useUnifiedCanvas(page)
+    const preview = workspace.locator(".cm-md-task-checkbox").first()
     await preview.tap()
     await expect(preview).toBeChecked()
   })
@@ -1178,21 +1157,19 @@ test.describe("待办键盘连续性与名称", () => {
     await expect(boxes.first()).not.toBeChecked()
   })
 
-  test("编辑与兼容阅读使用任务正文名称并保留原生状态", async ({ page }, testInfo) => {
+  test("编辑与锁定阅读使用任务正文名称并保留原生状态", async ({ page }, testInfo) => {
     const { boxes, workspace } = await openFixture(page, testInfo.project.name === "mobile-chrome")
     await expect(boxes.first()).toHaveAccessibleName("买牛奶 店铺 清单")
     await expect(boxes.nth(1)).toHaveAccessibleName("子任务")
     await expect(boxes.nth(2)).toHaveAccessibleName("下一项")
     await expect(boxes.nth(1)).toBeChecked()
-    await useCompatibilityPreview(page)
-    const preview = workspace.locator('.markdown-preview input[type="checkbox"]')
+    await lockUnifiedCanvas(page)
+    const preview = workspace.locator('.cm-md-task-checkbox')
     await expect(preview.first()).toHaveAccessibleName("买牛奶 店铺 清单")
     await expect(preview.nth(1)).toHaveAccessibleName("子任务")
     await expect(preview.nth(2)).toHaveAccessibleName("下一项")
     await expect(preview.nth(1)).toBeChecked()
-    await preview.first().focus()
-    await page.keyboard.press("Space")
-    await expect(preview.first()).toBeChecked()
+    await expect(preview.first()).toBeDisabled()
   })
 
   test("带标题链接的名称保留正文真实空格且两种模式一致", async ({ page }, testInfo) => {
@@ -1200,8 +1177,8 @@ test.describe("待办键盘连续性与名称", () => {
     const { boxes, workspace } = await openFixture(page, testInfo.project.name === "mobile-chrome", content)
     await expect(boxes.nth(0)).toHaveAccessibleName("店铺续写")
     await expect(boxes.nth(1)).toHaveAccessibleName("店铺 续写")
-    await useCompatibilityPreview(page)
-    const preview = workspace.locator('.markdown-preview input[type="checkbox"]')
+    await lockUnifiedCanvas(page)
+    const preview = workspace.locator('.cm-md-task-checkbox')
     await expect(preview.nth(0)).toHaveAccessibleName("店铺续写")
     await expect(preview.nth(1)).toHaveAccessibleName("店铺 续写")
   })
@@ -1226,13 +1203,13 @@ test.describe("待办键盘连续性与名称", () => {
     expect(errors).toEqual([])
   })
 
-  test("嵌套方括号标签名称与兼容阅读一致", async ({ page }, testInfo) => {
+  test("嵌套方括号标签名称与锁定阅读一致", async ({ page }, testInfo) => {
     const content = '前文\n\n- [ ] [A [B] C](https://example.com "标题")结束\n- [ ] [A [**B**] C](https://example.com "标题") 结束\n\n末段'
     const { boxes, workspace } = await openFixture(page, testInfo.project.name === "mobile-chrome", content)
     await expect(boxes.nth(0)).toHaveAccessibleName("A [B] C结束")
     await expect(boxes.nth(1)).toHaveAccessibleName("A [B] C 结束")
-    await useCompatibilityPreview(page)
-    const preview = workspace.locator('.markdown-preview input[type="checkbox"]')
+    await lockUnifiedCanvas(page)
+    const preview = workspace.locator('.cm-md-task-checkbox')
     await expect(preview.nth(0)).toHaveAccessibleName("A [B] C结束")
     await expect(preview.nth(1)).toHaveAccessibleName("A [B] C 结束")
   })

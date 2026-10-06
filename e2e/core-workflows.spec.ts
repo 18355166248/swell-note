@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test"
 
-import { lockUnifiedCanvas, useCompatibilityPreview, useUnifiedCanvas } from "./note-view-mode"
+import { lockUnifiedCanvas, useUnifiedCanvas } from "./note-view-mode"
 import { createVaultBackup } from "../src/services/backup/vault-backup"
 
 async function seedCachedVault(page: Page, tags: string[] = []) {
@@ -222,7 +222,7 @@ test.describe("核心笔记流程", () => {
     await expect(page.getByRole("button", { name: /恢复 ZIP/ })).toBeVisible()
   })
 
-  test("兼容阅读下新建笔记直接进入统一画布，且不改写显式阅读偏好", async ({ page }, testInfo) => {
+  test("锁定阅读下新建笔记直接进入统一画布，且不改写显式阅读偏好", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page)
     await page.evaluate(() => {
@@ -236,18 +236,18 @@ test.describe("核心笔记流程", () => {
     await page.reload()
     const workspace = page.locator(".desktop-workspace:visible")
 
-    await useCompatibilityPreview(page)
-    await expect(workspace.getByText("当前使用兼容阅读视图")).toBeVisible()
+    await lockUnifiedCanvas(page)
+    await expect(workspace.locator(".note-editor")).toHaveAttribute("data-view-mode", "locked")
     await workspace.getByRole("button", { name: "新建笔记" }).click()
     await expect(workspace.locator(".note-editor")).toHaveAttribute("data-view-mode", "unified")
     await expect(workspace.locator(".cm-content")).toBeVisible()
 
-    // 只切当前视图：本次新建不会覆盖用户显式选择的兼容阅读偏好。
+    // 只切当前视图：本次新建不会覆盖用户显式选择的锁定阅读偏好。
     const storedViewMode = await page.evaluate(() => {
       const raw = localStorage.getItem("swell-note:ui-preferences:v1")
       return raw ? (JSON.parse(raw) as { noteViewMode?: string }).noteViewMode ?? null : null
     })
-    expect(storedViewMode).toBe("preview")
+    expect(storedViewMode).toBe("locked")
   })
 
   test("桌面端右键笔记与文件夹弹出自定义菜单并接上后续对话框", async ({ page }, testInfo) => {

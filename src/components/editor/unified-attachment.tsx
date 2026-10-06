@@ -1,3 +1,4 @@
+import { markdownDestination, resolveDocumentReference } from "@/services/markdown/markdown-reference-links"
 import { syntaxTree } from "@codemirror/language"
 import type { EditorState } from "@codemirror/state"
 import { EditorView, WidgetType } from "@codemirror/view"
@@ -12,12 +13,12 @@ export function collectAttachmentBlocks(state: EditorState): AttachmentBlock[] {
   syntaxTree(state).iterate({ enter(node) {
     if (node.name !== "Link") return
     const url = node.node.getChild("URL")
-    if (!url) return
     const line = state.doc.lineAt(node.from)
     const source = state.sliceDoc(node.from, node.to)
     // 只接管独占一行的附件，句内链接仍保留文本选区和正常 Markdown 编辑。
     if (line.text.trim() !== source || state.doc.lineAt(node.to).number !== line.number) return
-    const raw = state.sliceDoc(url.from, url.to).replace(/^<|>$/g, "")
+    const raw = url ? markdownDestination(state.sliceDoc(url.from, url.to)) : resolveDocumentReference(node.node, state.doc)?.source
+    if (!raw) return
     const href = parseVaultAssetHref(raw) ?? (isRelativeAttachmentHref(raw) ? raw : null)
     if (!href) return
     blocks.push({ kind: "attachment", from: line.from, to: line.to, source: line.text, href, label: /^\[([^\]]*)\]/.exec(source)?.[1] || href })
@@ -29,7 +30,7 @@ export class AttachmentBlockWidget extends WidgetType {
   private root?: Root
   private readOnly: boolean
   constructor(readonly block: AttachmentBlock, readonly options: CompatibilityBlockOptions, readonly view: EditorView) { super(); this.readOnly = view.state.readOnly }
-  eq(other: AttachmentBlockWidget) { return other.block.source === this.block.source && other.block.from === this.block.from && other.options.assetScope === this.options.assetScope && other.readOnly === this.readOnly }
+  eq(other: AttachmentBlockWidget) { return other.block.href === this.block.href && other.block.source === this.block.source && other.block.from === this.block.from && other.options.assetScope === this.options.assetScope && other.readOnly === this.readOnly }
   toDOM() {
     const host = document.createElement("div")
     host.className = "cm-md-attachment"

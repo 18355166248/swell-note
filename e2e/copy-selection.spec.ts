@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test"
 
-import { useCompatibilityPreview } from "./note-view-mode"
+import { lockUnifiedCanvas } from "./note-view-mode"
 
 // 复制文本的两条自定义路径（阅读态菜单、表格选区浮层）的界面验证。
 // 种子数据是独立的离线 vault，不触碰真实笔记。
@@ -102,37 +102,27 @@ async function captureClipboardWrites(page: Page) {
 }
 
 test.describe("复制选区文本", () => {
-  test("阅读态右键复制只带走正文，不含界面文字且表格保留制表符", async ({ page }, testInfo) => {
+  test("阅读态右键复制只带走正文，不含界面文字且保留 Markdown 表格", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await captureClipboardWrites(page)
     await seedNote(page)
-    await useCompatibilityPreview(page)
+    await lockUnifiedCanvas(page)
 
-    const preview = page.locator(".note-editor:visible .markdown-preview")
-    // 全选正文后右键：右键点在被选中文字内部，原生右键不会清掉已有选区。
-    const range = await preview.boundingBox()
-    if (!range) throw new Error("阅读态没有渲染出正文")
-    await page.evaluate(() => {
-      const content = document.querySelector(".note-editor:not([hidden]) .markdown-preview") ?? document.querySelector(".markdown-preview")
-      if (!content) throw new Error("没有 .markdown-preview")
-      const all = document.createRange()
-      all.selectNodeContents(content)
-      const selection = window.getSelection()
-      selection?.removeAllRanges()
-      selection?.addRange(all)
-    })
-    await page.mouse.click(range.x + 8, range.y + 8, { button: "right" })
+    const preview = page.locator(".note-editor:visible .cm-content")
+    // 锁定阅读与编辑共用正文选区；全选命令不包含工作区界面文字。
+    await preview.press("ControlOrMeta+a")
+    await preview.locator(".cm-line").first().click({ button: "right", position: { x: 8, y: 8 } })
     await page.getByRole("menuitem", { name: "复制", exact: true }).click()
 
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __clipboardWrites: string[] }).__clipboardWrites.length)).toBe(1)
     const writes = await page.evaluate(() => (window as unknown as { __clipboardWrites: string[] }).__clipboardWrites)
-    expect(writes).toHaveLength(1)
     const copied = writes[0]
     // 代码块的 js 语言名与「复制」按钮、表格的「左右滑动」提示都是 user-select:none 的界面文字。
     expect(copied).not.toContain("js复制")
     expect(copied).not.toContain("左右滑动")
     expect(copied).toContain("const a = 1")
-    // Range.toString() 会把单元格之间的制表符吞掉，Selection.toString() 保留。
-    expect(copied).toContain("名称\t状态")
+    // 正文复制保留源码中的表格结构。
+    expect(copied).toContain("| 名称 | 状态 |")
     expect(copied).toContain("结尾段。")
   })
 

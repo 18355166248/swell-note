@@ -27,7 +27,7 @@ describe("UI preferences", () => {
     expect(loadUiPreferences().editorLineHeight).toBe(1.8)
   })
 
-  it("defaults to the unified canvas and restores an explicit compatibility preview", () => {
+  it("defaults to the unified canvas", () => {
     expect(loadUiPreferences()).toEqual({
       editorLineHeight: 1.8,
       editorFontSize: 16,
@@ -39,9 +39,6 @@ describe("UI preferences", () => {
       noteViewMode: "unified",
     })
 
-    saveUiPreferences({ noteViewMode: "preview" })
-
-    expect(loadUiPreferences().noteViewMode).toBe("preview")
   })
 
   it("keeps the Markdown source mode as a local preference independent of the view mode", () => {
@@ -57,7 +54,7 @@ describe("UI preferences", () => {
   })
 
   it("treats an unknown or missing Markdown source mode as live preview", () => {
-    // 旧版本写下的偏好对象没有这个字段，升级后必须仍停留在即时预览。
+    // 缺省或无效输入均使用即时预览。
     window.localStorage.setItem("swell-note:ui-preferences:v1", JSON.stringify({ colorMode: "dark" }))
     expect(loadUiPreferences().markdownSourceMode).toBe("live")
 
@@ -73,10 +70,7 @@ describe("UI preferences", () => {
     expect(loadUiPreferences().noteViewMode).toBe("unified")
   })
 
-  it("maps legacy edit to unified and persists an explicit canvas lock", () => {
-    window.localStorage.setItem("swell-note:ui-preferences:v1", JSON.stringify({ noteViewMode: "edit" }))
-    expect(loadUiPreferences().noteViewMode).toBe("unified")
-
+  it("persists an explicit canvas lock", () => {
     saveUiPreferences({ noteViewMode: "locked" })
     expect(loadUiPreferences().noteViewMode).toBe("locked")
 
@@ -123,9 +117,8 @@ describe("UI preferences", () => {
     expect(loadUiPreferences()).toMatchObject({ libraryPaneWidth: 340, noteListPaneWidth: 280 })
   })
 
-  it("keeps shortcut and menu actions explicit across all three view modes", () => {
+  it("keeps shortcut and menu actions explicit across both view modes", () => {
     expect(getNoteViewModeAction("unified")).toEqual({ label: "锁定为只读阅读", nextMode: "locked" })
     expect(getNoteViewModeAction("locked")).toEqual({ label: "解除锁定，继续编辑", nextMode: "unified" })
-    expect(getNoteViewModeAction("preview")).toEqual({ label: "进入一体化编辑", nextMode: "unified" })
   })
 })
