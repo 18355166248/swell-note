@@ -39,6 +39,7 @@ import { findTextMatches } from "@/services/markdown/text-search"
 import { beginEditorSearch, configureEditorSearch, editorMatches, editorSearchState, endEditorSearch, tableSearchHighlights, type EditorSearchConfig } from "./editor-search"
 import { INSERTABLE_BLOCKS, insertBlock, insertNoteTemplate } from "./block-insertion"
 import { slashCompletion } from "./slash-completion"
+import type { ReadingAnchor } from "@/services/navigation/note-reading-position"
 
 // 链接面板在表格单元格编辑中打开时的现场快照：保存前校验单元格内容未变，
 // 取消时据此把焦点与选区还给单元格 textarea。
@@ -85,6 +86,8 @@ export type MarkdownEditorHandle = {
   insertText: (text: string) => void
   // 与阅读态互换视图时用来对齐阅读位置：一个按屏幕坐标问行号，一个把指定行顶到可视区顶端。
   lineAtViewportTop: (clientY: number) => number | null
+  readingAnchorAtViewportTop: (clientY: number) => ReadingAnchor | null
+  restoreReadingAnchor: (anchor: ReadingAnchor, viewport: HTMLElement) => boolean
   pasteAtSelection: () => Promise<boolean>
   // 链接面板打开前的上下文：光标处已有链接、当前选中文本、编辑器是否持有焦点（取消后据此恢复）；
   // 正在编辑单元格时改从单元格 textarea 读取，并附上面板期间需要的现场快照。
@@ -1304,6 +1307,30 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         const bounds = view.contentDOM.getBoundingClientRect()
         const position = view.posAtCoords({ x: bounds.left + 1, y: clientY + 1 }, false)
         return position === null ? null : view.state.doc.lineAt(position).number
+      },
+      readingAnchorAtViewportTop(clientY) {
+        const view = controlRef.current?.getView()
+        if (!view || !view.dom.isConnected) return null
+        const bounds = view.contentDOM.getBoundingClientRect()
+        const position = view.posAtCoords({ x: bounds.left + 1, y: clientY + 1 }, false)
+        if (position === null) return null
+        const line = view.state.doc.lineAt(position)
+        const block = view.lineBlockAt(line.from)
+        return {
+          line: line.number,
+          text: line.text.slice(0, 256),
+          fraction: Math.min(1, Math.max(0, (clientY - view.documentTop - block.top) / Math.max(1, block.height))),
+        }
+      },
+      restoreReadingAnchor(anchor, viewport) {
+        const view = controlRef.current?.getView()
+        if (!view || !view.dom.isConnected || viewport.clientHeight <= 0) return false
+        const line = view.state.doc.line(Math.min(view.state.doc.lines, Math.max(1, anchor.line)))
+        const block = view.lineBlockAt(line.from)
+        // 按源码段落及段内比例恢复，字号与屏幕宽度变化后仍跟随原段；不派发选区事务、不唤起键盘。
+        const delta = view.documentTop + block.top + block.height * anchor.fraction - viewport.getBoundingClientRect().top
+        viewport.scrollTop = Math.max(0, viewport.scrollTop + delta)
+        return true
       },
       async pasteAtSelection() {
         const control = controlRef.current

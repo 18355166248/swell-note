@@ -472,7 +472,10 @@ export class EditorControl {
         // 销毁后返回 false 而非 undefined：调用方按 `=== true` 判定对位是否成功，
         // 返回类型既然声明为 boolean，就不能在这条路径上漏出 undefined。
         if (this.destroyed) return false
-        this.revealLine(command.line, { y: "start" })
+        // revealLine 是主动导航，会同步改选区；排版对位只派发滚动效果，保留用户原来的光标和选中内容。
+        this.view.dispatch({
+          effects: EditorView.scrollIntoView(this.view.state.doc.line(clampLine(command.line, this.view.state)).from, { y: "start" }),
+        })
         return true
       default:
         // 穷尽性检查：新增命令类型却忘了实现时，这里会变成编译错误，

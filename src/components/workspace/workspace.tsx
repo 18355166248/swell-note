@@ -141,7 +141,8 @@ import { useLongPress } from "@/components/workspace/use-long-press"
 import { useEdgeSwipeAction } from "@/components/workspace/use-edge-swipe-action"
 import { SyncActivityToast } from "@/components/workspace/sync-activity-toast"
 import { useMobileLayoutQuery } from "@/services/navigation/mobile-layout"
-import { mobileLibraryScrollMemory, mobileNoteListScrollMemory, noteEditorScrollMemory } from "@/services/navigation/mobile-scroll-memory"
+import { useNoteReadingPosition } from "./use-note-reading-position"
+import { mobileLibraryScrollMemory, mobileNoteListScrollMemory } from "@/services/navigation/mobile-scroll-memory"
 import { createMobileRouteEntry, createMobileRouteStack, updateMobileRouteStack, type MobileNavigationAction, type MobileRouteEntry, type MobileRouteStack } from "@/services/navigation/mobile-route-stack"
 import type { SyncProgress } from "@/services/sync/sync-progress"
 import { shouldShowFloatingSyncProgress } from "@/services/sync/sync-progress"
@@ -2065,7 +2066,6 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   // 大纲扫描推迟到输入停顿后，固定侧栏也不能让长文每次按键都重新扫描全文。
   const outlineSource = useSettledContent(note.id, note.content)
   const noteOutline = useMemo(() => isSpecialPreview ? [] : extractNoteOutline(outlineSource), [isSpecialPreview, outlineSource])
-  const editorScrollKey = `${activeCacheId ?? "session"}:${note.id}`
 
   // 切换阅读/编辑时用来对位：滚动过程中随手记下可视区顶端落在哪一源码行。
   // 用命中测试而不是遍历整篇，长笔记里滚动才不会为此多花时间。
@@ -2079,54 +2079,18 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
   // 换了笔记就丢掉上一篇的锚点，否则下一次切视图会按别的文档的行号对位。
   useEffect(() => { anchorLineRef.current = null }, [note.id])
 
-  useLayoutEffect(() => {
-    const viewport = editorViewportRef.current
-    if (!viewport) return
-    const target = noteEditorScrollMemory.get(editorScrollKey)
-    let latestScrollTop = viewport.scrollTop
-    let frame = 0
-    let settlingFrame = 0
-    let anchorFrame = 0
-    const restore = () => {
-      // 从搜索进入时由命中定位负责滚动，不能让历史阅读位置在下一帧覆盖它。
-      if (searchNavigation.request?.noteId === note.id) return
-      const maximum = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
-      viewport.scrollTop = Math.min(target, maximum)
-      latestScrollTop = viewport.scrollTop
-    }
-    const rememberVisiblePosition = () => {
-      // 断点切换会先用 CSS 隐藏旧布局，再卸载组件；隐藏阶段产生的 0 不能覆盖真实阅读位置。
-      if (viewport.clientHeight <= 0) return
-      latestScrollTop = viewport.scrollTop
-      // 阅读与编辑两侧的排版高度不一样，切换视图时只有源码行才是共同的坐标。
-      // 推迟一帧再问：编辑器要等自己的滚动处理跑完才会渲染新位置的行，
-      // 在滚动事件里当场问，拿到的是按估算高度换算出来的旧位置。
-      if (anchorFrame) return
-      anchorFrame = window.requestAnimationFrame(() => {
-        anchorFrame = 0
-        const line = readTopSourceLine()
-        if (line !== null) anchorLineRef.current = line
-      })
-    }
-    viewport.addEventListener("scroll", rememberVisiblePosition, { passive: true })
-    // 先在绘制前恢复，再等 Markdown/Suspense 完成本帧布局后校准，避免返回长笔记时先闪到顶部。
-    restore()
-    frame = window.requestAnimationFrame(() => {
-      restore()
-      settlingFrame = window.requestAnimationFrame(() => {
-        restore()
-        // 恢复到位后先记一次锚点：读者还没滚动就直接切视图时，另一侧也有位置可对。
-        rememberVisiblePosition()
-      })
-    })
-    return () => {
-      window.cancelAnimationFrame(frame)
-      window.cancelAnimationFrame(settlingFrame)
-      window.cancelAnimationFrame(anchorFrame)
-      viewport.removeEventListener("scroll", rememberVisiblePosition)
-      noteEditorScrollMemory.set(editorScrollKey, latestScrollTop)
-    }
-  }, [editorScrollKey])
+  useNoteReadingPosition({
+    active,
+    cacheId: activeCacheId,
+    content: note.content,
+    editor: editorRef,
+    identity: noteRenderIdentity,
+    noteId: note.id,
+    onAnchor: (line) => { anchorLineRef.current = line },
+    ready: note.contentLoaded !== false && !isSpecialPreview,
+    searchTarget: searchNavigation.request?.noteId === note.id,
+    viewport: editorViewportRef,
+  })
 
   // 切换视图不会重建滚动容器，像素偏移被原样带到另一侧；但同一段正文在两边的高度并不相同
   // （图片、表格在编辑态还是源码），沿用像素等于换个地方落地。这里按切换前记下的源码行重新对位。

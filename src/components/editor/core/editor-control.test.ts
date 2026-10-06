@@ -397,11 +397,16 @@ describe("EditorControl 命令", () => {
     expect(control.getDocument()).toBe("新正文")
   })
 
-  it("revealLine 与 scrollLineToTop 定位到指定行", () => {
+  it("revealLine 主动导航，scrollLineToTop 只滚动且保留选区与焦点", () => {
     const control = createControl({ doc: "第一行\n第二行\n第三行", identity: identity("a") })
     control.dispatchCommand({ line: 2, type: "navigation.revealLine" })
     expect(control.getSelection().line).toBe(2)
+    control.getView().dispatch({ selection: { anchor: 1, head: 4 } })
+    const selection = control.getSelection()
+    const focused = control.getView().hasFocus
     expect(control.dispatchCommand({ line: 3, type: "navigation.scrollLineToTop" })).toBe(true)
+    expect(control.getSelection()).toEqual(selection)
+    expect(control.getView().hasFocus).toBe(focused)
   })
 
   it("selection.all 覆盖全文，collapse 收起选区且不抢焦点", () => {
