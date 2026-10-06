@@ -1,0 +1,97 @@
+src/services/vault/local-save-coordinator.ts
+  s_7aa9251711039a::t_8276835114ca5d 62-66
+src/components/editor/markdown-table-widget.ts
+  s_7aa9251711039a::t_8a4e7d2f5bb5e0 1200
+  s_7aa9251711039a::t_d8db9649a20adc 3,306-315,321-324,1199,1204-1207
+src/components/editor/markdown-editor.tsx
+  s_7aa9251711039a::t_a85023ba8cd2a2 3,199
+  s_7aa9251711039a::t_194bd8fe140481 184-191,194-195,202-208
+  s_7aa9251711039a::t_637afb80d0006c 1-2,689,785
+  s_7aa9251711039a::t_8276835114ca5d 192-193,196-198,200-201
+src/services/sync/sync-summary.test.ts
+  s_7aa9251711039a::t_10284e3012b027 4,15-19
+  s_7aa9251711039a::t_a145b7b7698abe 20
+src/services/vault/save-lifecycle.ts
+  s_7aa9251711039a::t_8276835114ca5d 1-3,5-16,22
+  s_7aa9251711039a::t_a85023ba8cd2a2 4,17-21
+src/services/cache/vault-cache.ts
+  s_7aa9251711039a::t_19a8aca4f62b57 660-670
+src/services/cache/vault-cache.test.ts
+  s_7aa9251711039a::t_19a8aca4f62b57 16
+  s_7aa9251711039a::t_1ed6c326738b18 55-65
+docs/mac-ios-optimization-2026-10-06.md
+  s_7aa9251711039a::t_a6e6f0d6ec7703 25-34
+  s_7aa9251711039a::t_0afbb763deeb3b 1-2,4-24
+  s_7aa9251711039a::t_ff210dfec15e75 3
+src/services/vault/prepare-offline-note.test.ts
+  s_7aa9251711039a::t_568a08f4004e0c 1-18
+e2e/editor-lifecycle-recovery.spec.ts
+  s_7aa9251711039a::t_568a08f4004e0c 1-30
+src/components/editor/block-edit-session.test.ts
+  s_7aa9251711039a::t_10284e3012b027 1-26
+src/lib/preload-note-renderers.ts
+  s_7aa9251711039a::t_a85023ba8cd2a2 1,16
+src/services/vault/prepare-offline-note.ts
+  s_7aa9251711039a::t_ad44d1a04f958f 1-19
+src/App.tsx
+  s_7aa9251711039a::t_845f69e27c8c02 2,2676-2677,2679,3071
+  s_7aa9251711039a::t_0e84519035ce39 3-4,444-445,481-482,665-666,671-680,682-692,694-699,701-718,734,1307-1312,1340,1344-1346,2731-2749,4077
+  s_7aa9251711039a::t_19a8aca4f62b57 83,2302-2303
+  s_7aa9251711039a::t_8a4e7d2f5bb5e0 667-670
+  s_7aa9251711039a::t_0b0db6d342d57e 1,700,719-733,735,2849,2894
+  s_7aa9251711039a::t_7f53799916f70c 2304
+  s_7aa9251711039a::t_1693a4a0cb7f6b 2750
+src-tauri/src/lib.rs
+  s_7aa9251711039a::t_4dc1bfd2483c9e 6
+  s_7aa9251711039a::t_0b0db6d342d57e 9-19,596,613,615-618,620-621,623-631
+  s_7aa9251711039a::t_80a8e17b9d22fe 619,622
+src/components/editor/unified-rich-block.ts
+  s_7aa9251711039a::t_4dc1bfd2483c9e 441-442
+  s_7aa9251711039a::t_751612f2ac3e53 382
+  s_7aa9251711039a::t_a85023ba8cd2a2 425
+  s_7aa9251711039a::t_637afb80d0006c 379-381,383
+src/components/workspace/workspace.tsx
+  s_7aa9251711039a::t_ad44d1a04f958f 2,2013,2714,3096
+src/components/workspace/note-offline-dialog.tsx
+  s_7aa9251711039a::t_ad44d1a04f958f 1-28
+e2e/editor-optional-startup.spec.ts
+  s_7aa9251711039a::t_4f6dec21cb0f5a 1-16
+docs/mac-ios-capability-review-2026-10-06.md
+  s_7aa9251711039a::t_f20249130ed89c 9
+  s_7aa9251711039a::t_55a62859ec75aa 1-8,10-82
+src/services/vault/local-save-coordinator.test.ts
+  s_7aa9251711039a::t_10284e3012b027 16-29
+src/services/vault/save-lifecycle.test.ts
+  s_7aa9251711039a::t_568a08f4004e0c 12
+  s_7aa9251711039a::t_10284e3012b027 1-11,13-29
+e2e/editor-history-archive.spec.ts
+  s_7aa9251711039a::t_194bd8fe140481 22-23
+e2e/editor-device-handoff.spec.ts
+  s_7aa9251711039a::t_eb2e36bbac6878 1-14,16-25,27-33,35-50
+  s_7aa9251711039a::t_80a8e17b9d22fe 15
+  s_7aa9251711039a::t_a3ec5c24e78a06 26,34
+src/services/sync/sync-summary.ts
+  s_7aa9251711039a::t_845f69e27c8c02 17-24
+vite.config.ts
+  s_7aa9251711039a::t_8276835114ca5d 37-38
+src/components/editor/block-edit-session.ts
+  s_7aa9251711039a::t_a85023ba8cd2a2 7,40,46-48,50-53
+  s_7aa9251711039a::t_637afb80d0006c 12,19-28,38-39,49,60-65
+  s_7aa9251711039a::t_8a4e7d2f5bb5e0 8,41-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "19273774deb56088e81db4774f976c15a3bc5672",
+  "prompts": {},
+  "sessions": {
+    "s_7aa9251711039a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd03-3670-77e2-8b5c-740397b0570b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
