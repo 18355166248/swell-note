@@ -1,0 +1,50 @@
+src/components/editor/markdown-input.ts
+  s_7aa9251711039a::t_009370475051ae 3,50-54,72,74,98-99,107
+e2e/editor-release-check.spec.ts
+  s_7aa9251711039a::t_e3c2a4b7657775 241,245
+src/components/editor/markdown-table-widget.ts
+  s_7aa9251711039a::t_7babb0a6f38b76 1031,1044
+  s_7aa9251711039a::t_0549dc2d5678e0 273,286,296,1042-1043,1129
+src/components/editor/markdown-table-model.ts
+  s_7aa9251711039a::t_e699f96f51b3d8 9-21,31,40,49,57-63,68
+src/services/markdown/markdown-reference-links.ts
+  s_7aa9251711039a::t_9dc3cd67efabe8 53-57,63
+docs/md-editing-review-2026-10-06.md
+  s_7aa9251711039a::t_69b6c1eeffa55c 1-2,4-22,25,27,30-33
+  s_7aa9251711039a::t_d95b82cfc961ec 3
+  s_7aa9251711039a::t_3941686f66e4d4 23,28-29
+  s_7aa9251711039a::t_54fae28ef50110 24,26
+src/components/editor/unified-attachment.test.tsx
+  s_7aa9251711039a::t_fb8d28e4c1591b 139-140
+src/components/editor/unified-rich-block.ts
+  s_7aa9251711039a::t_0096adcb55482f 259,261,288,407,411,415,417-419,422,425
+  s_7aa9251711039a::t_679de99757f02d 258,267,275-278,284,287,290,394,400,429-430,438
+src/components/editor/markdown-table-inline.ts
+  s_7aa9251711039a::t_3048e368729f08 29-34,124-127,178
+  s_7aa9251711039a::t_301fd9c31da08c 1-2,11,38-75,80,83,89,99,110,112-114,119,123,138,153-156,163,193,196,199
+src/components/editor/table-history.ts
+  s_7aa9251711039a::t_be55493f66ce22 42-43
+src/components/editor/markdown-editor.tsx
+  s_7aa9251711039a::t_464cbee4e50f1b 217-222,224-245
+  s_7aa9251711039a::t_47987a24f0ce71 32,1460-1461,1539-1541
+  s_7aa9251711039a::t_244c83d52d4a13 755-760,797
+  s_7aa9251711039a::t_cfa3e34d9ccbea 223
+src/components/editor/markdown-table-inline.test.ts
+  s_7aa9251711039a::t_e80d6391393e5d 135-166
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "3a2839ae82fec45e34f74a96edec69ea09325675",
+  "prompts": {},
+  "sessions": {
+    "s_7aa9251711039a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd03-3670-77e2-8b5c-740397b0570b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
