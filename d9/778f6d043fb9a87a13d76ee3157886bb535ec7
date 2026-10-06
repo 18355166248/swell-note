@@ -1,0 +1,94 @@
+src/components/workspace/document-context-menu.tsx
+  s_7aa9251711039a::t_0bf95abe1d907d 1,29,34,36-37,39,77,90,93,95,97,105
+src/services/markdown/markdown-preview-utils.test.ts
+  s_7aa9251711039a::t_310e82c98de624 31-37,64,67-68
+src/services/vault/prepare-offline-note.test.ts
+  s_7aa9251711039a::t_0bf95abe1d907d 3-8
+src/services/vault/attachment-maintenance.ts
+  s_7aa9251711039a::t_310e82c98de624 1-2,54-70
+src/services/markdown/markdown-preview-utils.ts
+  s_7aa9251711039a::t_310e82c98de624 1-3,9,31,51-65
+docs/mac-ios-editor-cleanup-2026-10-06.md
+  s_7aa9251711039a::t_b6fdc95f069423 1-2,4-19,21-27
+  s_7aa9251711039a::t_0ce77ecaaeeac6 3
+  s_7aa9251711039a::t_bf50b536d1e8ea 20
+src/components/editor/live-preview.test.ts
+  s_7aa9251711039a::t_0bf95abe1d907d 181-194
+  s_7aa9251711039a::t_b9c4ffe005ede0 195-197,296,300
+src/components/editor/unified-attachment.test.tsx
+  s_7aa9251711039a::t_183944ee80cbcb 18-25
+src/services/markdown/markdown-reference-links.ts
+  s_7aa9251711039a::t_310e82c98de624 15,18,20,38,51
+  s_7aa9251711039a::t_bf50b536d1e8ea 14,50
+  s_7aa9251711039a::t_d5eb9f3c5e8b93 1-13,16-17,19,21-37,39-49,52-59
+src/components/editor/markdown-editor.tsx
+  s_7aa9251711039a::t_6e2867ff884071 451-458
+e2e/editor-reading-cleanup.spec.ts
+  s_7aa9251711039a::t_d629c00507b648 1-44
+e2e/copy-selection.spec.ts
+  s_e80f7d159de26d::t_4c7181e36c1ab9 3,105,109,111-114,117,124-125
+e2e/core-workflows.spec.ts
+  s_e80f7d159de26d::t_14dcf293e025ed 3,225,239-240,245,250
+e2e/editor-device-handoff.spec.ts
+  s_e80f7d159de26d::t_3e54bfea51947c 26,28-30
+e2e/editor-image-presentation.spec.ts
+  s_e80f7d159de26d::t_5376eab29dd21b 3,24-25
+e2e/editor-link-click.spec.ts
+  s_e80f7d159de26d::t_b42fab141d5d8b 5,763,769,1092,1103-1104,1160,1166-1167,1172,1180-1181,1206,1211-1212
+e2e/editor-release-check.spec.ts
+  s_e80f7d159de26d::t_32b1a0f218ad8f 3,398,407-409,419-421,553-555,559
+e2e/note-view-mode.ts
+  s_7aa9251711039a::t_b412ef2995a11d 16
+src/App.tsx
+  s_7aa9251711039a::t_8bfa157cc4c6bd 398
+src/components/editor/live-preview.ts
+  s_e80f7d159de26d::t_d0d13a4b6c2403 1,12,269,372,751,754-756,891,1181-1183,1199-1200,1222-1224,1237
+src/components/editor/markdown-preview.test.tsx
+  s_e80f7d159de26d::t_3317b330e571a4 20,314,323,325-326
+src/components/editor/markdown-preview.tsx
+  s_e80f7d159de26d::t_bf54a3df7684d5 704-705,707-709,811
+src/components/editor/unified-attachment.tsx
+  s_e80f7d159de26d::t_bb84c21b02ec59 1,20-21,33
+src/components/workspace/note-offline-dialog.tsx
+  s_e80f7d159de26d::t_559b9098164735 22
+src/components/workspace/shortcut-scope.test.ts
+  s_7aa9251711039a::t_4f46aff5653387 4
+src/components/workspace/workspace.tsx
+  s_e80f7d159de26d::t_e80ae3eab4ac83 60,130,155,1948-1949,1983-1984,2015,2020,2029,2075-2077,2149-2150,2158,2187,2300-2301,2304,2306,2310-2311,2315,2347,2363,2366,2369,2375,2417,2429,2433,2439,2441,2443,2452,2523,2550,2583-2584,2586,2624,2676,2708-2709,2762,2767,2771,2873,2891,2900,2908,2932,2981
+src/services/export/html-export.test.tsx
+  s_e80f7d159de26d::t_c2385b2846cf58 26-28,31
+src/services/export/html-export.tsx
+  s_e80f7d159de26d::t_9ab211b385a866 7,69-70
+src/services/markdown/image-presentation.ts
+  s_e80f7d159de26d::t_154675fa56aabb 4
+src/services/preferences/ui-preferences.test.ts
+  s_e80f7d159de26d::t_4a993c333964df 30,57,73,120
+src/services/preferences/ui-preferences.ts
+  s_e80f7d159de26d::t_e178812841ad2d 1,9,78,80
+src/services/vault/attachment-maintenance.test.ts
+  s_e80f7d159de26d::t_80384d6c5a8dff 18-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "d9778f6d043fb9a87a13d76ee3157886bb535ec7",
+  "prompts": {},
+  "sessions": {
+    "s_7aa9251711039a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd03-3670-77e2-8b5c-740397b0570b",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    },
+    "s_e80f7d159de26d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0fd45-c8e8-76b2-823c-0e66a11613c9",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
