@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const nativeWindow = vi.hoisted(() => ({ enabled: false, setTheme: vi.fn().mockResolvedValue(undefined) }))
+vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => nativeWindow.enabled }))
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setTheme: nativeWindow.setTheme }) }))
 
 import { applyColorMode, applyEditorDisplay, getNoteViewModeAction, loadUiPreferences, saveUiPreferences } from "./ui-preferences"
 
 describe("UI preferences", () => {
-  beforeEach(() => window.localStorage.clear())
+  beforeEach(() => {
+    window.localStorage.clear()
+    nativeWindow.enabled = false
+    nativeWindow.setTheme.mockClear()
+  })
 
   it("restores display preferences and rejects corrupt sizes without changing the note mode", () => {
     saveUiPreferences({ editorFontSize: 24, editorLineWidth: "narrow", noteViewMode: "locked" })
@@ -107,6 +115,27 @@ describe("UI preferences", () => {
       colorMode: "dark",
       noteViewMode: "unified",
     })
+  })
+
+  it("同步桌面原生外观，并在跟随系统时清除手动覆盖", () => {
+    nativeWindow.enabled = true
+    applyColorMode("light", true)
+    expect(nativeWindow.setTheme).toHaveBeenLastCalledWith("light")
+    applyColorMode("dark", false)
+    expect(nativeWindow.setTheme).toHaveBeenLastCalledWith("dark")
+    applyColorMode("system", false)
+    expect(nativeWindow.setTheme).toHaveBeenLastCalledWith(null)
+  })
+
+  it("浏览器不调用原生窗口，原生失败不阻断页面主题", async () => {
+    applyColorMode("light", true)
+    expect(nativeWindow.setTheme).not.toHaveBeenCalled()
+    nativeWindow.enabled = true
+    nativeWindow.setTheme.mockRejectedValueOnce(new Error("window unavailable"))
+    applyColorMode("dark", false)
+    await Promise.resolve()
+    expect(document.documentElement.classList.contains("dark")).toBe(true)
+    applyColorMode("light", true)
   })
 
   it("restores desktop pane widths and clamps invalid values", () => {

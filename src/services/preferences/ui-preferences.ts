@@ -100,6 +100,11 @@ export function applyColorMode(
   document.documentElement.style.colorScheme = dark ? "dark" : "light"
   document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
     ?.setAttribute("content", dark ? "#151821" : "#3150e8")
+  // 只改网页主题会让 macOS 深色原生描边包住浅色内容；窗口外观必须与用户选择同步。
+  // 跟随系统时清除原生覆盖，避免锁住系统主题变化；失败仍保留已应用的页面主题。
+  if (isTauri() && !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+    void getCurrentWindow().setTheme(colorMode === "system" ? null : colorMode).catch(() => undefined)
+  }
 }
 
 export function saveUiPreferences(preferences: Partial<UiPreferences>) {
@@ -113,3 +118,5 @@ export function saveUiPreferences(preferences: Partial<UiPreferences>) {
     // 隐私模式或存储空间不足时只影响跨刷新保留，当前会话状态仍由 React 维护。
   }
 }
+import { isTauri } from "@tauri-apps/api/core"
+import { getCurrentWindow } from "@tauri-apps/api/window"
