@@ -1,0 +1,44 @@
+src/components/desktop/desktop-app-frame.tsx
+  s_02be4752effd91::t_771b1a1c36e92c 42
+  s_02be4752effd91::t_48c3d229fb4812 49
+src/App.css
+  s_02be4752effd91::t_48c3d229fb4812 132
+src-tauri/tauri.macos.conf.json
+  s_02be4752effd91::t_48c3d229fb4812 1-19
+e2e/editor-link-click.spec.ts
+  s_08831e1610b5ae::t_48a476a663486a 112,123-124,127,130,143,147-152,295-297,306-307,313-314
+src/components/editor/live-preview.mac.test.ts
+  s_08831e1610b5ae::t_f803d6fc19b7b2 27,32
+src/components/editor/live-preview.ts
+  s_08831e1610b5ae::t_e26722c7733e9d 59-60,570,603,1186,1188,1347,1350,1365
+src/components/editor/markdown-table-inline.ts
+  s_08831e1610b5ae::t_21fa65f00de1bf 211,214
+src/components/editor/markdown-table-widget.ts
+  s_08831e1610b5ae::t_315072491303d9 501
+src/components/editor/platform-editor-integration.test.tsx
+  s_08831e1610b5ae::t_2a2aa4682b42de 329,332,334
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "f1cb90fc5f3e7cb751ff791d00aed18114e3614c",
+  "prompts": {},
+  "sessions": {
+    "s_02be4752effd91": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a11961-bd4f-7912-a0c8-78bc9e896ee3",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    },
+    "s_08831e1610b5ae": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1195e-3613-7640-b647-8062da35a7b9",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
