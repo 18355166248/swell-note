@@ -1,0 +1,24 @@
+src/services/preferences/ui-preferences.test.ts
+  s_ff2bd25e4fc172::t_bf98c96877698b 2-6,11-15,120-139
+  s_ff2bd25e4fc172::t_6f610e4d40813b 140
+src-tauri/capabilities/default.json
+  s_ff2bd25e4fc172::t_a08edc4f6fa9b5 11
+src/services/preferences/ui-preferences.ts
+  s_ff2bd25e4fc172::t_a08edc4f6fa9b5 103-107,121-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "290793db31e9a7f4a2bea29ff7f6047fa706701c",
+  "prompts": {},
+  "sessions": {
+    "s_ff2bd25e4fc172": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a11982-89ea-7cf2-946f-a515103eac33",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
