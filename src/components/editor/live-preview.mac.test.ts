@@ -24,12 +24,12 @@ async function createView(readOnly = false, touchPoints = 0) {
 }
 
 describe("Mac editing links", () => {
-  it("leaves plain press/click available for cursor placement and drag selection", async () => {
+  it("opens plain press/click once without requiring Cmd", async () => {
     const { link, opened } = await createView()
     vi.spyOn(view!, "posAtCoords").mockReturnValue(10)
     link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }))
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
-    expect(opened).not.toHaveBeenCalled()
+    expect(opened).toHaveBeenCalledExactlyOnceWith("另一篇")
   })
 
   it("Cmd click opens once and Cmd+Enter still opens at the cursor", async () => {

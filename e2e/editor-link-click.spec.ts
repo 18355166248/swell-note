@@ -109,7 +109,7 @@ async function seedCachedVault(page: Page, noteContent?: string, readOnly = fals
 }
 
 test.describe("编辑态链接点击跳转", () => {
-  test("桌面端按平台键位点击笔记链接与外链", async ({ page }, testInfo) => {
+  test("桌面端直接点击笔记链接与外链", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome")
     await seedCachedVault(page)
     const workspace = page.locator(".desktop-workspace:visible")
@@ -117,18 +117,17 @@ test.describe("编辑态链接点击跳转", () => {
 
     const editor = page.locator(".cm-content")
     await expect(editor).toBeVisible()
-    const modifiers: Array<"Meta"> = process.platform === "darwin" ? ["Meta"] : []
     // 点走编辑器，确保链接行不处于光标激活态。
     await page.mouse.click(20, 20)
 
-    // Mac 编辑态 Cmd 点击；其他桌面平台保留既有点击行为。
-    await editor.getByText("第二篇", { exact: true }).first().click({ modifiers })
+    // Mac 与其他桌面平台都直接点击打开。
+    await editor.getByText("第二篇", { exact: true }).first().click()
     await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
 
-    // wiki 双链：同样按平台键位打开。
+    // wiki 双链同样直接点击打开。
     await workspace.getByText("第一篇", { exact: true }).first().click()
     await page.mouse.click(20, 20)
-    await page.locator(".cm-content .cm-md-link-actionable[data-wiki-target]").first().click({ modifiers })
+    await page.locator(".cm-content .cm-md-link-actionable[data-wiki-target]").first().click()
     await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
 
     // 外链：mousedown 与 click 去重后恰好打开一次。
@@ -141,30 +140,16 @@ test.describe("编辑态链接点击跳转", () => {
         return null
       }
     })
-    await page.locator(".cm-content .cm-md-link-actionable[data-md-href]").first().click({ modifiers })
+    await page.locator(".cm-content .cm-md-link-actionable[data-md-href]").first().click()
     await expect
       .poll(() => page.evaluate(() => (window as unknown as { __openCalls: string[] }).__openCalls))
       .toEqual(["https://example.com/page"])
-  })
-
-  test("Mac 编辑链接单击和拖选保留当前位置", async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop-chrome" || process.platform !== "darwin")
-    await seedCachedVault(page)
-    const editor = page.locator(".cm-content")
-    const link = editor.locator("[data-md-note-target]").first()
-    const currentUrl = page.url()
-    await link.click()
-    await expect(page).toHaveURL(currentUrl)
-    await expect(editor).toBeFocused()
-    const rect = await link.boundingBox()
-    expect(rect).not.toBeNull()
-    await page.mouse.move(rect!.x + 2, rect!.y + rect!.height / 2)
-    await page.mouse.down()
-    await page.mouse.move(rect!.x + rect!.width - 2, rect!.y + rect!.height / 2, { steps: 5 })
-    await page.mouse.up()
-    await expect(page).toHaveURL(currentUrl)
-    expect(await page.evaluate(() => document.getSelection()?.toString())).toContain("第二篇")
-    await page.screenshot({ path: testInfo.outputPath("mac-link-selection.png") })
+    // 等前一次点按的 500ms 去重窗口结束，再验证独立的 Markdown 外链点击。
+    await page.waitForTimeout(550)
+    await editor.getByText("示例站", { exact: true }).click()
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __openCalls: string[] }).__openCalls))
+      .toEqual(["https://example.com/page", "https://example.com"])
   })
 
   test("Mac Option 上下按段落导航和扩选而不改正文", async ({ page }, testInfo) => {
@@ -307,33 +292,26 @@ test.describe("编辑态链接点击跳转", () => {
     }
   })
 
-  test("Mac 表格链接普通点击编辑且 Cmd 点击打开", async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop-chrome" || process.platform !== "darwin")
-    for (const href of ["./第二篇.md", "https://example.com/page"]) {
+  for (const href of ["./第二篇.md", "https://example.com/page"]) {
+    test(`Mac 表格链接直接点击打开 ${href}`, async ({ page }, testInfo) => {
+      test.skip(testInfo.project.name !== "desktop-chrome" || process.platform !== "darwin")
       await seedCachedVault(page, `| 名称 |\n| --- |\n| [标签](${href}) |`)
       const editor = page.locator(".cm-content")
       const link = editor.locator(".cm-md-table-link")
-      const url = page.url()
-      await link.click()
-      await expect(page).toHaveURL(url)
-      const input = editor.locator(".cm-md-table-cell-input")
-      await expect(input).toBeFocused()
-      await expect(input).toHaveValue(`[标签](${href})`)
-      await input.press("Escape")
-      await expect(link).toBeVisible()
       await page.evaluate(() => {
         const calls: string[] = []
         Object.assign(window, { __tableLinkOpened: calls })
         window.open = (url) => { calls.push(String(url)); return null }
       })
-      await link.click({ modifiers: ["Meta"] })
+      await link.click()
+      await expect(editor.locator(".cm-md-table-cell-input")).toHaveCount(0)
       if (href.startsWith("http")) {
         expect(await page.evaluate(() => (window as unknown as { __tableLinkOpened: string[] }).__tableLinkOpened)).toEqual([href])
       } else {
         await expect(page).toHaveURL(/#\/notes\/webdav.*%E7%AC%AC%E4%BA%8C%E7%AF%87/)
       }
-    }
-  })
+    })
+  }
 
   test("Mac 表格链接拖选尾随点击不跳转", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop-chrome" || process.platform !== "darwin")

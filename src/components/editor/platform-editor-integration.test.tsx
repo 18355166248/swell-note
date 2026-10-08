@@ -326,18 +326,12 @@ describe("production editor link activation", () => {
     expect(opened).not.toHaveBeenCalled()
   })
 
-  it.each(["另一篇.md", "https://example.com"])("plain table click edits and Cmd click opens %s exactly once", async (target) => {
+  it.each(["另一篇.md", "https://example.com"])("plain table click opens %s exactly once without editing", async (target) => {
     const doc = `| 名称 |\n| --- |\n| [标签](${target}) |`
     const { view, opened } = await mountEditor(doc)
-    let link = view.contentDOM.querySelector(".cm-md-table-link")!
-    click(link)
-    expect(opened).not.toHaveBeenCalled()
-    expect(view.contentDOM.querySelector(".cm-md-table-cell-input")).not.toBeNull()
-    const input = view.contentDOM.querySelector<HTMLTextAreaElement>(".cm-md-table-cell-input")!
-    act(() => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })))
-    link = view.contentDOM.querySelector(".cm-md-table-link")!
-    click(link, { metaKey: true })
+    click(view.contentDOM.querySelector(".cm-md-table-link")!)
     expect(opened).toHaveBeenCalledExactlyOnceWith(target)
+    expect(view.contentDOM.querySelector(".cm-md-table-cell-input")).toBeNull()
     expect(view.state.doc.toString()).toBe(doc)
   })
 

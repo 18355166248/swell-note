@@ -5,7 +5,6 @@ import { blockEditSessionKey, clearBlockEditDraft, readBlockEditDraft, writeBloc
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
 
 import { scrollElementIntoVisibleBand } from "./cursor-visibility"
-import { requiresLinkModifier } from "./editor-link-activation"
 
 import {
   organizeMarkdownTable,
@@ -499,7 +498,7 @@ export class TableWidget extends WidgetType {
   }
 
   private renderCell(parent: HTMLElement, value: string) {
-    renderTableInlineMarkdown(parent, value, { ...this.options, requireLinkModifier: requiresLinkModifier(this.readOnly) }, (url) => this.objectUrls.add(url))
+    renderTableInlineMarkdown(parent, value, this.options, (url) => this.objectUrls.add(url))
   }
 
   private renderedColumnWidths(wrapper: HTMLElement) {

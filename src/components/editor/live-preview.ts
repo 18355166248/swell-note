@@ -9,7 +9,6 @@ import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type Vi
 
 import { isImageAssetPath, parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
 import { openExternalUrl } from "@/services/open-external-url"
-import { requiresLinkModifier } from "./editor-link-activation"
 import { buildImageReference, imageWidthComment, readImageWidthComment, unescapeMarkdownImageText, type ImageWidth } from "@/services/markdown/image-presentation"
 
 import { collectCompatibilityBlocks, CompatibilityBlockWidget, type CompatibilityBlock, type CompatibilityBlockOptions } from "./compatibility-blocks"
@@ -57,8 +56,8 @@ export const livePreviewOptions = Facet.define<LivePreviewOptions, LivePreviewOp
   combine: (values) => values[0] ?? {},
 })
 
-function linkHint(state: EditorState, note = false) {
-  return `${requiresLinkModifier(state.readOnly) ? "⌘ 点击" : "点击"}打开${note ? "笔记" : "链接"}`
+function linkHint(note = false) {
+  return `点击打开${note ? "笔记" : "链接"}`
 }
 
 // 使用已有 Markdown 语法树读取本任务正文；Task 不包含嵌套子列表。
@@ -568,7 +567,7 @@ function decorateWikiLinks(
     if (labelStart >= labelEnd) continue
     // 只把可见文字设为跳转热区；编辑态仍可点击括号或目标源码定位修改。
     push(Decoration.mark({
-      attributes: { "data-wiki-target": target, title: linkHint(state, true) },
+      attributes: { "data-wiki-target": target, title: linkHint(true) },
       class: "cm-md-link-actionable",
     }).range(labelStart, labelEnd))
 
@@ -601,7 +600,7 @@ function decorateBareUrls(
     // 正式 Markdown 链接和代码区域由语法树处理，裸 URL 扫描只补齐 GFM 自动链接。
     if (isInsideParsedLinkOrCode(state, start + 1)) continue
     push(Decoration.mark({
-      attributes: { "data-md-href": href, title: linkHint(state) },
+      attributes: { "data-md-href": href, title: linkHint() },
       class: "cm-md-link cm-md-link-actionable",
     }).range(start, end))
   }
@@ -1184,9 +1183,9 @@ function buildLivePreviewDecorations(view: EditorView, forcedRanges?: readonly D
             const href = url ? markdownDestination(view.state.sliceDoc(url.from, url.to)) : reference!.source
             const noteTarget = parseMarkdownNoteHref(href)
             const linkAttributes: Record<string, string> | undefined = noteTarget
-              ? { "data-md-note-target": noteTarget, title: linkHint(view.state, true) }
+              ? { "data-md-note-target": noteTarget, title: linkHint(true) }
               : externalHrefPattern.test(href)
-                ? { "data-md-href": href, title: linkHint(view.state) }
+                ? { "data-md-href": href, title: linkHint() }
                 : undefined
             const marks: MdSyntaxNode[] = []
             for (let child = node.node.firstChild; child; child = child.nextSibling) {
@@ -1345,10 +1344,10 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
   },
   {
     decorations: (plugin) => plugin.decorations,
-    // Mac 编辑态留出单击定位与拖选，Cmd 点击打开；阅读态和移动端保留原有点按行为。
+    // 编辑态与阅读态都直接点击打开，避免 Mac 的修饰键门槛让已有链接失去响应。
     eventHandlers: {
       mousedown(event: MouseEvent, view: EditorView) {
-        if (event.button !== 0 || (requiresLinkModifier(view.state.readOnly) && !event.metaKey)) return false
+        if (event.button !== 0) return false
         if (interceptLinkTap(event, view)) {
           event.preventDefault()
           lastLinkActivationAt = Date.now()
@@ -1363,7 +1362,7 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
       // iOS WebView 的点按不一定合成 mousedown，触屏端靠 click 兜底；桌面端 mousedown
       // 已经跳转过的话，紧随的 click 直接吞掉。
       click(event: MouseEvent, view: EditorView) {
-        if (event.button !== 0 || (requiresLinkModifier(view.state.readOnly) && !event.metaKey)) return false
+        if (event.button !== 0) return false
         const element = event.target instanceof Element ? event.target : null
         if (!element) return false
         if (Date.now() - lastLinkActivationAt < 500) {

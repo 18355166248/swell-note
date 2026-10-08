@@ -39,20 +39,14 @@ function DesktopTitleBar() {
       .catch(() => undefined)
   }
 
+  // Tauri 拖动区已接管双击缩放；再绑 onDoubleClick 会重复切换，导致窗口放大后立即还原。
   return (
     <header
       className="desktop-titlebar"
       data-platform={mac ? "mac" : "windows"}
       data-tauri-drag-region
-      onDoubleClick={() => run("toggleMaximize")}
     >
-      {mac ? (
-        <div className="desktop-window-controls desktop-window-controls-mac" aria-label="窗口控制">
-          <button aria-label="关闭窗口" className="desktop-window-close" onClick={() => run("close")} type="button"><X /></button>
-          <button aria-label="最小化窗口" className="desktop-window-minimize" onClick={() => run("minimize")} type="button"><Minus /></button>
-          <button aria-label="最大化窗口" className="desktop-window-maximize" onClick={() => run("toggleMaximize")} type="button"><Maximize2 /></button>
-        </div>
-      ) : null}
+      {/* macOS 使用 Overlay 原生窗口，由系统裁切圆角并提供红黄绿按钮，避免两套控制重叠。 */}
 
       <div className="desktop-titlebar-brand" data-tauri-drag-region>
         <img alt="" src={swellNoteLogo} />

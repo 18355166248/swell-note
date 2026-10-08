@@ -129,7 +129,7 @@
   input, textarea, select, [contenteditable="true"] { font-size: 16px !important; }
 }
 
-/* 桌面安装包使用无边框窗口：统一顶部拖动区与原生窗口操作，Web/移动端不会挂载这一层。 */
+/* macOS 通过 Tauri Overlay 窗口提供原生圆角与阴影；此层只负责顶部布局，避免 CSS 裁角露出黑底。 */
 .desktop-app-frame { display: grid; width: 100%; height: 100dvh; grid-template-rows: 38px minmax(0,1fr); overflow: hidden; background: var(--background); }
 .desktop-app-content { min-width: 0; min-height: 0; overflow: hidden; }
 .desktop-app-content .workspace-root,
@@ -144,12 +144,6 @@
 .desktop-window-controls button { display: grid; height: 100%; place-items: center; border: 0; background: transparent; color: #667080; }
 .desktop-window-controls button:focus-visible { position: relative; z-index: 1; outline-offset: -3px; }
 .desktop-window-controls svg { width: 13px; height: 13px; }
-.desktop-window-controls-mac { left: 13px; gap: 8px; }
-.desktop-window-controls-mac button { width: 13px; height: 13px; overflow: hidden; border-radius: 50%; color: transparent; }
-.desktop-window-controls-mac button:hover svg, .desktop-window-controls-mac:focus-within button svg { width: 8px; height: 8px; color: color-mix(in oklab,#1d2530 72%,transparent); }
-.desktop-window-controls-mac .desktop-window-close { background: #ff5f57; }
-.desktop-window-controls-mac .desktop-window-minimize { background: #febc2e; }
-.desktop-window-controls-mac .desktop-window-maximize { background: #28c840; }
 .desktop-window-controls-windows { right: 0; }
 .desktop-window-controls-windows button { width: 46px; }
 .desktop-window-controls-windows button:hover { background: var(--muted); color: var(--foreground); }
