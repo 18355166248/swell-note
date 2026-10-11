@@ -1,0 +1,40 @@
+src/components/editor/markdown-table-widget.test.ts
+  s_42ad1f97799dab::t_079d74e2369821 117-130
+  s_42ad1f97799dab::t_89b15b41d607a7 131-145
+  s_42ad1f97799dab::t_6168092188550f 146-152,155-160
+  s_42ad1f97799dab::t_5a20e82d4671d0 153-154
+e2e/table-editing.spec.ts
+  s_42ad1f97799dab::t_cba134f2cc2218 104-105
+src/components/editor/markdown-table-widget.ts
+  s_42ad1f97799dab::t_2d170f62be8395 1021-1023,1045,1073
+  s_42ad1f97799dab::t_e392b332ae7a7d 1118-1122
+  s_42ad1f97799dab::t_c87fb24f834975 1664-1665,1673
+  s_42ad1f97799dab::t_d9ffdfa95b5864 1709-1712
+  s_42ad1f97799dab::t_bb512f0362e967 1797
+  s_42ad1f97799dab::t_3bda1a7f19b58f 1386,1642
+  s_42ad1f97799dab::t_9a50d46fdd2e12 1385,1387,1499-1502,1513,1518,1634,1644,1668-1669,1676-1677,1733-1735,1792-1794
+  s_42ad1f97799dab::t_1ffa0bb416fec9 1048-1049,1062-1063,1066-1071,1074-1077
+  s_42ad1f97799dab::t_da86d68c20b76d 66,1655,1663,1670-1671,1678-1679,1695-1700,1704-1706,1722-1732,1779,1789-1791,1795-1796,1798-1799
+  s_42ad1f97799dab::t_06b7d8028a867a 1130-1140
+  s_42ad1f97799dab::t_8d65628e408737 1736-1737
+e2e/table-cell-click.spec.ts
+  s_42ad1f97799dab::t_d462f06cf4164d 30-36,39,41-43,60-61
+  s_42ad1f97799dab::t_75797ba6aabef2 1-17,20-28,62-181
+  s_42ad1f97799dab::t_aa6234793dfa3f 18-19,29,37-38,40,44-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "8b01ae845d799def1ca0b2074b939fd6b69ad12a",
+  "prompts": {},
+  "sessions": {
+    "s_42ad1f97799dab": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1286a-10e0-7133-bde4-5485481ba9ea",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
