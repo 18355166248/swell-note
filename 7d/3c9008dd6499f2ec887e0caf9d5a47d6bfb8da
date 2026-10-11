@@ -1,0 +1,20 @@
+e2e/table-interaction-edge.spec.ts
+  s_42ad1f97799dab::t_56619733ed04f2 2,35-59
+  s_42ad1f97799dab::t_29cf3d0ef7dfeb 60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "7d3c9008dd6499f2ec887e0caf9d5a47d6bfb8da",
+  "prompts": {},
+  "sessions": {
+    "s_42ad1f97799dab": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1286a-10e0-7133-bde4-5485481ba9ea",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
