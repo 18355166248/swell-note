@@ -114,6 +114,50 @@ afterEach(() => {
 })
 
 describe("单元格编辑与键盘导航", () => {
+  it("文字格之间只有 pointerdown 也在本次按下交接光标", async () => {
+    view = createView()
+    await settle()
+    clickCell(0, 0)
+    const target = cellAt(1, 0).querySelector(".cm-md-table-cell-display")!
+    const press = new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, buttons: 0 })
+    Object.defineProperty(press, "pointerType", { value: "mouse" })
+    target.dispatchEvent(press)
+    expect(cellInput()?.value).toBe("香蕉")
+    expect(document.activeElement).toBe(cellInput())
+    await tick()
+    expect(cellInput()?.value).toBe("香蕉")
+    expect(document.activeElement).toBe(cellInput())
+  })
+  it("空白格卸下旧输入时焦点暂留旧格，也能直接进入下方格", async () => {
+    view = createView(doc.replace("一般", ""))
+    await settle()
+    clickCell(1, 1)
+    const previousCell = cellAt(1, 1)
+    const input = cellInput()!
+    const remove = input.remove.bind(input)
+    // 模拟浏览器移除输入框后将焦点暂时交给其可聚焦父格的情况。
+    input.remove = () => { remove(); previousCell.focus() }
+    clickCell(2, 1)
+    expect(cellInput()?.closest("td")).toBe(cellAt(2, 1))
+    expect(cellInput()).toBe(document.activeElement)
+    await tick()
+    expect(cellInput()?.closest("td")).toBe(cellAt(2, 1))
+  })
+  for (const separator of ["| --- | --- | --- |", "|---|---|---|"]) {
+    it(`未改动的空白格点击下方只保留新格焦点：${separator}`, async () => {
+      view = createView(`前文\n\n| A | B | C |\n${separator}\n| 甲 |  | 丙 |\n| 丁 |  | 己 |\n| 庚 | 下方 | 壬 |\n\n后文`)
+      await settle()
+      clickCell(1, 1)
+      expect(cellInput()?.value).toBe("")
+      clickCell(2, 1)
+      // 原文没变时无需重绘；本次点击结束前就应完成焦点交接。
+      if (separator.includes(" ")) expect(cellInput()?.closest("td")).toBe(cellAt(2, 1))
+      await tick()
+      expect(cellInput()?.closest("td")).toBe(cellAt(2, 1))
+      expect(cellInput()).toBe(document.activeElement)
+      expect(wrapper().querySelectorAll("textarea")).toHaveLength(1)
+    })
+  }
   it("左右键到内容边界才切格，切换前提交，按进入方向定位首尾", async () => {
     view = createView(doc.replace("新鲜", "第一行<br>第二行"))
     await settle()

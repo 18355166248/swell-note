@@ -63,6 +63,7 @@ type DragSession = {
   lastY: number
   startX: number
   startY: number
+  startedAt: number
 }
 
 type CellEditDraft = {
@@ -1017,7 +1018,9 @@ export class TableWidget extends WidgetType {
     // 但残留的输入框必须收掉，否则旧 textarea 一直挂在格子里。
     if (serializeMarkdownTable(table) === this.source) {
       activeTableEdit(this.view)?.cancel()
-      if (focus) this.focusCellAfterUpdate(focus)
+      // 未修改的空白格等场景没有 DOM 重绘，直接完成本次点击的焦点交接。
+      // 延迟恢复会留下无输入框的空档，也可能把移除 textarea 后的临时焦点误判为用户跳转。
+      if (focus) this.focusCellAfterUpdate(focus, false)
       return true
     }
     this.view.dispatch({ changes: { from: this.from, to: this.to, insert: serializeMarkdownTable(table) }, userEvent: "input.table", annotations: isolateHistory.of("full") })
@@ -1039,10 +1042,11 @@ export class TableWidget extends WidgetType {
     return true
   }
 
-  private focusCellAfterUpdate(target: CellTarget) {
+  private focusCellAfterUpdate(target: CellTarget, defer = true) {
     const doc = this.view.state.doc
     const selection = this.view.state.selection
-    window.setTimeout(() => {
+    let caret = target.selection
+    const restore = (delayed: boolean) => {
       if (!this.view.dom.isConnected || this.view.state.readOnly || this.view.state.doc !== doc) return
       // 重绘期间用户可能已选了另一格，或把焦点交给表格按钮等内部控件。
       // 旧恢复只接管暂时无焦点或仍在正文的状态，不能再点击旧目标格。
@@ -1055,15 +1059,22 @@ export class TableWidget extends WidgetType {
       const cell = wrapper?.querySelectorAll("tr")?.[target.row]?.children[target.column]
       if (!(cell instanceof HTMLElement)) return
       // 点击另一格时浏览器会先聚焦 td；这正是本次导航目标，不能当成「用户已移走焦点」而拒绝打开输入框。
-      if (focused && focused !== document.body && focused !== this.view.contentDOM && focused !== cell) return
-      if (focused !== cell && !this.view.state.selection.eq(selection)) return
+      if (delayed && focused && focused !== document.body && focused !== this.view.contentDOM && focused !== cell) return
+      if (delayed && focused !== cell && !this.view.state.selection.eq(selection)) return
       cell.click()
       const input = activeTableEdit(this.view)?.input
-      if (target.selection && input && cell.contains(input)) {
-        input.setSelectionRange(target.selection.from, target.selection.to, target.selection.direction)
-        input.dispatchEvent(new Event("select", { bubbles: true }))
+      if (input && cell.contains(input)) {
+        if (caret) {
+          input.setSelectionRange(caret.from, caret.to, caret.direction)
+          input.dispatchEvent(new Event("select", { bubbles: true }))
+        }
+        caret = { from: input.selectionStart, to: input.selectionEnd, direction: input.selectionDirection }
       }
-    }, 0)
+    }
+    if (!defer) restore(false)
+    // 某些点击路径会在处理结束后才聚焦 td，触发刚打开输入框的 blur；下一拍
+    // 仅当焦点仍属于本次目标时补回输入和原落点，其他格/按钮的新操作仍由上面的守卫保护。
+    window.setTimeout(() => restore(true), 0)
   }
 
   private enableCellEditing(
@@ -1104,7 +1115,11 @@ export class TableWidget extends WidgetType {
         this.replaceTable(this.tableWithActiveEdit(wrapper, table), { column: columnIndex, row: rowIndex + 1 })
         return
       }
-      if (cell.querySelector("textarea")) return
+      const existingInput = cell.querySelector<HTMLTextAreaElement>("textarea")
+      if (existingInput) {
+        if (document.activeElement !== existingInput) existingInput.focus({ preventScroll: true })
+        return
+      }
       const storedPoint = session.pendingPoint
       session.pendingPoint = null
       const point = event instanceof MouseEvent && (event.clientX || event.clientY)
@@ -1112,6 +1127,17 @@ export class TableWidget extends WidgetType {
         : storedPoint ?? undefined
       this.openCellInput(cell, table, rowIndex, columnIndex, originalValue, point)
     }
+    cell.addEventListener("pointerdown", (event) => {
+      if (event.pointerType !== "mouse" || event.button !== 0 || event.shiftKey) return
+      const target = event.target instanceof Element ? event.target : null
+      if (target?.closest(".cm-md-table-cell-input, .cm-md-table-resize-handle")) return
+      const editing = activeTableEdit(this.view)
+      if (!editing || cell.contains(editing.input)) return
+      // Mac WebKit 的文字命中路径可能先抬起、后补按下，甚至不派发 click；
+      // 已在编辑时直接在目标格的按下事件交接光标，不能等待松手再要求用户点第二次。
+      // wrapper 捕获阶段已记下拖选锚点，后续真跨格拖动仍可转成矩形选区。
+      beginEditing(event)
+    })
     cell.addEventListener("click", beginEditing)
     cell.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") beginEditing(event)
@@ -1356,6 +1382,9 @@ export class TableWidget extends WidgetType {
     })
     input.addEventListener("blur", () => {
       // 自定义菜单暂时接过焦点，输入框和选区仍属于当前单元格；菜单关闭后再恢复或提交。
+      // WebKit 可在 pointerdown 后先让旧输入失焦，再派发 click。此时立即提交会
+      // 重建点击目标，吃掉这一次点击；格间按压由目标格处理器提交并交接焦点。
+      if (this.session().drag && !this.session().drag?.active) return
       if (input.dataset.contextMenuActive !== "true") commit()
     })
     input.addEventListener("keydown", (event) => {
@@ -1467,6 +1496,10 @@ export class TableWidget extends WidgetType {
   // ---------------------------------------------------------------------------
 
   private attachTableInteraction(wrapper: HTMLElement, table: MarkdownTable) {
+    const pointerDown = (event: PointerEvent) => {
+      // 提前记录桌面按压，但不取消 pointerdown 的兼容鼠标事件；触屏仍保留滚动和原生 click。
+      if (event.pointerType === "mouse" && !event.shiftKey) this.onTableMouseDown(wrapper, table, event, false)
+    }
     const mouseDown = (event: MouseEvent) => this.onTableMouseDown(wrapper, table, event)
     const keyDown = (event: KeyboardEvent) => this.onWrapperKeyDown(wrapper, table, event)
     // 链接的 click 监听先于单元格监听执行；在捕获阶段消费拖选尾随的 click，
@@ -1477,10 +1510,12 @@ export class TableWidget extends WidgetType {
       event.preventDefault()
       event.stopPropagation()
     }
+    wrapper.addEventListener("pointerdown", pointerDown, true)
     wrapper.addEventListener("mousedown", mouseDown)
     wrapper.addEventListener("keydown", keyDown)
     wrapper.addEventListener("click", suppressLinkClick, true)
     this.cleanupCallbacks.add(() => {
+      wrapper.removeEventListener("pointerdown", pointerDown, true)
       wrapper.removeEventListener("mousedown", mouseDown)
       wrapper.removeEventListener("keydown", keyDown)
       wrapper.removeEventListener("click", suppressLinkClick, true)
@@ -1596,7 +1631,7 @@ export class TableWidget extends WidgetType {
     }
   }
 
-  private onTableMouseDown(wrapper: HTMLElement, table: MarkdownTable, event: MouseEvent) {
+  private onTableMouseDown(wrapper: HTMLElement, table: MarkdownTable, event: MouseEvent, preventDefault = true) {
     if (event.button !== 0) return
     const target = event.target instanceof Element ? event.target : null
     const cell = target?.closest<HTMLElement>("th, td")
@@ -1604,9 +1639,9 @@ export class TableWidget extends WidgetType {
     // 编辑中的 textarea 保持原生文字选择；列宽手柄有自己的拖拽。
     if (target?.closest(".cm-md-table-cell-input")) return
     if (target?.closest(".cm-md-table-resize-handle")) return
-    // 阻止默认的文字选择与焦点转移：拖选由这里接管，点击进入编辑仍走 click 事件，
+    // 阻止默认的文字选择与焦点转移：拖选由这里接管，编辑交接由单元格处理器完成，
     // 未提交的输入也不会因为 mousedown 抢焦点而提前提交。
-    event.preventDefault()
+    if (preventDefault) event.preventDefault()
     const position: CellPosition = { column: Number(cell.dataset.columnIndex), row: Number(cell.dataset.rowIndex) }
     if (!Number.isInteger(position.row) || !Number.isInteger(position.column)) return
     const session = this.session()
@@ -1617,7 +1652,7 @@ export class TableWidget extends WidgetType {
       session.suppressClick = true
       return
     }
-    session.drag = { active: false, anchor: position, lastX: event.clientX, lastY: event.clientY, startX: event.clientX, startY: event.clientY }
+    session.drag = { active: false, anchor: position, lastX: event.clientX, lastY: event.clientY, startX: event.clientX, startY: event.clientY, startedAt: event.timeStamp }
     this.attachDragListeners(wrapper, table)
   }
 
@@ -1625,11 +1660,23 @@ export class TableWidget extends WidgetType {
     this.releaseDragListeners()
     const move = (event: MouseEvent) => this.onDragMove(wrapper, table, event)
     const up = (event: MouseEvent) => this.onDragUp(wrapper, table, event)
+    const cancel = () => this.cancelDrag(wrapper)
+    // 按下切格会取消兼容鼠标事件；拖选必须同时接收原始 pointermove 才能继续工作。
+    document.addEventListener("pointermove", move)
     document.addEventListener("mousemove", move)
     document.addEventListener("mouseup", up)
+    document.addEventListener("pointerup", up)
+    document.addEventListener("pointercancel", cancel)
+    document.addEventListener("wheel", cancel, { passive: true, capture: true })
+    window.addEventListener("blur", cancel)
     const dispose = () => {
+      document.removeEventListener("pointermove", move)
       document.removeEventListener("mousemove", move)
       document.removeEventListener("mouseup", up)
+      document.removeEventListener("pointerup", up)
+      document.removeEventListener("pointercancel", cancel)
+      document.removeEventListener("wheel", cancel, true)
+      window.removeEventListener("blur", cancel)
     }
     this.session().dragListeners = dispose
   }
@@ -1645,11 +1692,24 @@ export class TableWidget extends WidgetType {
     const session = this.session()
     const drag = session.drag
     if (!drag) return
+    // 快速操作、在窗口外松手等场景可能漏掉 mouseup；实际已松键就结束会话，
+    // 不能让普通悬停继续沿用上一次按下的锚点。滚轮与窗口失焦也走同一取消路径。
+    if (!(event.buttons & 1)) {
+      this.cancelDrag(wrapper)
+      return
+    }
     drag.lastX = event.clientX
     drag.lastY = event.clientY
     if (!drag.active) {
+      // 点击后立即滑走优先按编辑处理；短暂按住再跨格才表达拖选意图。
+      // 只在移动事件上判断，不用定时器自动启动，避免静止长按也出现选区。
+      if (event.timeStamp - drag.startedAt < 120) return
       // 阈值之内仍按单击处理，不影响点击进编辑和双击选词。
       if (Math.hypot(drag.lastX - drag.startX, drag.lastY - drag.startY) < 5) return
+      // 鼠标或触控板在同一格内的抖动仍是点击；真正跨格后才接管拖选，
+      // 否则 mouseup 会抑制后续 click，让用户反复点击也拿不到编辑光标。
+      const cell = this.cellFromPoint(wrapper, drag.lastX, drag.lastY)
+      if (!cell || (cell.row === drag.anchor.row && cell.column === drag.anchor.column)) return
       drag.active = true
       window.getSelection()?.removeAllRanges()
       wrapper.dataset.rangeSelecting = "true"
@@ -1657,6 +1717,22 @@ export class TableWidget extends WidgetType {
     }
     event.preventDefault()
     this.scheduleDragFrame(wrapper, table)
+  }
+
+  private cancelDrag(wrapper: HTMLElement) {
+    const session = this.session()
+    const wasActive = session.drag?.active
+    session.drag = null
+    this.releaseDragListeners()
+    delete wrapper.dataset.rangeSelecting
+    if (this.dragFrame) {
+      cancelAnimationFrame(this.dragFrame)
+      this.dragFrame = 0
+    }
+    if (wasActive) this.clearCellRange(wrapper)
+    const editing = activeTableEdit(this.view)
+    // 按压期间延后的失焦提交在取消时补齐，避免滚动/窗口失焦后留下失焦的草稿输入层。
+    if (editing && wrapper.contains(editing.input) && document.activeElement !== editing.input) editing.commit()
   }
 
   // 拖选期间用 rAF 循环驱动绘制与自动滚动：指针停在边缘不动时也能持续滚动。
@@ -1700,7 +1776,7 @@ export class TableWidget extends WidgetType {
     return Number.isInteger(row) && Number.isInteger(column) ? { column, row } : null
   }
 
-  private onDragUp(wrapper: HTMLElement, table: MarkdownTable, _event: MouseEvent) {
+  private onDragUp(wrapper: HTMLElement, table: MarkdownTable, event: MouseEvent) {
     const session = this.session()
     const drag = session.drag
     session.drag = null
@@ -1710,7 +1786,17 @@ export class TableWidget extends WidgetType {
       cancelAnimationFrame(this.dragFrame)
       this.dragFrame = 0
     }
-    if (!drag?.active) return
+    if (!drag) return
+    if (!drag.active) {
+      const releasedCell = this.cellFromPoint(wrapper, event.clientX, event.clientY)
+      if (releasedCell) {
+        // 单击在松手时就完成旧格提交和新格聚焦，不依赖 WebKit 在旧输入失焦后
+        // 是否继续派发 click。后续原生 click 命中已打开的 textarea，不会重复提交。
+        const cell = wrapper.querySelector<HTMLElement>(`[data-row-index="${drag.anchor.row}"][data-column-index="${drag.anchor.column}"]`)
+        cell?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: drag.startX, clientY: drag.startY }))
+      } else this.cancelDrag(wrapper)
+      return
+    }
     // 拖选落定：紧随的 click 必须吞掉，否则又会进入编辑并清掉选区。
     session.suppressClick = true
     // 跨格拖选时 click 派发到按下/抬起位置的公共祖先而不是某个单元格，beginEditing

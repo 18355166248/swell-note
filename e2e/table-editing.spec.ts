@@ -101,6 +101,8 @@ async function dragCells(page: Page, fromText: string, toText: string, steps = 1
   const to = (await cellDisplay(page, toText).boundingBox())!
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
   await page.mouse.down()
+  // 拖选需要明确的按住手势，快速按下后滑走仍按点击进入编辑。
+  await page.waitForTimeout(150)
   await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps })
   await page.mouse.up()
 }
