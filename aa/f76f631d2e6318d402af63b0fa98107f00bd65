@@ -1,0 +1,19 @@
+src/components/editor/markdown-table-widget.test.ts
+  s_42ad1f97799dab::t_836c190dee6bc1 117-276
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "aaf76f631d2e6318d402af63b0fa98107f00bd65",
+  "prompts": {},
+  "sessions": {
+    "s_42ad1f97799dab": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1286a-10e0-7133-bde4-5485481ba9ea",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
