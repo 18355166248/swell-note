@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react"
 import { Bold, Braces, CheckCircle2, Code, Code2, Heading3, Image, Italic, Link, List, ListOrdered, LoaderCircle, Minus, MoreHorizontal, Quote, Redo2, Strikethrough, Table, Undo2, Sigma, Workflow, MessageSquare, BookOpen, NotebookPen } from "lucide-react"
 
-import { TABLE_INSERT_TEMPLATE, type MarkdownEditorHandle } from "@/components/editor/markdown-editor"
+import type { MarkdownEditorHandle } from "@/components/editor/markdown-editor"
 import type { EditorFormatState } from "@/components/editor/markdown-input"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 import { SelectionButtons, useSelectionActions } from "./selection-action-bar"
 import { INSERTABLE_BLOCKS } from "@/components/editor/block-insertion"
+import { buildTableTemplate } from "@/components/editor/table-template"
+import { TableSizePicker } from "./table-size-picker"
 
 // 手机一行放不下全部按钮，这些低频格式收进“更多”；语法与桌面端共用，避免两处写法漂移。
 // 前 4 项的顺序被下方解构复用，新增项一律往后追加。
@@ -15,6 +17,8 @@ const SECONDARY_FORMATS: Array<{
   icon: typeof List
   label: string
   stateKey?: keyof Pick<EditorFormatState, "orderedList" | "quote">
+  // 需要先选尺寸再插入的项（表格）：syntax 不直接下发。
+  picker?: boolean
   syntax: string
 }> = [
   { icon: Heading3, label: "三级标题", syntax: "\n### " },
@@ -24,7 +28,7 @@ const SECONDARY_FORMATS: Array<{
   { icon: Strikethrough, label: "删除线", syntax: "~~删除线文字~~" },
   { icon: Code, label: "行内代码", syntax: "`行内代码`" },
   { icon: Minus, label: "分割线", syntax: "\n---\n" },
-  { icon: Table, label: "表格", syntax: TABLE_INSERT_TEMPLATE },
+  { icon: Table, label: "表格", picker: true, syntax: "" },
   { icon: ListOrdered, label: "有序列表", stateKey: "orderedList", syntax: "\n1. " },
   ...INSERTABLE_BLOCKS.map((block) => ({ icon: block.id === "math" ? Sigma : block.id === "mermaid" ? Workflow : block.id === "callout" ? MessageSquare : block.id === "footnote" ? BookOpen : NotebookPen, label: block.label, syntax: block.syntax })),
 ]
@@ -125,7 +129,7 @@ export function FormattingToolbar({ canUndo = true, canRedo = true, editingTable
           <FormatButton disabled={editingTable} icon={code.icon} label={code.label} onClick={() => onFormat(code.syntax)} />
           <FormatButton icon={link.icon} label={`${link.label}（⌘/Ctrl+K）`} onClick={() => onFormat(link.syntax)} />
           <span className="toolbar-divider" />
-          <FormatButton disabled={editingTable} icon={table.icon} label={table.label} onClick={() => onFormat(table.syntax)} />
+          <TableInsertButton disabled={editingTable} icon={table.icon} label={table.label} onInsert={(rows, cols) => onFormat(buildTableTemplate(rows, cols))} />
           <FormatButton disabled={editingTable} icon={rule.icon} label={rule.label} onClick={() => onFormat(rule.syntax)} />
           <span className="toolbar-divider" />
           {/* 正文呈现方式与上方的格式按钮不是一类：它只改怎么看着写，不改可写性，
@@ -175,26 +179,22 @@ function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
-
-  useEffect(() => {
-    if (!open) return
-    const closeOnOutsidePress = (event: PointerEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) setOpen(false)
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false)
-    }
-    document.addEventListener("pointerdown", closeOnOutsidePress)
-    document.addEventListener("keydown", closeOnEscape)
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePress)
-      document.removeEventListener("keydown", closeOnEscape)
-    }
-  }, [open])
+  const [tablePickerOpen, setTablePickerOpen] = useState(false)
+  const panelRef = useRef<HTMLDivElement>(null)
+  useDismiss(open || tablePickerOpen, containerRef, () => { setOpen(false); setTablePickerOpen(false) }, panelRef)
+  useEffect(() => { if (editingTable) setTablePickerOpen(false) }, [editingTable])
 
   return (
     <div className="toolbar-more" ref={containerRef}>
-      <FormatButton expanded={open} icon={MoreHorizontal} label={blocksOnly ? "插入内容" : "更多格式"} onClick={() => setOpen((current) => !current)} />
+      <FormatButton expanded={open} icon={MoreHorizontal} label={blocksOnly ? "插入内容" : "更多格式"} onClick={() => { setTablePickerOpen(false); setOpen((current) => !current) }} />
+      {tablePickerOpen ? (
+        <TableSizePicker
+          anchorRef={containerRef}
+          panelRef={panelRef}
+          onCancel={() => setTablePickerOpen(false)}
+          onConfirm={(rows, cols) => { setTablePickerOpen(false); onFormat(buildTableTemplate(rows, cols)) }}
+        />
+      ) : null}
       {open ? (
         <div className="toolbar-more-menu" role="menu">
           {showUndo ? (
@@ -222,15 +222,16 @@ function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false
             <Redo2 />
             <span>重做</span>
           </button> : null}
-          {(blocksOnly ? SECONDARY_FORMATS.slice(9) : SECONDARY_FORMATS).map(({ icon: Icon, label, stateKey, syntax }) => (
+          {(blocksOnly ? SECONDARY_FORMATS.slice(9) : SECONDARY_FORMATS).map(({ icon: Icon, label, picker, stateKey, syntax }) => (
             <button
               aria-pressed={stateKey ? Boolean(formatState?.[stateKey]) : undefined}
               data-active={stateKey && formatState?.[stateKey] ? "true" : undefined}
               key={label}
-              disabled={editingTable && syntax.startsWith("\n")}
+              disabled={editingTable && (picker || syntax.startsWith("\n"))}
               onClick={() => {
                 setOpen(false)
-                onFormat(syntax)
+                if (picker) setTablePickerOpen(true)
+                else onFormat(syntax)
               }}
               onPointerDown={(event) => event.preventDefault()}
               role="menuitem"
@@ -265,6 +266,46 @@ function SecondaryFormatsMenu({ canUndo = true, canRedo = true, showUndo = false
           ) : null}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function useDismiss(active: boolean, containerRef: RefObject<HTMLElement | null>, close: () => void, panelRef?: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    if (!active) return
+    const closeOnOutsidePress = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node) && !panelRef?.current?.contains(event.target as Node)) close()
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      // 编辑器持有焦点时先关闭浮层，避免 Escape 同时触发正文的退出编辑动作。
+      if (event.key === "Escape" && !event.isComposing) { event.preventDefault(); event.stopPropagation(); close() }
+    }
+    document.addEventListener("pointerdown", closeOnOutsidePress)
+    document.addEventListener("keydown", closeOnEscape, true)
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePress)
+      document.removeEventListener("keydown", closeOnEscape, true)
+    }
+    // close 每次渲染都是新函数，依赖它只会反复重挂监听。
+  }, [active])
+}
+
+function TableInsertButton({ disabled, icon, label, onInsert }: {
+  disabled: boolean
+  icon: typeof List
+  label: string
+  onInsert: (rows: number, cols: number) => void
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = useState(false)
+  const panelRef = useRef<HTMLDivElement>(null)
+  useDismiss(open, containerRef, () => setOpen(false), panelRef)
+  useEffect(() => { if (disabled) setOpen(false) }, [disabled])
+
+  return (
+    <div className="table-insert" ref={containerRef}>
+      <FormatButton disabled={disabled} expanded={open} icon={icon} label={label} onClick={() => setOpen((current) => !current)} />
+      {open ? <TableSizePicker anchorRef={containerRef} panelRef={panelRef} onCancel={() => setOpen(false)} onConfirm={(rows, cols) => { setOpen(false); onInsert(rows, cols) }} /> : null}
     </div>
   )
 }

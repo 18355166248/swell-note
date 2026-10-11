@@ -740,11 +740,19 @@ export class TableWidget extends WidgetType {
       sizePanel()
       const rect = trigger.getBoundingClientRect()
       const viewport = window.visualViewport
-      const bottom = (viewport?.height ?? window.innerHeight) + (viewport?.offsetTop ?? 0)
+      // 键盘收缩可视区时限制菜单高度并允许内部滚动，不能只避让下沿而把顶部推出屏幕。
+      const left = (viewport?.offsetLeft ?? 0) + 8
+      const top = (viewport?.offsetTop ?? 0) + 8
+      const availableWidth = Math.max(0, (viewport?.width ?? window.innerWidth) - 16)
+      const availableHeight = Math.max(0, (viewport?.height ?? window.innerHeight) - 16)
+      panel.style.maxWidth = `${availableWidth}px`
+      panel.style.minWidth = `${Math.min(112, availableWidth)}px`
+      panel.style.maxHeight = `${availableHeight}px`
       const width = panel.offsetWidth || 140
       const height = panel.offsetHeight || 190
-      panel.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`
-      panel.style.top = `${Math.max(8, rect.bottom + height + 8 < bottom ? rect.bottom + 5 : rect.top - height - 5)}px`
+      const y = rect.bottom + height + 5 <= top + availableHeight ? rect.bottom + 5 : rect.top - height - 5
+      panel.style.left = `${Math.max(left, Math.min(rect.left, left + availableWidth - width))}px`
+      panel.style.top = `${Math.max(top, Math.min(y, top + availableHeight - height))}px`
     }
     menu.addEventListener("toggle", () => {
       panel.style.display = menu.open ? "grid" : "none"
@@ -766,11 +774,15 @@ export class TableWidget extends WidgetType {
     document.addEventListener("keydown", closeOnEscape, true)
     window.addEventListener("scroll", position, true)
     window.addEventListener("resize", position)
+    window.visualViewport?.addEventListener("resize", position)
+    window.visualViewport?.addEventListener("scroll", position)
     this.cleanupCallbacks.add(() => {
       document.removeEventListener("keydown", closeOnEscape, true)
       panel.remove()
       window.removeEventListener("scroll", position, true)
       window.removeEventListener("resize", position)
+      window.visualViewport?.removeEventListener("resize", position)
+      window.visualViewport?.removeEventListener("scroll", position)
     })
     document.addEventListener("pointerdown", closeOnOutside)
     this.cleanupCallbacks.add(() => document.removeEventListener("pointerdown", closeOnOutside))
@@ -1389,6 +1401,8 @@ export class TableWidget extends WidgetType {
     if (event.key === "Enter") {
       next.row = visualRow + 1
       next.appendRow = next.row > lastVisualRow
+      // 末行回车新增的是一整行空行，光标回到新行第一列方便从头填写。
+      if (next.appendRow) next.column = 0
       return next
     }
     if (event.shiftKey) {

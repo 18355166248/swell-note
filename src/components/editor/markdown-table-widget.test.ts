@@ -164,6 +164,22 @@ describe("单元格编辑与键盘导航", () => {
     expect(docText()).not.toContain("不得覆盖")
   })
 
+  it("末行任意列 Enter 补一行空行，光标落在新行第一列", async () => {
+    view = createView()
+    await settle()
+
+    clickCell(2, 2)
+    await tick()
+    const last = cellInput()!
+    expect(last.value).toBe("残余")
+    keydown(last, { key: "Enter" })
+    await tick()
+
+    expect(docText()).toContain("| 樱桃 | 过期 | 残余 |\n|  |  |  |")
+    const input = cellInput()!
+    expect(input.closest("td")).toBe(cellAt(3, 0))
+  })
+
   it("Enter 提交并下移，末行自动补行；Tab 跨列回绕；Escape 放弃输入", async () => {
     view = createView()
     await settle()

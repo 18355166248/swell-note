@@ -2,6 +2,7 @@ import { flushSync } from "react-dom"
 import { registerSavePreparation } from "@/services/vault/save-lifecycle"
 import { hasUnpersistedBlockDraft } from "./block-edit-session"
 import { chapterFolding, chapterRange, markdownHeadings, foldEffect } from "./chapter-folding"
+import { isTableInsertTemplate } from "./table-template"
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown"
 import { syntaxTree, foldGutter, unfoldAll, codeFolding } from "@codemirror/language"
@@ -110,10 +111,6 @@ export type MarkdownFindResult = {
   replaced?: number
   scopeInvalid?: boolean
 }
-
-// 工具栏「插入表格」按钮与 formatToolbarText 共用同一份模板字符串，
-// 插入完成后靠它识别出这次插入的是表格，从而自动聚焦到第一个单元格。
-export const TABLE_INSERT_TEMPLATE = "\n| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |\n"
 
 // 一次装饰更新里可能同时挂着好几张表格的 wrapper，用起点行号才能挑出这次刚插入的那一张。
 export function findTableWrapperAtLine(root: ParentNode, lineStart: number): HTMLElement | null {
@@ -1334,7 +1331,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         })
         view.focus()
         // 模板固定以换行开头，表格真正的第一行从插入点之后一个字符算起。
-        if (text === TABLE_INSERT_TEMPLATE) focusFirstTableHeaderCell(view, insertFrom + leading + 1)
+        if (isTableInsertTemplate(text)) focusFirstTableHeaderCell(view, insertFrom + leading + 1)
       },
       lineAtViewportTop(clientY) {
         const view = controlRef.current?.getView()

@@ -233,16 +233,16 @@ test.describe("编辑器三批修复收尾验收", () => {
     await page.keyboard.press("Enter")
     await capture((content) => content === `${snapshots[snapshots.length - 1]}\n`, false)
     await page.getByRole("button", { name: "表格", exact: true }).click()
-    await capture((content) => content.includes("| 列 1 | 列 2 |"))
+    await page.getByRole("button", { name: "插入 3 × 3" }).click()
+    await capture((content) => content.includes("|  |  |  |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |"))
 
-    // 4) 填写单元格（Tab 提交，避免末行 Enter 自动补行干扰快照）
-    const newTable = page.locator(".cm-md-table-wrap", { hasText: "列 1" })
-    await newTable.locator("td", { hasText: "内容" }).first().click()
+    // 4) 填写单元格（Tab 提交，避免末行 Enter 自动补行干扰快照）；新表格全部留空，没有占位字段
+    const newTable = page.locator(".cm-md-table-wrap").filter({ hasNot: page.locator("td", { hasText: /\S/ }) }).first()
+    await newTable.locator("td").first().click()
     await expect(newTable.locator(".cm-md-table-cell-input")).toBeFocused()
-    await page.keyboard.press("ControlOrMeta+a")
     await page.keyboard.type("单元值")
     await page.keyboard.press("Tab")
-    await capture((content) => content.includes("| 单元值 | 内容 |") && content.includes("***新增一句***"))
+    await capture((content) => content.includes("| 单元值 |  |  |") && content.includes("***新增一句***"))
 
     // 5) 插入图片（单元格编辑中：先提交单元格，图片落在表格之后）
     await insertImages(page, ["流程一.png"])

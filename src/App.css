@@ -1679,6 +1679,48 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .toolbar-more-menu button:hover { background: var(--muted); }
 .formatting-toolbar[data-mobile="true"] .toolbar-more-menu { top: auto; }
 
+/* 尺寸浮层挂到 body；头尾固定，中间滚动，键盘收缩后确认按钮仍可直接操作。 */
+.table-insert { position: relative; display: flex; }
+.table-picker-popover { position: fixed; z-index: 100; display: flex; flex-direction: column; box-sizing: border-box; width: 320px; overflow: hidden; border: 1px solid var(--border); border-radius: 16px; background: var(--popover); box-shadow: 0 16px 40px rgb(15 23 42 / .16); color: var(--foreground); }
+.table-picker-header { flex: none; padding: 12px 16px 10px; }
+.table-picker-title { display: flex; align-items: center; gap: 8px; }
+.table-picker-title > svg { width: 17px; height: 17px; color: var(--primary); }
+.table-picker-title strong { font-size: 15px; font-weight: 650; }
+.table-picker-header p { margin: 4px 0 0; color: var(--muted-foreground); font-size: 12px; }
+.table-picker-body { display: grid; flex: 0 1 auto; min-height: 0; gap: 10px; overflow-y: auto; overscroll-behavior: contain; padding: 2px 16px 12px; }
+.table-picker-popover button { display: grid; place-items: center; flex: none; min-width: 36px; min-height: 36px; border: 1px solid var(--border); border-radius: 8px; padding: 0 10px; background: transparent; color: var(--foreground); font: inherit; font-size: 13px; font-weight: 550; cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background-color 120ms ease, border-color 120ms ease; }
+.table-picker-popover button svg { width: 15px; height: 15px; }
+.table-picker-popover button:disabled { opacity: .35; cursor: default; }
+.table-picker-popover button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+@media (hover: hover) { .table-picker-popover button:hover:not(:disabled) { background: var(--muted); } }
+.table-picker-popover button:active:not(:disabled) { background: var(--muted); }
+.table-picker-presets { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 4px; border-radius: 10px; padding: 3px; background: var(--muted); }
+.table-picker-presets button { min-height: 32px; border-color: transparent; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.table-picker-presets button[aria-pressed="true"] { border-color: var(--border); background: var(--popover); color: var(--primary); box-shadow: 0 1px 3px rgb(15 23 42 / .06); }
+.table-picker-dimensions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+.table-picker-row { min-width: 0; border: 1px solid var(--border); border-radius: 10px; padding: 8px; }
+.table-picker-dimension-label { display: flex; min-height: 20px; align-items: center; gap: 5px; margin-bottom: 4px; font-size: 12px; font-weight: 550; }
+.table-picker-dimension-label small { color: var(--muted-foreground); font-size: 10px; font-weight: 400; }
+.table-picker-stepper { display: flex; align-items: center; justify-content: space-between; }
+.table-picker-stepper output { min-width: 24px; text-align: center; font-size: 16px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.table-picker-stepper button { width: 36px; padding: 0; background: var(--background); }
+.table-picker-preview-label { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; color: var(--muted-foreground); font-size: 11px; }
+.table-picker-preview-label span:first-child { color: var(--foreground); font-variant-numeric: tabular-nums; }
+.table-picker-preview { display: grid; height: 56px; gap: 3px; }
+.table-picker-preview span { min-height: 0; border: 1px solid var(--border); border-radius: 3px; background: var(--background); }
+.table-picker-preview span[data-header] { border-color: color-mix(in oklab,var(--primary) 25%,var(--border)); background: color-mix(in oklab,var(--primary) 10%,var(--popover)); }
+.table-picker-actions { display: flex; flex: none; gap: 8px; border-top: 1px solid var(--border); padding: 10px 16px; background: var(--popover); }
+.table-picker-actions button { min-height: 40px; }
+.table-picker-actions button:first-child { min-width: 64px; color: var(--muted-foreground); }
+.table-picker-popover .table-picker-actions button[data-primary="true"] { flex: 1; border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
+.table-picker-popover .table-picker-actions button[data-primary="true"]:hover { background: color-mix(in oklab,var(--primary) 90%,var(--foreground)); }
+.table-picker-popover[data-compact="true"] .table-picker-header { padding-block: 10px; }
+.table-picker-popover[data-compact="true"] .table-picker-header p, .table-picker-popover[data-compact="true"] .table-picker-preview-section { display: none; }
+@media (pointer: coarse) {
+  .table-picker-popover button { min-width: 44px; min-height: 44px; }
+  .table-picker-stepper button { width: 44px; }
+}
+
 .cm-block-completion[hidden] { display: none; }
 
 .cm-md-attachment { padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-soft); }
