@@ -1,0 +1,24 @@
+src/components/editor/markdown-table-widget.ts
+  s_42ad1f97799dab::t_64e6eca26e08a8 67,1134-1135,1642-1647,1662,1798-1799
+e2e/table-interaction-edge.spec.ts
+  s_42ad1f97799dab::t_abf19af2777317 4-7
+  s_42ad1f97799dab::t_6737470dfb432c 40-41
+  s_42ad1f97799dab::t_c9c1a32be8d313 1-3,35-39,42-55
+  s_42ad1f97799dab::t_d93154cb7f9e67 8-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "f961d8df8f8f62d157700b6bc807a0487f02dde6",
+  "prompts": {},
+  "sessions": {
+    "s_42ad1f97799dab": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1286a-10e0-7133-bde4-5485481ba9ea",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
