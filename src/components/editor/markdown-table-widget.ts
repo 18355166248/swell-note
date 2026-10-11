@@ -64,6 +64,7 @@ type DragSession = {
   startX: number
   startY: number
   startedAt: number
+  link: boolean
 }
 
 type CellEditDraft = {
@@ -1130,7 +1131,8 @@ export class TableWidget extends WidgetType {
     cell.addEventListener("pointerdown", (event) => {
       if (event.pointerType !== "mouse" || event.button !== 0 || event.shiftKey) return
       const target = event.target instanceof Element ? event.target : null
-      if (target?.closest(".cm-md-table-cell-input, .cm-md-table-resize-handle")) return
+      // 链接有独立的打开语义，不能在按下时把展示层换成 textarea 吃掉链接 click。
+      if (target?.closest(".cm-md-table-cell-input, .cm-md-table-resize-handle, .cm-md-table-link")) return
       const editing = activeTableEdit(this.view)
       if (!editing || cell.contains(editing.input)) return
       // Mac WebKit 的文字命中路径可能先抬起、后补按下，甚至不派发 click；
@@ -1637,7 +1639,12 @@ export class TableWidget extends WidgetType {
     const cell = target?.closest<HTMLElement>("th, td")
     if (!cell || !wrapper.contains(cell)) return
     // 编辑中的 textarea 保持原生文字选择；列宽手柄有自己的拖拽。
-    if (target?.closest(".cm-md-table-cell-input")) return
+    if (target?.closest(".cm-md-table-cell-input")) {
+      // Mac 的补发按下可能没有对应松手；开始原生文字选择前必须结束旧拖选会话，
+      // 否则鼠标拖出输入框边缘会沿用旧锚点，把选文字误变成选单元格。
+      this.cancelDrag(wrapper)
+      return
+    }
     if (target?.closest(".cm-md-table-resize-handle")) return
     // 阻止默认的文字选择与焦点转移：拖选由这里接管，编辑交接由单元格处理器完成，
     // 未提交的输入也不会因为 mousedown 抢焦点而提前提交。
@@ -1652,7 +1659,7 @@ export class TableWidget extends WidgetType {
       session.suppressClick = true
       return
     }
-    session.drag = { active: false, anchor: position, lastX: event.clientX, lastY: event.clientY, startX: event.clientX, startY: event.clientY, startedAt: event.timeStamp }
+    session.drag = { active: false, anchor: position, lastX: event.clientX, lastY: event.clientY, startX: event.clientX, startY: event.clientY, startedAt: event.timeStamp, link: !!target?.closest(".cm-md-table-link") }
     this.attachDragListeners(wrapper, table)
   }
 
@@ -1788,6 +1795,8 @@ export class TableWidget extends WidgetType {
     }
     if (!drag) return
     if (!drag.active) {
+      // 链接的原生 click 负责打开；只有真正进入拖选后才抑制它，普通松手不能先打开编辑层。
+      if (drag.link) return
       const releasedCell = this.cellFromPoint(wrapper, event.clientX, event.clientY)
       if (releasedCell) {
         // 单击在松手时就完成旧格提交和新格聚焦，不依赖 WebKit 在旧输入失焦后
