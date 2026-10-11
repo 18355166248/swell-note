@@ -63,7 +63,7 @@
    不再满足悬停条件，靠这条防止浮层跟着收起，面板开合也不与浮层动画打架。 */
 .markdown-editor-shell .cm-md-table-toolbar:has(.cm-md-table-menu[open]) { z-index: 7; }
 .markdown-editor-shell .cm-md-table-toolbar:has(.cm-md-table-menu[open]) .cm-md-table-toolbar-panel { opacity: 1; visibility: visible; transform: none; transition: none; }
-.markdown-editor-shell .cm-md-table-toolbar-panel::after { content: "Tab 切换 · Enter 下移 · Shift+Enter 换行"; margin-left: auto; padding-left: 14px; color: var(--muted-foreground); font-size: 10px; }
+.markdown-editor-shell .cm-md-table-toolbar-panel::after { content: "Enter 下移 / 末行新增 · Shift+Enter 换行 · 方向键到边界跨格 · Tab 下一格"; margin-left: auto; padding-left: 14px; color: var(--muted-foreground); font-size: 10px; }
 .markdown-editor-shell .cm-md-table-toolbar button { border: 0; border-radius: 5px; background: transparent; padding: 3px 7px; color: var(--muted-foreground); font: inherit; font-size: 11px; cursor: pointer; }
 .markdown-editor-shell .cm-md-table-toolbar button:hover { background: var(--blue-soft); color: var(--primary); }
 .markdown-editor-shell .cm-md-table-toolbar button:disabled { opacity: .4; cursor: not-allowed; }

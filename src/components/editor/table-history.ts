@@ -1,6 +1,7 @@
 import { ChangeSet, type EditorSelection, type Text } from "@codemirror/state"
 import { diffChars } from "diff"
 
+import { tableCellEditorValue } from "./table-cell-editing"
 import type { EditorControl } from "./core/editor-control"
 import { parseMarkdownTable, tableCellAt } from "./markdown-table-model"
 import { restoreTableHistoryContext } from "./markdown-table-widget"
@@ -69,7 +70,7 @@ export class TableHistoryController {
     const after = parseMarkdownTable(source)
     if (!before || !after || before.header.length !== after.header.length || before.rows.length !== after.rows.length
       || context.column >= after.header.length || context.row >= after.rows.length) return
-    const value = tableCellAt(after, context.row, context.column)
+    const value = tableCellEditorValue(tableCellAt(after, context.row, context.column)).text
     const selection = mapCellSelection(context.value, value, context.selectionStart, context.selectionEnd)
     const request: PendingRestore = {
       context: { ...context, from, to, source, value, ...selection }, control,

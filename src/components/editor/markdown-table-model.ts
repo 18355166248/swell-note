@@ -65,7 +65,8 @@ export function parseMarkdownTable(source: string): MarkdownTable | null {
 
 function serializeTableCell(value: string) {
   // Markdown 表格不能包含物理换行，统一转成兼容 CommonMark/GFM 的 HTML 换行标签。
-  return value.trim().replace(/\r?\n/g, "<br>").replace(/(\\*)\|/g, (_pipe, escapes: string) => `${escapes}${escapes.length % 2 === 0 ? "\\" : ""}|`)
+  // 先转义再 trim，保留回车产生的首尾空行，重新打开时仍能接着填写。
+  return value.replace(/\r?\n/g, "<br>").trim().replace(/(\\*)\|/g, (_pipe, escapes: string) => `${escapes}${escapes.length % 2 === 0 ? "\\" : ""}|`)
 }
 
 export function serializeMarkdownTable(table: MarkdownTable) {

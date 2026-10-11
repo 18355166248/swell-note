@@ -4,6 +4,8 @@ import { blockEditSessionKey, clearBlockEditDraft, readBlockEditDraft, writeBloc
 
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
 
+import { atCellVerticalBoundary, tableCellEditorValue } from "./table-cell-editing"
+
 import { scrollElementIntoVisibleBand } from "./cursor-visibility"
 
 import {
@@ -932,8 +934,10 @@ export class TableWidget extends WidgetType {
     const rowIndex = Number(cell?.dataset.rowIndex)
     const columnIndex = Number(cell?.dataset.columnIndex)
     if (!input || !Number.isInteger(rowIndex) || !Number.isInteger(columnIndex)) return next
-    if (rowIndex < 0) next.header[columnIndex] = input.value
-    else if (next.rows[rowIndex]) next.rows[rowIndex][columnIndex] = input.value
+    const original = tableCellAt(table, rowIndex, columnIndex)
+    const value = input.value === tableCellEditorValue(original).text ? original : input.value
+    if (rowIndex < 0) next.header[columnIndex] = value
+    else if (next.rows[rowIndex]) next.rows[rowIndex][columnIndex] = value
     return next
   }
 
@@ -1166,11 +1170,12 @@ export class TableWidget extends WidgetType {
       : null
     // 光标定位必须在输入层盖上去之前完成：textarea 与展示层重叠后会截获坐标命中，
     // caretRangeFromPoint 打不到展示层的文字，光标只能退回末尾。
-    const caret = point ? this.caretIndexFromPoint(display, originalValue, point) : originalValue.length
+    const editable = tableCellEditorValue(originalValue, point ? this.caretIndexFromPoint(display, originalValue, point) : originalValue.length)
+    const caret = editable.offset
     const initialContentHeight = display.getBoundingClientRect().height
     const input = document.createElement("textarea")
     input.className = "cm-md-table-cell-input"
-    input.value = draft ? draft.value : originalValue
+    input.value = draft ? draft.value : editable.text
     input.rows = 1
     input.setAttribute("aria-label", cell.getAttribute("aria-label") ?? "编辑表格单元格")
     // 展示层继续留在网格中占位，输入层与其重叠；聚焦不会再替换 DOM 或触发表格重新布局。
@@ -1212,7 +1217,7 @@ export class TableWidget extends WidgetType {
         value: input.value,
       }
       // 活动单元格也保存独立恢复记录；只在原表/原单元格仍匹配时恢复，不覆盖远端新表。
-      writeBlockEditDraft(this.view, this.draftKey(), { draft: JSON.stringify(session.cellDraft), originalSource: this.source, open: true, dirty: input.value !== originalValue })
+      writeBlockEditDraft(this.view, this.draftKey(), { draft: JSON.stringify(session.cellDraft), originalSource: this.source, open: true, dirty: input.value !== editable.text })
     }
     const clearDraft = () => {
       const current = session.cellDraft
@@ -1262,7 +1267,7 @@ export class TableWidget extends WidgetType {
         restoreCell()
         return
       }
-      if (!navigation && input.value === originalValue) {
+      if (!navigation && input.value === editable.text) {
         clearDraft()
         restoreCell()
         return
@@ -1272,8 +1277,9 @@ export class TableWidget extends WidgetType {
       // 把下一次点击的合并目标搞错，最终连续 Tab 时输入焦点会跌回 body。
       restoreCell()
       const next = cloneMarkdownTable(table)
-      if (rowIndex < 0) next.header[columnIndex] = input.value
-      else next.rows[rowIndex][columnIndex] = input.value
+      const value = input.value === editable.text ? originalValue : input.value
+      if (rowIndex < 0) next.header[columnIndex] = value
+      else next.rows[rowIndex][columnIndex] = value
       if (navigation?.appendRow) next.rows.push(Array(next.header.length).fill(""))
       // 同步改表冲突时不清草稿、不覆盖新正文；只有原表快照仍匹配才提交。
       if (this.view.state.sliceDoc(this.from, this.to) === this.source) {
@@ -1373,7 +1379,8 @@ export class TableWidget extends WidgetType {
         this.view.dispatch({ selection: { anchor: this.to } })
         return
       }
-      if (event.key === "Enter" && event.shiftKey) {
+      // 表格连续录入默认用 Enter 提交并下移；Shift+Enter 才在当前格内换行。
+      if (event.key === "Enter" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault()
         event.stopPropagation()
         const start = input.selectionStart ?? input.value.length
@@ -1382,8 +1389,41 @@ export class TableWidget extends WidgetType {
         input.dispatchEvent(new Event("input", { bubbles: true }))
         return
       }
-      if (event.key !== "Tab" && event.key !== "Enter") return
+      if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && input.selectionStart === input.selectionEnd) {
+        const left = event.key === "ArrowLeft"
+        // 格内字符移动交给 textarea（含中文和 emoji）；只有整个内容的首尾边界才跨格。
+        if (input.selectionStart !== (left ? 0 : input.value.length)) return
+        event.preventDefault()
+        event.stopPropagation()
+        const column = columnIndex + (left ? -1 : 1)
+        // 左右键不跨行、不补列；行首/行尾继续留在当前输入框。
+        if (column < 0 || column >= table.header.length) return
+        const value = tableCellEditorValue(tableCellAt(table, rowIndex, column)).text
+        // 从左侧进入时落在开头，从右侧进入时落在末尾，避免跨格后又跳回上一格。
+        const caret = left ? value.length : 0
+        commit({ row: rowIndex + 1, column, selection: { from: caret, to: caret, direction: "none" } })
+        return
+      }
+      if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.shiftKey && !event.altKey && input.selectionStart === input.selectionEnd) {
+        const up = event.key === "ArrowUp"
+        // 多行/软换行内优先保留 textarea 的上下移动；首末显示行才跨格，Mod+方向键可直接跨格。
+        if (!event.ctrlKey && !event.metaKey && !atCellVerticalBoundary(input, up ? "up" : "down")) return
+        event.preventDefault()
+        event.stopPropagation()
+        const row = rowIndex + 1 + (up ? -1 : 1)
+        // 表头向上、末行向下保持原格；方向键不隐式创建新行。
+        if (row < 0 || row > table.rows.length) return
+        const value = tableCellEditorValue(tableCellAt(table, row - 1, columnIndex)).text
+        const column = input.selectionStart - (input.value.slice(0, input.selectionStart).lastIndexOf("\n") + 1)
+        const lineStart = up ? value.lastIndexOf("\n") + 1 : 0
+        const lineEnd = value.indexOf("\n", lineStart)
+        const caret = Math.min(lineStart + column, lineEnd < 0 ? value.length : lineEnd)
+        commit({ row, column: columnIndex, selection: { from: caret, to: caret, direction: "none" } })
+        return
+      }
+      if (event.altKey || (event.key !== "Tab" && event.key !== "Enter")) return
       event.preventDefault()
+      event.stopPropagation()
       commit(this.nextCellTarget(event, table, rowIndex, columnIndex))
     })
   }
