@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test"
-import { seedCapabilityNote } from "./editor-capability-seed"
+import { capabilityContent, seedCapabilityNote } from "./editor-capability-seed"
 
 test.beforeEach(({ isMobile }) => {
   test.skip(isMobile, "桌面鼠标切格、链接点击与文字拖选兼容")
@@ -30,6 +30,32 @@ test("从链接开始拖选单元格不打开链接", async ({ page }) => {
   await page.mouse.up()
   await expect(table.locator(".cm-md-table-cell-in-range")).toHaveCount(4)
   await expect(page.locator("body")).not.toHaveAttribute("data-opened-link", /.+/)
+})
+
+test("编辑草稿后打开链接，再切格仍提交旧格内容", async ({ page }) => {
+  await seedCapabilityNote(page, "正文\n\n| A | B |\n| --- | --- |\n| 第一格 | [文档](https://example.com/table) |\n| 下一行 | 另一格 |\n\n结尾")
+  await page.evaluate(() => { window.open = (url) => { document.body.dataset.openedLink = String(url); return null } })
+  const table = page.locator(".note-editor:visible .cm-md-table")
+  await table.locator("tbody td").first().click()
+  await table.locator("textarea").fill("尚未提交的草稿")
+  await table.locator(".cm-md-table-link").click()
+  await expect(page.locator("body")).toHaveAttribute("data-opened-link", "https://example.com/table")
+  await table.locator("tbody td").nth(2).click()
+  await expect(table.locator("tbody td").nth(2).locator("textarea")).toBeFocused()
+  await expect(table.locator("tbody td").first()).toContainText("尚未提交的草稿")
+  await expect.poll(() => capabilityContent(page)).toContain("尚未提交的草稿")
+})
+
+test("Shift 点击链接扩展选区，下一次普通点击仍可编辑", async ({ page }) => {
+  await seedCapabilityNote(page, "正文\n\n| A | B |\n| --- | --- |\n| 第一格 | [文档](https://example.com/table) |\n| 下一行 | 另一格 |\n\n结尾")
+  await page.evaluate(() => { window.open = (url) => { document.body.dataset.openedLink = String(url); return null } })
+  const table = page.locator(".note-editor:visible .cm-md-table")
+  await table.locator("tbody td").first().click()
+  await table.locator(".cm-md-table-link").click({ modifiers: ["Shift"] })
+  await expect(table.locator(".cm-md-table-cell-in-range")).toHaveCount(2)
+  await expect(page.locator("body")).not.toHaveAttribute("data-opened-link", /.+/)
+  await table.locator("tbody td").nth(2).click()
+  await expect(table.locator("tbody td").nth(2).locator("textarea")).toBeFocused()
 })
 
 test("缺失松手的切格之后，在输入框内拖文字不会变成单元格拖选", async ({ page }) => {
