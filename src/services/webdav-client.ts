@@ -476,7 +476,8 @@ async function webDavFetch(
 
   if (response.ok || response.status === 207 || acceptedStatuses.includes(response.status)) return response
   if (response.status === 401) throw new WebDavAuthenticationError()
-  if (response.status === 404) throw new Error(`远端目录不存在：${config.remotePath}`)
+  // 文件 GET 的 404 不代表根目录丢失，保留实际请求路径供冲突恢复与界面诊断。
+  if (response.status === 404) throw new WebDavHttpError(404, `远端${init.method === "PROPFIND" ? "目录" : "文件"}不存在：${path}`)
   if (response.status === 412) throw new WebDavRevisionConflictError(path)
   if (response.status === 429) throw new Error("坚果云请求过于频繁，请稍后再试")
   throw new Error(`坚果云请求失败（HTTP ${response.status}）`)

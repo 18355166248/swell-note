@@ -749,7 +749,7 @@ html[data-resizing-pane="true"], html[data-resizing-pane="true"] * { cursor: col
 .sync-conflict-banner { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid color-mix(in oklab,#b66a00 25%,var(--border)); background: color-mix(in oklab,#f5a623 9%,white); padding: 9px 16px; color: #7d4b00; }
 .sync-conflict-banner > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
 .sync-conflict-banner strong { font-size: 12px; }
-.sync-conflict-banner span { font-size: 10.5px; line-height: 1.35; }
+.sync-conflict-banner span { font-size: 10.5px; line-height: 1.35; overflow-wrap: anywhere; }
 .formatting-toolbar { display: flex; min-height: 40px; align-items: center; gap: 1px; overflow-x: auto; border-bottom: 1px solid var(--border); padding: 4px 16px; }
 .formatting-toolbar-locked { gap: 8px; color: var(--muted-foreground); font-size: 11px; }
 .formatting-toolbar-locked > svg { width: 14px; height: 14px; }

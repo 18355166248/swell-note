@@ -59,7 +59,9 @@ import {
 } from "@/services/vault/attachment-queue"
 import { resolveAttachmentFallback } from "@/services/vault/attachment-target"
 import { createWebDavVaultAdapter } from "@/services/vault/webdav-vault-adapter"
-import { WebDavAuthenticationError } from "@/services/webdav-client"
+import { WebDavAuthenticationError, WebDavHttpError } from "@/services/webdav-client"
+import { adoptRemoteConflictDocument, findRemoteConflictCandidates } from "@/services/sync/remote-conflict-recovery"
+import { RemoteConflictDialog } from "@/components/workspace/remote-conflict-dialog"
 import {
   cacheSyncedVaultAttachment,
   cacheVaultNoteDocuments,
@@ -408,6 +410,12 @@ function App() {
   const [isRefreshingVault, setIsRefreshingVault] = useState(false)
   const [syncEditableCacheId, setSyncEditableCacheId] = useState<string | null>(null)
   const [vaultError, setVaultError] = useState<string | null>(null)
+  const conflictResolutionBusyRef = useRef(false)
+  const conflictResolutionDoneRef = useRef<Promise<void> | null>(null)
+  const [isResolvingConflict, setIsResolvingConflict] = useState(false)
+  const [remoteConflictChoice, setRemoteConflictChoice] = useState<{
+    cacheId: string; noteId: string; sourcePath: string; candidates: VaultFileEntry[]
+  } | null>(null)
   const [webDavConfigured, setWebDavConfigured] = useState(hasSavedWebDavConfig)
   const [quickConnectOpen, setQuickConnectOpen] = useState(false)
   const [vaultNoteCount, setVaultNoteCount] = useState(0)
@@ -612,6 +620,7 @@ function App() {
 
   useEffect(() => {
     if (!cacheReady || !activeCacheMeta) return
+    if (conflictResolutionBusyRef.current) return
     // 显式同步的检查点拥有缓存写权；旧渲染产生的整库防抖快照不能覆盖新 ETag。
     if (activeSyncRunRef.current && activeCacheIdRef.current === activeCacheMeta.id) return
     if (batchOrganizeRef.current || (webDavTagRenameRef.current && activeCacheMeta.sourceKind === "webdav")) return
@@ -629,6 +638,7 @@ function App() {
     const timer = window.setTimeout(() => {
       // 清除/切库/原子目录重命名都会替换 ref；旧闭包不得把过期快照重新写回。
       if (latestCacheSnapshotRef.current !== snapshot) return
+      if (conflictResolutionBusyRef.current) return
       if (activeSyncRunRef.current && activeCacheIdRef.current === snapshot.id) return
       if (batchOrganizeRef.current || (webDavTagRenameRef.current && snapshot.sourceKind === "webdav")) return
       // 内容读取、收藏、置顶和本地编辑后统一刷新离线快照；敏感凭据不属于 Note 模型，因此不会进入缓存。
@@ -639,7 +649,7 @@ function App() {
       cacheSnapshotWritesRef.current = write
     }, 450)
     return () => window.clearTimeout(timer)
-  }, [activeCacheMeta, activeNoteId, cachePrivacyMode, cacheReady, isManagingNote, notes, pendingWebDavDirectories, pendingWebDavDirectoryMoves, trashEntries, vaultDirectories])
+  }, [activeCacheMeta, activeNoteId, cachePrivacyMode, cacheReady, isManagingNote, isResolvingConflict, notes, pendingWebDavDirectories, pendingWebDavDirectoryMoves, trashEntries, vaultDirectories])
 
   useEffect(() => {
     if (!activeCacheMeta || activeCacheMeta.sourceKind !== "webdav") {
@@ -671,6 +681,8 @@ function App() {
     await liveEditWritesRef.current
     if (liveEditWriteErrorRef.current) throw liveEditWriteErrorRef.current
     await cacheSnapshotWritesRef.current
+    // 冲突恢复会替换笔记身份；后台/关闭保存必须等内存与持久化检查点一同完成，不能写回旧副本。
+    await conflictResolutionDoneRef.current
     const snapshot = latestCacheSnapshotRef.current
     if (snapshot && !activeSyncRunRef.current) {
       await saveVaultCache({ ...snapshot, notes: prepareNotesForCache(notesRef.current, cachePrivacyMode), savedAt: Date.now() })
@@ -1985,6 +1997,7 @@ function App() {
   }
 
   const connectWebDav = async (config: WebDavConfig, password: string) => {
+    if (conflictResolutionBusyRef.current) throw new Error("正在处理笔记冲突，请等待完成后再连接")
     if (batchOrganizeRef.current) throw new Error("正在批量整理，请等待完成")
     // 设置页与快捷连接也可能在旧列表仍可操作时同步；同样挡住置顶编辑，避免晚到快照覆盖新意图。
     vaultMutationBarrierRef.current += 1
@@ -2504,6 +2517,7 @@ function App() {
   }
 
   const refreshVault = async (noteIds?: ReadonlySet<string>, options: { automatic?: boolean } = {}) => {
+    if (conflictResolutionBusyRef.current) return
     if (batchOrganizeRef.current) { setVaultError("正在批量整理，请等待完成"); return }
     // 新一轮重试先收起旧错误；若仍失败会立即用本轮原因替换，成功则不会残留过期提示。
     setSyncFailure(null)
@@ -2822,6 +2836,7 @@ function App() {
   }, [vaultSession])
 
   const selectVaultCache = async (cacheId: string) => {
+    if (conflictResolutionBusyRef.current) return
     if (batchOrganizeRef.current) { setVaultError("正在批量整理，请等待完成"); return }
     // 同库重新选择会把读取时的旧快照整库写回，可能抹去正在上传的检查点。
     if (activeSyncRunRef.current && cacheId === activeCacheIdRef.current) return
@@ -3104,20 +3119,80 @@ function App() {
     }
   }
 
-  const resolveActiveConflict = async (strategy: "local" | "merge" | "remote") => {
+  const resolveActiveConflict = async (strategy: "local" | "merge" | "remote", selectedFile?: VaultFileEntry) => {
     const note = activeNote
     const path = note?.previousRemotePath ?? note?.remotePath
     if (!note || note.syncStatus !== "conflict" || !path || !vaultSession) return
-    if (strategy === "remote" && !window.confirm("采用云端版本会放弃这篇笔记尚未同步的本地修改，是否继续？")) {
+    if (strategy === "remote" && !selectedFile && !window.confirm("采用云端版本会放弃这篇笔记尚未同步的本地修改，是否继续？")) {
       return
     }
 
+    const cacheId = activeCacheMeta?.id
+    if (!cacheId || activeSyncRunRef.current || conflictResolutionBusyRef.current || isManagingNote || vaultMutationBarrierRef.current > 0) return
+    conflictResolutionBusyRef.current = true
+    let finishResolution!: () => void
+    conflictResolutionDoneRef.current = new Promise<void>((resolve) => { finishResolution = resolve })
+    vaultMutationBarrierRef.current += 1
+    setIsManagingNote(true)
+    setIsResolvingConflict(true)
+    setRemoteConflictChoice(null)
+    const isCurrent = () => activeCacheIdRef.current === cacheId
+      && notesRef.current.some((current) => current.id === note.id && current.content === note.content
+        && current.localEditSequence === note.localEditSequence
+        && current.remotePath === note.remotePath && current.syncStatus === "conflict")
     setSaveStates((current) => ({ ...current, [note.id]: { status: "saving" } }))
     setVaultError(null)
     try {
       // 三种选择都先读取最新远端版本：后续上传会基于新的 ETag，避免冲突处理期间再次覆盖他人修改。
-      const physicalPath = resolveWebDavPhysicalPath(path, pendingDirectoryMovesRef.current, vaultSession)
-      const remoteDocument = await vaultSession.readTextFile(physicalPath)
+      const physicalPath = selectedFile?.path ?? resolveWebDavPhysicalPath(path, pendingDirectoryMovesRef.current, vaultSession)
+      let remoteDocument
+      try {
+        remoteDocument = await vaultSession.readTextFile(physicalPath)
+      } catch (error) {
+        if (strategy !== "remote" || selectedFile || !(error instanceof WebDavHttpError) || error.status !== 404) throw error
+        const candidates = await findRemoteConflictCandidates(vaultSession, physicalPath)
+        if (!isCurrent()) return
+        if (candidates.length === 0) throw new Error(`云端原文件已不存在，未找到同名文件：${physicalPath}。本地正文已保留，请确认文件是否被重命名或删除。`)
+        setRemoteConflictChoice({ cacheId, noteId: note.id, sourcePath: physicalPath, candidates })
+        setSaveStates((current) => ({ ...current, [note.id]: { status: "conflict", message: `云端原文件已不存在：${physicalPath}。请确认要采用的同名文件。` } }))
+        return
+      }
+      if (!isCurrent()) return
+      if (strategy === "remote") {
+        const file = selectedFile ?? { path, name: path.split("/").pop()! }
+        // 先保存被放弃的本地正文；备份失败就停止采用，避免修复路径时丢掉唯一的工作副本。
+        adoptRemoteConflictDocument(notesRef.current, note.id, file, remoteDocument)
+        const protectedVersion = await saveNoteVersion({ cacheId, noteId: `webdav:${file.path}`, content: note.content, title: note.title, reason: "恢复前" })
+        if (!protectedVersion) throw new Error("无法保存本地保护版本，采用云端已取消")
+        if (!isCurrent()) return
+        const nextNotes = adoptRemoteConflictDocument(notesRef.current, note.id, file, remoteDocument, vaultSession.getDisplayPath?.(file.path) ?? file.path)
+        const restoredId = `webdav:${file.path}`
+        const latest = latestCacheSnapshotRef.current
+        if (!latest || latest.id !== cacheId) throw new Error("当前笔记库已变化，请重试")
+        const snapshot = { ...latest, activeNoteId: restoredId, notes: prepareNotesForCache(nextNotes, cachePrivacyMode), savedAt: Date.now() }
+        latestCacheSnapshotRef.current = snapshot
+        try {
+          await saveVaultCache(snapshot, { updateLastCache: false })
+        } catch (error) {
+          // 写入失败后生命周期保存仍应使用旧身份，不能留下“新路由 + 旧正文列表”的半完成快照。
+          if (latestCacheSnapshotRef.current === snapshot) latestCacheSnapshotRef.current = latest
+          throw error
+        }
+        if (!isCurrent()) return
+        notesRef.current = nextNotes
+        setNotes(nextNotes)
+        revisionByPathRef.current.delete(note.remotePath!)
+        revisionByPathRef.current.set(file.path, remoteDocument.revision)
+        setSaveStates((current) => {
+          const next = { ...current }
+          delete next[note.id]
+          next[restoredId] = { status: "saved" }
+          return next
+        })
+        setActiveNoteId(restoredId)
+        navigate(`/notes/${encodeURIComponent(restoredId)}`, { replace: true })
+        return
+      }
       const mergeResult = strategy === "merge"
         ? mergeMarkdownVersions(note.baseContent, note.content, remoteDocument.content)
         : null
@@ -3148,50 +3223,26 @@ function App() {
             updatedAt: mergeResult.conflictCount > 0 ? "合并后仍有重叠修改" : "刚刚自动合并",
           }
         }
-        return {
-          ...candidate,
-          baseContent: remoteDocument.content,
-          content: remoteDocument.content,
-          contentLoaded: true,
-          ...indexNoteContent(remoteDocument.content),
-          folder: deriveRemoteFolder(vaultSession.getDisplayPath?.(path) ?? path),
-          id: `${vaultSession.kind}:${path}`,
-          mergeConflictCount: undefined,
-          pendingOperation: undefined,
-          previousRemotePath: undefined,
-          preview: buildNotePreview(remoteDocument.content, candidate.format),
-          readOnly: false,
-          remotePath: path,
-          revision: remoteDocument.revision,
-          syncError: undefined,
-          syncStatus: "synced",
-          title: path.split("/").pop()?.replace(/\.md$/i, "") ?? candidate.title,
-          updatedAt: "刚刚采用云端版本",
-        }
+        return candidate
       }))
       setSaveStates((current) => ({
         ...current,
-        [note.id]: strategy === "remote"
-          ? { status: "saved" }
-          : mergeResult && mergeResult.conflictCount > 0
-            ? { message: `仍有 ${mergeResult.conflictCount} 处重叠修改`, status: "conflict" }
-            : { status: "pending" },
+        [note.id]: mergeResult && mergeResult.conflictCount > 0
+          ? { message: `仍有 ${mergeResult.conflictCount} 处重叠修改`, status: "conflict" }
+          : { status: "pending" },
       }))
-      if (strategy === "remote" && note.id !== `${vaultSession.kind}:${path}`) {
-        const restoredId = `${vaultSession.kind}:${path}`
-        setSaveStates((current) => {
-          const next = { ...current }
-          delete next[note.id]
-          next[restoredId] = { status: "saved" }
-          return next
-        })
-        setActiveNoteId(restoredId)
-        navigate(`/notes/${encodeURIComponent(restoredId)}`, { replace: true })
-      }
     } catch (error) {
+      if (!isCurrent()) return
       const message = error instanceof Error ? error.message : "读取云端冲突版本失败"
       setSaveStates((current) => ({ ...current, [note.id]: { message, status: "conflict" } }))
       setVaultError(message)
+    } finally {
+      conflictResolutionBusyRef.current = false
+      conflictResolutionDoneRef.current = null
+      finishResolution()
+      vaultMutationBarrierRef.current = Math.max(0, vaultMutationBarrierRef.current - 1)
+      if (activeCacheIdRef.current === cacheId) setIsManagingNote(false)
+      setIsResolvingConflict(false)
     }
   }
 
@@ -5189,6 +5240,15 @@ function App() {
         }}
         onOpenChange={setQuickConnectOpen}
         open={quickConnectOpen}
+      />
+      <RemoteConflictDialog
+        sourcePath={remoteConflictChoice?.cacheId === activeCacheMeta?.id && remoteConflictChoice?.noteId === activeNoteId ? remoteConflictChoice.sourcePath : undefined}
+        candidates={remoteConflictChoice?.candidates ?? []}
+        onChoose={(file) => {
+          if (remoteConflictChoice?.cacheId === activeCacheMeta?.id && remoteConflictChoice?.noteId === activeNoteId) void resolveActiveConflict("remote", file)
+        }}
+        onDismiss={() => setRemoteConflictChoice(null)}
+        resolving={isResolvingConflict}
       />
       <FolderOrderConflictDialog
         conflict={folderOrderConflict}

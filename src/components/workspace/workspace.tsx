@@ -2575,9 +2575,9 @@ const NoteEditor = memo(function NoteEditor({ active = true, activeCacheId, allo
         <div className="sync-conflict-banner" role="alert">
           <div>
             <strong>云端版本已变化</strong>
-            <span>{note.mergeConflictCount
+            <span>{saveState.message ?? note.syncError ?? (note.mergeConflictCount
               ? `合并稿仍有 ${note.mergeConflictCount} 处重叠修改；编辑标记后可保留本地版本。`
-              : "本地修改仍然安全保留，可先尝试合并两台设备的修改。"}</span>
+              : "本地修改仍然安全保留，可先尝试合并两台设备的修改。")}</span>
           </div>
           <Button onClick={() => onResolveConflict("merge")} size="sm">合并修改</Button>
           <Button onClick={() => onResolveConflict("local")} size="sm" variant="outline">保留本地版本</Button>

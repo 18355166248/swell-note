@@ -13,6 +13,7 @@ import {
   moveMarkdownFile,
   moveWebDavDirectory,
   readJsonDocument,
+  readMarkdownDocument,
   readWebDavAsset,
   updateJsonDocument,
   WebDavAuthenticationError,
@@ -35,6 +36,12 @@ afterEach(() => {
 })
 
 describe("WebDAV conditional create", () => {
+  it("笔记 GET 404 保留文件路径与状态码，不误报为根目录不存在", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 404 })))
+    await expect(readMarkdownDocument(config, "app-password", "/Swell/旧目录/笔记.md"))
+      .rejects.toMatchObject({ name: "WebDavHttpError", status: 404, message: "远端文件不存在：/Swell/旧目录/笔记.md" })
+  })
+
   it("读取缺失附件时明确报告文件缺失", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 404 })))
 
