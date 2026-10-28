@@ -1,0 +1,58 @@
+.note-calendar-root .route-page-shell { background: var(--background); }
+.note-calendar-header { display:flex; align-items:center; flex-wrap:wrap; gap:14px; padding:24px; border-bottom:1px solid var(--border); }
+.note-calendar-heading { margin-right:auto; }
+.note-calendar-heading h1 { margin:0; font-size:23px; font-weight:600; }
+.note-calendar-heading>span,.note-calendar-muted { color:var(--muted-foreground); font-size:12px; }
+.note-calendar-date-nav,.note-calendar-view-switch { display:flex; align-items:center; gap:4px; }
+.note-calendar-date-nav strong { font-size:14px; font-weight:500; white-space:nowrap; }
+.note-calendar-view-switch { background:var(--muted); border-radius:8px; padding:3px; }
+.note-calendar-body { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 260px; }
+/* 宿主保留自己的导航工具栏，日期/视图通过组件公开 props 控制。覆盖仅限本页面。 */
+.note-calendar-details { border-left:1px solid var(--border); padding:25px 20px; overflow:auto; }
+.note-calendar-details h2 { font-size:18px; margin:6px 0; }
+.note-calendar-details h2 small { font-size:12px; font-weight:400; color:var(--muted-foreground); }
+.note-calendar-item { display:flex; flex-direction:column; gap:9px; width:100%; padding:20px 0; border:0; border-bottom:1px solid var(--border); background:transparent; text-align:left; }
+.note-calendar-item:hover { background:var(--muted); }
+.note-calendar-item>span { font-size:12px; color:var(--muted-foreground); }
+.note-calendar-item strong { font-size:14px; font-weight:500; overflow-wrap:anywhere; }
+.note-calendar-item small { color:var(--primary); display:flex; gap:6px; align-items:center; overflow-wrap:anywhere; }
+.note-calendar-item svg { width:14px; height:14px; flex-shrink:0; }
+.note-calendar-empty { margin:32px 0; color:var(--muted-foreground); font-size:13px; line-height:1.9; }
+.note-calendar-footer { display:flex; justify-content:space-between; gap:8px; padding:13px 22px; border-top:1px solid var(--border); font-size:11px; color:var(--muted-foreground); }
+.note-calendar-notice { padding:9px 22px; margin:0; background:var(--muted); font-size:12px; }
+.note-calendar-notice button { color:var(--primary); margin-left:8px; }
+.note-calendar-event-detail h2 { font-size:21px; overflow-wrap:anywhere; margin:10px 0; }
+.note-calendar-event-detail p { font-size:13px; line-height:1.8; margin:14px 0; }
+.note-calendar-form { display:grid; gap:16px; }
+.note-calendar-form label { display:grid; gap:7px; font-size:13px; }
+.note-calendar-form input,.note-calendar-form select { min-width:0; width:100%; padding:10px 12px; border:1px solid var(--input); border-radius:8px; background:var(--background); color:var(--foreground); }
+.note-calendar-form [role=alert] { color:var(--destructive); font-size:13px; }
+.note-calendar-dialog { max-height:calc(100dvh - 40px); overflow:auto; }
+.note-calendar-week-strip { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:5px; padding:12px 18px; border-bottom:1px solid var(--border); }
+.note-calendar-week-strip button { display:flex; align-items:center; flex-direction:column; gap:8px; padding:8px 0; border:0; background:transparent; border-radius:12px; }
+.note-calendar-week-strip button span { font-size:11px; color:var(--muted-foreground); }
+.note-calendar-week-strip button strong { font-size:16px; font-weight:500; }
+.note-calendar-week-strip button[aria-pressed=true] { background:var(--primary); color:var(--primary-foreground); }
+.note-calendar-week-strip button[aria-pressed=true] span { color:inherit; }
+.note-calendar-week-strip i { height:3px; width:3px; border-radius:50%; }
+.note-calendar-week-strip i[data-has-event=true] { background:currentColor; }
+@media (min-width:768px) and (max-width:1100px) { .note-calendar-body { grid-template-columns:minmax(0,1fr) 220px; } .note-calendar-header { gap:8px; padding:16px; } .note-calendar-heading>span { display:none; } }
+@media (max-width:767px), (pointer:coarse) and (hover:none) and (max-height:500px) {
+ .note-calendar-header { padding:14px 16px 10px; gap:10px; }
+ .note-calendar-heading h1 { font-size:21px; }
+ .note-calendar-heading>span { display:none; }
+ .note-calendar-add span { display:none; }
+ .note-calendar-body { display:flex; flex-direction:column; }
+ .note-calendar-footer { padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px)); }
+ .note-calendar-dialog { top:auto; bottom:0; left:0; right:0; transform:none; width:100%; max-width:none; max-height:calc(100dvh - env(safe-area-inset-top,0px) - 20px); border-radius:18px 18px 0 0; padding-bottom:calc(24px + env(safe-area-inset-bottom,0px)); }
+ .note-calendar-form input { font-size:16px; }
+}
+
+@media (max-width:767px), (pointer:coarse) and (hover:none) and (max-height:500px) {
+ .note-calendar-header { display:grid; grid-template-columns:40px minmax(0,1fr) 44px; gap:10px; }
+ .note-calendar-header>.mobile-drawer-trigger { grid-row:1; grid-column:1; order:0; }
+ .note-calendar-heading { grid-row:1; grid-column:2; text-align:center; margin:0; white-space:nowrap; }
+ .note-calendar-add { grid-row:1; grid-column:3; }
+ .note-calendar-date-nav { grid-row:2; grid-column:1 / -1; width:auto; gap:0; }
+ .note-calendar-mobile-views { grid-row:3; grid-column:1 / -1; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
+}

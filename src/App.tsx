@@ -1,8 +1,10 @@
+import type { CalendarDraft } from "@/services/calendar/calendar-notes"
+import { saveCalendarDraft } from "@/services/calendar/calendar-save"
 import { syncCompletionMessage } from "@/services/sync/sync-summary"
 import { clearPersistedBlockDrafts } from "@/components/editor/block-edit-session"
 import { isTauri } from "@tauri-apps/api/core"
 import { flushLifecycleSave, registerLifecycleSave } from "@/services/vault/save-lifecycle"
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { flushSync } from "react-dom"
 import { Navigate, Route, Routes, useLocation, useMatch, useNavigate } from "react-router-dom"
 
@@ -254,6 +256,8 @@ type FolderOrderResolutionRequestOptions = {
   resolve: () => Promise<FolderOrderSyncRunResult>
   showFailure: (message: string) => void
 }
+
+const CalendarPage = lazy(() => import("@/components/calendar/calendar-page"))
 
 function hasMobileNavigationOverlay(value: unknown) {
   return typeof value === "object" && value !== null
@@ -799,9 +803,9 @@ function App() {
   }, [cacheReady, folderRouteMatch?.params.folderPath, isNotesLibraryRoute, noteRouteMatch?.params.noteId, viewRouteMatch?.params.view])
 
   useEffect(() => {
-    if (location.pathname !== "/todos" || !activeCacheMeta) return
+    if (!["/todos", "/calendar"].includes(location.pathname) || !activeCacheMeta) return
     let cancelled = false
-    // 待办需要跨笔记解析 Markdown；只在进入待办页时批量恢复正文，普通目录浏览仍保持元数据常驻。
+    // 待办与日历需要跨笔记读取正文；仅进入聚合页时恢复缓存，普通目录浏览保持元数据常驻。
     void listCachedNoteDocuments(activeCacheMeta.id).then((documents) => {
       if (cancelled) return
       const byNoteId = new Map(documents.map((document) => [document.noteId, document]))
@@ -1593,97 +1597,107 @@ function App() {
       : note))
   }
 
-  const createNote = async (targetFolder?: string | null) => {
+  const createNote = async (targetFolder?: string | null, seed?: { content: string; title: string; filenamePrefix: string }) => {
     const adapter = vaultSession
+    const creationCacheId = activeCacheIdRef.current
     const canCreateOfflineWebDav = !adapter && activeCacheMeta?.sourceKind === "webdav" && webDavConfigured
     if ((!adapter && !canCreateOfflineWebDav)
       || (adapter && adapter.kind !== "webdav" && (!adapter.createTextFile || adapter.readOnly))) {
       setVaultError("请先打开一个可写的本地 Vault")
-      return
+      return false
     }
 
+    if (isCreatingNote || isRefreshingVault || isManagingNote || vaultMutationBarrierRef.current > 0) return false
     setIsCreatingNote(true)
     setVaultError(null)
     try {
       const now = new Date()
       const timestamp = formatFileTimestamp(now)
-      const title = ""
+      const title = seed?.title ?? ""
       // 右键文件夹新建时目标目录由菜单指定；其余入口仍沿用当前选中的目录。
       const noteFolder = targetFolder === undefined ? effectiveFolder : targetFolder
       const directory = noteFolder?.split(/\s*\/\s*/).filter(Boolean).join("/")
-      const displayPath = `${directory ? `${directory}/` : ""}新笔记-${timestamp}-${now.getMilliseconds().toString().padStart(3, "0")}.md`
+      const displayPath = `${directory ? `${directory}/` : ""}${seed?.filenamePrefix ?? "新笔记"}-${timestamp}-${now.getMilliseconds().toString().padStart(3, "0")}.md`
       const config = loadWebDavConfig()
       const webDavStoragePath = `${config.remotePath.replace(/\/+$/g, "")}/${displayPath.replace(/^\/+/, "")}`
         .replace(/\/{2,}/g, "/")
       const path = adapter?.getStoragePath?.(displayPath)
         ?? (adapter?.kind === "webdav" || canCreateOfflineWebDav ? webDavStoragePath : displayPath)
-      const content = ""
+      const content = seed?.content ?? ""
       if (adapter?.kind === "webdav" || canCreateOfflineWebDav) {
         const id = `webdav:${path}`
         const newNote: Note = {
           content,
           contentLoaded: true,
-          draft: true,
+          draft: !seed,
           folder: deriveRemoteFolder(displayPath),
           id,
           modifiedAt: now.getTime(),
-          outgoingLinks: [],
           pendingOperation: "create",
-          preview: "开始记录你的想法…",
+          preview: seed ? buildNotePreview(content, "markdown") : "开始记录你的想法…",
           readOnly: false,
           remotePath: path,
-          searchText: content.toLocaleLowerCase(),
           source: "webdav",
           starred: false,
           syncStatus: "modified",
           title,
           updatedAt: "刚刚创建 · 待同步",
+          ...indexNoteContent(content),
         }
         // 新笔记先进入 IndexedDB 工作副本；这里不调用适配器，避免创建动作绕过显式同步。
         setLibraryView("all")
         setNotes((current) => [newNote, ...current])
-        setActiveNoteId(id)
-        openNoteViewForEditing()
+        if (!seed) { setActiveNoteId(id); openNoteViewForEditing() }
         setSaveStates((current) => ({ ...current, [id]: { status: "pending" } }))
         setVaultNoteCount((count) => count + 1)
-        navigate(`/notes/${encodeURIComponent(id)}`)
-        return
+        if (!seed) navigate(`/notes/${encodeURIComponent(id)}`)
+        return true
       }
 
       const result = await adapter!.createTextFile!(path, content)
+      // 本地写入完成前可能切换笔记库；文件留在来源库，不能把旧结果混入当前库。
+      if (activeCacheIdRef.current !== creationCacheId || assetResolverContextRef.current.vaultSession !== adapter) return false
       const id = `${adapter!.kind}:${result.path}`
       const newNote: Note = {
         content,
         contentLoaded: true,
-        draft: true,
+        draft: !seed,
         folder: deriveRemoteFolder(result.path),
         id,
         modifiedAt: now.getTime(),
-        outgoingLinks: [],
-        preview: "开始记录你的想法…",
+        preview: seed ? buildNotePreview(content, "markdown") : "开始记录你的想法…",
         readOnly: false,
         remotePath: result.path,
         revision: result.revision,
-        searchText: content.toLocaleLowerCase(),
         source: "local",
         starred: false,
         title,
         updatedAt: "刚刚",
+        ...indexNoteContent(content),
       }
       revisionByPathRef.current.set(result.path, result.revision)
       setLibraryView("all")
       setNotes((current) => [newNote, ...current])
-      setActiveNoteId(id)
-      openNoteViewForEditing()
+      if (!seed) { setActiveNoteId(id); openNoteViewForEditing() }
       setSaveStates((current) => ({ ...current, [id]: { status: "saved" } }))
       setVaultNoteCount((count) => count + 1)
-      navigate(`/notes/${encodeURIComponent(id)}`)
+      if (!seed) navigate(`/notes/${encodeURIComponent(id)}`)
+      return true
     } catch (error) {
-      setVaultError(error instanceof Error ? error.message : "新建笔记失败")
+      if (activeCacheIdRef.current === creationCacheId) setVaultError(error instanceof Error ? error.message : "新建笔记失败")
+      return false
     } finally {
       setIsCreatingNote(false)
     }
   }
+
+  const saveCalendarEvent = (draft: CalendarDraft, source?: Note) => saveCalendarDraft(draft, source, {
+    busy: isRefreshingVault || isManagingNote || isCreatingNote || vaultMutationBarrierRef.current > 0,
+    getNote: id => notesRef.current.find(note => note.id === id),
+    canWriteLocal: Boolean(vaultSession?.writeTextFile),
+    createNote: seed => createNote(null, seed),
+    updateContent: (id, content) => updateNoteById(id, { content }),
+  })
 
   const importMarkdownFiles = async (files: File[]) => {
     const adapter = vaultSession
@@ -5110,6 +5124,14 @@ function App() {
           />
         )}
       />
+      <Route path="/calendar" element={<Suspense fallback={<div role="status">正在加载日历…</div>}><CalendarPage
+        key={activeCacheMeta?.id ?? "no-vault"}
+        notes={availableNotes} connected={connected} saveStates={saveStates}
+        canCreate={Boolean((vaultSession && (vaultSession.kind === "webdav" || (vaultSession.createTextFile && !vaultSession.readOnly))) || (!vaultSession && activeCacheMeta?.sourceKind === "webdav" && webDavConfigured))}
+        busy={isCreatingNote || isRefreshingVault || isManagingNote}
+        error={vaultError} indexProgress={indexProgress}
+        onNavigate={navigate} onOpenNote={openNote} onSave={saveCalendarEvent}
+      /></Suspense>} />
       <Route
         path="/todos"
         element={(

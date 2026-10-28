@@ -16,6 +16,7 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  CalendarDays,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -159,7 +160,7 @@ const CanvasPreview = lazyWithRetry(() => import("@/components/editor/canvas-pre
 
 export type MobileScreen = "library" | "notes" | "editor"
 
-export type AppSection = "notes" | "settings" | "todos"
+export type AppSection = "notes" | "settings" | "todos" | "calendar"
 export type LibraryView = "all" | "recent" | "starred"
 
 type WorkspaceProps = {
@@ -766,6 +767,7 @@ export function AppNavigationRail({
       <nav className="rail-navigation" aria-label="主导航">
         <RailButton active={activeSection === "notes"} icon={FileText} label="笔记" onClick={() => onNavigate("/notes")} />
         <RailButton active={activeSection === "todos"} icon={CheckCircle2} label="待办" onClick={() => onNavigate("/todos")} />
+        <RailButton active={activeSection === "calendar"} icon={CalendarDays} label="日历" onClick={() => onNavigate("/calendar")} />
       </nav>
       <div className="rail-footer">
         <RailButton
@@ -4119,6 +4121,7 @@ export function MobileNavigationDrawer({
             <nav className="mobile-drawer-nav mobile-drawer-sections" aria-label="应用导航">
               <button data-active={activeSection === "notes"} onClick={() => navigate("/notes")} type="button"><FileText /><span>笔记</span></button>
               <button data-active={activeSection === "todos"} onClick={() => navigate("/todos")} type="button"><CheckCircle2 /><span>待办</span></button>
+              <button data-active={activeSection === "calendar"} onClick={() => navigate("/calendar")} type="button"><CalendarDays /><span>日历</span></button>
               <button data-active={activeSection === "settings"} onClick={() => navigate("/settings")} type="button"><Settings /><span>设置</span></button>
             </nav>
             <div className="mobile-drawer-footer">

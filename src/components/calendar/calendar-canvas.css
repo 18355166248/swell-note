@@ -1,0 +1,31 @@
+/* 仅在组件适配层覆盖第三方类名；应用布局和表单样式不依赖这些内部选择器。 */
+.note-calendar-engine { min-width:0; min-height:0; padding:18px; --swell-agenda-bg:var(--background); --swell-agenda-today:var(--primary); }
+.note-calendar-engine .swell-calendar-toolbar { display:none; }
+.note-calendar-engine .swell-calendar-month-cell { background:var(--background); border-color:var(--border); }
+.note-calendar-engine .swell-calendar-month-cell-other-month { background:var(--panel-soft); }
+.note-calendar-engine .swell-calendar-month-week-row { border-color:var(--border); }
+.note-calendar-engine .swell-calendar-month-cell-date { color:var(--foreground); }
+.note-calendar-engine .swell-calendar-month-cell-other-month .swell-calendar-month-cell-date { color:var(--muted-foreground); }
+.note-calendar-engine .swell-calendar-month-cell-date-today { background:var(--primary); color:var(--primary-foreground); }
+.note-calendar-engine .swell-calendar-month-cell-header { background:transparent; border:0; width:100%; font:inherit; }
+.note-calendar-engine .swell-calendar-month-event { border-radius:4px; }
+.note-calendar-engine .swell-calendar-agenda-event,.note-calendar-engine .swell-calendar-agenda-day-header { background:var(--background); color:var(--foreground); border-color:var(--border); }
+.note-calendar-engine .swell-calendar-agenda-event:hover { background:var(--muted); }
+.note-calendar-engine .swell-calendar-agenda-day-title,.note-calendar-engine .swell-calendar-agenda-event-title { color:var(--foreground); font-weight:500; }
+.note-calendar-engine .swell-calendar-agenda-day-count,.note-calendar-engine .swell-calendar-agenda-empty { color:var(--muted-foreground); }
+.note-calendar-engine .swell-calendar-agenda-day-title { display:none; }
+.note-calendar-engine .swell-calendar-agenda-day-count { width:100%; }
+.note-calendar-agenda-heading { display:flex; width:100%; justify-content:space-between; align-items:center; gap:12px; }
+.note-calendar-agenda-heading strong { font-size:16px; color:var(--foreground); font-weight:500; }
+.note-calendar-agenda-heading small { color:var(--muted-foreground); }
+.note-calendar-engine .swell-calendar-agenda-event-time { color:var(--foreground); }
+.note-calendar-engine .swell-calendar-agenda-event-time-end,.note-calendar-engine .swell-calendar-template-agendaEventMeta { color:var(--muted-foreground); }
+
+@media (max-width:767px), (pointer:coarse) and (hover:none) and (max-height:500px) {
+ .note-calendar-engine { flex:1; padding:0; min-height:0; }
+}
+
+/* 日视图展示完整 24 小时，保留每小时至少 60px，避免短日程的触控缩放区盖住移动区。 */
+.note-calendar-engine .swell-calendar-day-view .swell-calendar-time-grid { min-height:1440px; }
+.note-calendar-engine .swell-calendar-day-view--mobile .swell-calendar-resize-handle-top,
+.note-calendar-engine .swell-calendar-day-view--mobile .swell-calendar-resize-handle-bottom { height:min(14px,25%); }

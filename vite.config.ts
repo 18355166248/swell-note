@@ -37,6 +37,8 @@ export default defineConfig(async () => ({
           // Vite 的共享预加载函数不能跟随可选画图包，否则入口会反向静态加载整块画图代码。
           if (id.includes("vite/preload-helper")) return "app-runtime";
           if (!id.includes("node_modules")) return undefined;
+          // pnpm 的日历路径带 React peer 后缀，须先独立分包，避免被下方 react 字符匹配拉进首屏。
+          if (id.includes("/swell-calendar/")) return "calendar-vendor";
           if (id.includes("@uiw/react-codemirror")) return "editor-react";
           // Excalidraw 是可选官方能力，保持独立 chunk，普通笔记与应用首屏不会下载它。
           if (id.includes("@excalidraw/excalidraw") || id.includes("@excalidraw+excalidraw") || id.includes("lz-string")) return "plugin-excalidraw";
