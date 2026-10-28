@@ -1,0 +1,61 @@
+README.md
+  s_181ac1a3848843::t_030e0a8eaaa967 39-40
+docs/calendar/integration.md
+  s_72a004a40f3bbc::t_316e98d7453a1a 1-62
+package.json
+  s_72a004a40f3bbc::t_411edcab2e79a9 73
+pnpm-lock.yaml
+  s_72a004a40f3bbc::t_1900bd633c67a4 40,128-130,177-179,186-199,334,354-357,458,464,473-476,484-490,498-504,511-524,529-532,563,569,575,581,587,593,599,605,611,617,623,629,635,641,647,653,659,665,671,677,683,689,695,701,707,713,737-745,863,1862,1867,1872,1877,1882,1887,1892,1898,1904,1910,1916,1922,1928,1934,1940,1946,1952,1958,1964,1970,1975,1980,1985,1990,1995,2013,2019,2025,2031,2037,2043,2050,2057,2064,2071,2083,2089,2116,2122,2128,2134,2141,2148,2155,2162,2169,2175,2181,2359,2507-2509,2618,2709-2712,2722-2725,2846,2869,2889-2892,3008-3011,3170,3175,3288-3291,3330-3332,3471-3474,3516-3524,3580,3586,3592,3598,3604,3610,3617,3624,3631,3638,3644,3661,3664,3685-3688,3764-3766,4029-4031,4483-4489,4530-4532,4537-4540,4553-4556,4561-4564,4575-4582,4821-4824,4837-4840,4845-4848,4924-4941,4947-4948,4962-4981,5186-5189,5469-5470,5476-5480,5488-5494,5499-5506,5509-5510,5635,5669,5688-5689,7479-7482,7680-7684,7692-7698,7890-7896,7982-7983,8341-8346,8389-8390,8481-8489,8537-8563,8687-8688,8874-8875,9259-9262,9861-9878,9904-9905,9910-9913,9924-9927,9932-9935,9942-9945,9959,9961,10147-10148,10157-10158,10164-10171,10212,10217,10220-10226
+src/App.tsx
+  s_72a004a40f3bbc::t_83e9c24d04af4e 1-2,7,260-261,806,808,1600,1602,1607,1610,1616,1620,1626,1632,1637,1645,1650,1653-1654,1658-1659,1664,1668,1676,1681,1684-1685,1687-1688,1694-1701,5127-5134
+src/components/calendar/calendar-canvas.tsx
+  s_72a004a40f3bbc::t_afac0075d81431 1-70
+src/components/calendar/calendar-display.ts
+  s_72a004a40f3bbc::t_af85f20da084a4 1-3
+src/components/calendar/calendar-editor.tsx
+  s_72a004a40f3bbc::t_89c2cec76f9ab5 1-58
+src/components/calendar/calendar-page.css
+  s_72a004a40f3bbc::t_115dac71d9a9f4 1-58
+src/components/calendar/calendar-page.tsx
+  s_72a004a40f3bbc::t_5c871f1acee5a7 1-109
+src/components/calendar/use-calendar-reschedule.test.tsx
+  s_72a004a40f3bbc::t_9677e3c299ff05 1-54
+src/components/calendar/use-calendar-reschedule.ts
+  s_72a004a40f3bbc::t_0cca4107f035aa 1-37
+src/components/workspace/workspace.tsx
+  s_72a004a40f3bbc::t_230f60a8cf0401 19,163,770,4124
+src/services/calendar/calendar-notes.test.ts
+  s_72a004a40f3bbc::t_24daf4aed286d6 1-44
+src/services/calendar/calendar-notes.ts
+  s_72a004a40f3bbc::t_c4b4d91398849c 1-62
+src/services/calendar/calendar-save.test.ts
+  s_72a004a40f3bbc::t_e5a5a7d5c54698 1-35
+src/services/calendar/calendar-save.ts
+  s_72a004a40f3bbc::t_5fabe235ed541e 1-28
+vite.config.ts
+  s_181ac1a3848843::t_e661c239ef77cc 40-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "23afa99ec9151f5bfd480fef813210cc70173147",
+  "prompts": {},
+  "sessions": {
+    "s_181ac1a3848843": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fcaa2-8d60-7fc1-af69-508c0d40e2cc",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    },
+    "s_72a004a40f3bbc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a18112-432c-71c3-aa96-8f673a69127a",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
