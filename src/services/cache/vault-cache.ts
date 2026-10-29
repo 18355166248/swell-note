@@ -289,32 +289,36 @@ export async function createVaultCacheId(identity: string) {
 
 export async function saveVaultCache(snapshot: VaultCacheSnapshot, options: SaveVaultCacheOptions = {}) {
   const database = await openDatabase()
-  const transaction = database.transaction([VAULT_STORE, SETTINGS_STORE, DOCUMENT_STORE], "readwrite")
-  const documentStore = transaction.objectStore(DOCUMENT_STORE)
-  const validDocumentKeys = new Set(snapshot.notes.map((note) => documentKey(snapshot.id, note.id)))
-  const existingDocumentKeys = documentStore.index("cacheId").getAllKeys(snapshot.id)
-  existingDocumentKeys.onsuccess = () => {
-    for (const key of existingDocumentKeys.result) {
-      if (typeof key === "string" && !validDocumentKeys.has(key)) documentStore.delete(key)
+  try {
+    const transaction = database.transaction([VAULT_STORE, SETTINGS_STORE, DOCUMENT_STORE], "readwrite")
+    const documentStore = transaction.objectStore(DOCUMENT_STORE)
+    const validDocumentKeys = new Set(snapshot.notes.map((note) => documentKey(snapshot.id, note.id)))
+    const existingDocumentKeys = documentStore.index("cacheId").getAllKeys(snapshot.id)
+    existingDocumentKeys.onsuccess = () => {
+      for (const key of existingDocumentKeys.result) {
+        if (typeof key === "string" && !validDocumentKeys.has(key)) documentStore.delete(key)
+      }
     }
-  }
-  const metadataNotes = snapshot.notes.map((note) => {
-    const key = documentKey(snapshot.id, note.id)
-    if (note.contentLoaded) {
-      documentStore.put(toVaultNoteDocument(snapshot.id, note))
-    } else if (!note.contentCached) {
-      // “仅目录”隐私模式会显式清除此标记，此时同步删除旧正文，不能只改元数据。
-      documentStore.delete(key)
+    const metadataNotes = snapshot.notes.map((note) => {
+      const key = documentKey(snapshot.id, note.id)
+      if (note.contentLoaded) {
+        documentStore.put(toVaultNoteDocument(snapshot.id, note))
+      } else if (!note.contentCached) {
+        // “仅目录”隐私模式会显式清除此标记，此时同步删除旧正文，不能只改元数据。
+        documentStore.delete(key)
+      }
+      return toMetadataNote(note, Boolean(note.contentLoaded || note.contentCached))
+    })
+    transaction.objectStore(VAULT_STORE).put({ ...snapshot, notes: metadataNotes })
+    // 后台旧库检查点可以继续落盘，但绝不能把当前库指针切回旧库。
+    if (options.updateLastCache !== false) {
+      transaction.objectStore(SETTINGS_STORE).put({ key: LAST_CACHE_KEY, value: snapshot.id })
     }
-    return toMetadataNote(note, Boolean(note.contentLoaded || note.contentCached))
-  })
-  transaction.objectStore(VAULT_STORE).put({ ...snapshot, notes: metadataNotes })
-  // 后台旧库检查点可以继续落盘，但绝不能把当前库指针切回旧库。
-  if (options.updateLastCache !== false) {
-    transaction.objectStore(SETTINGS_STORE).put({ key: LAST_CACHE_KEY, value: snapshot.id })
+    await transactionDone(transaction)
+  } finally {
+    // 事务中止或配额异常也要关闭连接，避免失败重试阻塞后续缓存维护。
+    database.close()
   }
-  await transactionDone(transaction)
-  database.close()
 }
 
 export async function saveVaultDirectoryQueueCheckpoint(

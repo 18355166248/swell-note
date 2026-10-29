@@ -461,6 +461,7 @@ function App() {
   const indexGenerationRef = useRef(0)
   const latestCacheSnapshotRef = useRef<VaultCacheSnapshot | null>(null)
   const cacheSnapshotWritesRef = useRef<Promise<void>>(Promise.resolve())
+  const creatingNoteRef = useRef(false)
   const batchOrganizeRef = useRef(false)
   const webDavTagRenameRef = useRef(false)
   const activeCacheIdRef = useRef<string | null>(null)
@@ -623,7 +624,7 @@ function App() {
   }, [activeCacheMeta, cacheReady, isOnline, vaultSession, webDavConfigured])
 
   useEffect(() => {
-    if (!cacheReady || !activeCacheMeta) return
+    if (!cacheReady || !activeCacheMeta || creatingNoteRef.current) return
     if (conflictResolutionBusyRef.current) return
     // 显式同步的检查点拥有缓存写权；旧渲染产生的整库防抖快照不能覆盖新 ETag。
     if (activeSyncRunRef.current && activeCacheIdRef.current === activeCacheMeta.id) return
@@ -641,7 +642,7 @@ function App() {
     latestCacheSnapshotRef.current = snapshot
     const timer = window.setTimeout(() => {
       // 清除/切库/原子目录重命名都会替换 ref；旧闭包不得把过期快照重新写回。
-      if (latestCacheSnapshotRef.current !== snapshot) return
+      if (latestCacheSnapshotRef.current !== snapshot || creatingNoteRef.current) return
       if (conflictResolutionBusyRef.current) return
       if (activeSyncRunRef.current && activeCacheIdRef.current === snapshot.id) return
       if (batchOrganizeRef.current || (webDavTagRenameRef.current && snapshot.sourceKind === "webdav")) return
@@ -653,7 +654,7 @@ function App() {
       cacheSnapshotWritesRef.current = write
     }, 450)
     return () => window.clearTimeout(timer)
-  }, [activeCacheMeta, activeNoteId, cachePrivacyMode, cacheReady, isManagingNote, isResolvingConflict, notes, pendingWebDavDirectories, pendingWebDavDirectoryMoves, trashEntries, vaultDirectories])
+  }, [activeCacheMeta, activeNoteId, cachePrivacyMode, cacheReady, isCreatingNote, isManagingNote, isResolvingConflict, notes, pendingWebDavDirectories, pendingWebDavDirectoryMoves, trashEntries, vaultDirectories])
 
   useEffect(() => {
     if (!activeCacheMeta || activeCacheMeta.sourceKind !== "webdav") {
@@ -1607,7 +1608,8 @@ function App() {
       return false
     }
 
-    if (isCreatingNote || isRefreshingVault || isManagingNote || vaultMutationBarrierRef.current > 0) return false
+    if (creatingNoteRef.current || isCreatingNote || isRefreshingVault || isManagingNote || activeSyncRunRef.current || vaultMutationBarrierRef.current > 0) return false
+    creatingNoteRef.current = true
     setIsCreatingNote(true)
     setVaultError(null)
     try {
@@ -1644,7 +1646,20 @@ function App() {
           updatedAt: "刚刚创建 · 待同步",
           ...indexNoteContent(content),
         }
-        // 新笔记先进入 IndexedDB 工作副本；这里不调用适配器，避免创建动作绕过显式同步。
+        // 新建必须先完成本地事务，再呈现成功；旧防抖快照暂停并排空，避免随后删掉新正文。
+        await cacheSnapshotWritesRef.current
+        if (activeCacheIdRef.current !== creationCacheId || assetResolverContextRef.current.vaultSession !== adapter) return false
+        const snapshot = latestCacheSnapshotRef.current
+        if (!snapshot || snapshot.id !== creationCacheId) throw new Error("笔记库缓存尚未就绪，请稍后重试")
+        const nextNotes = [newNote, ...notesRef.current]
+        const nextSnapshot = { ...snapshot, notes: prepareNotesForCache(nextNotes, cachePrivacyMode), savedAt: Date.now() }
+        const write = saveVaultCache(nextSnapshot, { updateLastCache: false })
+        // 生命周期保存会等待该事务；错误由当前表单呈现，重试不被上一次失败的 Promise 阻塞。
+        cacheSnapshotWritesRef.current = write.catch(() => undefined)
+        await write
+        if (activeCacheIdRef.current !== creationCacheId || assetResolverContextRef.current.vaultSession !== adapter) return false
+        notesRef.current = [newNote, ...notesRef.current]
+        latestCacheSnapshotRef.current = { ...nextSnapshot, notes: prepareNotesForCache(notesRef.current, cachePrivacyMode) }
         setLibraryView("all")
         setNotes((current) => [newNote, ...current])
         if (!seed) { setActiveNoteId(id); openNoteViewForEditing() }
@@ -1687,6 +1702,7 @@ function App() {
       if (activeCacheIdRef.current === creationCacheId) setVaultError(error instanceof Error ? error.message : "新建笔记失败")
       return false
     } finally {
+      creatingNoteRef.current = false
       setIsCreatingNote(false)
     }
   }
@@ -2531,7 +2547,8 @@ function App() {
   }
 
   const refreshVault = async (noteIds?: ReadonlySet<string>, options: { automatic?: boolean } = {}) => {
-    if (conflictResolutionBusyRef.current) return
+    // 新建本地事务尚未发布到内存时，同步不能用旧列表覆盖其缓存。
+    if (creatingNoteRef.current || conflictResolutionBusyRef.current) return
     if (batchOrganizeRef.current) { setVaultError("正在批量整理，请等待完成"); return }
     // 新一轮重试先收起旧错误；若仍失败会立即用本轮原因替换，成功则不会残留过期提示。
     setSyncFailure(null)
@@ -2850,7 +2867,7 @@ function App() {
   }, [vaultSession])
 
   const selectVaultCache = async (cacheId: string) => {
-    if (conflictResolutionBusyRef.current) return
+    if (creatingNoteRef.current || conflictResolutionBusyRef.current) return
     if (batchOrganizeRef.current) { setVaultError("正在批量整理，请等待完成"); return }
     // 同库重新选择会把读取时的旧快照整库写回，可能抹去正在上传的检查点。
     if (activeSyncRunRef.current && cacheId === activeCacheIdRef.current) return
