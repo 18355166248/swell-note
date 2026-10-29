@@ -1,0 +1,21 @@
+src/App.tsx
+  s_b16fc6363ce496::t_880338049cf0ca 464,627,645,657,1611-1612,1649-1662,1705,2550-2551,2870
+src/components/calendar/calendar-editor.tsx
+  s_b16fc6363ce496::t_e715105e74ab72 16,20-28,53-59,68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "be1a29027930b729d9bb6cd55976f109ceba6dbf",
+  "prompts": {},
+  "sessions": {
+    "s_b16fc6363ce496": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a18735-7112-7292-b0a5-32b7a528f09d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
