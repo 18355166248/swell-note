@@ -1,0 +1,19 @@
+src/components/editor/markdown-table.css
+  s_947a8a771403fa::t_c0476f17dc1b97 109,111,113-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "a3218eb180ee4e92ff3d461478b1f87a45f9db09",
+  "prompts": {},
+  "sessions": {
+    "s_947a8a771403fa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a18652-8ea1-7091-8333-b9a8dd7d3a1b",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
