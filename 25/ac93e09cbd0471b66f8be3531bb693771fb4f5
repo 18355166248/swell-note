@@ -1,0 +1,21 @@
+src/components/calendar/calendar-canvas.tsx
+  s_b16fc6363ce496::t_31ce1761ecc724 27
+src/components/calendar/calendar-page.tsx
+  s_b16fc6363ce496::t_94c1d31651bf93 3,119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "25ac93e09cbd0471b66f8be3531bb693771fb4f5",
+  "prompts": {},
+  "sessions": {
+    "s_b16fc6363ce496": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a18735-7112-7292-b0a5-32b7a528f09d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
