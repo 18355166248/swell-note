@@ -58,6 +58,13 @@ export function extractFrontmatter(content: string) {
       properties[key] = values
       continue
     }
+    // 日程标题由 JSON 字符串写入；在索引阶段解码，确保未加载正文时与正文展示一致。
+    if (key === "event_title" && rawValue.startsWith('"')) {
+      try {
+        const title: unknown = JSON.parse(rawValue)
+        if (typeof title === "string") { properties[key] = title; continue }
+      } catch { /* 手写非 JSON 标量仍沿用已有读取规则，不猜测反斜杠语义。 */ }
+    }
     properties[key] = rawValue.startsWith("[") && rawValue.endsWith("]")
       ? rawValue.slice(1, -1).split(",").map(cleanFrontmatterValue).filter(Boolean)
       : cleanFrontmatterValue(rawValue)

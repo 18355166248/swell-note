@@ -30,7 +30,8 @@ export function isNotesLibraryRoute(path: string) {
 
 function isNotesListRoute(value: unknown): value is string {
   return typeof value === "string" && (
-    /^\/notes\/view\/(all|recent|starred)$/.test(value)
+    /^\/calendar(?:\?[^#]*)?$/.test(value)
+    || /^\/notes\/view\/(all|recent|starred)$/.test(value)
     || value.startsWith(NOTES_FOLDER_ROUTE_PREFIX)
   )
 }

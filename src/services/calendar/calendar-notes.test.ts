@@ -42,3 +42,26 @@ describe("calendar Markdown adapter", () => {
     expect(eventsOnDate([event], new Date(2026, 9, 27))).toHaveLength(1)
   })
 })
+
+it("keeps indexed and loaded titles identical, including literal escapes", async () => {
+  const { extractFrontmatter } = await import("@/services/search/note-index")
+  for (const title of ['讨论 "A方案"', String.raw`C:\notes`, String.raw`literal \n`]) {
+    const content = writeCalendarNote("正文", { ...draft, title })
+    const indexed = { ...note(""), contentLoaded: false, frontmatter: extractFrontmatter(content).properties }
+    expect(readCalendarNote(indexed)?.title).toBe(title)
+    expect(readCalendarNote(note(content))?.title).toBe(title)
+  }
+})
+
+it("removes only owned metadata and rejects unsafe multiline fields", async () => {
+  const { removeCalendarSchedule, isCalendarNote } = await import("./calendar-notes")
+  const original = "---\r\ntags: [keep]\r\nowner: Swell\r\n---\r\n# 原笔记\r\n正文"
+  const scheduled = writeCalendarNote(original, draft)
+  expect(removeCalendarSchedule(scheduled)).toBe(original)
+  expect(isCalendarNote(note(removeCalendarSchedule(scheduled)))).toBe(false)
+  expect(() => removeCalendarSchedule(scheduled.replace(/event_title:.*\r\n/, "event_title: |\r\n  多行\r\n"))).toThrow("多行")
+  const invalid = note(scheduled.replace(/event_start:.*\r\n/, "event_start: invalid\r\n"))
+  expect(isCalendarNote(invalid)).toBe(true)
+  expect(readCalendarNote(invalid)).toBeNull()
+  expect(isCalendarNote({ ...invalid, pendingOperation: "delete" })).toBe(false)
+})

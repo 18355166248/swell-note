@@ -1691,7 +1691,7 @@ function App() {
     }
   }
 
-  const saveCalendarEvent = (draft: CalendarDraft, source?: Note) => saveCalendarDraft(draft, source, {
+  const saveCalendarEvent = (draft: CalendarDraft | null, source?: Note) => saveCalendarDraft(draft, source, {
     busy: isRefreshingVault || isManagingNote || isCreatingNote || vaultMutationBarrierRef.current > 0,
     getNote: id => notesRef.current.find(note => note.id === id),
     canWriteLocal: Boolean(vaultSession?.writeTextFile),
@@ -3020,7 +3020,8 @@ function App() {
     // 路由状态记录来源列表，刷新详情后依然能返回原目录，而不是退回一个含旧筛选的伪 `/notes`。
     // 用 effectiveFolder 而不是 selectedFolder：从跟随态进入另一篇笔记时，
     // 返回目标应是当前实际显示的目录，而不是详情路由留下来的空值。
-    const returnTo = noteRouteMatch
+    // 日历详情返回原日期和视图，继续打开笔记链接时沿用该来源。
+    const returnTo = location.pathname === "/calendar" ? `${location.pathname}${location.search}` : noteRouteMatch
       ? getNoteReturnRoute(location.state, libraryView, effectiveFolder)
       : getNotesListRoute(libraryView, effectiveFolder)
     navigate(`/notes/${encodeURIComponent(note.id)}`, { state: { returnTo } })
@@ -4947,7 +4948,11 @@ function App() {
       if (locationRef.current.key !== originLocationKey) return false
     }
     if (canGoBack) navigate(-1)
-    else navigate(fallback, { replace: true })
+    else {
+      // 日历不在移动笔记页栈中；首次打开或刷新后优先恢复明确的日历来源。
+      const returnRoute = getNoteReturnRoute(location.state, libraryView, effectiveFolder)
+      navigate(noteRouteMatch && returnRoute.startsWith("/calendar") ? returnRoute : fallback, { replace: true })
+    }
     return true
   }
 
@@ -5131,6 +5136,7 @@ function App() {
         busy={isCreatingNote || isRefreshingVault || isManagingNote}
         error={vaultError} indexProgress={indexProgress}
         onNavigate={navigate} onOpenNote={openNote} onSave={saveCalendarEvent}
+        onRemove={note => saveCalendarEvent(null, note)}
       /></Suspense>} />
       <Route
         path="/todos"

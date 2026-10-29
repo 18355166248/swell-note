@@ -190,7 +190,8 @@ for (const view of ["日", "周"]) {
     expect(resized).toContain("必须保留的原笔记正文")
     await page.reload()
     expect(await capabilityContent(page)).toBe(resized)
-    await page.getByRole("button", { name: mobile ? "日" : "周", exact: true }).click()
+    // 刷新现在恢复原视图；直接验收恢复结果，避免切视图时抓取即将卸载的旧卡片。
+    await expect(page.getByRole("button", { name: view, exact: true })).toHaveAttribute("aria-pressed", "true")
     await card.scrollIntoViewIfNeeded()
     await expect(card).toBeVisible()
     await expect(page.getByRole("alert")).toHaveCount(0)

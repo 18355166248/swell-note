@@ -30,3 +30,10 @@ describe("note routes", () => {
     expect(getNoteBreadcrumbSegments()).toEqual(["根目录"])
   })
 })
+
+it("preserves calendar return context but rejects unrelated destinations", () => {
+  const route = "/calendar?date=2026-11-01&view=day&event=test"
+  expect(getNoteReturnRoute({ returnTo: route }, "all", null)).toBe(route)
+  expect(getNoteReturnRoute({ returnTo: "/calendar-other" }, "all", null)).toBe("/notes/view/all")
+  expect(getNoteReturnRoute({ returnTo: "https://example.com/calendar" }, "all", null)).toBe("/notes/view/all")
+})

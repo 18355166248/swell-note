@@ -120,7 +120,7 @@ import { NoteVersionHistoryDialog } from "@/components/workspace/note-version-hi
 import { BatchOrganizeDialog, type OrganizeNotesHandler } from "@/components/workspace/batch-organize-dialog"
 import { GlobalSearchDialog } from "@/components/workspace/global-search-dialog"
 import type { VaultCacheSummary } from "@/services/cache/vault-cache"
-import { getNoteBreadcrumbSegments } from "@/lib/note-routes"
+import { getNoteBreadcrumbSegments, getNoteReturnRoute } from "@/lib/note-routes"
 import { resolveRouteNoteId, stableNoteRenderIdentity } from "@/lib/note-route-resolution"
 import { MobileNoteSearch } from "@/components/workspace/mobile-note-search"
 import { MobileFolderActionSheet, MobileNoteActionSheet } from "@/components/workspace/mobile-action-sheets"
@@ -3194,7 +3194,7 @@ function RouteStackMobileWorkspace(props: WorkspaceProps & FolderTreeProps) {
             <RouteActivityProvider active={role === "current"}>
               <MobileRouteEntryPage
                 active={role === "current"}
-                backLabel={getMobileRouteEntryLabel(stack.entries[index - 1] ?? null, props.allNotes)}
+                backLabel={role === "current" && !canGoBack && descriptor.screen === "editor" && getNoteReturnRoute(location.state, "all", null).startsWith("/calendar") ? "日历" : getMobileRouteEntryLabel(stack.entries[index - 1] ?? null, props.allNotes)}
                 canGoBack={Boolean(index > 0 && !stack.entries[index - 1]?.synthetic)}
                 entry={entry}
                 navigationOpen={role === "current" && navigationOpen}

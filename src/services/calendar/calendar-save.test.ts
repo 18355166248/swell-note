@@ -33,3 +33,14 @@ describe("calendar save boundary", () => {
     expect(host.updateContent.mock.calls[0][1]).toContain("02:00:17.123Z")
   })
 })
+
+it("removes scheduling through the protected host pipeline without deleting the note", async () => {
+  const host = context()
+  await expect(saveCalendarDraft(null, source, host)).resolves.toBe(true)
+  expect(host.updateContent.mock.calls[0][1]).toContain("原始正文")
+  expect(host.updateContent.mock.calls[0][1]).not.toContain("swell_event")
+  expect(host.createNote).not.toHaveBeenCalled()
+  await expect(saveCalendarDraft(null, source, context({ ...source, content: source.content + "新内容" }))).rejects.toThrow("已经变化")
+  await expect(saveCalendarDraft(null, source, context({ ...source, readOnly: true }))).rejects.toThrow()
+  await expect(saveCalendarDraft(null, source, { ...context(), busy: true })).rejects.toThrow()
+})

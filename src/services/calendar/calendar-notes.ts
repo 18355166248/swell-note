@@ -23,17 +23,25 @@ export function readCalendarNote(note: Note): CalendarNote | null {
   if (note.pendingOperation === "delete" || note.format === "canvas") return null
   const props = note.contentLoaded ? extractFrontmatter(note.content).properties : note.frontmatter
   if (props?.swell_event !== "1" || typeof props.event_start !== "string" || typeof props.event_end !== "string") return null
-  let title = typeof props.event_title === "string" ? props.event_title : note.title
-  // 仅解码正文中明确的双引号标量，不能把手写的 C:\notes 当成 JSON 转义。
-  const rawTitle = note.contentLoaded ? note.content.match(/^---[^\S\r\n]*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1].match(/^event_title:[ \t]*("[^\r\n]*")[ \t]*$/m)?.[1] : undefined
-  if (rawTitle) {
-    try { title = JSON.parse(rawTitle) as string } catch { /* 非 JSON 的手写 YAML 标量保留索引值。 */ }
-  }
+  const title = typeof props.event_title === "string" ? props.event_title : note.title
   const draft: CalendarDraft = { title, start: props.event_start, end: props.event_end, category: props.event_category === "personal" ? "personal" : "work" }
   try { validateCalendarDraft(draft); return { ...draft, note } } catch { return null }
 }
+export function isCalendarNote(note: Note) {
+  if (note.pendingOperation === "delete" || note.format === "canvas") return false
+  const props = note.contentLoaded ? extractFrontmatter(note.content).properties : note.frontmatter
+  return props?.swell_event === "1"
+}
+
+// 移除安排与编辑共用字段校验；仅删除日程元数据，正文、标签和其他属性保持原样。
+export function removeCalendarSchedule(content: string) {
+  return rewriteCalendarMetadata(content)
+}
 export function writeCalendarNote(content: string, draft: CalendarDraft) {
   validateCalendarDraft(draft)
+  return rewriteCalendarMetadata(content, draft)
+}
+function rewriteCalendarMetadata(content: string, draft?: CalendarDraft) {
   // 只替换自有的单行元数据，保留用户正文、标签及其他 frontmatter；不重序列化整个 YAML。
   const newline = content.includes("\r\n") ? "\r\n" : "\n"
   const match = content.match(/^---[^\S\r\n]*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
@@ -50,6 +58,7 @@ export function writeCalendarNote(content: string, draft: CalendarDraft) {
   }
   const retained = match ? match[1].split(/\r?\n/).filter(line => !fields.some(field => line.startsWith(`${field}:`))) : []
   // JSON 双引号字符串也是合法 YAML 标量，保留引号、冒号和反斜杠。
+  if (!draft) return match ? `---${newline}${retained.join(newline)}${newline}---${newline}${content.slice(match[0].length)}` : content
   const title = JSON.stringify(draft.title.trim())
   const metadata = [...retained, "swell_event: 1", `event_title: ${title}`, `event_start: ${new Date(draft.start).toISOString()}`, `event_end: ${new Date(draft.end).toISOString()}`, `event_category: ${draft.category}`]
   return `---${newline}${metadata.join(newline)}${newline}---${newline}${match ? content.slice(match[0].length) : content}`
