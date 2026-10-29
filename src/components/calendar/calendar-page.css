@@ -1,58 +1,97 @@
-.note-calendar-root .route-page-shell { background: var(--background); }
-.note-calendar-header { display:flex; align-items:center; flex-wrap:wrap; gap:14px; padding:24px; border-bottom:1px solid var(--border); }
-.note-calendar-heading { margin-right:auto; }
-.note-calendar-heading h1 { margin:0; font-size:23px; font-weight:600; }
-.note-calendar-heading>span,.note-calendar-muted { color:var(--muted-foreground); font-size:12px; }
-.note-calendar-date-nav,.note-calendar-view-switch { display:flex; align-items:center; gap:4px; }
-.note-calendar-date-nav strong { font-size:14px; font-weight:500; white-space:nowrap; }
-.note-calendar-view-switch { background:var(--muted); border-radius:8px; padding:3px; }
-.note-calendar-body { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 260px; }
-/* 宿主保留自己的导航工具栏，日期/视图通过组件公开 props 控制。覆盖仅限本页面。 */
-.note-calendar-details { border-left:1px solid var(--border); padding:25px 20px; overflow:auto; }
-.note-calendar-details h2 { font-size:18px; margin:6px 0; }
+.note-calendar-root {
+ --calendar-work: var(--primary);
+ --calendar-personal: #8760bd;
+ --calendar-work-bg: color-mix(in oklab, var(--primary) 9%, var(--background));
+ --calendar-personal-bg: color-mix(in oklab, var(--calendar-personal) 10%, var(--background));
+ --calendar-line: color-mix(in oklab, var(--border) 65%, var(--background));
+}
+.dark .note-calendar-root { --calendar-personal:#ba9de2; }
+.note-calendar-root .route-page-shell { background:var(--background); }
+.note-calendar-header { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:24px 20px; padding:28px 28px 22px; }
+.note-calendar-heading { grid-column:1; grid-row:1; }
+.note-calendar-heading h1 { margin:0 0 5px; font-size:26px; font-weight:650; line-height:1.25; letter-spacing:-.6px; }
+.note-calendar-heading>span,.note-calendar-muted { color:var(--muted-foreground); font-size:13px; line-height:1.6; }
+.note-calendar-date-nav { grid-row:2; grid-column:1; display:flex; align-items:center; gap:6px; }
+.note-calendar-date-nav strong { order:-1; margin-right:16px; font-size:21px; font-weight:600; letter-spacing:-.4px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.note-calendar-date-nav [data-slot=button] { height:32px; border-radius:9px; }
+.note-calendar-date-nav [data-variant=outline] { margin-left:6px; padding-inline:13px; font-size:12px; }
+.note-calendar-view-switch { grid-row:2; grid-column:2; display:flex; align-items:center; gap:3px; padding:4px; border:1px solid var(--calendar-line); background:var(--panel-soft); border-radius:12px; }
+.note-calendar-view-switch [data-slot=button] { min-width:44px; height:31px; padding-inline:14px; font-size:13px; border-radius:8px; color:var(--muted-foreground); background:transparent; }
+.note-calendar-view-switch [aria-pressed=true] { color:var(--foreground); background:var(--background); box-shadow:0 1px 4px color-mix(in oklab, var(--foreground) 10%, transparent); font-weight:600; }
+.note-calendar-add { grid-row:1; grid-column:2; justify-self:end; height:38px; padding-inline:16px; border-radius:11px; font-size:13px; box-shadow:0 3px 8px color-mix(in oklab, var(--primary) 16%, transparent); }
+.note-calendar-body { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 284px; padding:0 28px 20px; gap:24px; }
+.note-calendar-details { padding:22px 20px; overflow:auto; border:1px solid var(--calendar-line); border-radius:16px; background:var(--panel-soft); }
+.note-calendar-details>.eyebrow { font-size:12px; font-weight:500; letter-spacing:.06em; color:var(--muted-foreground); }
+.note-calendar-details h2 { display:flex; align-items:baseline; gap:8px; font-size:19px; letter-spacing:-.4px; margin:8px 0 6px; font-weight:600; }
 .note-calendar-details h2 small { font-size:12px; font-weight:400; color:var(--muted-foreground); }
-.note-calendar-item { display:flex; flex-direction:column; gap:9px; width:100%; padding:20px 0; border:0; border-bottom:1px solid var(--border); background:transparent; text-align:left; }
-.note-calendar-item:hover { background:var(--muted); }
-.note-calendar-item>span { font-size:12px; color:var(--muted-foreground); }
-.note-calendar-item strong { font-size:14px; font-weight:500; overflow-wrap:anywhere; }
-.note-calendar-item small { color:var(--primary); display:flex; gap:6px; align-items:center; overflow-wrap:anywhere; }
-.note-calendar-item svg { width:14px; height:14px; flex-shrink:0; }
-.note-calendar-empty { margin:32px 0; color:var(--muted-foreground); font-size:13px; line-height:1.9; }
-.note-calendar-footer { display:flex; justify-content:space-between; gap:8px; padding:13px 22px; border-top:1px solid var(--border); font-size:11px; color:var(--muted-foreground); }
-.note-calendar-notice { padding:9px 22px; margin:0; background:var(--muted); font-size:12px; }
-.note-calendar-notice button { color:var(--primary); margin-left:8px; }
-.note-calendar-event-detail h2 { font-size:21px; overflow-wrap:anywhere; margin:10px 0; }
-.note-calendar-event-detail p { font-size:13px; line-height:1.8; margin:14px 0; }
-.note-calendar-form { display:grid; gap:16px; }
-.note-calendar-form label { display:grid; gap:7px; font-size:13px; }
-.note-calendar-form input,.note-calendar-form select { min-width:0; width:100%; padding:10px 12px; border:1px solid var(--input); border-radius:8px; background:var(--background); color:var(--foreground); }
-.note-calendar-form [role=alert] { color:var(--destructive); font-size:13px; }
-.note-calendar-dialog { max-height:calc(100dvh - 40px); overflow:auto; }
-.note-calendar-week-strip { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:5px; padding:12px 18px; border-bottom:1px solid var(--border); }
-.note-calendar-week-strip button { display:flex; align-items:center; flex-direction:column; gap:8px; padding:8px 0; border:0; background:transparent; border-radius:12px; }
+.note-calendar-details>.note-calendar-muted { display:block; margin-bottom:22px; font-size:12px; }
+.note-calendar-item { --item-color:var(--calendar-work); display:flex; flex-direction:column; gap:8px; width:100%; margin-bottom:12px; padding:16px; border:1px solid var(--calendar-line); border-radius:12px; background:var(--background); text-align:left; transition:background .15s,border-color .15s; }
+.note-calendar-item[data-category=personal] { --item-color:var(--calendar-personal); }
+.note-calendar-item:hover { background:color-mix(in oklab,var(--item-color) 4%,var(--background)); border-color:color-mix(in oklab,var(--item-color) 28%,var(--border)); }
+.note-calendar-item:focus-visible { outline:2px solid var(--primary); outline-offset:3px; }
+.note-calendar-item>span { font-size:12px; color:var(--muted-foreground); line-height:1.6; font-variant-numeric:tabular-nums; }
+.note-calendar-item strong { padding-left:10px; border-left:3px solid var(--item-color); font-size:15px; line-height:1.5; font-weight:600; overflow-wrap:anywhere; }
+.note-calendar-item small { color:var(--muted-foreground); display:flex; gap:6px; align-items:center; font-size:12px; overflow-wrap:anywhere; }
+.note-calendar-item svg { width:13px; height:13px; flex-shrink:0; }
+.note-calendar-details>[data-slot=button] { width:100%; height:36px; margin-top:6px; color:var(--primary); font-size:13px; border:1px dashed var(--border); }
+.note-calendar-empty { display:flex; align-items:center; flex-direction:column; gap:12px; margin:36px 0; color:var(--muted-foreground); font-size:13px; line-height:1.9; text-align:center; }
+.note-calendar-empty svg { width:32px; height:32px; stroke-width:1.3; color:color-mix(in oklab,var(--primary) 50%,var(--muted-foreground)); }
+.note-calendar-footer { display:flex; justify-content:space-between; gap:8px; padding:0 28px 16px; font-size:11px; line-height:1.5; color:var(--muted-foreground); }
+.note-calendar-notice { padding:10px 14px; margin:0 28px 12px; border:1px solid var(--calendar-line); border-radius:10px; background:var(--panel-soft); font-size:13px; line-height:1.6; }
+.note-calendar-notice button { color:var(--primary); margin-left:8px; text-decoration:underline; text-underline-offset:3px; }
+.note-calendar-dialog { max-width:460px; max-height:calc(100dvh - 40px); overflow:auto; padding:28px; border-radius:20px; gap:22px; }
+.note-calendar-dialog [data-slot=dialog-title] { font-size:20px; line-height:1.4; letter-spacing:-.4px; }
+.note-calendar-dialog [data-slot=dialog-description] { font-size:13px; line-height:1.7; margin-top:6px; }
+.note-calendar-event-detail>span.eyebrow { display:inline-flex; padding:4px 10px; border-radius:6px; background:var(--accent); color:var(--primary); font-size:12px; }
+.note-calendar-event-detail h2 { font-size:24px; line-height:1.4; font-weight:600; overflow-wrap:anywhere; margin:12px 0; }
+.note-calendar-event-detail p { font-size:14px; line-height:1.8; margin:16px 0; }
+.note-calendar-event-detail [data-slot=button] { height:38px; font-size:13px; margin:4px 8px 4px 0; }
+.note-calendar-form { display:grid; gap:20px; min-width:0; }
+.note-calendar-form label { display:grid; gap:8px; font-size:13px; font-weight:500; color:var(--foreground); min-width:0; }
+.note-calendar-form input,.note-calendar-form select { box-sizing:border-box; min-width:0; width:100%; min-height:44px; padding:10px 13px; border:1px solid var(--input); border-radius:10px; background:var(--background); color:var(--foreground); font-size:15px; font-weight:400; outline:none; transition:border-color .15s,box-shadow .15s; }
+.note-calendar-form input:focus,.note-calendar-form select:focus { border-color:var(--primary); box-shadow:0 0 0 3px color-mix(in oklab,var(--primary) 12%,transparent); }
+.note-calendar-form input::placeholder { color:var(--muted-foreground); }
+.note-calendar-form [role=alert] { color:var(--destructive); font-size:13px; line-height:1.6; }
+.note-calendar-form>fieldset { margin:0; padding:0; border:0; }
+form.note-calendar-form>[type=submit] { margin-top:12px; }
+.note-calendar-form>[data-slot=button] { height:42px; font-size:14px; border-radius:10px; }
+.note-calendar-week-strip { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:4px; padding:12px 18px 18px; }
+.note-calendar-week-strip button { display:flex; align-items:center; flex-direction:column; gap:8px; padding:12px 0 8px; border:0; background:transparent; border-radius:13px; min-width:0; }
 .note-calendar-week-strip button span { font-size:11px; color:var(--muted-foreground); }
-.note-calendar-week-strip button strong { font-size:16px; font-weight:500; }
-.note-calendar-week-strip button[aria-pressed=true] { background:var(--primary); color:var(--primary-foreground); }
-.note-calendar-week-strip button[aria-pressed=true] span { color:inherit; }
+.note-calendar-week-strip button strong { font-size:19px; font-weight:550; font-variant-numeric:tabular-nums; line-height:1.2; }
+.note-calendar-week-strip button[aria-pressed=true] { background:var(--primary); color:var(--primary-foreground); box-shadow:0 3px 10px color-mix(in oklab,var(--primary) 18%,transparent); }
+.note-calendar-week-strip button[aria-pressed=true] span { color:inherit; opacity:.85; }
 .note-calendar-week-strip i { height:3px; width:3px; border-radius:50%; }
 .note-calendar-week-strip i[data-has-event=true] { background:currentColor; }
-@media (min-width:768px) and (max-width:1100px) { .note-calendar-body { grid-template-columns:minmax(0,1fr) 220px; } .note-calendar-header { gap:8px; padding:16px; } .note-calendar-heading>span { display:none; } }
-@media (max-width:767px), (pointer:coarse) and (hover:none) and (max-height:500px) {
- .note-calendar-header { padding:14px 16px 10px; gap:10px; }
- .note-calendar-heading h1 { font-size:21px; }
- .note-calendar-heading>span { display:none; }
- .note-calendar-add span { display:none; }
- .note-calendar-body { display:flex; flex-direction:column; }
- .note-calendar-footer { padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px)); }
- .note-calendar-dialog { top:auto; bottom:0; left:0; right:0; transform:none; width:100%; max-width:none; max-height:calc(100dvh - env(safe-area-inset-top,0px) - 20px); border-radius:18px 18px 0 0; padding-bottom:calc(24px + env(safe-area-inset-bottom,0px)); }
- .note-calendar-form input { font-size:16px; }
+@media (min-width:768px) and (max-width:1100px) {
+ .note-calendar-header { padding:22px 20px 18px; gap:20px 12px; }
+ .note-calendar-body { grid-template-columns:minmax(0,1fr) 228px; padding:0 20px 16px; gap:16px; }
+ .note-calendar-details { padding:18px 14px; }
+ .note-calendar-date-nav strong { font-size:18px; margin-right:4px; }
+ .note-calendar-view-switch [data-slot=button] { min-width:34px; padding-inline:9px; }
 }
-
 @media (max-width:767px), (pointer:coarse) and (hover:none) and (max-height:500px) {
- .note-calendar-header { display:grid; grid-template-columns:40px minmax(0,1fr) 44px; gap:10px; }
- .note-calendar-header>.mobile-drawer-trigger { grid-row:1; grid-column:1; order:0; }
- .note-calendar-heading { grid-row:1; grid-column:2; text-align:center; margin:0; white-space:nowrap; }
- .note-calendar-add { grid-row:1; grid-column:3; }
- .note-calendar-date-nav { grid-row:2; grid-column:1 / -1; width:auto; gap:0; }
+ .note-calendar-header { grid-template-columns:40px minmax(0,1fr) 40px; padding:18px 18px 6px; gap:18px 8px; }
+ .note-calendar-header>.mobile-drawer-trigger { grid-row:1; grid-column:1; }
+ .note-calendar-heading { grid-row:1; grid-column:2; text-align:center; }
+ .note-calendar-heading h1 { margin:0; font-size:20px; letter-spacing:-.3px; }
+ .note-calendar-heading>span { display:none; }
+ .note-calendar-add { grid-row:1; grid-column:3; height:36px; width:36px; padding:0; border-radius:11px; }
+ .note-calendar-add span { display:none; }
+ .note-calendar-date-nav { grid-row:2; grid-column:1 / -1; gap:2px; }
+ .note-calendar-date-nav strong { flex:1; margin-right:4px; font-size:20px; }
+ .note-calendar-date-nav [data-slot=button] { min-width:32px; }
+ .note-calendar-date-nav [data-variant=outline] { margin-left:5px; padding-inline:10px; }
  .note-calendar-mobile-views { grid-row:3; grid-column:1 / -1; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); }
+ .note-calendar-view-switch [data-slot=button] { height:32px; font-size:13px; }
+ .note-calendar-body { display:flex; flex-direction:column; padding:0 14px 12px; gap:0; }
+ .note-calendar-footer { padding:4px 18px calc(12px + env(safe-area-inset-bottom,0px)); font-size:10px; }
+ .note-calendar-notice { margin:8px 18px; font-size:12px; }
+ .note-calendar-dialog { top:auto; bottom:0; left:0; right:0; transform:none; width:100%; max-width:none; max-height:calc(100dvh - env(safe-area-inset-top,0px) - 20px); border-radius:22px 22px 0 0; padding:24px 22px calc(24px + env(safe-area-inset-bottom,0px)); }
+ .note-calendar-form input,.note-calendar-form select { font-size:16px; }
+}
+@media (max-width:359px) {
+ .note-calendar-date-nav strong { font-size:17px; }
+ .note-calendar-header { padding-inline:14px; }
+ .note-calendar-week-strip { padding-inline:14px; }
 }

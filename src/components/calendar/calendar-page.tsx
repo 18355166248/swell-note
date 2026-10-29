@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react"
 import { useLocation } from "react-router-dom"
-import { ChevronLeft, ChevronRight, FileText, Plus } from "lucide-react"
+import { CalendarDays, ChevronLeft, ChevronRight, FileText, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { AppNavigationRail, MobileNavigationDrawer } from "@/components/workspace/workspace"
@@ -116,7 +116,7 @@ export default function CalendarPage(props: Props) {
               onSelectDate={next => { chooseDate(next, mobile) }}
               onSelectEvent={openEvent} />
           {!mobile ? <aside className="note-calendar-details"><span className="eyebrow">{dateKey === localDateKey(new Date()) ? "今天" : "日程安排"}</span><h2>{date.getMonth() + 1} 月 {date.getDate()} 日 <small>{dayNames[date.getDay()]}</small></h2><span className="note-calendar-muted">{daily.length} 项安排</span>
-            {daily.length ? daily.map(e => <button className="note-calendar-item" key={e.note.id} onClick={() => openEvent(e.note.id)}><span>{eventTimeRange(e.start, e.end)} · {e.category === "personal" ? "个人" : "工作"}</span><strong>{e.title}</strong><small><FileText />{e.note.title || "日程笔记"}</small></button>) : <p className="note-calendar-empty">这一天还没有安排<br />留一点空白，给新的想法。</p>}
+            {daily.length ? daily.map(e => <button className="note-calendar-item" data-category={e.category} key={e.note.id} onClick={() => openEvent(e.note.id)}><span>{eventTimeRange(e.start, e.end)} · {e.category === "personal" ? "个人" : "工作"}</span><strong>{e.title}</strong><small><FileText />{e.note.title || "日程笔记"}</small></button>) : <div className="note-calendar-empty"><CalendarDays aria-hidden="true" /><p>这一天还没有安排<br />留一点空白，给新的想法。</p></div>}
             <Button variant="ghost" disabled={!props.canCreate || props.busy} onClick={() => beginEdit()}><Plus />添加日程</Button>
           </aside> : null}
         </div>

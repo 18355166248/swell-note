@@ -1,31 +1,42 @@
-/* 仅在组件适配层覆盖第三方类名；应用布局和表单样式不依赖这些内部选择器。 */
-.note-calendar-engine { min-width:0; min-height:0; padding:18px; --swell-agenda-bg:var(--background); --swell-agenda-today:var(--primary); }
+/* 第三方选择器仅在适配层使用；不改事件定位、拖拽命中区和时间轴几何尺寸。 */
+.note-calendar-engine { min-width:0; min-height:0; padding:0; border:1px solid var(--calendar-line); border-radius:16px; overflow:hidden; --swell-month-event-font-size:13px; --swell-month-event-radius:5px; --swell-time-event-radius:6px; --swell-agenda-bg:var(--background); --swell-agenda-today:var(--primary); --text-1:var(--foreground); --text-3:var(--muted-foreground); --text-disabled:var(--muted-foreground); --accent-bg:var(--primary); --accent-contrast:var(--primary-foreground); --mobile-topzone-bg:var(--background); --mobile-topzone-divider:var(--calendar-line); }
 .note-calendar-engine .swell-calendar-toolbar { display:none; }
-.note-calendar-engine .swell-calendar-month-cell { background:var(--background); border-color:var(--border); }
+.note-calendar-engine .swell-calendar-agenda-view { background:var(--background); }
+.note-calendar-engine .swell-calendar-month-cell { background:var(--background); border-color:var(--calendar-line); }
 .note-calendar-engine .swell-calendar-month-cell-other-month { background:var(--panel-soft); }
-.note-calendar-engine .swell-calendar-month-week-row { border-color:var(--border); }
-.note-calendar-engine .swell-calendar-month-cell-date { color:var(--foreground); }
-.note-calendar-engine .swell-calendar-month-cell-other-month .swell-calendar-month-cell-date { color:var(--muted-foreground); }
+.note-calendar-engine .swell-calendar-month-week-row { border-color:var(--calendar-line); }
+.note-calendar-engine .swell-calendar-month-cell-date { color:var(--foreground); font-size:14px; font-weight:500; font-variant-numeric:tabular-nums; }
+.note-calendar-engine .swell-calendar-month-cell-other-month .swell-calendar-month-cell-date { color:var(--muted-foreground); opacity:.65; }
 .note-calendar-engine .swell-calendar-month-cell-date-today { background:var(--primary); color:var(--primary-foreground); }
 .note-calendar-engine .swell-calendar-month-cell-header { background:transparent; border:0; width:100%; font:inherit; }
-.note-calendar-engine .swell-calendar-month-event { border-radius:4px; }
-.note-calendar-engine .swell-calendar-agenda-event,.note-calendar-engine .swell-calendar-agenda-day-header { background:var(--background); color:var(--foreground); border-color:var(--border); }
-.note-calendar-engine .swell-calendar-agenda-event:hover { background:var(--muted); }
-.note-calendar-engine .swell-calendar-agenda-day-title,.note-calendar-engine .swell-calendar-agenda-event-title { color:var(--foreground); font-weight:500; }
-.note-calendar-engine .swell-calendar-agenda-day-count,.note-calendar-engine .swell-calendar-agenda-empty { color:var(--muted-foreground); }
+.note-calendar-engine .swell-calendar-month-day-names .swell-calendar-day-name { font-size:12px; color:var(--muted-foreground); }
+.note-calendar-engine .swell-calendar-month-event { border-radius:5px; font-weight:500; }
+.note-calendar-engine .swell-calendar-agenda-event { width:calc(100% - 32px); margin:8px 16px; padding:16px; min-height:78px; border:1px solid var(--calendar-line); border-radius:12px; background:var(--background); color:var(--foreground); gap:12px; }
+.note-calendar-engine .swell-calendar-agenda-event:hover { background:var(--panel-soft); border-color:color-mix(in oklab,var(--swell-agenda-event-border) 30%,var(--border)); }
+.note-calendar-engine .swell-calendar-agenda-event-mark { width:3px; min-height:34px; }
+.note-calendar-engine .swell-calendar-agenda-event-title { color:var(--foreground); font-size:15px; line-height:1.5; font-weight:600; }
+.note-calendar-engine .swell-calendar-agenda-event-main { gap:5px; }
+.note-calendar-engine .swell-calendar-agenda-event-time { color:var(--foreground); font-size:14px; line-height:1.5; font-weight:500; }
+.note-calendar-engine .swell-calendar-agenda-event-time-end { color:var(--muted-foreground); font-size:12px; }
+.note-calendar-engine .swell-calendar-template-agendaEventMeta { color:var(--muted-foreground); font-size:12px; }
+.note-calendar-engine .swell-calendar-agenda-day-header { padding:20px 18px 12px; background:var(--background); color:var(--foreground); border-color:var(--calendar-line); }
 .note-calendar-engine .swell-calendar-agenda-day-title { display:none; }
 .note-calendar-engine .swell-calendar-agenda-day-count { width:100%; }
 .note-calendar-agenda-heading { display:flex; width:100%; justify-content:space-between; align-items:center; gap:12px; }
-.note-calendar-agenda-heading strong { font-size:16px; color:var(--foreground); font-weight:500; }
-.note-calendar-agenda-heading small { color:var(--muted-foreground); }
-.note-calendar-engine .swell-calendar-agenda-event-time { color:var(--foreground); }
-.note-calendar-engine .swell-calendar-agenda-event-time-end,.note-calendar-engine .swell-calendar-template-agendaEventMeta { color:var(--muted-foreground); }
-
-@media (max-width:767px), (pointer:coarse) and (hover:none) and (max-height:500px) {
- .note-calendar-engine { flex:1; padding:0; min-height:0; }
-}
-
-/* 日视图展示完整 24 小时，保留每小时至少 60px，避免短日程的触控缩放区盖住移动区。 */
+.note-calendar-agenda-heading strong { font-size:15px; color:var(--foreground); font-weight:600; }
+.note-calendar-agenda-heading small { padding:2px 7px; border-radius:5px; background:var(--panel-soft); color:var(--muted-foreground); font-size:11px; font-weight:400; }
+.note-calendar-engine .swell-calendar-agenda-empty { padding:24px 18px; font-size:13px; color:var(--muted-foreground); border-color:var(--calendar-line); }
+.note-calendar-engine .swell-calendar-day-name__date { font-size:22px; font-weight:500; }
+.note-calendar-engine .swell-calendar-time-grid-time { font-size:11px; font-variant-numeric:tabular-nums; color:var(--muted-foreground); }
+/* 保留日视图每小时至少 60px，避免短日程的缩放区盖住移动区。 */
 .note-calendar-engine .swell-calendar-day-view .swell-calendar-time-grid { min-height:1440px; }
 .note-calendar-engine .swell-calendar-day-view--mobile .swell-calendar-resize-handle-top,
 .note-calendar-engine .swell-calendar-day-view--mobile .swell-calendar-resize-handle-bottom { height:min(14px,25%); }
+@media (max-width:767px), (pointer:coarse) and (hover:none) and (max-height:500px) {
+ .note-calendar-engine { --swell-month-event-font-size:11px; flex:1; min-height:0; border-radius:14px; }
+ .note-calendar-engine .swell-calendar-month-view--mobile .swell-calendar-month-cell-date { font-size:17px; font-weight:500; }
+ .note-calendar-engine .swell-calendar-agenda-event { width:calc(100% - 24px); margin:8px 12px; padding:14px 12px; min-height:76px; }
+ .note-calendar-engine .swell-calendar-agenda-day-header { padding:16px 14px 12px; }
+ .note-calendar-engine .swell-calendar-agenda-day-header--fixed { padding:16px 14px 12px; }
+ .note-calendar-agenda-heading strong { font-size:14px; }
+}

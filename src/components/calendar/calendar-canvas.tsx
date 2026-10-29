@@ -24,7 +24,7 @@ export function CalendarCanvas({ entries, date, view, mobile, canCreate, busy, r
   const updateEnabled = !busy && (view === "day" || view === "week")
   const events = useMemo<EventObject[]>(() => entries.map(e => ({
     id: e.note.id, calendarId: e.category, title: e.title, start: e.start, end: e.end,
-    category: "time", raw: { noteTitle: e.note.title || "日程笔记", entry: e }, isReadOnly: !updateEnabled || !canEditCalendarNote(e.note), backgroundColor: e.category === "personal" ? "var(--secondary)" : "var(--accent)", color: "var(--foreground)", borderColor: "var(--primary)",
+    category: "time", raw: { noteTitle: e.note.title || "日程笔记", entry: e }, isReadOnly: !updateEnabled || !canEditCalendarNote(e.note), backgroundColor: e.category === "personal" ? "var(--calendar-personal-bg)" : "var(--calendar-work-bg)", color: "var(--foreground)", borderColor: e.category === "personal" ? "var(--calendar-personal)" : "var(--calendar-work)",
   })), [entries, updateEnabled, revision])
   // 创建与改期分开控制：手机保留空白区域滚动，已有事件可通过组件的触控手势调整。
   const createEnabled = canCreate && !mobile && !busy
