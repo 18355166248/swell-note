@@ -1,0 +1,49 @@
+docs/calendar/integration.md
+  s_b16fc6363ce496::t_707c0d31e6b358 63-74
+e2e/calendar-completion.spec.ts
+  s_b16fc6363ce496::t_c6d1cab3994f03 1-43
+e2e/calendar.spec.ts
+  s_b16fc6363ce496::t_5103acc8b5452d 193-194
+src/App.tsx
+  s_b16fc6363ce496::t_9f6e1f543d313c 1694,3023-3024,4951-4955,5139
+src/components/calendar/calendar-display.test.ts
+  s_b16fc6363ce496::t_5c7e3f944649ab 1-10
+src/components/calendar/calendar-display.ts
+  s_b16fc6363ce496::t_d568b43fb6e400 4-10
+src/components/calendar/calendar-page.tsx
+  s_b16fc6363ce496::t_7f949387d7d2d1 1,9,11,14-15,23,30-34,40,43-44,63-76,85,102-105,116,119,126-134
+src/components/calendar/use-calendar-location.ts
+  s_b16fc6363ce496::t_0206b81472c529 1-32
+src/components/workspace/workspace.tsx
+  s_b16fc6363ce496::t_b9f05908b54332 123,3197
+src/lib/note-routes.test.ts
+  s_b16fc6363ce496::t_6d895e07d648ef 33-39
+src/lib/note-routes.ts
+  s_b16fc6363ce496::t_32b569c74bbc5f 33-34
+src/services/calendar/calendar-notes.test.ts
+  s_b16fc6363ce496::t_f155a0b4a1f6b7 45-67
+src/services/calendar/calendar-notes.ts
+  s_b16fc6363ce496::t_45be1b207817b7 26,30-39,42-44,61
+src/services/calendar/calendar-save.test.ts
+  s_b16fc6363ce496::t_412f3c5fe1ba15 36-46
+src/services/calendar/calendar-save.ts
+  s_b16fc6363ce496::t_a0ea2bfdb4b5d8 2,14,17,27
+src/services/search/note-index.ts
+  s_b16fc6363ce496::t_f169fa2d4f8234 61-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "f5191ad362d2ad30cd9156eb063e2c2fbbaee3f9",
+  "prompts": {},
+  "sessions": {
+    "s_b16fc6363ce496": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a18735-7112-7292-b0a5-32b7a528f09d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
