@@ -1,0 +1,19 @@
+src/components/editor/platform-editor-integration.test.tsx
+  s_4ba930c468955e::t_2dbe35420ff93c 344,347-352,354-359,363-383
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "20bde486f495b055019b686a402b658149810bbb",
+  "prompts": {},
+  "sessions": {
+    "s_4ba930c468955e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ab8d-54b6-7ff3-b36a-8364e6473616",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
