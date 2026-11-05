@@ -152,3 +152,63 @@ test("左右跨空单元格和多行内容，行末不换行，表头同样可�
   await expect(header.nth(0).locator("textarea")).toBeFocused()
   expect(await input.evaluate((element: HTMLTextAreaElement) => element.selectionStart)).toBe(1)
 })
+
+test("格内空格正常输入，输入法确认不被外层单元格取消", async ({ page }) => {
+  await seedCapabilityNote(page, content)
+  const cell = page.locator(".note-editor:visible .cm-md-table tbody td").first()
+  await cell.click()
+  const input = cell.locator("textarea")
+  await input.fill("abcdef")
+  await input.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(2, 4))
+  // 必须走真实键盘事件；fill / insertText 不经过 keydown，会漏掉空格被拦截的问题。
+  await page.keyboard.type("X Y")
+  await expect(input).toHaveValue("abX Yef")
+  expect(await input.evaluate((el: HTMLTextAreaElement) => el.selectionStart)).toBe(5)
+  const prevented = await input.evaluate((el) => ["Enter", " "].map((key) => {
+    const event = new KeyboardEvent("keydown", { key, isComposing: true, keyCode: 229, bubbles: true, cancelable: true })
+    el.dispatchEvent(event)
+    return event.defaultPrevented
+  }))
+  expect(prevented).toEqual([false, false])
+  await expect(input).toBeFocused()
+  await expect(input).toHaveValue("abX Yef")
+  await input.press("Tab")
+  await expect.poll(() => capabilityContent(page)).toContain("| abX Yef | 新鲜 |")
+})
+
+for (const wrapped of [false, true]) {
+  test(`长单元格在顶部、中部和末尾输入，滚动跟随实际光标：${wrapped ? "软换行" : "显式换行"}`, async ({ page }) => {
+    await seedCapabilityNote(page, content)
+    const cell = page.locator(".note-editor:visible .cm-md-table tbody td").first()
+    await cell.click()
+    const input = cell.locator("textarea")
+    await input.fill(wrapped ? "较长的中文内容用于检查自动折行。".repeat(100) : Array.from({ length: 70 }, (_, i) => `第${i}行内容`).join("\n"))
+    for (const position of [0, 0.5, 1]) {
+      const offset = await input.evaluate((el: HTMLTextAreaElement, fraction) => {
+        const offset = Math.floor(el.value.length * fraction)
+        el.setSelectionRange(offset, offset)
+        return offset
+      }, position)
+      await page.keyboard.type("xyz")
+      // 用独立 textarea 的原生排版测量光标行，避免复用被测镜像算法。
+      await expect.poll(() => input.evaluate((el: HTMLTextAreaElement) => {
+        const probe = el.cloneNode() as HTMLTextAreaElement
+        probe.value = el.value
+        const style = getComputedStyle(el)
+        probe.style.cssText = style.cssText
+        for (const property of ["font", "line-height", "letter-spacing", "white-space", "overflow-wrap", "word-break", "padding", "border", "box-sizing"]) probe.style.setProperty(property, style.getPropertyValue(property))
+        Object.assign(probe.style, { position: "fixed", top: "0", left: "-10000px", width: `${el.getBoundingClientRect().width}px`, height: style.lineHeight, overflow: "hidden" })
+        document.body.append(probe)
+        // 用内容前缀的原生 scrollHeight 测量当前行，不转移焦点。
+        probe.value = el.value.slice(0, el.selectionStart) + "x"
+        const offset = probe.scrollHeight - probe.clientHeight
+        probe.remove()
+        const top = el.getBoundingClientRect().top + offset - el.scrollTop
+        const viewport = el.closest('[data-slot="scroll-area-viewport"]')!.getBoundingClientRect()
+        return { visible: top >= viewport.top && top + parseFloat(style.lineHeight) <= Math.min(viewport.bottom, window.innerHeight), top, viewportTop: viewport.top, viewportBottom: viewport.bottom, caret: el.selectionStart }
+      })).toMatchObject({ visible: true })
+      await expect(input).toBeFocused()
+      expect(await input.evaluate((el: HTMLTextAreaElement) => el.selectionStart)).toBe(offset + 3)
+    }
+  })
+}

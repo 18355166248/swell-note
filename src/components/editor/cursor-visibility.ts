@@ -102,9 +102,9 @@ export function scrollCursorIntoView(view: EditorView) {
 
 // 表格单元格的 textarea 持有焦点时 CodeMirror 本身失焦，光标跟随不会触发；
 // 键盘弹起后由这里把正在编辑的单元格送回可视带（同样避开底部工具栏）。
-export function scrollElementIntoVisibleBand(element: HTMLElement, margin = 12) {
+export function scrollElementIntoVisibleBand(element: HTMLElement, margin = 12, cursor: CursorRect = element.getBoundingClientRect()) {
   const scroller = findScrollParent(element)
   if (!scroller) return
-  const delta = computeScrollAdjustment(element.getBoundingClientRect(), resolveVisibleBand(element, scroller), margin)
+  const delta = computeScrollAdjustment(cursor, resolveVisibleBand(element, scroller), margin)
   if (delta !== 0) scroller.scrollTop += delta
 }

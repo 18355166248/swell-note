@@ -4,7 +4,7 @@ import { blockEditSessionKey, clearBlockEditDraft, readBlockEditDraft, writeBloc
 
 import { writeClipboardText } from "@/services/clipboard/clipboard-text"
 
-import { atCellVerticalBoundary, tableCellEditorValue } from "./table-cell-editing"
+import { atCellVerticalBoundary, tableCellCaretRect, tableCellEditorValue } from "./table-cell-editing"
 
 import { scrollElementIntoVisibleBand } from "./cursor-visibility"
 
@@ -1142,6 +1142,8 @@ export class TableWidget extends WidgetType {
     })
     cell.addEventListener("click", beginEditing)
     cell.addEventListener("keydown", (event) => {
+      // 只接管单元格本身的键盘入口；textarea 冒泡的空格和输入法确认必须保留原生行为。
+      if (event.target !== cell || event.isComposing || event.keyCode === 229) return
       if (event.key === "Enter" || event.key === " ") beginEditing(event)
     })
   }
@@ -1349,7 +1351,8 @@ export class TableWidget extends WidgetType {
         followFrame = requestAnimationFrame(() => {
           followFrame = 0
           if (finished || document.activeElement !== input) return
-          scrollElementIntoVisibleBand(input)
+          // 长单元格可能高于整个视口，按整框底边滚动会把正在输入的顶部文字推到屏幕外。
+          scrollElementIntoVisibleBand(input, 12, tableCellCaretRect(input))
         })
       })
     }
