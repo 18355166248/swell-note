@@ -1,0 +1,28 @@
+src/components/editor/cursor-visibility.ts
+  s_4ba930c468955e::t_fcae682332e34b 105,108
+src/components/editor/table-cell-editing.ts
+  s_4ba930c468955e::t_e890fcfc7abc9d 48-50
+  s_4ba930c468955e::t_fcae682332e34b 26-42,57-59
+src/components/editor/markdown-table-widget.ts
+  s_4ba930c468955e::t_fcae682332e34b 7,1145-1146,1354-1355
+e2e/table-cell-keyboard.spec.ts
+  s_4ba930c468955e::t_48441db3d3208e 193,200,208-209
+  s_4ba930c468955e::t_360ea930c5cdd3 155-186,188-191,194-199,201,203-207,210-214
+  s_4ba930c468955e::t_c2b3f35a3d57ee 187,192,202
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "8b5b355bedda0b4e36f1b4ec5f71ffa23ae734fb",
+  "prompts": {},
+  "sessions": {
+    "s_4ba930c468955e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ab8d-54b6-7ff3-b36a-8364e6473616",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
