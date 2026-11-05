@@ -1,0 +1,44 @@
+e2e/table-interaction-audit.spec.ts
+  s_4ba930c468955e::t_7cedce2e84338e 24-92,94-96,128
+  s_4ba930c468955e::t_1621081736e5db 93
+  s_4ba930c468955e::t_7d5a0782d3eb3d 1-23,97-127,129-134
+docs/table-interaction-audit-2026-11-05/focus-events.json
+  s_4ba930c468955e::t_adf6454a78f0b8 1-107
+docs/table-interaction-audit-2026-11-05/README.md
+  s_4ba930c468955e::t_8a48e415d36de6 50
+  s_4ba930c468955e::t_7d8dc093e7c13a 48,54
+  s_4ba930c468955e::t_b81776ede65108 1-2,4,6-26,28-44
+  s_4ba930c468955e::t_568a93d85336aa 56-57
+  s_4ba930c468955e::t_b8c02429f8a4d2 3,5,27,45-47,49,51-53,55,58-59
+e2e/table-focus-race.spec.ts
+  s_4ba930c468955e::t_1621081736e5db 1-23
+  s_4ba930c468955e::t_e8fa23d80193f9 24-30,32-45
+  s_4ba930c468955e::t_e7f9e0843435fd 31
+src/components/editor/markdown-table-widget.test.ts
+  s_4ba930c468955e::t_5c67d7f5629604 117-131
+  s_4ba930c468955e::t_c482ee4cc47725 147-167
+  s_4ba930c468955e::t_e8fa23d80193f9 132-146
+src/components/editor/live-preview.ts
+  s_4ba930c468955e::t_e8fa23d80193f9 1307,1309,1319,1324,1331-1335
+  s_4ba930c468955e::t_5c67d7f5629604 1308
+src/components/editor/markdown-table-widget.ts
+  s_4ba930c468955e::t_e8fa23d80193f9 1078
+  s_4ba930c468955e::t_5c67d7f5629604 1077
+  s_4ba930c468955e::t_7d8dc093e7c13a 55,1027-1028,1079,1442,1459,1465
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "f0bd56395eaa45764b35bd4043c29c84099ef32f",
+  "prompts": {},
+  "sessions": {
+    "s_4ba930c468955e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ab8d-54b6-7ff3-b36a-8364e6473616",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
