@@ -79,3 +79,29 @@ test("缺失松手的切格之后，在输入框内拖文字不会变成单元�
   await expect(target.locator("textarea")).toBeFocused()
   await expect.poll(() => target.locator("textarea").evaluate((input: HTMLTextAreaElement) => input.selectionEnd - input.selectionStart)).toBeGreaterThan(0)
 })
+
+for (const metaKey of [false, true]) {
+  test(`从链接跨格拖选再回原链接松手，不误打开且下次点击正常：Cmd=${metaKey}`, async ({ page }) => {
+    await seedCapabilityNote(page, "正文\n\n| A | B |\n| --- | --- |\n| [文档](https://example.com/table) | 右侧 |\n| 下一行 | 另一格 |\n\n结尾")
+    await page.evaluate(() => { window.open = (url) => { document.body.dataset.openedLink = String(url); return null } })
+    const table = page.locator(".note-editor:visible .cm-md-table")
+    const link = table.locator(".cm-md-table-link")
+    const start = (await link.boundingBox())!
+    const end = (await table.locator("tbody td").nth(3).boundingBox())!
+    if (metaKey) await page.keyboard.down("Meta")
+    await page.mouse.move(start.x + 4, start.y + 8)
+    await page.mouse.down()
+    await page.waitForTimeout(150)
+    await page.mouse.move(end.x + 12, end.y + 12, { steps: 5 })
+    await expect(table.locator(".cm-md-table-cell-in-range")).toHaveCount(4)
+    // 回到按下的链接松手，浏览器会真实生成 click；仅跨格松手通常把 click 发给公共祖先。
+    await page.mouse.move(start.x + 4, start.y + 8, { steps: 5 })
+    await page.mouse.up()
+    if (metaKey) await page.keyboard.up("Meta")
+    await expect(table.locator(".cm-md-table-cell-in-range")).toHaveCount(1)
+    await expect(page.locator("body")).not.toHaveAttribute("data-opened-link", /.+/)
+    await expect(table.locator("textarea")).toHaveCount(0)
+    await link.click()
+    await expect(page.locator("body")).toHaveAttribute("data-opened-link", "https://example.com/table")
+  })
+}

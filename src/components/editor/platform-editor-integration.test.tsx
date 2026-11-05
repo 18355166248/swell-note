@@ -341,19 +341,46 @@ describe("production editor link activation", () => {
     expect(opened).toHaveBeenCalledExactlyOnceWith("另一篇.md")
   })
 
-  it("a click after table drag selection never opens the link, even with Cmd", async () => {
+  it.each([false, true])("a click after table drag selection never opens the link (Cmd: %s)", async (metaKey) => {
     const { view, opened } = await mountEditor("| 名称 |\n| --- |\n| [标签](另一篇.md) |\n| 第二格 |")
     const link = view.contentDOM.querySelector(".cm-md-table-link")!
-    const cell = link.closest("td")!
-    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => cell })
+    const destination = view.contentDOM.querySelectorAll("tbody td")[1]
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => destination })
+    // 拖选必须持续按住左键、超过意图阈值并跨格；旧用例 buttons=0 且命中原格，实际走的是普通点击。
+    const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true, buttons: 1, clientX: 10, clientY: 10 })
+    const move = new MouseEvent("mousemove", { bubbles: true, cancelable: true, buttons: 1, clientX: 10, clientY: 50 })
+    Object.defineProperty(move, "timeStamp", { value: down.timeStamp + 150 })
     act(() => {
-      link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }))
-      document.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, clientX: 30, clientY: 10 }))
-      document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, clientX: 30, clientY: 10 }))
-      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }))
+      link.dispatchEvent(down)
+      document.dispatchEvent(move)
+      expect(view.contentDOM.querySelector("[data-range-selecting]")).not.toBeNull()
+      document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, clientX: 10, clientY: 50 }))
+      expect(view.contentDOM.querySelectorAll(".cm-md-table-cell-in-range")).toHaveLength(2)
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey }))
     })
     expect(opened).not.toHaveBeenCalled()
     expect(view.contentDOM.querySelector(".cm-md-table-cell-input")).toBeNull()
+    // 只消费本次拖选的兼容 click，后续正常点击不能被残留抑制状态吞掉。
+    click(link)
+    expect(opened).toHaveBeenCalledExactlyOnceWith("另一篇.md")
+  })
+
+  it.each(["released", "quick", "same-cell"])("a %s movement does not suppress a normal table link click", async (gesture) => {
+    const { view, opened } = await mountEditor("| 名称 |\n| --- |\n| [标签](另一篇.md) |\n| 第二格 |")
+    const link = view.contentDOM.querySelector(".cm-md-table-link")!
+    const destination = gesture === "same-cell" ? link.closest("td")! : view.contentDOM.querySelectorAll("tbody td")[1]
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => destination })
+    const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true, buttons: 1, clientX: 10, clientY: 10 })
+    const move = new MouseEvent("mousemove", { bubbles: true, cancelable: true, buttons: gesture === "released" ? 0 : 1, clientX: 10, clientY: 50 })
+    Object.defineProperty(move, "timeStamp", { value: down.timeStamp + (gesture === "quick" ? 20 : 150) })
+    act(() => {
+      link.dispatchEvent(down)
+      document.dispatchEvent(move)
+      document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, clientX: 10, clientY: 50 }))
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
+    })
+    expect(view.contentDOM.querySelectorAll(".cm-md-table-cell-in-range")).toHaveLength(0)
+    expect(opened).toHaveBeenCalledExactlyOnceWith("另一篇.md")
   })
 })
 
