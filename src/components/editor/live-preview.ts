@@ -1304,7 +1304,9 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
       }
       this.decorations = buildLivePreviewDecorations(update.view)
       // 表格块只在文档变化或语法树推进时才可能增减；滚动不会改变它们，没必要跟着重扫一遍语法树。
-      if (update.docChanged || parsed || readOnlyChanged || optionsChanged) this.syncTableDecorations(update.view)
+      if (update.docChanged || parsed || readOnlyChanged || optionsChanged) {
+        this.syncTableDecorations(update.view, update.transactions.some(transaction => transaction.isUserEvent("input.table.navigate")))
+      }
       if (update.docChanged || parsed || readOnlyChanged || optionsChanged) this.syncRichBlockDecorations(update.view)
     }
 
@@ -1314,19 +1316,23 @@ const markdownLivePreviewPlugin = ViewPlugin.fromClass(
 
     // 表格装饰变化时经 effect 写入 StateField，内容不变则跳过，避免无意义的重绘。
     // 插件 update 期间不允许同步 dispatch，延迟到当前更新结束后提交。
-    syncTableDecorations(view: EditorView) {
+    syncTableDecorations(view: EditorView, beforeNextInput = false) {
       // 表格编辑关闭时不注册该字段，装饰也无处安放——直接不产出。
       if (view.state.field(tableDecorationsField, false) === undefined) return
       const current = collectTableBlocks(view.state)
       if (tableBlocksKey(current, view.state.readOnly, view.state.facet(livePreviewOptions).tableStorageKey) === this.tableBlocksKey && !tableDecorationsDrifted(view.state, current)) return
-      window.setTimeout(() => {
+      const sync = () => {
         if (this.destroyed) return
         // 等待期间文档可能已被同步合并或撤销改写，必须按当前状态重算，
         // 否则会把基于旧文档的位置派发到新文档上。
         const blocks = collectTableBlocks(view.state)
         this.tableBlocksKey = tableBlocksKey(blocks, view.state.readOnly, view.state.facet(livePreviewOptions).tableStorageKey)
         view.dispatch({ effects: setTableDecorations.of(tableBlocksDecorations(blocks, view)) })
-      }, 0)
+      }
+      // 切格提交后须在下一次按键之前重建 DOM；微任务避开插件 update 的同步 dispatch 限制，
+      // 又不会像定时器一样留下焦点空窗，让紧随的全选/输入落到整篇正文。
+      if (beforeNextInput) queueMicrotask(sync)
+      else window.setTimeout(sync, 0)
     }
 
     // 块级公式与 Mermaid 和表格一样由 StateField 提供。延迟期间始终重读当前文档，

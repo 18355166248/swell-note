@@ -114,6 +114,57 @@ afterEach(() => {
 })
 
 describe("单元格编辑与键盘导航", () => {
+  it("无导航的失焦保存不在微任务中移除尚待 click 的目标格", async () => {
+    view = createView()
+    await settle()
+    clickCell(0, 0)
+    typeInto(cellInput()!, "修改")
+    const clickTarget = cellAt(0, 1)
+    // clickCell 简化了鼠标序列；补上输入框内按下，清掉旧拖选会话后再真实失焦。
+    cellInput()!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }))
+    cellInput()!.blur()
+    await Promise.resolve()
+    expect(clickTarget.isConnected).toBe(true)
+    expect(docText()).toContain("修改")
+    await tick()
+    expect(clickTarget.isConnected).toBe(false)
+  })
+  it("切格后焦点已交给其他输入框，微任务和定时补偿都不抢回焦点", async () => {
+    view = createView()
+    await settle()
+    clickCell(0, 0)
+    typeInto(cellInput()!, "修改")
+    keydown(cellInput()!, { key: "Tab" })
+    const external = document.createElement("input")
+    document.body.append(external)
+    external.focus()
+    await Promise.resolve()
+    expect(document.activeElement).toBe(external)
+    await tick()
+    expect(document.activeElement).toBe(external)
+    expect(cellInput()).toBeNull()
+  })
+  it("修改后连续 Tab 在下一次键盘事件前完成重建与焦点交接", async () => {
+    view = createView()
+    await settle()
+    clickCell(0, 0)
+    for (const value of ["甲甲", "乙乙", "丙丙"]) {
+      const input = cellInput()!
+      input.select()
+      typeInto(input, value)
+      keydown(input, { key: "Tab" })
+      // 只等待当前事件后的微任务，不运行 setTimeout；重建与聚焦不能依赖下一轮定时器。
+      await Promise.resolve()
+      expect(cellInput()).not.toBeNull()
+      expect(activeTableEdit(view)?.input).toBe(document.activeElement)
+    }
+    expect(docText()).toContain("| 甲甲 | 乙乙 | 丙丙 |")
+    expect(cellInput()?.value).toBe("香蕉")
+    // 原有定时补偿执行后也不能把焦点倒退回先前的单元格。
+    await tick()
+    expect(cellInput()?.value).toBe("香蕉")
+    expect(document.activeElement).toBe(cellInput())
+  })
   it("文字格之间只有 pointerdown 也在本次按下交接光标", async () => {
     view = createView()
     await settle()

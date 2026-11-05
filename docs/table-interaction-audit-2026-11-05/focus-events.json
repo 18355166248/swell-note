@@ -1,0 +1,107 @@
+[
+  {
+    "type": "focusin",
+    "target": "cm-md-table-cell-input",
+    "active": "cm-md-table-cell-input",
+    "value": "abcdef"
+  },
+  {
+    "type": "keydown",
+    "key": "Meta",
+    "target": "cm-md-table-cell-input",
+    "active": "cm-md-table-cell-input",
+    "value": "abcdef"
+  },
+  {
+    "type": "keydown",
+    "key": "a",
+    "target": "cm-md-table-cell-input",
+    "active": "cm-md-table-cell-input",
+    "value": "abcdef"
+  },
+  {
+    "type": "input",
+    "target": "cm-md-table-cell-input",
+    "active": "cm-md-table-cell-input",
+    "value": "甲"
+  },
+  {
+    "type": "input",
+    "target": "cm-md-table-cell-input",
+    "active": "cm-md-table-cell-input",
+    "value": "甲甲"
+  },
+  {
+    "type": "keydown",
+    "key": "Tab",
+    "target": "cm-md-table-cell-input",
+    "active": "cm-md-table-cell-input",
+    "value": "甲甲"
+  },
+  {
+    "type": "focusout",
+    "target": "cm-md-table-cell-input",
+    "active": ""
+  },
+  {
+    "type": "keydown",
+    "key": "Meta",
+    "target": "",
+    "active": ""
+  },
+  {
+    "type": "keydown",
+    "key": "a",
+    "target": "",
+    "active": ""
+  },
+  {
+    "type": "focusin",
+    "target": "cm-content cm-lineWrapping",
+    "active": "cm-content cm-lineWrapping"
+  },
+  {
+    "type": "input",
+    "target": "cm-content cm-lineWrapping",
+    "active": "cm-content cm-lineWrapping"
+  },
+  {
+    "type": "input",
+    "target": "cm-content cm-lineWrapping",
+    "active": "cm-content cm-lineWrapping"
+  },
+  {
+    "type": "keydown",
+    "key": "Tab",
+    "target": "cm-content cm-lineWrapping",
+    "active": "cm-content cm-lineWrapping"
+  },
+  {
+    "type": "keydown",
+    "key": "Meta",
+    "target": "cm-content cm-lineWrapping",
+    "active": "cm-content cm-lineWrapping"
+  },
+  {
+    "type": "keydown",
+    "key": "a",
+    "target": "cm-content cm-lineWrapping",
+    "active": "cm-content cm-lineWrapping"
+  },
+  {
+    "type": "input",
+    "target": "cm-content cm-lineWrapping",
+    "active": "cm-content cm-lineWrapping"
+  },
+  {
+    "type": "input",
+    "target": "cm-content cm-lineWrapping",
+    "active": "cm-content cm-lineWrapping"
+  },
+  {
+    "type": "keydown",
+    "key": "Tab",
+    "target": "cm-content cm-lineWrapping",
+    "active": "cm-content cm-lineWrapping"
+  }
+]

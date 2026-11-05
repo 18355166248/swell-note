@@ -52,7 +52,7 @@ import { registerTableWidgetApi, type TableWidgetApi, type TableWidgetMenuState 
 
 type TableVerticalMode = "bottom" | "middle" | "top"
 // 聚焦目标：row 是 DOM tr 下标（0 = 表头）。
-type CellTarget = { column: number; row: number; selection?: { from: number; to: number; direction: "forward" | "backward" | "none" } }
+type CellTarget = { column: number; row: number; beforeNextInput?: boolean; selection?: { from: number; to: number; direction: "forward" | "backward" | "none" } }
 // 选区坐标：row 与 data-row-index 一致（-1 = 表头，0 起为正文行）。
 type CellPosition = { column: number; row: number }
 
@@ -1024,7 +1024,8 @@ export class TableWidget extends WidgetType {
       if (focus) this.focusCellAfterUpdate(focus, false)
       return true
     }
-    this.view.dispatch({ changes: { from: this.from, to: this.to, insert: serializeMarkdownTable(table) }, userEvent: "input.table", annotations: isolateHistory.of("full") })
+    // 只有键盘导航提前重建；鼠标/触屏与 blur 必须保留点击目标，等原生 click 派发完再重绘。
+    this.view.dispatch({ changes: { from: this.from, to: this.to, insert: serializeMarkdownTable(table) }, userEvent: focus?.beforeNextInput ? "input.table.navigate" : "input.table", annotations: isolateHistory.of("full") })
     if (focus) this.focusCellAfterUpdate(focus)
     return true
   }
@@ -1073,6 +1074,9 @@ export class TableWidget extends WidgetType {
       }
     }
     if (!defer) restore(false)
+    // input.table.navigate 的重建微任务已由 dispatch 排入队列；紧随其后恢复焦点，下一次按键仍属于目标格。
+    // 保留下面的定时补偿处理浏览器晚到的 td 聚焦，两个路径都受文档/选区/焦点守卫约束。
+    else if (target.beforeNextInput) queueMicrotask(() => restore(true))
     // 某些点击路径会在处理结束后才聚焦 td，触发刚打开输入框的 blur；下一拍
     // 仅当焦点仍属于本次目标时补回输入和原落点，其他格/按钮的新操作仍由上面的守卫保护。
     window.setTimeout(() => restore(true), 0)
@@ -1435,7 +1439,7 @@ export class TableWidget extends WidgetType {
         const value = tableCellEditorValue(tableCellAt(table, rowIndex, column)).text
         // 从左侧进入时落在开头，从右侧进入时落在末尾，避免跨格后又跳回上一格。
         const caret = left ? value.length : 0
-        commit({ row: rowIndex + 1, column, selection: { from: caret, to: caret, direction: "none" } })
+        commit({ row: rowIndex + 1, column, beforeNextInput: true, selection: { from: caret, to: caret, direction: "none" } })
         return
       }
       if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.shiftKey && !event.altKey && input.selectionStart === input.selectionEnd) {
@@ -1452,13 +1456,13 @@ export class TableWidget extends WidgetType {
         const lineStart = up ? value.lastIndexOf("\n") + 1 : 0
         const lineEnd = value.indexOf("\n", lineStart)
         const caret = Math.min(lineStart + column, lineEnd < 0 ? value.length : lineEnd)
-        commit({ row, column: columnIndex, selection: { from: caret, to: caret, direction: "none" } })
+        commit({ row, column: columnIndex, beforeNextInput: true, selection: { from: caret, to: caret, direction: "none" } })
         return
       }
       if (event.altKey || (event.key !== "Tab" && event.key !== "Enter")) return
       event.preventDefault()
       event.stopPropagation()
-      commit(this.nextCellTarget(event, table, rowIndex, columnIndex))
+      commit({ ...this.nextCellTarget(event, table, rowIndex, columnIndex), beforeNextInput: true })
     })
   }
 
