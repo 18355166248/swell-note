@@ -1,0 +1,29 @@
+e2e/table-regular-editing-audit.spec.ts
+  s_4ba930c468955e::t_dbbfc74b0b9313 41,43-53
+  s_4ba930c468955e::t_05d76b9f4d9d7d 1-40,42,54-138
+docs/table-interaction-audit-2026-11-05/regular-editing.md
+  s_4ba930c468955e::t_7b6c42fd22f081 1-2,4-46,48-49
+  s_4ba930c468955e::t_baf8f3374a0fea 3,47,50-67
+docs/table-interaction-audit-2026-11-05/regular-editing-focus.json
+  s_4ba930c468955e::t_7b6c42fd22f081 1-18
+src/components/editor/markdown-table-widget.ts
+  s_4ba930c468955e::t_dbbfc74b0b9313 237-239,1848-1850
+src/components/editor/markdown-table-widget.test.ts
+  s_4ba930c468955e::t_9b5726f8a3024c 547-584
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "3a74181007c70e11c8eac250da0e1e5086fa0dc9",
+  "prompts": {},
+  "sessions": {
+    "s_4ba930c468955e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ab8d-54b6-7ff3-b36a-8364e6473616",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
