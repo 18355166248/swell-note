@@ -1,0 +1,32 @@
+src/components/editor/live-preview.ts
+  s_4ba930c468955e::t_b12f2431f96f12 6-7,814-841,1423,1437
+docs/table-interaction-audit-2026-11-05/paragraph-boundary-2026-11-06.md
+  s_4ba930c468955e::t_4bca4b514c8665 1-32
+e2e/table-paragraph-boundary.spec.ts
+  s_4ba930c468955e::t_feedf96556c1f7 1-6,8-11,16-31
+  s_4ba930c468955e::t_8d5bb15d6042ba 12
+  s_4ba930c468955e::t_a20b46cea96975 7,13-15
+src/components/editor/table-paragraph-boundary.test.ts
+  s_4ba930c468955e::t_b12f2431f96f12 1-40
+e2e/table-outside-editing-audit.spec.ts
+  s_4ba930c468955e::t_c30844eb63a2b9 1-124,127-129,132,135-137,139,141,143,146-151,155-158,161,163
+  s_4ba930c468955e::t_68dbebcffd049d 125-126,130-131,133-134,138,140,142,144-145,152-154,159-160,162
+docs/table-interaction-audit-2026-11-05/outside-editing-2026-11-06.md
+  s_4ba930c468955e::t_42314ae372085e 1-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.1",
+  "base_commit_sha": "074c8e5548d96f4b239a698679287e4ab6bc70cc",
+  "prompts": {},
+  "sessions": {
+    "s_4ba930c468955e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ab8d-54b6-7ff3-b36a-8364e6473616",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "lang.jiang <lang.jiang@ximalaya.com>"
+    }
+  }
+}
