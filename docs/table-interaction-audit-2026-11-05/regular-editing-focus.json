@@ -1,0 +1,18 @@
+[
+  {
+    "project": "mobile-chrome",
+    "after": "粘贴 TSV → Escape → Cmd+Z",
+    "activeElement": {
+      "tag": "BODY",
+      "className": ""
+    }
+  },
+  {
+    "project": "desktop-chrome",
+    "after": "粘贴 TSV → Escape → Cmd+Z",
+    "activeElement": {
+      "tag": "BODY",
+      "className": ""
+    }
+  }
+]

@@ -234,6 +234,9 @@ function parseClipboardTabular(transfer: DataTransfer): string[][] | null {
   const html = transfer.getData("text/html")
   const parsed = html ? new DOMParser().parseFromString(html, "text/html").querySelector("table") : null
   if (!parsed) return null
+  // 单列剪贴板可能没有 TSV；先把 br 转成文本换行，再读取纯文本，避免两行粘连。
+  // 只修改脱离页面的解析结果，不把剪贴板 HTML 节点插入编辑器。
+  parsed.querySelectorAll("br").forEach((br) => br.replaceWith("\n"))
   const cells = Array.from(parsed.rows, (row) => Array.from(row.cells, (cell) => cell.textContent ?? ""))
   return cells.length && !cells.every((row) => row.length === 0) ? cells : null
 }
@@ -1842,6 +1845,9 @@ export class TableWidget extends WidgetType {
         // 选区 pin 住：撤销触发的重建后高亮仍框住原范围，不留下不可见的活动选区。
         const range = this.normalizedSessionRange()
         if (range) session.pinnedRange = range
+        // Escape 后焦点仍在旧单元格，撤销重建会将它移除。无矩形选区时先交给
+        // 稳定的编辑器节点，让后续快捷键继续生效；选区仍沿用原来的 pin 恢复路径。
+        else this.view.focus()
         const forward = keyName === "y" || event.shiftKey
         ;(forward ? redo : undo)(this.view)
         return

@@ -544,6 +544,44 @@ describe("矩形选区与剪贴板", () => {
     expect(docText()).toContain("前段文字。")
   })
 
+  it.each([false, true])("HTML 回退保留 br、实体与连续换行，选区粘贴=%s", async (range) => {
+    view = createView()
+    await settle()
+    if (range) await dragRange([0, 0], [1, 0])
+    else clickCell(0, 0)
+    ;(range ? wrapper() : cellInput()!).dispatchEvent(clipboardEvent("paste", {
+      "text/plain": "第一行\n第二行\n\n末尾&🙂",
+      "text/html": '<table><tr><td><b>第一行</b><BR/>第二行<br><br><span>末尾&amp;🙂</span></td></tr><tr><td>下一格</td></tr></table>',
+    }))
+    await tick()
+    expect(docText()).toContain("| 第一行<br>第二行<br><br>末尾&🙂 | 新鲜 | 重点 |")
+    expect(docText()).toContain("| 下一格 | 一般 | 普通 |")
+    undo(view!)
+    expect(docText()).toBe(doc)
+    redo(view!)
+    expect(docText()).toContain("第一行<br>第二行<br><br>末尾&🙂")
+  })
+
+  it("退出格内编辑后键盘撤销重建表格，焦点保留在编辑器且不延迟抢焦", async () => {
+    view = createView()
+    await settle()
+    clickCell(0, 0)
+    cellInput()!.dispatchEvent(clipboardEvent("paste", { "text/plain": "一\t二" }))
+    await tick()
+    keydown(cellInput()!, { key: "Escape" })
+    keydown(document.activeElement!, { key: "z", metaKey: true })
+    expect(docText()).toBe(doc)
+    expect(document.activeElement).toBe(view!.contentDOM)
+    await tick()
+    expect(document.activeElement).toBe(view!.contentDOM)
+    const external = document.createElement("input")
+    document.body.appendChild(external)
+    external.focus()
+    await tick()
+    expect(document.activeElement).toBe(external)
+    external.remove()
+  })
+
   it("格内换行的 Excel 粘贴优先走 TSV，换行不粘连", async () => {
     view = createView()
     await settle()
