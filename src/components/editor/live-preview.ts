@@ -3,8 +3,8 @@ import { markdownDestination, resolveDocumentReference } from "@/services/markdo
 import { AttachmentBlockWidget, collectAttachmentBlocks, type AttachmentBlock } from "./unified-attachment"
 import { isolateHistory } from "@codemirror/commands"
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language"
-import type { EditorState, Range } from "@codemirror/state"
-import { Facet, Prec, StateEffect, StateField } from "@codemirror/state"
+import type { Range } from "@codemirror/state"
+import { EditorState, Facet, Prec, StateEffect, StateField } from "@codemirror/state"
 import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view"
 
 import { isImageAssetPath, parseMarkdownNoteHref } from "@/services/markdown/markdown-preview-utils"
@@ -811,6 +811,34 @@ function collectTableBlocks(state: EditorState): TableBlock[] {
   return blocks
 }
 
+// 网格下方的空行是正文输入区，也是 Markdown 结束表格的唯一分隔。
+// 输入占用它时补留一行，否则无竖线的后续段落也可能被 GFM 当作表格行。
+// 与原输入合并成一个事务，光标随映射移动，撤销同时恢复原来的空行。
+const preserveTableParagraphBoundary = EditorState.transactionFilter.of((transaction) => {
+  if (!transaction.docChanged || !transaction.isUserEvent("input") || transaction.isUserEvent("input.table")) return transaction
+  const state = transaction.startState
+  const boundaries = new Set<number>()
+  transaction.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+    if (!inserted.length) return
+    const line = state.doc.lineAt(from)
+    if (line.number === 1 || line.text.trim() || to > line.to) return
+    const position = transaction.changes.mapPos(line.from, -1)
+    if (!transaction.newDoc.lineAt(position).text.trim()) return
+    const previous = state.doc.line(line.number - 1)
+    let node = (ensureSyntaxTree(state, previous.to, 50) ?? syntaxTree(state)).resolveInner(previous.to, -1)
+    for (;;) {
+      if (node.name === "Table" && node.to === previous.to) {
+        boundaries.add(position)
+        break
+      }
+      if (!node.parent) break
+      node = node.parent
+    }
+  })
+  if (!boundaries.size) return transaction
+  return [transaction, { changes: [...boundaries].sort((a, b) => a - b).map(from => ({ from, insert: "\n" })), sequential: true }]
+})
+
 // RangeSet 没有值相等接口，用位置加原文构成轻量 key；只比长度会漏掉同步合并、
 // 撤销等带来的等长改写，导致表格继续渲染旧内容。
 function tableBlocksKey(blocks: TableBlock[], readOnly: boolean, tableStorageKey?: string) {
@@ -1392,7 +1420,7 @@ export { markdownLivePreviewPlugin, richBlockDecorationsField, tableDecorationsF
 
 // 表格块替换必须经 StateField 提供，与行内装饰插件一起注册。
 export function markdownLivePreview(options: LivePreviewOptions = {}) {
-  return [livePreviewOptions.of(options), pendingLinkActivation, markdownLinkKeymap, markdownLivePreviewPlugin, tableDecorationsField, richBlockDecorationsField]
+  return [livePreviewOptions.of(options), pendingLinkActivation, markdownLinkKeymap, markdownLivePreviewPlugin, tableDecorationsField, preserveTableParagraphBoundary, richBlockDecorationsField]
 }
 
 /**
@@ -1406,5 +1434,5 @@ export function markdownLivePreviewBase(options: LivePreviewOptions = {}) {
 
 /** 表格网格 widget。注册它才会出现可编辑的表格；不注册则表格保持 Markdown 源码。 */
 export function markdownTableEditing() {
-  return [tableDecorationsField]
+  return [tableDecorationsField, preserveTableParagraphBoundary]
 }
